@@ -42,6 +42,7 @@ import {
   resolveDuePaymentProviderOperations,
 } from "./_core/billing/checkoutStore";
 import { runDailyBillingReconciliation } from "./_core/billing/reconciliation";
+import { assertBillingTriggerRuntimePreflight } from "../scripts/billing-trigger-runtime-preflight.mjs";
 
 const suite = describe.runIf(process.env.RUN_MYSQL_INTEGRATION === "1");
 
@@ -148,7 +149,7 @@ suite("billing execution MySQL safety boundary", () => {
         mode: "test",
         eventType: "manual_review",
         deduplicationKey: `safety-${suffix}-${workspaceId}`,
-        payload: { reason: "billing_execution_disabled" },
+        payload: { reason: "billing_profile_revoked" },
         status: "pending",
         availableAt: safetyDue,
       },
@@ -157,8 +158,38 @@ suite("billing execution MySQL safety boundary", () => {
     await expect(
       getNextBillingOutboxDue(workspaceId, "test", new Date("2030-01-01"))
     ).resolves.toEqual(safetyDue);
-    const claimed = await claimBillingOutboxItem("test", workspaceId);
-    expect(claimed?.eventType).toBe("manual_review");
+    process.env.BILLING_OPERATOR_NOTIFICATION_WEBHOOK_URL =
+      "https://notifications.example/operator";
+    process.env.BILLING_OPERATOR_NOTIFICATION_SIGNING_SECRET = "s".repeat(32);
+    process.env.BILLING_OPERATOR_NOTIFICATION_KEY_ID = "test-key";
+    process.env.BILLING_NOTIFICATION_SOURCE_ID = "mysql-safety-test";
+    const notificationFetch = vi
+      .fn()
+      .mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", notificationFetch);
+    const providerMethodRead = vi.fn();
+    const providerClient = new Proxy(
+      {},
+      {
+        get(_target, property) {
+          providerMethodRead(String(property));
+          throw new Error("Mollie transport must remain unused");
+        },
+      }
+    ) as MollieClient;
+    try {
+      await expect(
+        runBillingOutboxOnce(workspaceId, providerClient)
+      ).resolves.toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+      delete process.env.BILLING_OPERATOR_NOTIFICATION_WEBHOOK_URL;
+      delete process.env.BILLING_OPERATOR_NOTIFICATION_SIGNING_SECRET;
+      delete process.env.BILLING_OPERATOR_NOTIFICATION_KEY_ID;
+      delete process.env.BILLING_NOTIFICATION_SOURCE_ID;
+    }
+    expect(providerMethodRead).not.toHaveBeenCalled();
+    expect(notificationFetch).toHaveBeenCalledOnce();
     const commercial = await database
       .select({ status: billingOutbox.status })
       .from(billingOutbox)
@@ -169,6 +200,103 @@ suite("billing execution MySQL safety boundary", () => {
         )
       );
     expect(commercial[0]?.status).toBe("pending");
+    const safety = await database
+      .select({ status: billingOutbox.status })
+      .from(billingOutbox)
+      .where(
+        and(
+          eq(billingOutbox.workspaceId, workspaceId),
+          eq(billingOutbox.eventType, "manual_review")
+        )
+      );
+    expect(safety[0]?.status).toBe("completed");
+  });
+
+  it("executes every billing trigger in a transaction and leaves no probe data", async () => {
+    const database = await getDatabaseOrThrow();
+    await registerBillingSchedulerTenant(
+      workspaceId,
+      "test",
+      new Date("2030-01-01T00:00:00.000Z")
+    );
+    const beforeLanes = await database
+      .select({
+        id: billingSchedulerTenants.id,
+        workspaceId: billingSchedulerTenants.workspaceId,
+        kind: billingSchedulerTenants.kind,
+        pendingWorkCount: billingSchedulerTenants.pendingWorkCount,
+        deadLetterCount: billingSchedulerTenants.deadLetterCount,
+        nextDueAt: billingSchedulerTenants.nextDueAt,
+      })
+      .from(billingSchedulerTenants)
+      .where(eq(billingSchedulerTenants.mode, "test"))
+      .orderBy(billingSchedulerTenants.id);
+    const beforeOutbox = await database
+      .select({ id: billingOutbox.id })
+      .from(billingOutbox)
+      .where(eq(billingOutbox.mode, "test"))
+      .orderBy(billingOutbox.id);
+    const url = process.env.DATABASE_URL;
+    if (!url) throw new Error("DATABASE_URL is required");
+    const connection = await mysql.createConnection(url);
+    let autoIncrementBefore: Record<string, string> = {};
+    let autoIncrementAfter: Record<string, string> = {};
+    try {
+      const [beforeCounterRows] = await connection.query(
+        "SELECT `TABLE_NAME` AS tableName,`AUTO_INCREMENT` AS autoIncrement FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN ('workspaces','billing_scheduler_tenants','billing_outbox') ORDER BY `TABLE_NAME`"
+      );
+      autoIncrementBefore = Object.fromEntries(
+        (
+          beforeCounterRows as Array<{
+            tableName: string;
+            autoIncrement: unknown;
+          }>
+        ).map(row => [row.tableName, String(row.autoIncrement)])
+      );
+      await assertBillingTriggerRuntimePreflight(connection, "test");
+      const [afterCounterRows] = await connection.query(
+        "SELECT `TABLE_NAME` AS tableName,`AUTO_INCREMENT` AS autoIncrement FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN ('workspaces','billing_scheduler_tenants','billing_outbox') ORDER BY `TABLE_NAME`"
+      );
+      autoIncrementAfter = Object.fromEntries(
+        (
+          afterCounterRows as Array<{
+            tableName: string;
+            autoIncrement: unknown;
+          }>
+        ).map(row => [row.tableName, String(row.autoIncrement)])
+      );
+    } finally {
+      await connection.end();
+    }
+    const afterLanes = await database
+      .select({
+        id: billingSchedulerTenants.id,
+        workspaceId: billingSchedulerTenants.workspaceId,
+        kind: billingSchedulerTenants.kind,
+        pendingWorkCount: billingSchedulerTenants.pendingWorkCount,
+        deadLetterCount: billingSchedulerTenants.deadLetterCount,
+        nextDueAt: billingSchedulerTenants.nextDueAt,
+      })
+      .from(billingSchedulerTenants)
+      .where(eq(billingSchedulerTenants.mode, "test"))
+      .orderBy(billingSchedulerTenants.id);
+    const afterOutbox = await database
+      .select({ id: billingOutbox.id })
+      .from(billingOutbox)
+      .where(eq(billingOutbox.mode, "test"))
+      .orderBy(billingOutbox.id);
+
+    expect(afterLanes).toEqual(beforeLanes);
+    expect(afterOutbox).toEqual(beforeOutbox);
+    expect(Object.keys(autoIncrementBefore).sort()).toEqual([
+      "billing_outbox",
+      "billing_scheduler_tenants",
+      "workspaces",
+    ]);
+    for (const counter of Object.values(autoIncrementBefore)) {
+      expect(counter).toMatch(/^[1-9][0-9]*$/);
+    }
+    expect(autoIncrementAfter).toEqual(autoIncrementBefore);
   });
 
   it("contains provider results that crash before domain attachment", async () => {

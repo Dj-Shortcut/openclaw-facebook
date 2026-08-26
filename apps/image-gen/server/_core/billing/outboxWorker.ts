@@ -70,6 +70,51 @@ class PermanentOutboxError extends Error {
 
 type ClaimedBillingOutboxItem = BillingOutboxItem & { leaseToken: string };
 
+type BillingOutboxDispatchStage =
+  | "read_config"
+  | "record_poll"
+  | "claim_tenant"
+  | "assert_lease_before"
+  | "process_tenant"
+  | "assert_lease_after"
+  | "compute_next_due"
+  | "release_tenant";
+
+class BillingOutboxDispatchError extends Error {
+  readonly errorCode: string;
+
+  constructor(
+    readonly stageCode: BillingOutboxDispatchStage,
+    cause: unknown
+  ) {
+    super("Billing outbox dispatch failed", { cause });
+    this.name = "BillingOutboxDispatchError";
+    this.errorCode = cause instanceof Error ? cause.name : "UnknownError";
+  }
+}
+
+function billingOutboxFailureMetadata(
+  stageCode: BillingOutboxDispatchStage,
+  error: unknown
+) {
+  return {
+    level: "error" as const,
+    stageCode,
+    errorCode: error instanceof Error ? error.name : "UnknownError",
+  };
+}
+
+async function runBillingOutboxDispatchStage<T>(
+  stageCode: BillingOutboxDispatchStage,
+  operation: () => Promise<T> | T
+): Promise<T> {
+  try {
+    return await operation();
+  } catch (error) {
+    throw new BillingOutboxDispatchError(stageCode, error);
+  }
+}
+
 let workerTimer: NodeJS.Timeout | null = null;
 
 export function startBillingOutboxWorker(): void {
@@ -86,13 +131,19 @@ export async function runBillingOutboxSchedulerOnce(
   limit = 25,
   now = new Date()
 ): Promise<number> {
-  const mode = getConfiguredBillingMode();
-  await recordBillingSchedulerPoll(mode, "outbox", now);
+  const mode = await runBillingOutboxDispatchStage("read_config", () =>
+    getConfiguredBillingMode()
+  );
+  await runBillingOutboxDispatchStage("record_poll", () =>
+    recordBillingSchedulerPoll(mode, "outbox", now)
+  );
   let processed = 0;
   const count = Math.max(1, Math.min(100, limit));
   for (let index = 0; index < count; index += 1) {
     const claimNow = index === 0 ? now : new Date();
-    const lease = await claimNextBillingTenant(mode, claimNow, "outbox");
+    const lease = await runBillingOutboxDispatchStage("claim_tenant", () =>
+      claimNextBillingTenant(mode, claimNow, "outbox")
+    );
     if (!lease) break;
     let failed = false;
     const heartbeat = setInterval(() => {
@@ -105,34 +156,46 @@ export async function runBillingOutboxSchedulerOnce(
         });
     }, 30_000);
     heartbeat.unref();
+    let tenantStage: BillingOutboxDispatchStage = "assert_lease_before";
     try {
       await assertBillingTenantLeaseOwned(lease);
+      tenantStage = "process_tenant";
       if (
         await runBillingOutboxOnce(lease.workspaceId, clientOverride, lease)
       ) {
         processed += 1;
       }
+      tenantStage = "assert_lease_after";
       await assertBillingTenantLeaseOwned(lease);
-    } catch {
+    } catch (error) {
       failed = true;
+      safeLog(
+        "billing_outbox_tenant_dispatch_failed",
+        billingOutboxFailureMetadata(tenantStage, error)
+      );
     } finally {
       clearInterval(heartbeat);
       const releaseNow = new Date();
       const nextAt = failed
         ? releaseNow
-        : await getNextBillingOutboxDue(
-            lease.workspaceId,
-            lease.mode,
-            releaseNow
+        : await runBillingOutboxDispatchStage("compute_next_due", () =>
+            getNextBillingOutboxDue(lease.workspaceId, lease.mode, releaseNow)
           );
-      const released = await releaseBillingTenantLease({
-        ...lease,
-        failed,
-        now: releaseNow,
-        nextAt,
-      });
+      const released = await runBillingOutboxDispatchStage(
+        "release_tenant",
+        () =>
+          releaseBillingTenantLease({
+            ...lease,
+            failed,
+            now: releaseNow,
+            nextAt,
+          })
+      );
       if (!released) {
-        throw new Error("billing scheduler lease ownership was lost");
+        throw new BillingOutboxDispatchError(
+          "release_tenant",
+          new Error("billing scheduler lease ownership was lost")
+        );
       }
     }
   }
@@ -346,13 +409,22 @@ function retryableErrorCode(error: unknown): string | null {
   return "transient_worker_error";
 }
 
-async function runBillingOutboxSchedulerSafely(): Promise<void> {
+export async function runBillingOutboxSchedulerSafely(): Promise<void> {
   try {
     await runBillingOutboxSchedulerOnce();
   } catch (error) {
     safeLog("billing_outbox_dispatch_failed", {
       level: "error",
-      errorCode: error instanceof Error ? error.name : "UnknownError",
+      stageCode:
+        error instanceof BillingOutboxDispatchError
+          ? error.stageCode
+          : "unknown",
+      errorCode:
+        error instanceof BillingOutboxDispatchError
+          ? error.errorCode
+          : error instanceof Error
+            ? error.name
+            : "UnknownError",
     });
   }
 }

@@ -68,6 +68,14 @@ Evidence is for PR #400 credential-free code commit
 These results validate code contracts only. They do not convert a provider
 scenario below from **NOT RUN** to **PASS**.
 
+## Release-boundary evidence
+
+| Scenario                              | Status   | Required evidence                                                                                                                 |
+| ------------------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| Direct multi-tenant image-gen route   | NOT RUN  | Production Meta callback and customer image traffic terminate in image-gen without creating an OpenClaw host session transcript   |
+| Image-gen deletion during provider IO | NOT RUN  | Tenant tombstone prevents late queue, asset, completion or send resurrection during a controlled slow provider/transport scenario |
+| OpenClaw non-archiving erasure        | DEFERRED | Required before any OpenClaw transcript/customer feature; non-blocking for image-gen only after the direct-route row passes       |
+
 ## Startpilot sandbox scenarios
 
 | Scenario                            | Status  | Required evidence                                                                                                                                       |
@@ -116,4 +124,7 @@ collecting a Subscription.
 Use only Mollie's documented Test Mode controls when these cases are eventually
 approved. Recurring test Payments do not have a checkout link.
 
-Overall result: **NO-GO**.
+Overall result: **NO-GO**. The direct image-gen route, image-gen deletion race,
+provider sandbox and human approval evidence remain open. OpenClaw
+non-archiving erasure is not an image-gen blocker only after the direct-route
+row passes.

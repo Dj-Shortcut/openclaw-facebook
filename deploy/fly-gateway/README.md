@@ -1,6 +1,8 @@
 # Leaderbot OpenClaw Fly Gateway
 
-This plugin repo now owns the Fly deployment source for the public Messenger gateway.
+This plugin repo owns the Fly deployment source for Andy's personal-only
+OpenClaw gateway. Multi-tenant Messenger customers terminate directly in
+image-gen and must never enter this workspace.
 OpenClaw and the official Codex harness plugin are installed as pinned package dependencies during the Docker build; the Facebook plugin is built from this repository in the same image.
 
 ## Update OpenClaw
@@ -39,7 +41,7 @@ npm run deploy:gateway
 Direct invocation is reserved for an explicitly approved emergency. Do not use
 `fly machine run`; detached Machines are rejected by the deployment drift gate.
 
-### Temporary production route-guard hotfix
+### Gateway deployment remains blocked
 
 The 2026-08-01 production upgrade to OpenClaw 2026.7.1 was rolled back because
 the mounted state contains conflicting legacy and canonical Memory Core index
@@ -48,18 +50,13 @@ state migration has been rehearsed on a copy, backed up, and explicitly
 approved. Do not run `openclaw doctor --fix` against production state as an
 unreviewed deploy step.
 
-Until that migration is resolved, the reproducible containment deployment keeps
-the last known-good OpenClaw 2026.6.11 image and overlays only the reviewed
-public route guard:
-
-```bash
-fly deploy --config fly.toml
-```
-
-This hotfix does not upgrade the bundled Facebook plugin, OpenClaw runtime, or
-`start-gateway.mjs`. It therefore does **not** contain the tenant-isolation
-controls described below. Do not use the hotfix command to claim or test this
-isolation port.
+The former direct `fly deploy --config fly.toml` containment command is retired.
+The current config hard-blocks both Facebook webhook paths, so deploying it
+before Meta's canonical callback is proven to reach image-gen would interrupt
+Messenger delivery. A direct Fly command would also bypass the protected
+workflow's pre-deploy callback check. Do not deploy this gateway while the
+production manifest keeps it disabled, and do not use a direct command as a
+temporary hotfix.
 
 The isolation port requires a reviewed immutable image built from the standard
 `deploy/fly-gateway/Dockerfile`. The production manifest currently blocks that
@@ -69,14 +66,22 @@ same isolation controls. Rolling back to an older startup script would recreate
 shared `MEMORY.md` and re-enable shared memory, so such an image is not an
 acceptable rollback target.
 
-Verify `/healthz`, `/facebook/webhook`, all intended portal/legal routes, and
-protected route near-misses after every deployment. Verify the legacy
-`/messenger/webhook` route remains blocked unless an explicitly reviewed
-persisted channel configuration still requires the matching route override.
+Only the protected deployment workflow may deploy the gateway after all of
+those prerequisites are recorded and the canonical image-gen Facebook callback
+and direct delivery have been proven. Until then there is no approved gateway
+deployment command.
+
+Verify `/healthz` and protected route near-misses after every deployment. Portal,
+legal and Mollie routes belong to `app.leaderbot.live`/image-gen and must return
+`404` on this personal gateway. Both `/facebook/webhook` and the legacy
+`/messenger/webhook` must also return `404`; the multi-tenant Page callback
+belongs to image-gen.
 
 ## Safety Defaults
 
-The container preserves `/data/openclaw.json` and only seeds non-secret defaults when missing:
+The container preserves `/data/openclaw.json` and normally seeds non-secret
+defaults only when missing. The reviewed safer `pairing` and bridge-disabled
+values are deliberately authoritative over stale public values.
 
 ### Reviewed model and memory settings
 
@@ -98,7 +103,7 @@ The checked-in values and the non-deploying update boundary are enforced by:
 npm run gateway:deployment-safety
 ```
 
-- `OPENCLAW_WORKSPACE_DIR` defaults to `/data/workspace` for static instruction files (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, and `IDENTITY.md`). Public Messenger memory plugins, session-memory hooks, compaction memory flushes, memory search, and memory tools are disabled because this gateway serves multiple tenant Pages.
+- `OPENCLAW_WORKSPACE_DIR` defaults to `/data/workspace` for static instruction files (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, and `IDENTITY.md`). Messenger memory plugins, session-memory hooks, compaction memory flushes, memory search, and memory tools remain disabled so legacy customer data cannot enter Andy's personal workspace.
 - Startup moves any legacy shared `USER.md`, `MEMORY.md`, or `memory/` content to the recoverable, operator-only `/data/private-memory-quarantine-v1` directory before accepting traffic. If shared memory reappears after a prior quarantine, startup fails closed instead of overwriting either copy.
 - `session.dmScope` is forced to `per-account-channel-peer`, keeping direct-message history isolated by Page account, channel, and sender. Startup rejects an explicit Facebook `agentId` other than `main`; when a binding omits `agentId`, the public plugin still rejects an inherited secondary default agent at runtime before transcript dispatch.
 - `attachments.ttlHours` is capped at 24 hours as crash-recovery cleanup; normal Messenger turns delete their downloaded temporary media immediately after completion or failure.
@@ -106,20 +111,23 @@ npm run gateway:deployment-safety
 - `plugins.load.paths` includes `/app/node_modules/@dj-shortcut/facebook`.
 - The optional Codex plugin path/allow entry is removed and its plugin entry is disabled.
 - `plugins.entries.facebook.enabled` defaults to `true`.
-- `channels.facebook.dmPolicy` defaults to `pairing`.
-- `channels.facebook.unknownSenderMode` is seeded from `OPENCLAW_FACEBOOK_UNKNOWN_SENDER_MODE` when missing. The public Leaderbot gateway sets this to `leaderbot_free_tier` so new Page senders enter the free-tier image flow while private installs can keep or set `pairing`.
-- `channels.facebook.leaderbotBridgeEnabled` is seeded from `OPENCLAW_FACEBOOK_LEADERBOT_BRIDGE_ENABLED` when missing. Keep it unset/false for ClawHub and private installs; set it only for the intentional public Leaderbot gateway where Messenger content and identifiers are disclosed as being processed by the separate image-generation service.
+- `channels.facebook.dmPolicy` defaults to `pairing`; persisted account-level
+  `open` overrides are also reduced to `pairing` unless public-open mode was
+  explicitly authorized.
+- `channels.facebook.unknownSenderMode` is seeded from `OPENCLAW_FACEBOOK_UNKNOWN_SENDER_MODE` when missing. A reviewed `pairing` value is authoritative over stale persisted top-level and account-level public modes on this personal-only gateway.
+- `channels.facebook.leaderbotBridgeEnabled` is seeded from `OPENCLAW_FACEBOOK_LEADERBOT_BRIDGE_ENABLED` when missing. A reviewed `false` value is authoritative over stale persisted top-level and account-level `true` values, preventing the mounted volume from silently restoring customer forwarding.
 - `agents.defaults.model.primary` defaults to `OPENCLAW_AGENT_MODEL` when set.
 - `agents.defaults.thinkingDefault` defaults to `OPENCLAW_AGENT_THINKING_DEFAULT` when set.
-- Every untrusted public Messenger turn replaces persisted tool profiles and provider overrides with a positive minimal allowlist containing only `session_status`; code mode is disabled and memory, cross-session, messaging, automation, plugin, node, web/UI, runtime, filesystem, and billable generation tools remain explicitly denied. Messenger image generation is routed through the separate Leaderbot image-gen service.
-- `OPENCLAW_PUBLIC_GATEWAY_GUARD=1` puts OpenClaw behind a small public route guard. Fly exposes `/facebook/webhook` and `/healthz` publicly by default, and can proxy customer portal/legal routes to `LEADERBOT_PORTAL_ORIGIN`. A deployment whose persisted channel config still uses the legacy `/messenger/webhook` path must opt in with `OPENCLAW_PUBLIC_GATEWAY_PATHS`; do not expose an unregistered webhook path because OpenClaw may otherwise serve its UI fallback there. Dashboard/UI/API access requires `OPENCLAW_ADMIN_TOKEN` and a request host listed in `OPENCLAW_ADMIN_HOSTS`; after that, OpenClaw's own device pairing/auth still applies.
+- Every untrusted public Messenger turn replaces persisted tool profiles and provider overrides with a positive minimal allowlist containing only `session_status`; code mode is disabled and memory, cross-session, messaging, automation, plugin, node, web/UI, runtime, filesystem, and billable generation tools remain explicitly denied. The multi-tenant customer image-generation path does not use this gateway.
+- The Fly startup always puts OpenClaw behind its public route guard and binds the OpenClaw target to loopback. Only `/healthz` is public; stale `OPENCLAW_PUBLIC_GATEWAY_GUARD`, `OPENCLAW_PUBLIC_GATEWAY_PATHS`, `LEADERBOT_PORTAL_ORIGIN` and `OPENCLAW_PUBLIC_PORTAL_ORIGIN` values cannot reopen webhook, portal, legal or Mollie routes. The canonical customer endpoints belong to image-gen. Dashboard/UI/API access requires `OPENCLAW_ADMIN_TOKEN` and a request host listed in `OPENCLAW_ADMIN_HOSTS`; after that, OpenClaw's own device pairing/auth still applies.
 
 The container changes `channels.facebook.dmPolicy: "open"` back to `"pairing"` unless `OPENCLAW_FACEBOOK_ALLOW_OPEN=1` is intentionally set.
 Secrets must remain in Fly secrets or the mounted state, never in this repo.
 
-### Tenant-isolation rollout gate
+### Personal gateway state/privacy rollout gate
 
-Before enabling the standard gateway deployment:
+Before enabling the standard gateway deployment, independently of the
+multi-tenant image-gen release:
 
 1. Snapshot or clone the mounted volume and rehearse startup on the copy. Do not
    inspect quarantined customer content without an approved, auditable support

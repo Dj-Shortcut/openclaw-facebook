@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   assertBillingSchedulerRegistryCoherence,
   assertPinnedBillingProfileReadiness,
+  getRequiredBillingRuntimeHeartbeatKinds,
 } from "./billingReadiness";
 
 const kinds = [
@@ -71,6 +72,71 @@ describe("billing scheduler readiness state machine", () => {
         incoherent
       )
     ).toThrow(/epoch|enablement/);
+  });
+});
+
+describe("billing runtime heartbeat policy", () => {
+  const disabled = {
+    providerDrainEnabled: false,
+    notificationPlaneEnabled: false,
+    entitlementEnforcementEnabled: false,
+    aiFinalizationDrainEnabled: false,
+    aiAnswerQuotaPreflightEnabled: false,
+    reconciliationEnabled: true,
+  } as const;
+
+  it("requires only the workers started by drain-only safety mode", () => {
+    expect(
+      getRequiredBillingRuntimeHeartbeatKinds({
+        ...disabled,
+        providerDrainEnabled: true,
+        notificationPlaneEnabled: true,
+      })
+    ).toEqual(["outbox", "reconciliation", "notification_receiver"]);
+  });
+
+  it("does not require a reconciliation heartbeat when that worker is explicitly disabled", () => {
+    expect(
+      getRequiredBillingRuntimeHeartbeatKinds({
+        ...disabled,
+        providerDrainEnabled: true,
+        notificationPlaneEnabled: true,
+        reconciliationEnabled: false,
+      })
+    ).toEqual(["outbox", "notification_receiver"]);
+  });
+
+  it("requires quota workers only when their exact startup gates are enabled", () => {
+    expect(
+      getRequiredBillingRuntimeHeartbeatKinds({
+        ...disabled,
+        providerDrainEnabled: true,
+        notificationPlaneEnabled: true,
+        entitlementEnforcementEnabled: true,
+      })
+    ).toEqual([
+      "outbox",
+      "reconciliation",
+      "profile_expiry",
+      "ai_finalization",
+      "notification_receiver",
+    ]);
+    expect(
+      getRequiredBillingRuntimeHeartbeatKinds({
+        ...disabled,
+        aiFinalizationDrainEnabled: true,
+      })
+    ).toEqual(["ai_finalization"]);
+  });
+
+  it("starts the provider-key-free safety outbox with the notification plane", () => {
+    expect(
+      getRequiredBillingRuntimeHeartbeatKinds({
+        ...disabled,
+        notificationPlaneEnabled: true,
+      })
+    ).toEqual(["outbox", "notification_receiver"]);
+    expect(getRequiredBillingRuntimeHeartbeatKinds(disabled)).toEqual([]);
   });
 });
 

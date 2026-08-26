@@ -517,16 +517,36 @@ function ensurePublicMessengerBaseline(config) {
   const unknownSenderMode = resolveDefaultUnknownSenderMode();
   if (
     unknownSenderMode &&
-    config.channels.facebook.unknownSenderMode === undefined
+    (unknownSenderMode === "pairing" ||
+      config.channels.facebook.unknownSenderMode === undefined)
   ) {
     config.channels.facebook.unknownSenderMode = unknownSenderMode;
   }
   const leaderbotBridgeEnabled = resolveDefaultLeaderbotBridgeEnabled();
   if (
     leaderbotBridgeEnabled !== undefined &&
-    config.channels.facebook.leaderbotBridgeEnabled === undefined
+    (leaderbotBridgeEnabled === false ||
+      config.channels.facebook.leaderbotBridgeEnabled === undefined)
   ) {
     config.channels.facebook.leaderbotBridgeEnabled = leaderbotBridgeEnabled;
+  }
+  if (isObject(config.channels.facebook.accounts)) {
+    for (const accountConfig of Object.values(
+      config.channels.facebook.accounts,
+    )) {
+      if (!isObject(accountConfig)) {
+        continue;
+      }
+      if (!allowOpen && accountConfig.dmPolicy === "open") {
+        accountConfig.dmPolicy = "pairing";
+      }
+      if (unknownSenderMode === "pairing") {
+        accountConfig.unknownSenderMode = unknownSenderMode;
+      }
+      if (leaderbotBridgeEnabled === false) {
+        accountConfig.leaderbotBridgeEnabled = leaderbotBridgeEnabled;
+      }
+    }
   }
 
   ensureAgentDefaults(config);
