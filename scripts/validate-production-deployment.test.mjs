@@ -2387,7 +2387,7 @@ describe("production deployment contract", () => {
     );
   });
 
-  it("requires completion recovery when the inline runner disappears", () => {
+  it("requires completion recovery when the parent dispatcher disappears", () => {
     const root = createRepositoryFixture();
     fs.unlinkSync(
       path.join(
@@ -2521,6 +2521,121 @@ describe("production deployment contract", () => {
     );
   });
 
+  it("defines exactly one validated image-gen dispatch and suppresses the completion fallback after parent success", () => {
+    const deployWorkflow = fs.readFileSync(
+      path.join(repoRoot, ".github/workflows/deploy-production.yml"),
+      "utf8",
+    );
+    const imageStart = deployWorkflow.indexOf("  queue-recovery-image-gen:");
+    const imageEnd = deployWorkflow.indexOf(
+      "  queue-recovery-storage-proxy:",
+      imageStart,
+    );
+    expect(imageStart).toBeGreaterThanOrEqual(0);
+    expect(imageEnd).toBeGreaterThan(imageStart);
+    const imageDispatchJob = deployWorkflow.slice(imageStart, imageEnd);
+    expect(
+      imageDispatchJob.match(
+        /\/actions\/workflows\/reconcile-production-deployment\.yml\/dispatches/g,
+      ) ?? [],
+    ).toHaveLength(1);
+    expect(imageDispatchJob).toContain("inputs.target == 'image-gen'");
+    expect(imageDispatchJob).toContain(
+      "needs.deploy-image-gen.result == 'failure' || needs.deploy-image-gen.result == 'cancelled'",
+    );
+    expect(imageDispatchJob).toContain(
+      '.status=="in_progress" and .head_branch=="main" and .head_sha==$sourceSha',
+    );
+    expect(imageDispatchJob).toContain(
+      "[.artifacts[] | select(.expired==false and .name==$name)] | length==1",
+    );
+
+    const completionWorkflow = fs.readFileSync(
+      path.join(
+        repoRoot,
+        ".github/workflows/recover-completed-production-deployment.yml",
+      ),
+      "utf8",
+    );
+    expect(
+      completionWorkflow.match(
+        /\/actions\/workflows\/reconcile-production-deployment\.yml\/dispatches/g,
+      ) ?? [],
+    ).toHaveLength(1);
+    const parentSuccess = completionWorkflow.indexOf(
+      'if test "$queue_result" = "success"; then',
+    );
+    const fallbackDispatch = completionWorkflow.indexOf(
+      "/actions/workflows/reconcile-production-deployment.yml/dispatches",
+    );
+    expect(parentSuccess).toBeGreaterThanOrEqual(0);
+    expect(fallbackDispatch).toBeGreaterThan(parentSuccess);
+  });
+
+  it.each([
+    [
+      '.status=="in_progress" and .head_branch=="main" and .head_sha==$sourceSha',
+      '.status=="in_progress" and .head_branch=="release" and .head_sha==$sourceSha',
+    ],
+    ['.head_branch=="main" and .head_sha==$sourceSha', '.head_branch=="main"'],
+    [
+      '.event=="workflow_dispatch" and .path==".github/workflows/deploy-production.yml"',
+      '.event=="workflow_dispatch" and .path==".github/workflows/untrusted.yml"',
+    ],
+    [
+      "[.artifacts[] | select(.expired==false and .name==$name)] | length==1",
+      "[.artifacts[] | select(.expired==false and .name==$name)] | length>=1",
+    ],
+  ])(
+    "blocks parent dispatch when in-progress source metadata or artifact binding is untrusted %#",
+    (before, after) => {
+      const root = createRepositoryFixture();
+      replaceFixtureText(
+        root,
+        ".github/workflows/deploy-production.yml",
+        before,
+        after,
+      );
+
+      expect(() => validateProductionRepository(root)).toThrow(
+        "must make one secretless exact-attempt gateway recovery dispatch only when its validated deploy job fails",
+      );
+    },
+  );
+
+  it.each([
+    [
+      '.status=="completed" and (.conclusion|IN("failure","cancelled","timed_out","action_required","stale","startup_failure")) and .head_branch=="main"',
+      '.status=="completed" and .conclusion!="success" and .head_branch=="main"',
+      "must remain a secretless exact-attempt selector with one protected recovery dispatch",
+    ],
+    [
+      '.event=="workflow_dispatch" and .path==".github/workflows/deploy-production.yml"',
+      '.event=="workflow_dispatch" and .path==".github/workflows/untrusted.yml"',
+      "must remain a secretless exact-attempt selector with one protected recovery dispatch",
+    ],
+    [
+      "[.artifacts[] | select(.expired==false and .name==$name)] | length==1",
+      "[.artifacts[] | select(.expired==false and .name==$name)] | length>=1",
+      "must revalidate exactly one target-bound rollback plan before dispatch",
+    ],
+  ])(
+    "blocks completion dispatch when completed source metadata or artifact binding is untrusted %#",
+    (before, after, expectedError) => {
+      const root = createRepositoryFixture();
+      replaceFixtureText(
+        root,
+        ".github/workflows/recover-completed-production-deployment.yml",
+        before,
+        after,
+      );
+
+      expect(() => validateProductionRepository(root)).toThrow(
+        expectedError,
+      );
+    },
+  );
+
   it("treats zero completed-run rollback plans as a clean no-op", () => {
     const root = createRepositoryFixture();
     replaceFixtureText(
@@ -2538,13 +2653,13 @@ describe("production deployment contract", () => {
   it.each([
     [
       ".github/workflows/deploy-production.yml",
-      "      target: gateway\n",
-      "      target: gateway\n    secrets: inherit\n",
+      "  queue-recovery-gateway:\n    name: Queue exact gateway recovery after failed deploy\n",
+      "  queue-recovery-gateway:\n    name: Queue exact gateway recovery after failed deploy\n    secrets: inherit\n",
     ],
     [
       ".github/workflows/recover-completed-production-deployment.yml",
-      "      target: ${{ needs.inspect.outputs.target }}\n",
-      "      target: ${{ needs.inspect.outputs.target }}\n    secrets: inherit\n",
+      "  dispatch-recovery:\n    name: Dispatch exact protected rollback after completion\n",
+      "  dispatch-recovery:\n    name: Dispatch exact protected rollback after completion\n    secrets: inherit\n",
     ],
   ])(
     "does not let the production caller %s inherit secrets",
@@ -2553,7 +2668,7 @@ describe("production deployment contract", () => {
       replaceFixtureText(root, workflowPath, before, after);
 
       expect(() => validateProductionRepository(root)).toThrow(
-        "production reusable recovery callers must never inherit caller secrets",
+        "production recovery dispatchers must never expose a reusable caller-secret boundary",
       );
     },
   );
@@ -2568,11 +2683,11 @@ describe("production deployment contract", () => {
     );
 
     expect(() => validateProductionRepository(root)).toThrow(
-      "must bind recovery to the exact canonical deploy attempt and its allowed lifecycle state",
+      "must bind recovery to one exact completed failed canonical deploy attempt",
     );
   });
 
-  it("allows manual recovery only after an explicit failed lifecycle state", () => {
+  it("allows recovery only after an explicit failed lifecycle state", () => {
     const root = createRepositoryFixture();
     replaceFixtureText(
       root,
@@ -2582,21 +2697,21 @@ describe("production deployment contract", () => {
     );
 
     expect(() => validateProductionRepository(root)).toThrow(
-      "must bind recovery to the exact canonical deploy attempt and its allowed lifecycle state",
+      "must bind recovery to one exact completed failed canonical deploy attempt",
     );
   });
 
-  it("gives manual recovery the target lock without deadlocking an inline child", () => {
+  it("queues direct recovery behind the exact target lock", () => {
     const root = createRepositoryFixture();
     replaceFixtureText(
       root,
       ".github/workflows/reconcile-production-deployment.yml",
-      "group: ${{ inputs.invocation_mode == 'inline' && format('recovery-child-{0}', github.run_id) || format('production-deploy-{0}', inputs.target) }}",
+      "group: production-deploy-${{ inputs.target }}",
       "group: production-recovery-${{ inputs.target }}",
     );
 
     expect(() => validateProductionRepository(root)).toThrow(
-      "must avoid a child deadlock while giving manual recovery the exact target lock",
+      "must queue every recovery behind the exact target deployment lock",
     );
   });
 
@@ -2617,7 +2732,7 @@ describe("production deployment contract", () => {
       ],
       [
         ".github/workflows/reconcile-production-deployment.yml",
-        "must retain every manual or post-completion recovery in the target lock queue",
+        "must retain every protected recovery in the target lock queue",
       ],
     ]) {
       const root = createRepositoryFixture();
@@ -2627,17 +2742,17 @@ describe("production deployment contract", () => {
     }
   });
 
-  it("marks every failed deploy caller as inline exact-attempt recovery", () => {
+  it("binds every failed deploy dispatcher to its exact target", () => {
     const root = createRepositoryFixture();
     replaceFixtureText(
       root,
       ".github/workflows/deploy-production.yml",
-      "      invocation_mode: inline\n      recovery_run_id: ${{ github.run_id }}\n      recovery_run_attempt: ${{ github.run_attempt }}\n      target: image-gen",
-      "      invocation_mode: manual\n      recovery_run_id: ${{ github.run_id }}\n      recovery_run_attempt: ${{ github.run_attempt }}\n      target: image-gen",
+      "          RECOVERY_TARGET: image-gen\n",
+      "          RECOVERY_TARGET: gateway\n",
     );
 
     expect(() => validateProductionRepository(root)).toThrow(
-      "must invoke exact-attempt image-gen recovery only when its validated deploy job fails",
+      "must make one secretless exact-attempt image-gen recovery dispatch only when its validated deploy job fails",
     );
   });
 
@@ -2680,6 +2795,25 @@ describe("production deployment contract", () => {
 
     expect(() => validateProductionRepository(root)).toThrow(
       "must reject recovery workflow code from every non-main ref",
+    );
+  });
+
+  it.each([
+    ".github/workflows/reconcile-production-deployment.yml",
+    ".github/workflows/recover-completed-production-deployment.yml",
+  ])("rejects an extra push trigger on %s", (workflowPath) => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      workflowPath,
+      "on:\n",
+      "on:\n  push:\n    branches: [main]\n",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      workflowPath.endsWith("reconcile-production-deployment.yml")
+        ? "must keep all three recovery jobs independent, exact-source, and least-privileged"
+        : "must remain a secretless exact-attempt selector with one protected recovery dispatch",
     );
   });
 
@@ -2978,17 +3112,36 @@ describe("production deployment contract", () => {
     );
   });
 
-  it("rejects every caller-provided recovery capability", () => {
+  it.each(["true", "false", null])(
+    "rejects caller-provided recovery capability with required=%s",
+    (required) => {
+      const root = createRepositoryFixture();
+      const requiredLine =
+        required === null ? "" : `        required: ${required}\n`;
+      replaceFixtureText(
+        root,
+        ".github/workflows/reconcile-production-deployment.yml",
+        "on:\n  workflow_dispatch:\n",
+        `on:\n  workflow_call:\n    secrets:\n      CUSTOM_SUPPORT_TOKEN:\n${requiredLine}  workflow_dispatch:\n`,
+      );
+
+      expect(() => validateProductionRepository(root)).toThrow(
+        "must expose no reusable caller-secret boundary and may reference only the four exact environment-scoped",
+      );
+    },
+  );
+
+  it("rejects extra recovery secret references outside the exact environment allowlist", () => {
     const root = createRepositoryFixture();
     replaceFixtureText(
       root,
       ".github/workflows/reconcile-production-deployment.yml",
-      "      target:\n        required: true\n        type: string\n  workflow_dispatch:\n",
-      "      target:\n        required: true\n        type: string\n    secrets:\n      CUSTOM_SUPPORT_TOKEN:\n        required: false\n  workflow_dispatch:\n",
+      "          GH_TOKEN: ${{ github.token }}\n",
+      "          GH_TOKEN: ${{ github.token }}\n          CUSTOM_SUPPORT_TOKEN: ${{ secrets.CUSTOM_SUPPORT_TOKEN }}\n",
     );
 
     expect(() => validateProductionRepository(root)).toThrow(
-      "must accept no caller secrets and may reference only the four exact environment-scoped",
+      "must expose no reusable caller-secret boundary and may reference only the four exact environment-scoped",
     );
   });
 
@@ -3002,7 +3155,7 @@ describe("production deployment contract", () => {
     );
 
     expect(() => validateProductionRepository(root)).toThrow(
-      "must accept no caller secrets and may reference only the four exact environment-scoped",
+      "must expose no reusable caller-secret boundary and may reference only the four exact environment-scoped",
     );
   });
 

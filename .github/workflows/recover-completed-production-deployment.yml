@@ -49,6 +49,13 @@ jobs:
           suffix="-rollback-${SOURCE_RUN_ID}-${SOURCE_RUN_ATTEMPT}"
           target="${artifact_name%"$suffix"}"
           [[ "$target" =~ ^(gateway|image-gen|storage-proxy)$ ]]
+          jobs="$(gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID/attempts/$SOURCE_RUN_ATTEMPT/jobs?per_page=100")"
+          queue_name="Queue exact ${target} recovery after failed deploy"
+          queue_result="$(jq -er --arg name "$queue_name" '[.jobs[] | select(.name==$name)] | if length==0 then "missing" elif length==1 then (.[0].conclusion // "missing") else error("duplicate recovery queue jobs") end' <<<"$jobs")"
+          if test "$queue_result" = "success"; then
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           {
             echo "needed=true"
             echo "run_id=$SOURCE_RUN_ID"
@@ -56,13 +63,38 @@ jobs:
             echo "target=$target"
           } >> "$GITHUB_OUTPUT"
 
-  recover:
-    name: Finish the protected rollback after completion
+  dispatch-recovery:
+    name: Dispatch exact protected rollback after completion
     needs: inspect
     if: needs.inspect.outputs.needed == 'true'
-    uses: ./.github/workflows/reconcile-production-deployment.yml
-    with:
-      invocation_mode: post_completion
-      recovery_run_id: ${{ needs.inspect.outputs.run_id }}
-      recovery_run_attempt: ${{ needs.inspect.outputs.run_attempt }}
-      target: ${{ needs.inspect.outputs.target }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      # Required only to POST the protected reconciliation workflow dispatch.
+      actions: write
+      contents: read
+    steps:
+      - name: Dispatch exact completed recovery
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RECOVERY_RUN_ID: ${{ needs.inspect.outputs.run_id }}
+          RECOVERY_RUN_ATTEMPT: ${{ needs.inspect.outputs.run_attempt }}
+          RECOVERY_TARGET: ${{ needs.inspect.outputs.target }}
+        run: |
+          test "$GITHUB_REF" = "refs/heads/main"
+          [[ "$RECOVERY_RUN_ID" =~ ^[0-9]+$ ]]
+          [[ "$RECOVERY_RUN_ATTEMPT" =~ ^[0-9]+$ ]]
+          [[ "$RECOVERY_TARGET" =~ ^(gateway|image-gen|storage-proxy)$ ]]
+          run="$(gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$RECOVERY_RUN_ID/attempts/$RECOVERY_RUN_ATTEMPT")"
+          jq -e --argjson runId "$RECOVERY_RUN_ID" --argjson runAttempt "$RECOVERY_RUN_ATTEMPT" '.id==$runId and .run_attempt==$runAttempt and .status=="completed" and (.conclusion|IN("failure","cancelled","timed_out","action_required","stale","startup_failure")) and .head_branch=="main" and .event=="workflow_dispatch" and .path==".github/workflows/deploy-production.yml" and (.head_sha|test("^[a-f0-9]{40}$"))' <<<"$run" > /dev/null
+          artifact_name="${RECOVERY_TARGET}-rollback-${RECOVERY_RUN_ID}-${RECOVERY_RUN_ATTEMPT}"
+          artifacts="$(gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$RECOVERY_RUN_ID/artifacts?per_page=100")"
+          jq -e --arg name "$artifact_name" '[.artifacts[] | select(.expired==false and .name==$name)] | length==1' <<<"$artifacts" > /dev/null
+          payload="$(jq -cn \
+            --arg runId "$RECOVERY_RUN_ID" \
+            --arg runAttempt "$RECOVERY_RUN_ATTEMPT" \
+            --arg target "$RECOVERY_TARGET" \
+            '{ref:"main",inputs:{recovery_run_id:$runId,recovery_run_attempt:$runAttempt,target:$target}}')"
+          gh api --method POST \
+            "/repos/$GITHUB_REPOSITORY/actions/workflows/reconcile-production-deployment.yml/dispatches" \
+            --input - <<<"$payload"
