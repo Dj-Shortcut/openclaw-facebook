@@ -24,7 +24,9 @@ kill_timeout = 300
   BILLING_CUSTOMER_NOTIFICATION_KEY_ID = "test-customer-v1"
   BILLING_CUSTOMER_NOTIFICATION_WEBHOOK_URL = "https://app.leaderbot.live/api/internal/billing/notifications/customer"
   BILLING_NOTIFICATION_ORIGIN_ALLOWLIST = "https://app.leaderbot.live"
-  BILLING_NOTIFICATION_PLANE_ENABLED = "true"
+  # Keep the first reviewed-runtime canary fully offline. Enabling this plane
+  # also starts the safety outbox, which may contact Mollie for existing jobs.
+  BILLING_NOTIFICATION_PLANE_ENABLED = "false"
   BILLING_NOTIFICATION_RECEIVER_CUSTOMER_KEY_ID = "test-customer-v1"
   BILLING_NOTIFICATION_RECEIVER_OPERATOR_KEY_ID = "test-operator-v1"
   BILLING_NOTIFICATION_RECEIVER_PREFLIGHT_ACK = "true"
@@ -51,7 +53,9 @@ kill_timeout = 300
   MESSENGER_USER_DAILY_SPEND_CAP_USD = "2.00"
   MOLLIE_ACCOUNTING_IMPORT_ENABLED = "false"
   MOLLIE_BILLING_ENABLED = "false"
-  MOLLIE_BILLING_DRAIN_ENABLED = "true"
+  # The first rollout of the reviewed runtime is provider-silent. The safety
+  # drain and reconciliation are enabled only in a later reviewed transition.
+  MOLLIE_BILLING_DRAIN_ENABLED = "false"
   MOLLIE_BILLING_PREFLIGHT_ENABLED = "false"
   MOLLIE_BILLING_SCHEDULER_MODE = "pilot_pin"
   MOLLIE_BILLING_WORKER_WORKSPACE_ID = "1"
@@ -62,7 +66,7 @@ kill_timeout = 300
   MOLLIE_LIVE_BILLING_ENABLED = "false"
   MOLLIE_MODE = "test"
   MOLLIE_PAYMENT_WEBHOOK_URL = "https://app.leaderbot.live/api/webhooks/mollie/payments"
-  MOLLIE_RECONCILIATION_ENABLED = "true"
+  MOLLIE_RECONCILIATION_ENABLED = "false"
   NODE_ENV = "production"
   OPENAI_IMAGE_MAX_RETRIES = "0"
   PORT = "8080"

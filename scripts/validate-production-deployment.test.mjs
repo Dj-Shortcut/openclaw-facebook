@@ -1668,8 +1668,64 @@ describe("production deployment contract", () => {
     replaceFixtureText(
       root,
       ".github/workflows/deploy-production.yml",
-      "            tail -n 120",
-      "            cat",
+      '          head -n 120 "$filtered_events"',
+      '          cat "$filtered_events"',
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must capture only bounded, classified image-gen startup metadata before rollback",
+    );
+  });
+
+  it("binds image-gen startup diagnostics to the exact candidate identity", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/deploy-production.yml",
+      '                      (.config.env.LEADERBOT_DEPLOYMENT_IDENTITY // "") ==\n                      $identity',
+      '                      (.config.env.LEADERBOT_DEPLOYMENT_IDENTITY // "") !=\n                      $identity',
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must capture only bounded, classified image-gen startup metadata before rollback",
+    );
+  });
+
+  it("requires a durable status-bearing image-gen diagnostic artifact", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/deploy-production.yml",
+      "      - name: Upload image-gen startup diagnostics",
+      "      - name: Omit image-gen startup diagnostics",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must capture only bounded, classified image-gen startup metadata before rollback",
+    );
+  });
+
+  it("requires scalar-safe image-gen startup log normalization", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/deploy-production.yml",
+      'if ($parsedPayload | type) == "object"',
+      'if ($parsedPayload | type) != "object"',
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must capture only bounded, classified image-gen startup metadata before rollback",
+    );
+  });
+
+  it("caps classified diagnostics for every candidate Machine", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/deploy-production.yml",
+      'head -n 20 "$machine_events"',
+      'cat "$machine_events"',
     );
 
     expect(() => validateProductionRepository(root)).toThrow(
