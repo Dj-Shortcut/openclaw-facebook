@@ -1663,6 +1663,20 @@ describe("production deployment contract", () => {
     );
   });
 
+  it("captures bounded classified image-gen startup diagnostics before rollback", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/deploy-production.yml",
+      "            tail -n 120",
+      "            cat",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must capture only bounded, classified image-gen startup metadata before rollback",
+    );
+  });
+
   it("requires immutable bridge and runtime schema markers", () => {
     const root = createRepositoryFixture();
     const dockerfilePath = path.join(root, "apps/image-gen/Dockerfile");
