@@ -230,12 +230,17 @@ The gateway currently has `deploymentEnabled: false`. This is an explicit
 bootstrap gate, not an operator override: both the workflow and the canonical
 package script reject it. Rehearse the volume migration and prove the current
 managed release first. Adding a digest and changing the flag is deliberately
-not enough to enable it. A later, separately reviewed transition must define a
-manifest-bound bootstrap/rebaseline from the proven live identity, use an
-attested artifact built from fully pinned inputs, bind the approved volume and
-Machine configuration, and update the validator plus negative tests in the same
-PR. Until that complete transition exists, the workflow rejects the target
-before production approval or any Fly mutation.
+not enough to enable it. `apps.gateway.stateRebaseline` now records the exact
+legacy Machine, image, encrypted volume, mount and region as metadata-only
+evidence. The legacy release has no deployment label, so the manifest uses the
+explicit `legacy_unlabeled` sentinel rather than inventing an identity. Its
+three configuration hashes remain `null` together until a canonical capture is
+reviewed; that unresolved state cannot advance. A later, separately reviewed
+transition must fill all three hashes, bind an attested artifact built from
+fully pinned inputs, pass the protected volume-copy rehearsal, and independently
+review both recovery and successor identities. Until that complete transition
+settles, the workflow rejects the target before production approval or any Fly
+mutation and gateway quota enforcement stays off.
 
 ## Normal release
 
@@ -449,6 +454,25 @@ converge, destroy, or replace detached gateway Machines until the volume state
 has been backed up, migration has been rehearsed on a copy, and the canonical
 Machine-volume attachment is explicitly approved. The pre-deploy drift gate is
 intentionally fail-closed while this remains unresolved.
+
+The manifest contract has four stages:
+
+1. `awaiting_rehearsal` binds the observed legacy Machine/image/volume tuple,
+   keeps configuration hashes unresolved together, and permits no reviewed
+   recovery or successor.
+2. `rehearsal_approved` requires all configuration hashes and exact trusted
+   artifact provenance, but still permits no rehearsal success claim. Only this
+   state may start the protected volume-copy rehearsal.
+3. `rehearsed` additionally requires an encrypted `/data` restore in `ams` and
+   metadata-only evidence that startup, isolation and rollback checks passed.
+4. `settled` additionally requires separately reviewed recovery and successor
+   identities and configs. Even this state does not enable deployment in the
+   current transition; that needs a later reviewed manifest/validator change.
+
+At every stage `historicalResources` forbids automatic deletion and preserves
+unlisted Machines and volumes. Cleanup is a separate, human-reviewed operation
+after the canonical state is proven; it is never an implicit side effect of
+rebaseline, deploy, rollback or reconciliation.
 
 Longer term, move gateway state into tenant-scoped durable storage so two or
 more interchangeable gateway Machines can run without shared customer-content

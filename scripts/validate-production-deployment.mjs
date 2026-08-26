@@ -12,6 +12,8 @@ const SCHEMA_TRANSITION_WORKFLOW_PATH =
   ".github/workflows/image-gen-schema-transition.yml";
 const SCHEMA_PROBE_CLEANUP_WORKFLOW_PATH =
   ".github/workflows/cleanup-image-gen-schema-probes.yml";
+const GATEWAY_STATE_REBASELINE_WORKFLOW_PATH =
+  ".github/workflows/gateway-state-rebaseline.yml";
 const PRODUCTION_RECONCILIATION_WORKFLOW_PATH =
   ".github/workflows/reconcile-production-deployment.yml";
 const PRODUCTION_COMPLETION_RECOVERY_WORKFLOW_PATH =
@@ -19,6 +21,8 @@ const PRODUCTION_COMPLETION_RECOVERY_WORKFLOW_PATH =
 const FRESH_SNAPSHOT_SELECTOR_PATH = "scripts/select-fresh-fly-snapshot.mjs";
 const PINNED_NODE_BASE_IMAGE =
   "node:24-alpine@sha256:d32cdf619f63fe0471182d08996dd516c6275bb5fd31ae06e55a570bd9e1ad43";
+const PINNED_GATEWAY_NODE_BASE_IMAGE =
+  "node:24-bookworm-slim@sha256:a9f5f7c91a432850b2a8a7797adf5eadb6c733ceed61167806cee7ea7fbc29df";
 const PINNED_FFMPEG_VERSION = "8.1.2-r0";
 const PINNED_MYSQL_IMAGE =
   "mysql:8.4.11@sha256:1d6b6a8fcee8ff758ff151d017f5203cd06792a0e698f0a593c9dfcb14609cf0";
@@ -33,6 +37,7 @@ const FORBIDDEN_FLY_API_HOSTNAME = "api.fly.io";
 const VERIFIED_FLYCTL_WORKFLOW_JOBS = Object.freeze({
   [TRUSTED_ARTIFACT_WORKFLOW_PATH]: ["build"],
   [SCHEMA_PROBE_CLEANUP_WORKFLOW_PATH]: ["cleanup"],
+  [GATEWAY_STATE_REBASELINE_WORKFLOW_PATH]: ["rehearse"],
   [PRODUCTION_WORKFLOW_PATH]: [
     "validate",
     "deploy-gateway",
@@ -64,6 +69,14 @@ const REVIEWED_ARTIFACT_KINDS = Object.freeze([
   "migration-bridge",
   "runtime",
 ]);
+const GATEWAY_REBASELINE_STATES = Object.freeze([
+  "awaiting_rehearsal",
+  "rehearsal_approved",
+  "rehearsed",
+  "settled",
+]);
+const GATEWAY_ARTIFACT_PREDICATE_TYPE =
+  "https://leaderbot.live/attestations/gateway-runtime/v1";
 const IMAGE_GEN_TRANSITION_STATES = Object.freeze([
   "awaiting_attested_bridge",
   "bridge_reviewed",
@@ -529,6 +542,71 @@ function assertPinnedNodeDockerfile(dockerfile, dockerfilePath, options = {}) {
   }
 }
 
+function assertPinnedGatewayDockerfile(rootDir) {
+  const dockerfilePath = "deploy/fly-gateway/Dockerfile";
+  const dockerfile = fs.readFileSync(path.join(rootDir, dockerfilePath), "utf8");
+  const nodeArg = `ARG NODE_BASE_IMAGE=${PINNED_GATEWAY_NODE_BASE_IMAGE}`;
+  const firstFrom = dockerfile.search(/^FROM\s+/m);
+  if (
+    firstFrom < 0 ||
+    dockerfile.indexOf(nodeArg) < 0 ||
+    dockerfile.indexOf(nodeArg) > firstFrom ||
+    occurrenceCount(dockerfile, nodeArg) !== 1 ||
+    occurrenceCount(dockerfile, "FROM ${NODE_BASE_IMAGE}") !== 2 ||
+    /^FROM\s+node:/m.test(dockerfile)
+  ) {
+    fail(
+      `${dockerfilePath} must use the exact pinned gateway Node base digest for both stages`,
+    );
+  }
+  for (const required of [
+    'org.opencontainers.image.revision="${SOURCE_REVISION}"',
+    'io.leaderbot.artifact.kind="gateway-runtime"',
+    'io.leaderbot.base.node="${NODE_BASE_IMAGE}"',
+    'io.leaderbot.gateway.state-rehearsal="real-openclaw-v1"',
+    "npm ci --ignore-scripts",
+    "npm ci --omit=dev --include=optional --no-audit --no-fund",
+    "deploy/fly-gateway/runtime/package-lock.json",
+    "snapshot.debian.org/archive/debian/20260824T000000Z",
+    "snapshot.debian.org/archive/debian-security/20260824T000000Z",
+    "Acquire::Check-Valid-Until",
+    "tar -xzf /tmp/openclaw-facebook.tgz",
+    "'gateway-runtime' > /app/.leaderbot-artifact-kind",
+  ]) {
+    if (!dockerfile.includes(required)) {
+      fail(`${dockerfilePath} must preserve its exact locked runtime contract`);
+    }
+  }
+  if (/\bnpm install\b/.test(dockerfile)) {
+    fail(`${dockerfilePath} must never resolve mutable npm dependencies`);
+  }
+  const runtimePackage = readJson(
+    path.join(rootDir, "deploy/fly-gateway/runtime/package.json"),
+  );
+  const runtimeLock = readJson(
+    path.join(rootDir, "deploy/fly-gateway/runtime/package-lock.json"),
+  );
+  const exactDependencies = {
+    "@openclaw/codex": "2026.7.2-beta.7",
+    ioredis: "6.0.0",
+    openclaw: "2026.7.2-beta.7",
+    zod: "4.4.3",
+  };
+  if (
+    JSON.stringify(runtimePackage.dependencies) !==
+      JSON.stringify(exactDependencies) ||
+    JSON.stringify(runtimeLock.packages?.[""]?.dependencies) !==
+      JSON.stringify(exactDependencies) ||
+    runtimeLock.lockfileVersion !== 3 ||
+    runtimeLock.packages?.["node_modules/openclaw"]?.version !==
+      "2026.7.2-beta.7" ||
+    runtimeLock.packages?.["node_modules/@openclaw/codex"]?.version !==
+      "2026.7.2-beta.7"
+  ) {
+    fail("Gateway runtime dependencies must remain exactly lockfile-bound");
+  }
+}
+
 export function loadProductionManifest(rootDir = process.cwd()) {
   const manifest = readJson(path.join(rootDir, MANIFEST_PATH));
   if (manifest.schemaVersion !== 1) {
@@ -612,6 +690,297 @@ function reviewedProductionImages(app) {
 
 function isReviewedSourceCommit(value) {
   return typeof value === "string" && /^[a-f0-9]{40}$/.test(value);
+}
+
+function hasExactObjectKeys(value, expectedKeys) {
+  return (
+    value != null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    JSON.stringify(Object.keys(value).sort()) ===
+      JSON.stringify([...expectedKeys].sort())
+  );
+}
+
+function isExactSha256(value) {
+  return typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+}
+
+function isGatewayBaselineImage(app, image) {
+  const prefix = `registry.fly.io/${app.app}:`;
+  return (
+    typeof image === "string" &&
+    image.startsWith(prefix) &&
+    /^[a-z0-9][a-z0-9._-]{0,127}@sha256:[a-f0-9]{64}$/.test(
+      image.slice(prefix.length),
+    )
+  );
+}
+
+function validateUnreviewedGatewayTransition(record, name) {
+  if (
+    !hasExactObjectKeys(record, [
+      "state",
+      "identity",
+      "image",
+      "sourceCommit",
+      "configSha256",
+    ]) ||
+    record.state !== "unreviewed" ||
+    record.identity !== null ||
+    record.image !== null ||
+    record.sourceCommit !== null ||
+    record.configSha256 !== null
+  ) {
+    fail(`gateway ${name} must remain explicitly unreviewed`);
+  }
+}
+
+function validateReviewedGatewayTransition(record, name, app) {
+  if (
+    !hasExactObjectKeys(record, [
+      "state",
+      "identity",
+      "image",
+      "sourceCommit",
+      "configSha256",
+    ]) ||
+    record.state !== "reviewed" ||
+    !/^deploy-[1-9][0-9]*-[1-9][0-9]*$/.test(record.identity ?? "") ||
+    !isImmutableAppImage(app, record.image) ||
+    !isReviewedSourceCommit(record.sourceCommit) ||
+    !isExactSha256(record.configSha256)
+  ) {
+    fail(`gateway ${name} lacks an exact reviewed identity and provenance`);
+  }
+}
+
+function validateGatewayRebaselineBaseline(app, contract) {
+  const baseline = contract.baseline;
+  if (
+    !hasExactObjectKeys(baseline, [
+      "app",
+      "machineId",
+      "deploymentIdentity",
+      "image",
+      "volumeId",
+      "mountPath",
+      "region",
+      "encrypted",
+      "configIdentity",
+    ]) ||
+    baseline.app !== app.app ||
+    !/^[a-f0-9]{14}$/.test(baseline.machineId ?? "") ||
+    (baseline.deploymentIdentity !== "legacy_unlabeled" &&
+      !/^deploy-[1-9][0-9]*-[1-9][0-9]*$/.test(
+        baseline.deploymentIdentity ?? "",
+      )) ||
+    !isGatewayBaselineImage(app, baseline.image) ||
+    !/^vol_[a-z0-9]{12,32}$/.test(baseline.volumeId ?? "") ||
+    baseline.mountPath !== "/data" ||
+    baseline.region !== "ams" ||
+    baseline.encrypted !== true
+  ) {
+    fail(
+      "gateway rebaseline must bind the exact live Machine and encrypted volume tuple",
+    );
+  }
+
+  const configIdentity = baseline.configIdentity;
+  if (
+    !hasExactObjectKeys(configIdentity, [
+      "machineConfigSha256",
+      "flyConfigSha256",
+      "generatedConfigSha256",
+    ])
+  ) {
+    fail("gateway rebaseline must define the complete configuration identity");
+  }
+  const configHashes = Object.values(configIdentity);
+  if (contract.state === "awaiting_rehearsal") {
+    if (configHashes.some((value) => value !== null)) {
+      fail(
+        "gateway awaiting-rehearsal configuration hashes must remain unresolved together",
+      );
+    }
+  } else if (!configHashes.every(isExactSha256)) {
+    fail(
+      "gateway rebaseline needs all exact configuration hashes before rehearsal can pass",
+    );
+  }
+  return baseline;
+}
+
+function validateGatewayRebaselineArtifact(app, contract) {
+  const artifact = contract.reviewedArtifact;
+  const exactArtifactKeys = [
+    "state",
+    "image",
+    "sourceCommit",
+    "builderWorkflow",
+    "predicateType",
+    "attestationBundleSha256",
+  ];
+  if (!hasExactObjectKeys(artifact, exactArtifactKeys)) {
+    fail("gateway rebaseline must define the complete artifact provenance");
+  }
+  if (contract.state === "awaiting_rehearsal") {
+    if (
+      artifact.state !== "unreviewed" ||
+      exactArtifactKeys
+        .filter((key) => key !== "state")
+        .some((key) => artifact[key] !== null)
+    ) {
+      fail(
+        "gateway artifact must remain explicitly unreviewed before rehearsal",
+      );
+    }
+  } else if (
+    artifact.state !== "reviewed" ||
+    !isImmutableAppImage(app, artifact.image) ||
+    !isReviewedSourceCommit(artifact.sourceCommit) ||
+    artifact.builderWorkflow !== TRUSTED_ARTIFACT_WORKFLOW_PATH ||
+    artifact.predicateType !== GATEWAY_ARTIFACT_PREDICATE_TYPE ||
+    !isExactSha256(artifact.attestationBundleSha256)
+  ) {
+    fail("gateway reviewed artifact lacks exact trusted provenance");
+  }
+  return artifact;
+}
+
+function validateGatewayRehearsal(contract, baseline) {
+  const rehearsal = contract.rehearsal;
+  if (
+    !hasExactObjectKeys(rehearsal, [
+      "state",
+      "evidenceArtifact",
+      "evidenceSha256",
+      "sourceVolumeId",
+      "mountPath",
+      "region",
+      "encrypted",
+      "contentInspectionAllowed",
+      "checks",
+    ]) ||
+    rehearsal.mountPath !== baseline.mountPath ||
+    rehearsal.region !== baseline.region ||
+    rehearsal.encrypted !== true ||
+    rehearsal.contentInspectionAllowed !== false ||
+    !hasExactObjectKeys(rehearsal.checks, [
+      "startupPassed",
+      "tenantIsolationPassed",
+      "rollbackPassed",
+      "metadataOnlyEvidence",
+    ])
+  ) {
+    fail(
+      "gateway rehearsal must preserve the exact encrypted metadata-only boundary",
+    );
+  }
+  const rehearsalChecks = Object.values(rehearsal.checks);
+  if (
+    contract.state === "awaiting_rehearsal" ||
+    contract.state === "rehearsal_approved"
+  ) {
+    const expectedSourceVolumeId =
+      contract.state === "rehearsal_approved" ? baseline.volumeId : null;
+    if (
+      rehearsal.state !== "pending" ||
+      rehearsal.evidenceArtifact !== null ||
+      rehearsal.evidenceSha256 !== null ||
+      rehearsal.sourceVolumeId !== expectedSourceVolumeId ||
+      rehearsalChecks.some((value) => value !== false)
+    ) {
+      fail(
+        "gateway rehearsal evidence must remain pending until the protected rehearsal completes",
+      );
+    }
+  } else if (
+    rehearsal.state !== "passed" ||
+    !/^gateway-state-rehearsal-[1-9][0-9]*-[1-9][0-9]*$/.test(
+      rehearsal.evidenceArtifact ?? "",
+    ) ||
+    !isExactSha256(rehearsal.evidenceSha256) ||
+    rehearsal.sourceVolumeId !== baseline.volumeId ||
+    rehearsalChecks.some((value) => value !== true)
+  ) {
+    fail("gateway rehearsal lacks complete exact metadata-only evidence");
+  }
+}
+
+function validateGatewayRebaselineTransitions(contract, app, artifact) {
+  if (contract.state === "settled") {
+    validateReviewedGatewayTransition(contract.recovery, "recovery", app);
+    validateReviewedGatewayTransition(contract.successor, "successor", app);
+    if (
+      contract.successor.image !== artifact.image ||
+      contract.successor.sourceCommit !== artifact.sourceCommit
+    ) {
+      fail("gateway successor must match the exact reviewed rollout artifact");
+    }
+  } else {
+    validateUnreviewedGatewayTransition(contract.recovery, "recovery");
+    validateUnreviewedGatewayTransition(contract.successor, "successor");
+  }
+}
+
+function validateGatewayHistoricalResourcePolicy(contract) {
+  if (
+    !hasExactObjectKeys(contract.historicalResources, [
+      "automaticDeletionAllowed",
+      "preserveUnlistedMachines",
+      "preserveUnlistedVolumes",
+    ]) ||
+    contract.historicalResources.automaticDeletionAllowed !== false ||
+    contract.historicalResources.preserveUnlistedMachines !== true ||
+    contract.historicalResources.preserveUnlistedVolumes !== true
+  ) {
+    fail(
+      "gateway state rebaseline must never auto-delete historical Machines or volumes",
+    );
+  }
+}
+
+function validateGatewayPreparatoryEnforcement(contract, flyConfig) {
+  if (contract.enforcementEnabled !== false) {
+    fail(
+      "gateway quota enforcement must remain disabled throughout the preparatory rebaseline",
+    );
+  }
+  if (
+    /(?:^|\n)\s*LEADERBOT_AI_ANSWER_ENFORCEMENT_ENABLED\s*=\s*(?:"1"|"true"|true)\s*(?:#.*)?(?:\n|$)/i.test(
+      flyConfig,
+    )
+  ) {
+    fail(
+      "fly.toml must keep gateway quota enforcement disabled throughout the preparatory rebaseline",
+    );
+  }
+}
+
+function validateGatewayStateRebaseline(app, flyConfig) {
+  const contract = app.stateRebaseline;
+  if (
+    !hasExactObjectKeys(contract, [
+      "state",
+      "enforcementEnabled",
+      "baseline",
+      "reviewedArtifact",
+      "rehearsal",
+      "recovery",
+      "successor",
+      "historicalResources",
+    ]) ||
+    !GATEWAY_REBASELINE_STATES.includes(contract.state)
+  ) {
+    fail("gateway must define one exact stateful rebaseline contract");
+  }
+  const baseline = validateGatewayRebaselineBaseline(app, contract);
+  const artifact = validateGatewayRebaselineArtifact(app, contract);
+  validateGatewayRehearsal(contract, baseline);
+  validateGatewayRebaselineTransitions(contract, app, artifact);
+  validateGatewayHistoricalResourcePolicy(contract);
+  validateGatewayPreparatoryEnforcement(contract, flyConfig);
 }
 
 function reviewedSourceCommitForImage(app, image) {
@@ -2963,7 +3332,7 @@ function validateTrustedArtifactWorkflow(rootDir) {
   if (
     stepsStart < 0 ||
     workflow.slice(0, stepsStart).includes("FLY_API_TOKEN") ||
-    occurrenceCount(workflow, "FLY_API_TOKEN:") !== 2 ||
+    occurrenceCount(workflow, "FLY_API_TOKEN:") !== 3 ||
     workflow.includes("&& secrets.FLY_STORAGE_PROXY_DEPLOY_TOKEN ||")
   ) {
     fail(
@@ -2972,6 +3341,7 @@ function validateTrustedArtifactWorkflow(rootDir) {
   }
   for (const [needle, message] of [
     ["workflow_dispatch:", "must be manually dispatched"],
+    ["gateway-runtime", "must offer the trusted gateway runtime target"],
     ['test "$GITHUB_REF" = "refs/heads/main"', "must require main"],
     ["environment: production", "must use the protected environment"],
     ["attestations: write", "must be allowed to publish attestations"],
@@ -2982,6 +3352,34 @@ function validateTrustedArtifactWorkflow(rootDir) {
     ],
     ["--metadata-file", "must capture the registry digest from the build"],
     ["--push", "must push the exact artifact it attests"],
+    [
+      "FLY_GATEWAY_DEPLOY_TOKEN",
+      "must scope the gateway registry credential to its exact auth step",
+    ],
+    [
+      'dockerfile="deploy/fly-gateway/Dockerfile"',
+      "must build the pinned full gateway runtime",
+    ],
+    [
+      `test "$node_base" = "${PINNED_GATEWAY_NODE_BASE_IMAGE}"`,
+      "must verify the exact gateway Node base label",
+    ],
+    [
+      'test "$rehearsal_interface" = "real-openclaw-v1"',
+      "must verify the real OpenClaw rehearsal interface label",
+    ],
+    [
+      "LEADERBOT_GATEWAY_STATE_REHEARSAL=1",
+      "must exercise the provider-disabled gateway state mode",
+    ],
+    [
+      "--network none --env LEADERBOT_GATEWAY_STATE_REHEARSAL=1",
+      "must prove the gateway starts without any provider network path",
+    ],
+    [
+      "rehearse-mounted-state.mjs --verify-running --expected-starts 2",
+      "must prove the real gateway runtime survives a second start",
+    ],
     [
       "MIGRATION_BRIDGE_BASE_IMAGE=$ARTIFACT_BASE_IMAGE",
       "must pin the bridge base",
@@ -2995,6 +3393,22 @@ function validateTrustedArtifactWorkflow(rootDir) {
       "must bind the release check to the immutable artifact marker",
     ],
     ["push-to-registry: false", "must retain attestations in GitHub"],
+    [
+      "https://leaderbot.live/attestations/gateway-runtime/v1",
+      "must attest the exact gateway runtime contract",
+    ],
+    [
+      "gateway-runtime.json",
+      "must preserve signed gateway runtime evidence",
+    ],
+    [
+      '--arg openClawVersion "2026.7.2-beta.7"',
+      "must bind the gateway attestation to the exact OpenClaw runtime",
+    ],
+    [
+      '--arg rehearsalInterface "real-openclaw-v1"',
+      "must bind the gateway attestation to the real-runtime rehearsal interface",
+    ],
     [
       "https://leaderbot.live/attestations/migration-bridge/v1",
       "must attest the exact bridge base material",
@@ -3093,9 +3507,9 @@ function validateTrustedArtifactWorkflow(rootDir) {
     occurrenceCount(
       workflow,
       "actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4",
-    ) !== 2
+    ) !== 3
   ) {
-    fail(`${TRUSTED_ARTIFACT_WORKFLOW_PATH} must pin both attestation steps`);
+    fail(`${TRUSTED_ARTIFACT_WORKFLOW_PATH} must pin every attestation step`);
   }
   if (
     occurrenceCount(
@@ -5213,6 +5627,7 @@ export function validateProductionRepository(rootDir = process.cwd()) {
       fail(`${dockerfilePath} must not use a mutable Dockerfile frontend`);
     }
   }
+  assertPinnedGatewayDockerfile(rootDir);
   validateStorageProxySafety(rootDir);
   validateImageGenMigrationCi(rootDir);
   validateTrustedArtifactWorkflow(rootDir);
@@ -5232,6 +5647,19 @@ export function validateProductionRepository(rootDir = process.cwd()) {
     path.join(rootDir, "fly.toml"),
     "utf8",
   );
+  if (
+    !gatewayFlyConfig.includes(
+      'dockerfile = "deploy/fly-gateway/Dockerfile"',
+    ) ||
+    !gatewayFlyConfig.includes(
+      'LEADERBOT_AI_ANSWER_ENFORCEMENT_ENABLED = "false"',
+    ) ||
+    gatewayFlyConfig.includes("Dockerfile.route-guard-hotfix")
+  ) {
+    fail(
+      "gateway must select the pinned full runtime while AI answer enforcement remains disabled",
+    );
+  }
   for (const retiredGatewayCap of [
     "MESSENGER_GATEWAY_DAILY_IMAGE_FORWARD_CAP",
     "MESSENGER_GATEWAY_DAILY_LEADERBOT_EVENT_FORWARD_CAP",
@@ -5308,6 +5736,9 @@ export function validateProductionRepository(rootDir = process.cwd()) {
       fail(
         "gateway must remain deployment-disabled until its stateful migration is approved",
       );
+    }
+    if (target === "gateway") {
+      validateGatewayStateRebaseline(app, gatewayFlyConfig);
     }
     if (
       new Set(app.reviewedRollbackImages).size !==

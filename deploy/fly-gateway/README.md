@@ -129,21 +129,34 @@ Secrets must remain in Fly secrets or the mounted state, never in this repo.
 Before enabling the standard gateway deployment, independently of the
 multi-tenant image-gen release:
 
-1. Snapshot or clone the mounted volume and rehearse startup on the copy. Do not
+1. Keep `deploy/production/apps.json` at
+   `apps.gateway.stateRebaseline.state=awaiting_rehearsal` and
+   `deploymentEnabled=false` while the three configuration fingerprints remain
+   unresolved. Keep `LEADERBOT_AI_ANSWER_ENFORCEMENT_ENABLED=false`; do not
+   enable it yet.
+2. Compute and review all three configuration fingerprints and the exact
+   artifact provenance, then move only to `rehearsal_approved`. This is the only
+   state from which the protected rehearsal may start; it still claims no
+   rehearsal success.
+3. Snapshot or clone the mounted volume and rehearse startup on the copy. Do not
    inspect quarantined customer content without an approved, auditable support
    or break-glass flow.
-2. Prove the generated non-secret config has
+4. Prove the generated non-secret config has
    `session.dmScope=per-account-channel-peer`, memory slot `none`, disabled
    `memory-core` and `session-memory`, disabled compaction memory flush, and an
    attachment TTL no greater than 24 hours.
-3. Prove `/data/workspace` has no `USER.md`, `MEMORY.md`, or `memory/` entry and
+5. Prove `/data/workspace` has no `USER.md`, `MEMORY.md`, or `memory/` entry and
    that any prior content is present only in the protected quarantine. A
    quarantine collision is a stop condition, not permission to delete or
    overwrite either copy.
-4. Build and review matching rollout and rollback artifacts containing these
+6. Build and review matching rollout and rollback artifacts containing these
    controls. Then use the protected production workflow; do not source-deploy or
    use the route-guard hotfix as evidence.
-5. Smoke two senders on one Page and one sender identity across two test Page
+7. Record exact artifact provenance, protected rehearsal evidence, the recovery
+   identity/config and the successor identity/config in `stateRebaseline`. All
+   historical Machines and volumes remain preserved; this transition never
+   deletes them automatically.
+8. Smoke two senders on one Page and one sender identity across two test Page
    accounts; their resolved session keys must all differ. Verify successful and
    failed attachment turns leave no downloaded media behind, and verify logs
    contain no raw session key, PSID, message text, or attachment URL.

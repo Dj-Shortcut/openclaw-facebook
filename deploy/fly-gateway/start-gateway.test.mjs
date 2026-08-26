@@ -14,6 +14,11 @@ import {
   isLocalAdminHost,
   startPublicRouteGuard,
 } from "./bin/public-route-guard.mjs";
+import {
+  assertGatewayStateRehearsalChildEnv,
+  assertGatewayStateRehearsalConfig,
+  buildGatewayChildEnv,
+} from "./bin/start-gateway.mjs";
 
 const scriptPath = path.resolve("deploy/fly-gateway/bin/start-gateway.mjs");
 const originalEnv = { ...process.env };
@@ -41,6 +46,9 @@ function runPrepareGatewayConfig(env) {
   const script = `
     import fs from "node:fs";
     import { pathToFileURL } from "node:url";
+    globalThis.fetch = () => {
+      throw new Error("Rehearsal preparation attempted network transport");
+    };
     const mod = await import(pathToFileURL(process.env.START_GATEWAY_SCRIPT).href);
     const config = mod.prepareGatewayConfig();
     console.log(JSON.stringify({
@@ -61,6 +69,56 @@ function runPrepareGatewayConfig(env) {
       quarantinedMemory: fs.existsSync(process.env.OPENCLAW_STATE_DIR + "/private-memory-quarantine-v1/MEMORY.md")
         ? fs.readFileSync(process.env.OPENCLAW_STATE_DIR + "/private-memory-quarantine-v1/MEMORY.md", "utf8")
         : null
+    }));
+  `;
+  const result = spawnSync(
+    process.execPath,
+    ["--input-type=module", "-e", script],
+    {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        ...env,
+        START_GATEWAY_SCRIPT: scriptPath,
+      },
+    },
+  );
+  if (result.status !== 0) {
+    throw new Error(
+      result.stderr || result.stdout || `node exited ${result.status}`,
+    );
+  }
+  return JSON.parse(result.stdout);
+}
+
+function runPrepareGatewayStateRehearsalConfig(env) {
+  const script = `
+    import fs from "node:fs";
+    import { pathToFileURL } from "node:url";
+    globalThis.fetch = () => {
+      throw new Error("Rehearsal preparation attempted network transport");
+    };
+    const mod = await import(pathToFileURL(process.env.START_GATEWAY_SCRIPT).href);
+    const productionPath = process.env.OPENCLAW_CONFIG_PATH;
+    const productionBefore = fs.existsSync(productionPath)
+      ? fs.readFileSync(productionPath, "utf8")
+      : "";
+    const rehearsalPath = mod.prepareGatewayStateRehearsalConfig();
+    const productionAfter = fs.readFileSync(productionPath, "utf8");
+    const rehearsal = JSON.parse(fs.readFileSync(rehearsalPath, "utf8"));
+    mod.prepareGatewayConfig({ verifyOnly: true });
+    mod.verifyGatewayStateRehearsalConfig();
+    console.log(JSON.stringify({
+      productionWasCanonicalized: productionBefore !== productionAfter,
+      productionStillHasFacebook: Boolean(JSON.parse(productionAfter).channels?.facebook),
+      rehearsalChannelCount: Object.keys(rehearsal.channels ?? {}).length,
+      rehearsalPluginAllowCount: rehearsal.plugins?.allow?.length,
+      rehearsalFacebookEnabled: rehearsal.plugins?.entries?.facebook?.enabled,
+      rehearsalHasModels: Object.hasOwn(rehearsal, "models"),
+      rehearsalCronEnabled: rehearsal.cron?.enabled,
+      rehearsalCronTriggersEnabled: rehearsal.cron?.triggers?.enabled,
+      rehearsalMode: fs.statSync(rehearsalPath).mode & 0o777,
+      productionMode: fs.statSync(productionPath).mode & 0o777,
     }));
   `;
   const result = spawnSync(
@@ -186,6 +244,126 @@ function requestWithHost({
 }
 
 describe("Fly gateway startup", () => {
+  it("derives a provider-disabled rehearsal config without replacing production config", () => {
+    const { stateDir } = configureTempGatewayEnv();
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(stateDir, "openclaw.json"),
+      `${JSON.stringify({
+        channels: { facebook: { dmPolicy: "pairing" } },
+        models: { providers: { openai: { apiKey: "stored-test-value" } } },
+        plugins: { entries: { facebook: { enabled: true } } },
+      })}\n`,
+    );
+
+    const result = runPrepareGatewayStateRehearsalConfig({
+      OPENAI_API_KEY: "dummy-openai",
+      FACEBOOK_PAGE_ACCESS_TOKEN: "dummy-facebook",
+    });
+
+    expect(result).toEqual({
+      productionWasCanonicalized: true,
+      productionStillHasFacebook: true,
+      rehearsalChannelCount: 0,
+      rehearsalPluginAllowCount: 0,
+      rehearsalFacebookEnabled: false,
+      rehearsalHasModels: false,
+      rehearsalCronEnabled: false,
+      rehearsalCronTriggersEnabled: false,
+      rehearsalMode: 0o600,
+      productionMode: 0o600,
+    });
+  });
+
+  it("removes provider credentials only from the real rehearsal child", () => {
+    process.env.OPENAI_API_KEY = "dummy-openai";
+    process.env.FACEBOOK_PAGE_ACCESS_TOKEN = "dummy-facebook";
+    process.env.LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN = "dummy-internal";
+    process.env.OPENCLAW_GATEWAY_TOKEN = "local-gateway-auth";
+    process.env.OPENCLAW_SKIP_CRON = "0";
+    process.env.DATABASE_URL = "mysql://dummy";
+    process.env.REDIS_URL = "redis://dummy";
+
+    const childEnv = buildGatewayChildEnv({
+      rehearsal: true,
+      openclawConfigPath: "/tmp/rehearsal-openclaw.json",
+    });
+
+    expect(childEnv.OPENAI_API_KEY).toBeUndefined();
+    expect(childEnv.FACEBOOK_PAGE_ACCESS_TOKEN).toBeUndefined();
+    expect(childEnv.LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN).toBeUndefined();
+    expect(childEnv.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
+    expect(childEnv.DATABASE_URL).toBeUndefined();
+    expect(childEnv.REDIS_URL).toBeUndefined();
+    expect(childEnv.LEADERBOT_IMAGE_GEN_URL).toBe("");
+    expect(childEnv.OPENCLAW_SKIP_STARTUP_MODEL_PREWARM).toBe("1");
+    expect(childEnv.OPENCLAW_SKIP_CRON).toBe("1");
+    expect(childEnv.OPENCLAW_CONFIG_PATH).toBe("/tmp/rehearsal-openclaw.json");
+  });
+
+  it.each([
+    ["configured channel", (config) => (config.channels.facebook = {})],
+    ["allowed plugin", (config) => config.plugins.allow.push("facebook")],
+    [
+      "enabled plugin",
+      (config) => (config.plugins.entries.facebook.enabled = true),
+    ],
+    ["non-loopback bind", (config) => (config.gateway.bind = "lan")],
+    [
+      "remote gateway",
+      (config) => (config.gateway.remote = "https://example.invalid"),
+    ],
+    ["model provider", (config) => (config.models = { providers: {} })],
+    ["enabled automation scheduler", (config) => (config.cron.enabled = true)],
+    [
+      "enabled automation triggers",
+      (config) => (config.cron.triggers.enabled = true),
+    ],
+    ["extra automation setting", (config) => (config.cron.webhookToken = "x")],
+  ])("rejects rehearsal config with %s", (_label, mutate) => {
+    const config = {
+      channels: {},
+      cron: { enabled: false, triggers: { enabled: false } },
+      plugins: { allow: [], entries: { facebook: { enabled: false } } },
+      gateway: { bind: "loopback" },
+    };
+    mutate(config);
+
+    expect(() => assertGatewayStateRehearsalConfig(config)).toThrow(
+      "transport boundary is invalid",
+    );
+  });
+
+  it("rejects a rehearsal child that retains any provider credential", () => {
+    expect(() =>
+      assertGatewayStateRehearsalChildEnv(
+        {
+          OPENAI_API_KEY: "dummy",
+          LEADERBOT_IMAGE_GEN_URL: "",
+          OPENCLAW_SKIP_STARTUP_MODEL_PREWARM: "1",
+          OPENCLAW_SKIP_CRON: "1",
+        },
+        { OPENAI_API_KEY: "dummy" },
+      ),
+    ).toThrow("retained a provider credential");
+  });
+
+  it.each([undefined, "0", "false"])(
+    "rejects a rehearsal child without the cron shutdown fence (%s)",
+    (value) => {
+      expect(() =>
+        assertGatewayStateRehearsalChildEnv(
+          {
+            LEADERBOT_IMAGE_GEN_URL: "",
+            OPENCLAW_SKIP_STARTUP_MODEL_PREWARM: "1",
+            ...(value === undefined ? {} : { OPENCLAW_SKIP_CRON: value }),
+          },
+          {},
+        ),
+      ).toThrow("transport fence is invalid");
+    },
+  );
+
   it(
     "persists the default OpenClaw workspace on the Fly volume",
     () => {

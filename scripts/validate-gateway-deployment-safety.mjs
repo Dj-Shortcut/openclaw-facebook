@@ -123,9 +123,21 @@ export function validateFlyGatewayConfig(text) {
   }
   requireTomlTableMatch(
     text,
+    "build",
+    /^dockerfile\s*=\s*"deploy\/fly-gateway\/Dockerfile"$/m,
+    "fly.toml must select the pinned full gateway Dockerfile",
+  );
+  requireTomlTableMatch(
+    text,
     "env",
     /^OPENCLAW_AGENT_MODEL\s*=\s*"openai\/gpt-5\.4-mini"$/m,
     "fly.toml must keep the reviewed provider-qualified gpt-5.4-mini model",
+  );
+  requireTomlTableMatch(
+    text,
+    "env",
+    /^LEADERBOT_AI_ANSWER_ENFORCEMENT_ENABLED\s*=\s*"false"$/m,
+    "fly.toml must keep AI answer enforcement disabled before gateway rollout approval",
   );
   requireTomlTableMatch(
     text,

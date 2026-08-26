@@ -80,12 +80,31 @@ prior gate is proven in production.
       is geen handmatige binnenweg.
 - [ ] Zet de productiebeveiliging, goedkeurders en vier beperkte sleutels in
       GitHub klaar en bewijs de route één keer van begin tot einde.
-- [ ] Zet de foto-app in kleine stappen live: eerst de veilige tussenversie,
+- [x] Zet de foto-app in kleine stappen live: eerst de veilige tussenversie,
       dan een nieuwe back-up met geslaagde hersteltest, daarna alleen
       database-uitbreiding 0016, en ten slotte de ondertekende nieuwe app.
+      De beschermde overgang en offline controle zijn vastgelegd in
+      [run 32820475232](https://github.com/Dj-Shortcut/openclaw-facebook/actions/runs/32820475232).
 - [x] Databasewijziging 0017 blijft uit. Daar komt pas later een apart plan voor.
 - [ ] Bouw en controleer de opslag-app via dezelfde bewaakte route.
 - [ ] Houd de gateway uit tot zijn gegevensschijf veilig is gekopieerd en getest.
+  - [x] Leg de huidige oude Machine, image, versleutelde volume, mount en regio
+        exact vast in `apps.gateway.stateRebaseline`; gebruik
+        `legacy_unlabeled` omdat de bestaande release geen deploymentlabel heeft.
+  - [x] Laat configuratievingerafdrukken alleen alle drie samen ontbreken en
+        blokkeer elke volgende fase tot ze canoniek berekend en beoordeeld zijn.
+  - [x] Verbied automatische verwijdering van oude gateway-Machines en volumes,
+        ook tijdens voorbereiding, herstel en opvolgercontrole.
+  - [ ] Maak een beschermde kopie van het volume en bewijs daarop start,
+        tenantisolatie en rollback zonder klantinhoud te lezen of te loggen.
+        De oefening mag alleen starten vanuit `rehearsal_approved`; deze
+        tussenstap vereist alle drie configuratiehashes en exact beoordeelde
+        artefactherkomst, maar bevat nog geen geslaagd oefenbewijs.
+  - [ ] Bouw en beoordeel afzonderlijke uitrol- en herstelartefacten uit volledig
+        vastgezette bouwinputs; leg beide identiteiten en configuratiehashes vast.
+  - [ ] Zet de gateway pas in een latere, apart beoordeelde wijziging op inzetbaar
+        nadat de rebaseline `settled` is. Betalings- en quota-enforcement blijven
+        tot dan uit.
 - [ ] Test na de livegang een gewone foto, een fotobewerking en de teller in
       echte Messenger-gesprekken.
 
@@ -661,7 +680,9 @@ Historical branch review note:
       `phase: "offline"`.
 - [x] After the canonical production migration and protected rollout, capture a
       redacted green `phase: "offline"` `/readyz` response before enabling any
-      operational paid lane or starting a Mollie sandbox checkout.
+      operational paid lane or starting a Mollie sandbox checkout. Protected
+      deploy [run 32820475232](https://github.com/Dj-Shortcut/openclaw-facebook/actions/runs/32820475232)
+      recorded this without a Mollie API call.
 - [ ] Deploy the first operational safety phase with only the retained billing
       drain and key-free notification plane enabled. Keep commercial checkout,
       entitlement admission and AI finalization off until the exact pilot
