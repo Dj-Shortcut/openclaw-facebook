@@ -112,9 +112,10 @@ function runPrepareGatewayStateRehearsalConfig(env) {
       productionWasCanonicalized: productionBefore !== productionAfter,
       productionStillHasFacebook: Boolean(JSON.parse(productionAfter).channels?.facebook),
       rehearsalChannelCount: Object.keys(rehearsal.channels ?? {}).length,
-      rehearsalPluginAllowCount: rehearsal.plugins?.allow?.length,
       rehearsalFacebookEnabled: rehearsal.plugins?.entries?.facebook?.enabled,
       rehearsalHasModels: Object.hasOwn(rehearsal, "models"),
+      rehearsalHooksEnabled: rehearsal.hooks?.enabled,
+      rehearsalInternalHooksEnabled: rehearsal.hooks?.internal?.enabled,
       rehearsalCronEnabled: rehearsal.cron?.enabled,
       rehearsalCronTriggersEnabled: rehearsal.cron?.triggers?.enabled,
       rehearsalMode: fs.statSync(rehearsalPath).mode & 0o777,
@@ -264,10 +265,11 @@ describe("Fly gateway startup", () => {
     expect(result).toEqual({
       productionWasCanonicalized: true,
       productionStillHasFacebook: true,
-      rehearsalChannelCount: 0,
-      rehearsalPluginAllowCount: 0,
-      rehearsalFacebookEnabled: false,
-      rehearsalHasModels: false,
+      rehearsalChannelCount: 1,
+      rehearsalFacebookEnabled: true,
+      rehearsalHasModels: true,
+      rehearsalHooksEnabled: false,
+      rehearsalInternalHooksEnabled: false,
       rehearsalCronEnabled: false,
       rehearsalCronTriggersEnabled: false,
       rehearsalMode: 0o600,
@@ -298,33 +300,37 @@ describe("Fly gateway startup", () => {
     expect(childEnv.LEADERBOT_IMAGE_GEN_URL).toBe("");
     expect(childEnv.OPENCLAW_SKIP_STARTUP_MODEL_PREWARM).toBe("1");
     expect(childEnv.OPENCLAW_SKIP_CRON).toBe("1");
+    expect(childEnv.OPENCLAW_SKIP_CHANNELS).toBe("1");
+    expect(childEnv.OPENCLAW_SKIP_PROVIDERS).toBe("1");
+    expect(childEnv.OPENCLAW_SKIP_GMAIL_WATCHER).toBe("1");
     expect(childEnv.OPENCLAW_CONFIG_PATH).toBe("/tmp/rehearsal-openclaw.json");
   });
 
   it.each([
-    ["configured channel", (config) => (config.channels.facebook = {})],
-    ["allowed plugin", (config) => config.plugins.allow.push("facebook")],
+    ["missing configured channel", (config) => delete config.channels.facebook],
     [
       "enabled plugin",
-      (config) => (config.plugins.entries.facebook.enabled = true),
+      (config) => (config.plugins.entries.facebook.enabled = false),
     ],
     ["non-loopback bind", (config) => (config.gateway.bind = "lan")],
     [
       "remote gateway",
       (config) => (config.gateway.remote = "https://example.invalid"),
     ],
-    ["model provider", (config) => (config.models = { providers: {} })],
     ["enabled automation scheduler", (config) => (config.cron.enabled = true)],
     [
       "enabled automation triggers",
       (config) => (config.cron.triggers.enabled = true),
     ],
     ["extra automation setting", (config) => (config.cron.webhookToken = "x")],
+    ["enabled hooks", (config) => (config.hooks.enabled = true)],
+    ["enabled internal hooks", (config) => (config.hooks.internal.enabled = true)],
   ])("rejects rehearsal config with %s", (_label, mutate) => {
     const config = {
-      channels: {},
+      channels: { facebook: {} },
       cron: { enabled: false, triggers: { enabled: false } },
-      plugins: { allow: [], entries: { facebook: { enabled: false } } },
+      plugins: { entries: { facebook: { enabled: true } } },
+      hooks: { enabled: false, internal: { enabled: false } },
       gateway: { bind: "loopback" },
     };
     mutate(config);
@@ -342,6 +348,9 @@ describe("Fly gateway startup", () => {
           LEADERBOT_IMAGE_GEN_URL: "",
           OPENCLAW_SKIP_STARTUP_MODEL_PREWARM: "1",
           OPENCLAW_SKIP_CRON: "1",
+          OPENCLAW_SKIP_CHANNELS: "1",
+          OPENCLAW_SKIP_PROVIDERS: "1",
+          OPENCLAW_SKIP_GMAIL_WATCHER: "1",
         },
         { OPENAI_API_KEY: "dummy" },
       ),
@@ -357,6 +366,9 @@ describe("Fly gateway startup", () => {
             LEADERBOT_IMAGE_GEN_URL: "",
             OPENCLAW_SKIP_STARTUP_MODEL_PREWARM: "1",
             ...(value === undefined ? {} : { OPENCLAW_SKIP_CRON: value }),
+            OPENCLAW_SKIP_CHANNELS: "1",
+            OPENCLAW_SKIP_PROVIDERS: "1",
+            OPENCLAW_SKIP_GMAIL_WATCHER: "1",
           },
           {},
         ),

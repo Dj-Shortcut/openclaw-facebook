@@ -103,11 +103,14 @@ describe("protected gateway state rehearsal workflow", () => {
     );
   });
 
-  it("proves rollback and always removes only the exact clone resources", () => {
+  it("does not overclaim unexercised isolation or rollback and removes only the exact clone resources", () => {
     expect(position("Stop the clone and prove the untouched live baseline")).toBeLessThan(
       position("Upload completed metadata-only rehearsal evidence"),
     );
-    expect(workflow).toContain("rollbackPassed:true");
+    expect(workflow).toContain("tenantIsolationPassed:false");
+    expect(workflow).toContain("rollbackPassed:false");
+    expect(workflow).toContain('tenantIsolation:"not exercised');
+    expect(workflow).toContain('rollback:"no reviewed recovery image');
     expect(workflow).toContain("metadataOnlyEvidence:true");
     expect(workflow).toContain("if: always()");
     expect(workflow).toContain(

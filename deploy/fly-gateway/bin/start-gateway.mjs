@@ -607,26 +607,21 @@ function ensurePublicMessengerBaseline(config) {
 }
 
 function ensureStateRehearsalNoTransport(config) {
-  config.channels = {};
   config.cron = {
     enabled: false,
     triggers: { enabled: false },
   };
-  if (!isObject(config.plugins)) config.plugins = {};
-  config.plugins.allow = [];
-  if (!isObject(config.plugins.entries)) config.plugins.entries = {};
-  for (const entry of Object.values(config.plugins.entries)) {
-    if (isObject(entry)) entry.enabled = false;
-  }
+  if (!isObject(config.hooks)) config.hooks = {};
+  config.hooks.enabled = false;
+  if (!isObject(config.hooks.internal)) config.hooks.internal = {};
+  config.hooks.internal.enabled = false;
   if (!isObject(config.gateway)) config.gateway = {};
   config.gateway.bind = "loopback";
   delete config.gateway.remote;
-  delete config.models;
   return config;
 }
 
 export function assertGatewayStateRehearsalConfig(config) {
-  const entries = config?.plugins?.entries;
   const cronKeys = isObject(config?.cron)
     ? Object.keys(config.cron).sort().join(",")
     : "";
@@ -635,21 +630,16 @@ export function assertGatewayStateRehearsalConfig(config) {
     : "";
   if (
     !isObject(config) ||
-    !isObject(config.channels) ||
-    Object.keys(config.channels).length !== 0 ||
+    !isObject(config.channels?.facebook) ||
     cronKeys !== "enabled,triggers" ||
     config.cron.enabled !== false ||
     triggerKeys !== "enabled" ||
     config.cron.triggers.enabled !== false ||
-    !Array.isArray(config.plugins?.allow) ||
-    config.plugins.allow.length !== 0 ||
-    !isObject(entries) ||
-    Object.values(entries).some(
-      (entry) => !isObject(entry) || entry.enabled !== false,
-    ) ||
+    config.plugins?.entries?.facebook?.enabled !== true ||
+    config.hooks?.enabled !== false ||
+    config.hooks?.internal?.enabled !== false ||
     config.gateway?.bind !== "loopback" ||
-    Object.hasOwn(config.gateway, "remote") ||
-    Object.hasOwn(config, "models")
+    Object.hasOwn(config.gateway, "remote")
   ) {
     throw new Error("Gateway state rehearsal transport boundary is invalid");
   }
@@ -736,7 +726,10 @@ export function assertGatewayStateRehearsalChildEnv(
   if (
     childEnv.LEADERBOT_IMAGE_GEN_URL !== "" ||
     childEnv.OPENCLAW_SKIP_STARTUP_MODEL_PREWARM !== "1" ||
-    childEnv.OPENCLAW_SKIP_CRON !== "1"
+    childEnv.OPENCLAW_SKIP_CRON !== "1" ||
+    childEnv.OPENCLAW_SKIP_CHANNELS !== "1" ||
+    childEnv.OPENCLAW_SKIP_PROVIDERS !== "1" ||
+    childEnv.OPENCLAW_SKIP_GMAIL_WATCHER !== "1"
   ) {
     throw new Error("Gateway state rehearsal child transport fence is invalid");
   }
@@ -760,6 +753,12 @@ export function buildGatewayChildEnv({
     childEnv.LEADERBOT_IMAGE_GEN_URL = "";
     childEnv.OPENCLAW_SKIP_STARTUP_MODEL_PREWARM = "1";
     childEnv.OPENCLAW_SKIP_CRON = "1";
+    // Keep the production-shaped channel and plugin configuration available for
+    // parsing and plugin initialization, but use the runtime's supported
+    // no-start fences so no channel, provider, or retained Gmail hook can send.
+    childEnv.OPENCLAW_SKIP_CHANNELS = "1";
+    childEnv.OPENCLAW_SKIP_PROVIDERS = "1";
+    childEnv.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
     assertGatewayStateRehearsalChildEnv(childEnv);
   }
   return childEnv;

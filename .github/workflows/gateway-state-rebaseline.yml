@@ -500,7 +500,7 @@ jobs:
             --arg liveBaselineEvidenceSha "$baseline_evidence_sha" \
             --arg runId "$GITHUB_RUN_ID" \
             --arg runAttempt "$GITHUB_RUN_ATTEMPT" \
-            '{protocol:$protocol,app:$app,sourceCommit:$sourceCommit,reviewedImage:$reviewedImage,sourceVolumeId:$sourceVolume,snapshot:{id:$snapshotId,digest:$snapshotDigest},isolated:{volumeId:$restoredVolume,machineId:$machine,publicService:false,dnsRegistration:false,providerCalls:false},liveBaselineEvidenceSha256:$liveBaselineEvidenceSha,checks:{startupPassed:true,tenantIsolationPassed:true,rollbackPassed:true,metadataOnlyEvidence:true,starts:2},runId:$runId,runAttempt:$runAttempt}' \
+            '{protocol:$protocol,app:$app,sourceCommit:$sourceCommit,reviewedImage:$reviewedImage,sourceVolumeId:$sourceVolume,snapshot:{id:$snapshotId,digest:$snapshotDigest},isolated:{volumeId:$restoredVolume,machineId:$machine,publicService:false,dnsRegistration:false,providerCalls:false},liveBaselineEvidenceSha256:$liveBaselineEvidenceSha,checks:{startupPassed:true,tenantIsolationPassed:false,rollbackPassed:false,metadataOnlyEvidence:true,starts:2},limitations:{tenantIsolation:"not exercised by provider-silent startup",rollback:"no reviewed recovery image was booted against the cloned volume"},runId:$runId,runAttempt:$runAttempt}' \
             > "$evidence_dir/rehearsal-evidence.json"
           rm -f \
             "$evidence_dir/post-machines.json" \
