@@ -243,7 +243,7 @@ export function validatePluginWorkflow(text) {
 }
 
 export function validateManagedRedeployHandoff(text) {
-  if (/\bfly\s+deploy\b/.test(text)) {
+  if (/\bfly\s+(?:deploy\b|releases\s+rollback\b)/.test(text)) {
     throw new Error(
       "The managed gateway handoff must not contain direct Fly deploy or rollback commands",
     );

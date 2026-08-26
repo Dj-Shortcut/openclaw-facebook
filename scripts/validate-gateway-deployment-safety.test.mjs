@@ -243,6 +243,16 @@ describe("gateway deployment safety validation", () => {
     ).toThrow("direct Fly deploy or rollback commands");
     expect(() =>
       validateManagedRedeployHandoff(
+        `${validManagedRedeployHandoff}\nfly releases rollback -a leaderbot-openclaw-gateway`,
+      ),
+    ).toThrow("direct Fly deploy or rollback commands");
+    expect(() =>
+      validateManagedRedeployHandoff(
+        `${validManagedRedeployHandoff}\nfly releases --image -a leaderbot-openclaw-gateway`,
+      ),
+    ).not.toThrow();
+    expect(() =>
+      validateManagedRedeployHandoff(
         validManagedRedeployHandoff.replace(
           "gh workflow run deploy-production.yml",
           "gh workflow view deploy-production.yml",
