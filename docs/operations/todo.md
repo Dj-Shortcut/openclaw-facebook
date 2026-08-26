@@ -99,7 +99,14 @@ prior gate is proven in production.
         tenantisolatie en rollback zonder klantinhoud te lezen of te loggen.
         De oefening mag alleen starten vanuit `rehearsal_approved`; deze
         tussenstap vereist alle drie configuratiehashes en exact beoordeelde
-        artefactherkomst, maar bevat nog geen geslaagd oefenbewijs.
+        artefactherkomst, maar bevat nog geen geslaagd oefenbewijs. De huidige
+        begrensde workflow bewijst alleen clone-mount, start/herstart met een
+        credential-gescrubde production-shaped Facebook-configuratie, lege
+        tijdelijke runtime-state, uitgeschakelde transporten, lege config- en
+        shell-credentialbronnen, geen cloud-workerprofielen en behoud van de
+        live baseline. Ze inspecteert nog niet de geladen plug-in plus `/readyz`.
+        Ze laat startgereedheid, tenantisolatie en rollback bewust op `false` en
+        claimt zonder egresscontrole niet dat er geen providercalls gebeurden.
   - [ ] Bouw en beoordeel afzonderlijke uitrol- en herstelartefacten uit volledig
         vastgezette bouwinputs; leg beide identiteiten en configuratiehashes vast.
   - [ ] Zet de gateway pas in een latere, apart beoordeelde wijziging op inzetbaar

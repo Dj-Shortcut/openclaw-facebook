@@ -94,6 +94,7 @@ function runPrepareGatewayConfig(env) {
 function runPrepareGatewayStateRehearsalConfig(env) {
   const script = `
     import fs from "node:fs";
+    import { spawnSync } from "node:child_process";
     import { pathToFileURL } from "node:url";
     globalThis.fetch = () => {
       throw new Error("Rehearsal preparation attempted network transport");
@@ -108,16 +109,110 @@ function runPrepareGatewayStateRehearsalConfig(env) {
     const rehearsal = JSON.parse(fs.readFileSync(rehearsalPath, "utf8"));
     mod.prepareGatewayConfig({ verifyOnly: true });
     mod.verifyGatewayStateRehearsalConfig();
+    const { VITEST: _vitest, ...cliEnv } = process.env;
+    const validation = spawnSync(
+      process.execPath,
+      [process.env.OPENCLAW_BIN, "config", "validate", "--json"],
+      {
+        encoding: "utf8",
+        env: {
+          ...cliEnv,
+          OPENCLAW_CONFIG_PATH: rehearsalPath,
+          OPENCLAW_STATE_DIR:
+            "/tmp/leaderbot-gateway-state-rehearsal-runtime",
+        },
+      },
+    );
+    if (validation.status !== 0) {
+      throw new Error(validation.stderr || validation.stdout);
+    }
+    const validationResult = JSON.parse(validation.stdout);
     console.log(JSON.stringify({
       productionWasCanonicalized: productionBefore !== productionAfter,
       productionStillHasFacebook: Boolean(JSON.parse(productionAfter).channels?.facebook),
       rehearsalChannelCount: Object.keys(rehearsal.channels ?? {}).length,
+      rehearsalHasStaleChannel: Object.hasOwn(
+        rehearsal.channels ?? {},
+        "stale-provider"
+      ),
+      rehearsalPluginAllowCount: rehearsal.plugins?.allow?.length,
+      rehearsalPluginEntryKeys: Object.keys(rehearsal.plugins?.entries ?? {}),
       rehearsalFacebookEnabled: rehearsal.plugins?.entries?.facebook?.enabled,
-      rehearsalHasModels: Object.hasOwn(rehearsal, "models"),
-      rehearsalHooksEnabled: rehearsal.hooks?.enabled,
-      rehearsalInternalHooksEnabled: rehearsal.hooks?.internal?.enabled,
+      rehearsalFacebookDmPolicy: rehearsal.channels?.facebook?.dmPolicy,
+      rehearsalFacebookPageId: rehearsal.channels?.facebook?.pageId,
+      rehearsalFacebookCredentialKeys: [
+        "pageAccessToken",
+        "tokenFile",
+        "appSecret",
+        "appSecretFile",
+        "verifyToken",
+        "verifyTokenFile",
+      ].filter((key) => Object.hasOwn(rehearsal.channels?.facebook ?? {}, key)),
+      rehearsalFacebookAccountCredentialKeys: [
+        "pageAccessToken",
+        "tokenFile",
+        "appSecret",
+        "appSecretFile",
+        "verifyToken",
+        "verifyTokenFile",
+      ].filter((key) =>
+        Object.hasOwn(rehearsal.channels?.facebook?.accounts?.main ?? {}, key)
+      ),
+      rehearsalSessionScope: rehearsal.session?.dmScope,
+      rehearsalModelKeys: Object.keys(rehearsal.models ?? {}),
+      rehearsalCatalogRefreshEnabled:
+        rehearsal.models?.catalogRefresh?.enabled,
       rehearsalCronEnabled: rehearsal.cron?.enabled,
       rehearsalCronTriggersEnabled: rehearsal.cron?.triggers?.enabled,
+      rehearsalHooks: rehearsal.hooks,
+      rehearsalUpdate: rehearsal.update,
+      rehearsalTranscripts: rehearsal.transcripts,
+      rehearsalDiscovery: rehearsal.discovery,
+      rehearsalAcp: rehearsal.acp,
+      rehearsalEnv: rehearsal.env,
+      rehearsalHasSecrets: Object.hasOwn(rehearsal, "secrets"),
+      rehearsalCloudWorkers: rehearsal.cloudWorkers,
+      rehearsalDefaultHeartbeat: rehearsal.agents?.defaults?.heartbeat,
+      rehearsalAgentHeartbeatPresent: Object.hasOwn(
+        rehearsal.agents?.entries?.main ?? {},
+        "heartbeat"
+      ),
+      rehearsalAgentCompactionPresent: Object.hasOwn(
+        rehearsal.agents?.entries?.main ?? {},
+        "compaction"
+      ),
+      rehearsalTailscale: rehearsal.gateway?.tailscale,
+      productionStillHasHookAccount: Boolean(
+        JSON.parse(productionAfter).hooks?.gmail?.account
+      ),
+      productionStillHasModelProvider: Boolean(
+        JSON.parse(productionAfter).models?.providers?.openai
+      ),
+      productionStillHasFacebookCredential: Boolean(
+        JSON.parse(productionAfter).channels?.facebook?.pageAccessToken
+      ),
+      productionStillHasStaleChannel: Boolean(
+        JSON.parse(productionAfter).channels?.["stale-provider"]
+      ),
+      productionStillHasStalePlugin: Boolean(
+        JSON.parse(productionAfter).plugins?.entries?.["unsafe-test-plugin"]
+      ),
+      productionStillHasEnvCredential: Boolean(
+        JSON.parse(productionAfter).env?.vars?.FACEBOOK_PAGE_ACCESS_TOKEN
+      ),
+      productionStillHasSecretProvider: Boolean(
+        JSON.parse(productionAfter).secrets?.providers?.rehearsal
+      ),
+      productionStillHasCloudWorker: Boolean(
+        JSON.parse(productionAfter).cloudWorkers?.profiles?.rehearsal
+      ),
+      rehearsalRuntimeStateEntries: fs.readdirSync(
+        "/tmp/leaderbot-gateway-state-rehearsal-runtime"
+      ),
+      rehearsalRuntimeStateMode:
+        fs.statSync("/tmp/leaderbot-gateway-state-rehearsal-runtime").mode & 0o777,
+      rehearsalConfigValid: validationResult.valid,
+      rehearsalConfigWarnings: validationResult.warnings ?? [],
       rehearsalMode: fs.statSync(rehearsalPath).mode & 0o777,
       productionMode: fs.statSync(productionPath).mode & 0o777,
     }));
@@ -130,6 +225,7 @@ function runPrepareGatewayStateRehearsalConfig(env) {
       env: {
         ...process.env,
         ...env,
+        OPENCLAW_BIN: path.resolve("node_modules/openclaw/openclaw.mjs"),
         START_GATEWAY_SCRIPT: scriptPath,
       },
     },
@@ -251,27 +347,134 @@ describe("Fly gateway startup", () => {
     fs.writeFileSync(
       path.join(stateDir, "openclaw.json"),
       `${JSON.stringify({
-        channels: { facebook: { dmPolicy: "pairing" } },
+        channels: {
+          facebook: {
+            dmPolicy: "pairing",
+            pageId: "production-page",
+            pageAccessToken: "stored-page-token",
+            tokenFile: "/data/page-token",
+            appSecret: "stored-app-secret",
+            appSecretFile: "/data/app-secret",
+            verifyToken: "stored-verify-token",
+            verifyTokenFile: "/data/verify-token",
+            accounts: {
+              main: {
+                pageId: "production-page",
+                pageAccessToken: "stored-account-token",
+                tokenFile: "/data/account-page-token",
+                appSecret: "stored-account-app-secret",
+                appSecretFile: "/data/account-app-secret",
+                verifyToken: "stored-account-verify-token",
+                verifyTokenFile: "/data/account-verify-token",
+              },
+            },
+          },
+          "stale-provider": { token: "stored-stale-token" },
+        },
         models: { providers: { openai: { apiKey: "stored-test-value" } } },
-        plugins: { entries: { facebook: { enabled: true } } },
+        hooks: {
+          enabled: true,
+          gmail: { account: "operator@example.invalid" },
+          internal: { enabled: true },
+        },
+        cron: { enabled: true, triggers: { enabled: true } },
+        update: { checkOnStart: true, auto: { enabled: true } },
+        transcripts: {
+          enabled: true,
+          autoStart: [{ providerId: "discord-voice" }],
+        },
+        discovery: {
+          wideArea: { domain: "example.invalid" },
+          mdns: { mode: "full" },
+        },
+        acp: { enabled: true, dispatch: { enabled: true } },
+        env: {
+          shellEnv: { enabled: true },
+          vars: {
+            FACEBOOK_PAGE_ACCESS_TOKEN: "stored-env-page-token",
+            OPENAI_API_KEY: "stored-env-openai-key",
+          },
+        },
+        secrets: {
+          providers: {
+            rehearsal: { source: "env" },
+          },
+        },
+        cloudWorkers: {
+          profiles: {
+            rehearsal: { provider: "unsafe-test-worker" },
+          },
+        },
+        agents: {
+          defaults: { heartbeat: { every: "5m" } },
+          entries: {
+            main: { default: true, heartbeat: { every: "1m" } },
+          },
+        },
+        gateway: {
+          remote: { url: "https://example.invalid" },
+          tailscale: { mode: "serve", resetOnExit: true },
+        },
+        plugins: {
+          allow: ["facebook", "unsafe-test-plugin"],
+          entries: {
+            facebook: {
+              enabled: true,
+              config: { retainedCredential: "stored-plugin-secret" },
+            },
+            "unsafe-test-plugin": { enabled: true },
+          },
+        },
       })}\n`,
     );
 
     const result = runPrepareGatewayStateRehearsalConfig({
       OPENAI_API_KEY: "dummy-openai",
       FACEBOOK_PAGE_ACCESS_TOKEN: "dummy-facebook",
+      OPENCLAW_FACEBOOK_PLUGIN_PATH: process.cwd(),
     });
 
     expect(result).toEqual({
       productionWasCanonicalized: true,
       productionStillHasFacebook: true,
       rehearsalChannelCount: 1,
+      rehearsalHasStaleChannel: false,
+      rehearsalPluginAllowCount: 1,
+      rehearsalPluginEntryKeys: ["facebook"],
       rehearsalFacebookEnabled: true,
-      rehearsalHasModels: true,
-      rehearsalHooksEnabled: false,
-      rehearsalInternalHooksEnabled: false,
+      rehearsalFacebookDmPolicy: "pairing",
+      rehearsalFacebookPageId: "production-page",
+      rehearsalFacebookCredentialKeys: [],
+      rehearsalFacebookAccountCredentialKeys: [],
+      rehearsalSessionScope: "per-account-channel-peer",
+      rehearsalModelKeys: ["catalogRefresh"],
+      rehearsalCatalogRefreshEnabled: false,
       rehearsalCronEnabled: false,
       rehearsalCronTriggersEnabled: false,
+      rehearsalHooks: { enabled: false, internal: { enabled: false } },
+      rehearsalUpdate: { checkOnStart: false, auto: { enabled: false } },
+      rehearsalTranscripts: { enabled: false, autoStart: [] },
+      rehearsalDiscovery: { mdns: { mode: "off" } },
+      rehearsalAcp: { enabled: false, dispatch: { enabled: false } },
+      rehearsalEnv: { shellEnv: { enabled: false }, vars: {} },
+      rehearsalHasSecrets: false,
+      rehearsalCloudWorkers: { profiles: {} },
+      rehearsalDefaultHeartbeat: { every: "0m" },
+      rehearsalAgentHeartbeatPresent: false,
+      rehearsalAgentCompactionPresent: false,
+      rehearsalTailscale: { mode: "off", resetOnExit: false },
+      productionStillHasHookAccount: true,
+      productionStillHasModelProvider: true,
+      productionStillHasFacebookCredential: true,
+      productionStillHasStaleChannel: true,
+      productionStillHasStalePlugin: true,
+      productionStillHasEnvCredential: true,
+      productionStillHasSecretProvider: true,
+      productionStillHasCloudWorker: true,
+      rehearsalRuntimeStateEntries: [],
+      rehearsalRuntimeStateMode: 0o700,
+      rehearsalConfigValid: true,
+      rehearsalConfigWarnings: [],
       rehearsalMode: 0o600,
       productionMode: 0o600,
     });
@@ -288,8 +491,10 @@ describe("Fly gateway startup", () => {
 
     const childEnv = buildGatewayChildEnv({
       rehearsal: true,
-      openclawConfigPath: "/tmp/rehearsal-openclaw.json",
+      openclawConfigPath:
+        "/tmp/leaderbot-gateway-state-rehearsal/openclaw.json",
     });
+    const productionChildEnv = buildGatewayChildEnv();
 
     expect(childEnv.OPENAI_API_KEY).toBeUndefined();
     expect(childEnv.FACEBOOK_PAGE_ACCESS_TOKEN).toBeUndefined();
@@ -298,24 +503,65 @@ describe("Fly gateway startup", () => {
     expect(childEnv.DATABASE_URL).toBeUndefined();
     expect(childEnv.REDIS_URL).toBeUndefined();
     expect(childEnv.LEADERBOT_IMAGE_GEN_URL).toBe("");
-    expect(childEnv.OPENCLAW_SKIP_STARTUP_MODEL_PREWARM).toBe("1");
-    expect(childEnv.OPENCLAW_SKIP_CRON).toBe("1");
     expect(childEnv.OPENCLAW_SKIP_CHANNELS).toBe("1");
     expect(childEnv.OPENCLAW_SKIP_PROVIDERS).toBe("1");
     expect(childEnv.OPENCLAW_SKIP_GMAIL_WATCHER).toBe("1");
-    expect(childEnv.OPENCLAW_CONFIG_PATH).toBe("/tmp/rehearsal-openclaw.json");
+    expect(childEnv.OPENCLAW_SKIP_STARTUP_MODEL_PREWARM).toBe("1");
+    expect(childEnv.OPENCLAW_SKIP_CRON).toBe("1");
+    expect(childEnv.OPENCLAW_DISABLE_BONJOUR).toBe("1");
+    expect(childEnv.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER).toBe("1");
+    expect(childEnv.OPENCLAW_SKIP_CANVAS_HOST).toBe("1");
+    expect(childEnv.OPENCLAW_SKIP_ACPX_RUNTIME).toBe("1");
+    expect(childEnv.OPENCLAW_SKIP_ACPX_RUNTIME_PROBE).toBe("1");
+    expect(childEnv.OPENCLAW_LOAD_SHELL_ENV).toBe("0");
+    expect(childEnv.OPENCLAW_NO_AUTO_UPDATE).toBe("1");
+    expect(childEnv.OPENCLAW_STATE_DIR).toBe(
+      "/tmp/leaderbot-gateway-state-rehearsal-runtime",
+    );
+    expect(childEnv.OPENCLAW_STATE_DIR).not.toBe(
+      productionChildEnv.OPENCLAW_STATE_DIR,
+    );
+    expect(childEnv.OPENCLAW_WORKSPACE_DIR).toBe(
+      productionChildEnv.OPENCLAW_WORKSPACE_DIR,
+    );
+    expect(childEnv.OPENCLAW_CONFIG_PATH).toBe(
+      "/tmp/leaderbot-gateway-state-rehearsal/openclaw.json",
+    );
   });
 
   it.each([
-    ["missing configured channel", (config) => delete config.channels.facebook],
+    ["missing Facebook channel", (config) => delete config.channels.facebook],
+    ["stale channel", (config) => (config.channels.other = {})],
     [
-      "enabled plugin",
+      "retained Facebook credential",
+      (config) => (config.channels.facebook.pageAccessToken = "secret"),
+    ],
+    [
+      "retained Facebook account credential",
+      (config) =>
+        (config.channels.facebook.accounts = {
+          main: { verifyTokenFile: "/data/verify-token" },
+        }),
+    ],
+    ["allowed provider plugin", (config) => config.plugins.allow.push("x")],
+    [
+      "disabled Facebook plugin",
       (config) => (config.plugins.entries.facebook.enabled = false),
+    ],
+    ["retained plugin config", (config) => (config.plugins.entries.other = {})],
+    [
+      "retained Facebook plugin config",
+      (config) => (config.plugins.entries.facebook.config = {}),
     ],
     ["non-loopback bind", (config) => (config.gateway.bind = "lan")],
     [
       "remote gateway",
       (config) => (config.gateway.remote = "https://example.invalid"),
+    ],
+    ["model provider", (config) => (config.models.providers = {})],
+    [
+      "remote model catalog",
+      (config) => (config.models.catalogRefresh.enabled = true),
     ],
     ["enabled automation scheduler", (config) => (config.cron.enabled = true)],
     [
@@ -324,14 +570,64 @@ describe("Fly gateway startup", () => {
     ],
     ["extra automation setting", (config) => (config.cron.webhookToken = "x")],
     ["enabled hooks", (config) => (config.hooks.enabled = true)],
-    ["enabled internal hooks", (config) => (config.hooks.internal.enabled = true)],
+    [
+      "enabled internal hooks",
+      (config) => (config.hooks.internal.enabled = true),
+    ],
+    ["retained Gmail hook", (config) => (config.hooks.gmail = {})],
+    ["startup update check", (config) => (config.update.checkOnStart = true)],
+    ["automatic update", (config) => (config.update.auto.enabled = true)],
+    ["enabled transcripts", (config) => (config.transcripts.enabled = true)],
+    [
+      "transcript auto-start",
+      (config) => config.transcripts.autoStart.push({ providerId: "x" }),
+    ],
+    ["enabled discovery", (config) => (config.discovery.mdns.mode = "full")],
+    ["enabled ACP", (config) => (config.acp.enabled = true)],
+    ["enabled shell env", (config) => (config.env.shellEnv.enabled = true)],
+    ["retained env credential", (config) => (config.env.vars.API_KEY = "x")],
+    ["retained secret provider", (config) => (config.secrets = {})],
+    [
+      "retained cloud worker",
+      (config) => (config.cloudWorkers.profiles.rehearsal = {}),
+    ],
+    ["enabled heartbeat", (config) => (config.agents.defaults.heartbeat = {})],
+    [
+      "per-agent heartbeat",
+      (config) => (config.agents.entries.main.heartbeat = { every: "1m" }),
+    ],
+    [
+      "per-agent compaction",
+      (config) => (config.agents.entries.main.compaction = {}),
+    ],
+    ["Tailscale serve", (config) => (config.gateway.tailscale.mode = "serve")],
   ])("rejects rehearsal config with %s", (_label, mutate) => {
     const config = {
-      channels: { facebook: {} },
+      channels: { facebook: { dmPolicy: "pairing" } },
       cron: { enabled: false, triggers: { enabled: false } },
-      plugins: { entries: { facebook: { enabled: true } } },
       hooks: { enabled: false, internal: { enabled: false } },
-      gateway: { bind: "loopback" },
+      models: { catalogRefresh: { enabled: false } },
+      update: { checkOnStart: false, auto: { enabled: false } },
+      transcripts: { enabled: false, autoStart: [] },
+      discovery: { mdns: { mode: "off" } },
+      acp: { enabled: false, dispatch: { enabled: false } },
+      env: { shellEnv: { enabled: false }, vars: {} },
+      cloudWorkers: { profiles: {} },
+      agents: {
+        defaults: { heartbeat: { every: "0m" } },
+        entries: { main: { default: true } },
+      },
+      session: { dmScope: "per-account-channel-peer" },
+      plugins: {
+        enabled: true,
+        allow: ["facebook"],
+        load: { paths: ["/app/node_modules/@dj-shortcut/facebook"] },
+        entries: { facebook: { enabled: true } },
+      },
+      gateway: {
+        bind: "loopback",
+        tailscale: { mode: "off", resetOnExit: false },
+      },
     };
     mutate(config);
 
@@ -346,35 +642,104 @@ describe("Fly gateway startup", () => {
         {
           OPENAI_API_KEY: "dummy",
           LEADERBOT_IMAGE_GEN_URL: "",
-          OPENCLAW_SKIP_STARTUP_MODEL_PREWARM: "1",
-          OPENCLAW_SKIP_CRON: "1",
           OPENCLAW_SKIP_CHANNELS: "1",
           OPENCLAW_SKIP_PROVIDERS: "1",
           OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+          OPENCLAW_SKIP_STARTUP_MODEL_PREWARM: "1",
+          OPENCLAW_SKIP_CRON: "1",
+          OPENCLAW_DISABLE_BONJOUR: "1",
+          OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+          OPENCLAW_SKIP_CANVAS_HOST: "1",
+          OPENCLAW_SKIP_ACPX_RUNTIME: "1",
+          OPENCLAW_SKIP_ACPX_RUNTIME_PROBE: "1",
+          OPENCLAW_LOAD_SHELL_ENV: "0",
+          OPENCLAW_NO_AUTO_UPDATE: "1",
         },
         { OPENAI_API_KEY: "dummy" },
       ),
     ).toThrow("retained a provider credential");
   });
 
-  it.each([undefined, "0", "false"])(
-    "rejects a rehearsal child without the cron shutdown fence (%s)",
-    (value) => {
+  it.each(
+    [
+      "OPENCLAW_SKIP_CHANNELS",
+      "OPENCLAW_SKIP_PROVIDERS",
+      "OPENCLAW_SKIP_GMAIL_WATCHER",
+      "OPENCLAW_SKIP_STARTUP_MODEL_PREWARM",
+      "OPENCLAW_SKIP_CRON",
+      "OPENCLAW_DISABLE_BONJOUR",
+      "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
+      "OPENCLAW_SKIP_CANVAS_HOST",
+      "OPENCLAW_SKIP_ACPX_RUNTIME",
+      "OPENCLAW_SKIP_ACPX_RUNTIME_PROBE",
+      "OPENCLAW_LOAD_SHELL_ENV",
+      "OPENCLAW_NO_AUTO_UPDATE",
+    ].flatMap((name) =>
+      [
+        undefined,
+        name === "OPENCLAW_LOAD_SHELL_ENV" ? "1" : "0",
+        "false",
+      ].map((value) => [name, value]),
+    ),
+  )(
+    "rejects a rehearsal child without transport fence %s=%s",
+    (name, value) => {
+      const childEnv = {
+        LEADERBOT_IMAGE_GEN_URL: "",
+        OPENCLAW_STATE_DIR:
+          "/tmp/leaderbot-gateway-state-rehearsal-runtime",
+        OPENCLAW_CONFIG_PATH:
+          "/tmp/leaderbot-gateway-state-rehearsal/openclaw.json",
+        OPENCLAW_WORKSPACE_DIR:
+          buildGatewayChildEnv().OPENCLAW_WORKSPACE_DIR,
+        OPENCLAW_SKIP_CHANNELS: "1",
+        OPENCLAW_SKIP_PROVIDERS: "1",
+        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+        OPENCLAW_SKIP_STARTUP_MODEL_PREWARM: "1",
+        OPENCLAW_SKIP_CRON: "1",
+        OPENCLAW_DISABLE_BONJOUR: "1",
+        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+        OPENCLAW_SKIP_CANVAS_HOST: "1",
+        OPENCLAW_SKIP_ACPX_RUNTIME: "1",
+        OPENCLAW_SKIP_ACPX_RUNTIME_PROBE: "1",
+        OPENCLAW_LOAD_SHELL_ENV: "0",
+        OPENCLAW_NO_AUTO_UPDATE: "1",
+      };
+      if (value === undefined) delete childEnv[name];
+      else childEnv[name] = value;
       expect(() =>
-        assertGatewayStateRehearsalChildEnv(
-          {
-            LEADERBOT_IMAGE_GEN_URL: "",
-            OPENCLAW_SKIP_STARTUP_MODEL_PREWARM: "1",
-            ...(value === undefined ? {} : { OPENCLAW_SKIP_CRON: value }),
-            OPENCLAW_SKIP_CHANNELS: "1",
-            OPENCLAW_SKIP_PROVIDERS: "1",
-            OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-          },
-          {},
-        ),
+        assertGatewayStateRehearsalChildEnv(childEnv, {}),
       ).toThrow("transport fence is invalid");
     },
   );
+
+  it("rejects a rehearsal child that can read the cloned runtime state", () => {
+    expect(() =>
+      assertGatewayStateRehearsalChildEnv(
+        {
+          LEADERBOT_IMAGE_GEN_URL: "",
+          OPENCLAW_STATE_DIR: buildGatewayChildEnv().OPENCLAW_STATE_DIR,
+          OPENCLAW_CONFIG_PATH:
+            "/tmp/leaderbot-gateway-state-rehearsal/openclaw.json",
+          OPENCLAW_WORKSPACE_DIR:
+            buildGatewayChildEnv().OPENCLAW_WORKSPACE_DIR,
+          OPENCLAW_SKIP_CHANNELS: "1",
+          OPENCLAW_SKIP_PROVIDERS: "1",
+          OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+          OPENCLAW_SKIP_STARTUP_MODEL_PREWARM: "1",
+          OPENCLAW_SKIP_CRON: "1",
+          OPENCLAW_DISABLE_BONJOUR: "1",
+          OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+          OPENCLAW_SKIP_CANVAS_HOST: "1",
+          OPENCLAW_SKIP_ACPX_RUNTIME: "1",
+          OPENCLAW_SKIP_ACPX_RUNTIME_PROBE: "1",
+          OPENCLAW_LOAD_SHELL_ENV: "0",
+          OPENCLAW_NO_AUTO_UPDATE: "1",
+        },
+        {},
+      ),
+    ).toThrow("transport fence is invalid");
+  });
 
   it(
     "persists the default OpenClaw workspace on the Fly volume",

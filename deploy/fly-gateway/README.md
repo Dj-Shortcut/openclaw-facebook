@@ -138,9 +138,18 @@ multi-tenant image-gen release:
    artifact provenance, then move only to `rehearsal_approved`. This is the only
    state from which the protected rehearsal may start; it still claims no
    rehearsal success.
-3. Snapshot or clone the mounted volume and rehearse startup on the copy. Do not
-   inspect quarantined customer content without an approved, auditable support
-   or break-glass flow.
+3. Snapshot or clone the mounted volume and run the protected bounded
+   observation on the copy. The current workflow proves only that the reviewed
+   image starts and restarts with a credential-scrubbed, production-shaped
+   Facebook configuration, disabled transports, empty config/shell credential
+   sources, no cloud-worker profiles, an empty temporary runtime state and no
+   public service, and that the live baseline remains unchanged.
+   Its artifact deliberately keeps production startup, tenant isolation, and
+   rollback at `false`: it does not yet inspect the loaded Facebook runtime or
+   `/readyz`, route isolation identities, or boot a recovery image, so it cannot
+   advance the contract to `rehearsed`. It also makes no no-provider-call claim
+   because the Fly rehearsal has no egress control. Do not inspect quarantined
+   customer content without an approved, auditable support or break-glass flow.
 4. Prove the generated non-secret config has
    `session.dmScope=per-account-channel-peer`, memory slot `none`, disabled
    `memory-core` and `session-memory`, disabled compaction memory flush, and an
@@ -152,10 +161,12 @@ multi-tenant image-gen release:
 6. Build and review matching rollout and rollback artifacts containing these
    controls. Then use the protected production workflow; do not source-deploy or
    use the route-guard hotfix as evidence.
-7. Record exact artifact provenance, protected rehearsal evidence, the recovery
-   identity/config and the successor identity/config in `stateRebaseline`. All
-   historical Machines and volumes remain preserved; this transition never
-   deletes them automatically.
+7. After a later production-shaped, egress-controlled rehearsal actually tests
+   plugin readiness, the relevant isolation boundary and the reviewed recovery
+   path, record that complete protected evidence together with the recovery and
+   successor identities/configs in `stateRebaseline`. The bounded observation
+   artifact from step 3 is not that evidence. All historical Machines and
+   volumes remain preserved; this transition never deletes them automatically.
 8. Smoke two senders on one Page and one sender identity across two test Page
    accounts; their resolved session keys must all differ. Verify successful and
    failed attachment turns leave no downloaded media behind, and verify logs

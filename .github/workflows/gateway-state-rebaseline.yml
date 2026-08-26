@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   rehearse:
-    name: Snapshot and rehearse the reviewed gateway on an isolated copy
+    name: Snapshot and observe the reviewed gateway image on an isolated copy
     runs-on: ubuntu-latest
     timeout-minutes: 90
     environment: production
@@ -350,7 +350,7 @@ jobs:
           test "$(jq -er '.name' <<<"$restored")" = "$name"
           test -z "$(jq -er '.attached_machine_id // ""' <<<"$restored")"
 
-      - name: Start the reviewed real OpenClaw runtime on the isolated copy
+      - name: Start the reviewed image with the scrubbed production-shaped Facebook configuration
         timeout-minutes: 15
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_GATEWAY_DEPLOY_TOKEN }}
@@ -407,7 +407,7 @@ jobs:
           printf '%s\n' "$rehearsal_machine_id" > "$evidence_dir/rehearsal-machine-id.txt"
           echo "REHEARSAL_MACHINE_ID=$rehearsal_machine_id" >> "$GITHUB_ENV"
 
-      - name: Verify real OpenClaw startup and metadata-only health pass one
+      - name: Observe no-transport health pass one
         timeout-minutes: 5
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_GATEWAY_DEPLOY_TOKEN }}
@@ -441,7 +441,7 @@ jobs:
           done
           test "$state" = "started"
 
-      - name: Verify real OpenClaw startup and metadata-only health pass two
+      - name: Observe no-transport health pass two
         timeout-minutes: 5
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_GATEWAY_DEPLOY_TOKEN }}
@@ -454,7 +454,7 @@ jobs:
             --quiet \
             --command "/bin/sh -lc '$verify'"
 
-      - name: Stop the clone and prove the untouched live baseline and health
+      - name: Stop the clone and verify the live baseline remained unchanged
         timeout-minutes: 12
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_GATEWAY_DEPLOY_TOKEN }}
@@ -500,14 +500,14 @@ jobs:
             --arg liveBaselineEvidenceSha "$baseline_evidence_sha" \
             --arg runId "$GITHUB_RUN_ID" \
             --arg runAttempt "$GITHUB_RUN_ATTEMPT" \
-            '{protocol:$protocol,app:$app,sourceCommit:$sourceCommit,reviewedImage:$reviewedImage,sourceVolumeId:$sourceVolume,snapshot:{id:$snapshotId,digest:$snapshotDigest},isolated:{volumeId:$restoredVolume,machineId:$machine,publicService:false,dnsRegistration:false,providerCalls:false},liveBaselineEvidenceSha256:$liveBaselineEvidenceSha,checks:{startupPassed:true,tenantIsolationPassed:false,rollbackPassed:false,metadataOnlyEvidence:true,starts:2},limitations:{tenantIsolation:"not exercised by provider-silent startup",rollback:"no reviewed recovery image was booted against the cloned volume"},runId:$runId,runAttempt:$runAttempt}' \
+            '{protocol:$protocol,app:$app,sourceCommit:$sourceCommit,reviewedImage:$reviewedImage,sourceVolumeId:$sourceVolume,snapshot:{id:$snapshotId,digest:$snapshotDigest},isolated:{volumeId:$restoredVolume,machineId:$machine},observations:{cloneVolumeMounted:true,noPublicServiceConfigured:true,dnsRegistrationDisabled:true,reviewedImageStarted:true,reviewedImageRestarted:true,liveBaselinePreserved:true},checks:{startupPassed:false,tenantIsolationPassed:false,rollbackPassed:false,metadataOnlyEvidence:true,starts:2},limitations:{providerCallAbsenceProven:false,productionShapedPluginReadinessProven:false},liveBaselineEvidenceSha256:$liveBaselineEvidenceSha,runId:$runId,runAttempt:$runAttempt}' \
             > "$evidence_dir/rehearsal-evidence.json"
           rm -f \
             "$evidence_dir/post-machines.json" \
             "$evidence_dir/post-volumes.json" \
             "$evidence_dir/post-generated-config.json"
 
-      - name: Upload completed metadata-only rehearsal evidence before cleanup
+      - name: Upload bounded metadata-only rehearsal observations before cleanup
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: gateway-state-rehearsal-${{ github.run_id }}-${{ github.run_attempt }}

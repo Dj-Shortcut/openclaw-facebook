@@ -49,7 +49,7 @@ describe("protected gateway state rehearsal workflow", () => {
     expect(workflow).not.toContain("flyctl config show --app \"$GATEWAY_APP\" --json");
   });
 
-  it("runs the real reviewed runtime twice without a public service", () => {
+  it("runs the reviewed image twice with a scrubbed production-shaped configuration", () => {
     expect(workflow).toContain(
       'io.leaderbot.gateway.state-rehearsal" }}\' "$REVIEWED_IMAGE")" = "real-openclaw-v1"',
     );
@@ -62,6 +62,9 @@ describe("protected gateway state rehearsal workflow", () => {
     expect(workflow).toContain(".config.guest.memory_mb==$memory");
     expect(workflow).toContain(
       '--env "LEADERBOT_GATEWAY_STATE_REHEARSAL=1"',
+    );
+    expect(workflow).toContain(
+      "scrubbed production-shaped Facebook configuration",
     );
     expect(workflow.match(/--verify-running --expected-starts [12]/g)).toHaveLength(
       2,
@@ -103,15 +106,26 @@ describe("protected gateway state rehearsal workflow", () => {
     );
   });
 
-  it("does not overclaim unexercised isolation or rollback and removes only the exact clone resources", () => {
-    expect(position("Stop the clone and prove the untouched live baseline")).toBeLessThan(
-      position("Upload completed metadata-only rehearsal evidence"),
+  it("records only bounded observations and removes the exact clone resources", () => {
+    expect(
+      position("Stop the clone and verify the live baseline remained unchanged"),
+    ).toBeLessThan(
+      position("Upload bounded metadata-only rehearsal observations"),
     );
+    expect(workflow).toContain("startupPassed:false");
     expect(workflow).toContain("tenantIsolationPassed:false");
     expect(workflow).toContain("rollbackPassed:false");
-    expect(workflow).toContain('tenantIsolation:"not exercised');
-    expect(workflow).toContain('rollback:"no reviewed recovery image');
     expect(workflow).toContain("metadataOnlyEvidence:true");
+    expect(workflow).toContain("cloneVolumeMounted:true");
+    expect(workflow).toContain("noPublicServiceConfigured:true");
+    expect(workflow).toContain("reviewedImageRestarted:true");
+    expect(workflow).toContain("liveBaselinePreserved:true");
+    expect(workflow).toContain("providerCallAbsenceProven:false");
+    expect(workflow).toContain("productionShapedPluginReadinessProven:false");
+    expect(workflow).not.toContain("startupPassed:true");
+    expect(workflow).not.toContain("tenantIsolationPassed:true");
+    expect(workflow).not.toContain("rollbackPassed:true");
+    expect(workflow).not.toContain("providerCalls:false");
     expect(workflow).toContain("if: always()");
     expect(workflow).toContain(
       'test -f "$evidence_dir/restore-volume-name.txt"',

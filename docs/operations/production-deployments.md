@@ -469,6 +469,18 @@ The manifest contract has four stages:
    identities and configs. Even this state does not enable deployment in the
    current transition; that needs a later reviewed manifest/validator change.
 
+The current protected workflow intentionally does not satisfy stage 3. It
+records only that an encrypted clone was mounted, the reviewed image started
+and restarted with a credential-scrubbed production-shaped Facebook
+configuration, disabled transports, empty config/shell credential sources, no
+cloud-worker profiles and an empty temporary runtime state, while the live
+baseline remained unchanged. The artifact therefore keeps `startupPassed`,
+`tenantIsolationPassed`, and `rollbackPassed` false. It does not exercise
+the loaded Facebook plugin runtime plus `/readyz`, route isolation identities,
+or start a reviewed recovery image. Without an explicit egress control it also
+makes no claim that provider calls were absent. A later complete rehearsal must
+prove those separate requirements before the manifest may move to `rehearsed`.
+
 At every stage `historicalResources` forbids automatic deletion and preserves
 unlisted Machines and volumes. Cleanup is a separate, human-reviewed operation
 after the canonical state is proven; it is never an implicit side effect of
