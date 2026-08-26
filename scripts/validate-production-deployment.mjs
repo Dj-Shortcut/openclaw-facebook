@@ -2271,12 +2271,26 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
   const imageGenStartupDiagnosticIndex = workflow.indexOf(
     "      - name: Capture bounded image-gen startup diagnostics",
   );
+  const imageGenDiagnosticScopeIndex = workflow.indexOf(
+    "      - name: Record image-gen candidate diagnostic scope",
+  );
+  const imageGenDiagnosticUploadIndex = workflow.indexOf(
+    "      - name: Upload image-gen startup diagnostics",
+  );
   const imageGenRestoreIndex = workflow.indexOf(
     "      - name: Restore captured image-gen release",
   );
   if (
     !imageGenStartupDiagnosticStep ||
+    imageGenDiagnosticScopeIndex < 0 ||
+    namedWorkflowStepTimeout(
+      workflow,
+      "Record image-gen candidate diagnostic scope",
+    ) !== 1 ||
     imageGenStartupDiagnosticIndex < 0 ||
+    imageGenStartupDiagnosticIndex <= imageGenDiagnosticScopeIndex ||
+    imageGenDiagnosticUploadIndex <= imageGenStartupDiagnosticIndex ||
+    imageGenRestoreIndex <= imageGenDiagnosticUploadIndex ||
     imageGenRestoreIndex <= imageGenStartupDiagnosticIndex ||
     namedWorkflowStepTimeout(
       workflow,
@@ -2289,10 +2303,23 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
       "FLY_API_TOKEN: ${{ secrets.FLY_IMAGE_GEN_DEPLOY_TOKEN }}",
     ) ||
     !imageGenStartupDiagnosticStep.includes(
-      "timeout --signal=TERM 30s",
+      "timeout --signal=TERM 12s",
     ) ||
     !imageGenStartupDiagnosticStep.includes(
-      "flyctl logs --app leaderbot-fb-image-gen --no-tail --json",
+      "flyctl machine list --app leaderbot-fb-image-gen --json",
+    ) ||
+    !imageGenStartupDiagnosticStep.includes(
+      '(.config.env.LEADERBOT_DEPLOYMENT_IDENTITY // "") ==',
+    ) ||
+    !imageGenStartupDiagnosticStep.includes('--machine "$machine_id"') ||
+    !imageGenStartupDiagnosticStep.includes(
+      'select($timestampSecond >= $startedAt)',
+    ) ||
+    !imageGenStartupDiagnosticStep.includes(
+      'if ($parsedPayload | type) == "object"',
+    ) ||
+    !imageGenStartupDiagnosticStep.includes(
+      'if ($payload.error | type) == "object"',
     ) ||
     !imageGenStartupDiagnosticStep.includes(
       'event: "machine_memory_failure"',
@@ -2300,8 +2327,27 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
     !imageGenStartupDiagnosticStep.includes(
       'else "unclassified_start_failure"',
     ) ||
-    !imageGenStartupDiagnosticStep.includes("tail -n 120") ||
-    imageGenStartupDiagnosticStep.includes("message: $raw")
+    !imageGenStartupDiagnosticStep.includes(
+      'then "billing_outbox_mollie_api"',
+    ) ||
+    !imageGenStartupDiagnosticStep.includes(
+      'then "notification_receiver_protocol"',
+    ) ||
+    !imageGenStartupDiagnosticStep.includes(
+      'head -n 20 "$machine_events"',
+    ) ||
+    !imageGenStartupDiagnosticStep.includes(
+      'head -n 120 "$filtered_events"',
+    ) ||
+    !imageGenStartupDiagnosticStep.includes(
+      'printf \'%s\\n\' "$capture_status" > "$diagnostics_dir/capture-status.txt"',
+    ) ||
+    imageGenStartupDiagnosticStep.includes("message: $raw") ||
+    imageGenStartupDiagnosticStep.includes("errorName:") ||
+    imageGenStartupDiagnosticStep.includes("errorCode:") ||
+    !workflow.includes(
+      "name: image-gen-startup-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}",
+    )
   ) {
     fail(
       `${PRODUCTION_WORKFLOW_PATH} must capture only bounded, classified image-gen startup metadata before rollback`,
@@ -2494,8 +2540,8 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
     ],
     [
       /^\s*timeout-minutes: 3\s*$/gm,
-      16,
-      "must bound setup and rollback-plan uploads",
+      17,
+      "must bound setup, rollback-plan, and diagnostic uploads",
     ],
     [
       /^\s*timeout-minutes: 2\s*$/gm,

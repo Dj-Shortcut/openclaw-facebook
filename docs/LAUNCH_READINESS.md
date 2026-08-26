@@ -163,12 +163,15 @@ deploying outside the protected workflows.
    LEADERBOT_AI_ANSWER_ENFORCEMENT_ENABLED=false
    BILLING_NOTIFICATION_PLANE_ENABLED=false
    MOLLIE_ACCOUNTING_IMPORT_ENABLED=false
+   MOLLIE_RECONCILIATION_ENABLED=false
    ```
 
 2. After a green `phase: "offline"` and operator-notification gate, deploy the
    provider-safe first operational phase with
    `MOLLIE_BILLING_DRAIN_ENABLED=true` and
-   `BILLING_NOTIFICATION_PLANE_ENABLED=true`. Keep
+   `BILLING_NOTIFICATION_PLANE_ENABLED=true`. In that same reviewed transition,
+   set `MOLLIE_RECONCILIATION_ENABLED=true`; keep the already reviewed
+   `BILLING_NOTIFICATION_RECEIVER_PREFLIGHT_ACK=true`. Keep
    `MOLLIE_BILLING_ENABLED=false`,
    `AI_ANSWER_FINALIZATION_DRAIN_ENABLED=false` and
    `MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED=false`. A commercially disabled

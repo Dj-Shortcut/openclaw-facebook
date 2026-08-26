@@ -605,6 +605,21 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      - name: Record image-gen candidate diagnostic scope
+        timeout-minutes: 1
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          diagnostics_dir="$RUNNER_TEMP/image-gen-startup-diagnostics"
+          mkdir -p "$diagnostics_dir"
+          candidate_identity="deploy-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          candidate_started_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          [[ "$candidate_identity" =~ ^deploy-[0-9]+-[0-9]+$ ]]
+          [[ "$candidate_started_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]
+          printf '%s\n' "$candidate_identity" > "$diagnostics_dir/candidate-identity.txt"
+          printf '%s\n' "$candidate_started_at" > "$diagnostics_dir/candidate-started-at.txt"
+          printf '%s\n' "pending" > "$diagnostics_dir/capture-status.txt"
       - name: Probe production billing triggers before rollout
         timeout-minutes: 5
         env:
@@ -701,63 +716,150 @@ jobs:
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_IMAGE_GEN_DEPLOY_TOKEN }}
         run: |
-          set +e
-          timeout --signal=TERM 30s \
-            flyctl logs --app leaderbot-fb-image-gen --no-tail --json |
-            jq -rc '
-              (.message // "") as $raw
-              | (try (
-                  if ($raw | type) == "string" then ($raw | fromjson)
-                  else $raw
-                  end
-                ) catch {}) as $payload
-              | if ([
-                  "boot",
-                  "version",
-                  "generator_startup_config",
-                  "mollie_billing_disabled",
-                  "mollie_commercial_billing_disabled_provider_drain_active",
-                  "server_listening",
-                  "server_start_failed",
-                  "billing_outbox_dispatch_failed",
-                  "billing_notification_receiver_worker_failed"
-                ] | index($payload.event)) != null then
-                  {
-                    timestamp,
-                    instance,
-                    event: $payload.event,
-                    level: ($payload.level // .level // "unknown"),
-                    errorName: (
-                      $payload.error.name //
-                      $payload.errorName //
-                      $payload.errorCode //
-                      null
-                    ),
-                    failureClass: (
-                      if $payload.event != "server_start_failed" then null
-                      elif (($payload.error.message // "") | test("notification"; "i")) then "notification_config"
-                      elif (($payload.error.message // "") | test("MOLLIE_API_KEY")) then "mollie_key_config"
-                      elif (($payload.error.message // "") | test("MOLLIE_MODE")) then "mollie_mode_config"
-                      elif (($payload.error.message // "") | test("MOLLIE_BILLING_DRAIN_ENABLED")) then "billing_drain_lifecycle"
-                      elif (($payload.error.message // "") | test("APP_BASE_URL|PORTAL_BASE_URL|MOLLIE_PAYMENT_WEBHOOK_URL")) then "billing_url_config"
-                      else "unclassified_start_failure"
-                      end
+          set -uo pipefail
+          diagnostics_dir="$RUNNER_TEMP/image-gen-startup-diagnostics"
+          candidate_identity="$(cat "$diagnostics_dir/candidate-identity.txt")"
+          candidate_started_at="$(cat "$diagnostics_dir/candidate-started-at.txt")"
+          filtered_events="$RUNNER_TEMP/image-gen-startup-events.filtered.jsonl"
+          : > "$filtered_events"
+          capture_status="complete"
+
+          if ! candidate_ids="$(
+            timeout --signal=TERM 20s \
+              flyctl machine list --app leaderbot-fb-image-gen --json |
+              jq -er --arg identity "$candidate_identity" '
+                [
+                  .[]
+                  | select(
+                      (.config.env.LEADERBOT_DEPLOYMENT_IDENTITY // "") ==
+                      $identity
                     )
-                  }
-                elif (($raw | tostring) | test("out of memory|oom|killed process"; "i")) then
-                  {
-                    timestamp,
-                    instance,
-                    event: "machine_memory_failure",
-                    level: "error",
-                    errorName: null,
-                    failureClass: "machine_memory"
-                  }
-                else empty
-                end
-            ' |
-            tail -n 120
+                  | .id
+                ]
+                | if
+                    length >= 1 and
+                    length <= 6 and
+                    (unique | length) == length and
+                    all(.[]; type == "string" and test("^[a-f0-9]{14}$"))
+                  then .[]
+                  else error("candidate machine selection failed")
+                  end
+              '
+          )"; then
+            capture_status="candidate_machine_selection_failed"
+            candidate_ids=""
+          fi
+
+          while IFS= read -r machine_id; do
+            test -n "$machine_id" || continue
+            machine_events="$(mktemp)"
+            if ! timeout --signal=TERM 12s \
+              flyctl logs --app leaderbot-fb-image-gen \
+                --machine "$machine_id" --no-tail --json |
+              jq -rc \
+                --arg machineId "$machine_id" \
+                --arg startedAt "$candidate_started_at" '
+                  def safe_level($value):
+                    if ["debug", "info", "warn", "error"] | index($value)
+                    then $value
+                    else "unknown"
+                    end;
+                  select(
+                    (.timestamp | type) == "string" and
+                    (.timestamp | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,9})?Z$"))
+                  )
+                  | (.timestamp | sub("\\.[0-9]{1,9}Z$"; "Z")) as $timestampSecond
+                  | select($timestampSecond >= $startedAt)
+                  | (.message // "") as $raw
+                  | (try (
+                      if ($raw | type) == "string" then ($raw | fromjson)
+                      else $raw
+                      end
+                    ) catch {}) as $parsedPayload
+                  | (
+                      if ($parsedPayload | type) == "object"
+                      then $parsedPayload
+                      else {}
+                      end
+                    ) as $payload
+                  | (
+                      if ($payload.error | type) == "object"
+                      then $payload.error
+                      else {}
+                      end
+                    ) as $payloadError
+                  | if ([
+                      "boot",
+                      "version",
+                      "generator_startup_config",
+                      "mollie_billing_disabled",
+                      "mollie_commercial_billing_disabled_provider_drain_active",
+                      "server_listening",
+                      "server_start_failed",
+                      "billing_outbox_dispatch_failed",
+                      "billing_notification_receiver_worker_failed"
+                    ] | index($payload.event)) != null then
+                      {
+                        timestamp,
+                        machineId: $machineId,
+                        event: $payload.event,
+                        level: safe_level($payload.level // .level // "unknown"),
+                        failureClass: (
+                          if $payload.event == "billing_outbox_dispatch_failed" then
+                            if ($payload.errorCode // "") == "MollieApiError" then "billing_outbox_mollie_api"
+                            elif ($payload.errorCode // "") == "RetryableOutboxError" then "billing_outbox_retryable"
+                            elif ($payload.errorCode // "") == "PermanentOutboxError" then "billing_outbox_permanent"
+                            elif ($payload.errorCode // "") == "DatabaseUnavailableError" then "billing_outbox_database_unavailable"
+                            else "billing_outbox_failure"
+                            end
+                          elif $payload.event == "billing_notification_receiver_worker_failed" then
+                            if ($payload.errorCode // "") == "BillingNotificationReceiverError" then "notification_receiver_protocol"
+                            elif ($payload.errorCode // "") == "BillingNotificationInboxError" then "notification_inbox"
+                            elif ($payload.errorCode // "") == "DatabaseUnavailableError" then "notification_database_unavailable"
+                            else "notification_worker_failure"
+                            end
+                          elif $payload.event != "server_start_failed" then null
+                          elif (($payloadError.message // "") | test("notification"; "i")) then "notification_config"
+                          elif (($payloadError.message // "") | test("MOLLIE_API_KEY")) then "mollie_key_config"
+                          elif (($payloadError.message // "") | test("MOLLIE_MODE")) then "mollie_mode_config"
+                          elif (($payloadError.message // "") | test("MOLLIE_BILLING_DRAIN_ENABLED")) then "billing_drain_lifecycle"
+                          elif (($payloadError.message // "") | test("APP_BASE_URL|PORTAL_BASE_URL|MOLLIE_PAYMENT_WEBHOOK_URL")) then "billing_url_config"
+                          else "unclassified_start_failure"
+                          end
+                        )
+                      }
+                    elif (($raw | tostring) | test("out of memory|oom|killed process"; "i")) then
+                      {
+                        timestamp,
+                        machineId: $machineId,
+                        event: "machine_memory_failure",
+                        level: "error",
+                        failureClass: "machine_memory"
+                      }
+                    else empty
+                    end
+                ' > "$machine_events"; then
+              capture_status="log_capture_failed"
+            fi
+            head -n 20 "$machine_events" >> "$filtered_events"
+          done <<< "$candidate_ids"
+
+          head -n 120 "$filtered_events" > "$diagnostics_dir/startup-events.jsonl"
+          if [[ "$capture_status" = "complete" && ! -s "$diagnostics_dir/startup-events.jsonl" ]]; then
+            capture_status="no_classified_events"
+          fi
+          printf '%s\n' "$capture_status" > "$diagnostics_dir/capture-status.txt"
           exit 0
+
+      - name: Upload image-gen startup diagnostics
+        if: failure() && steps.deploy.outcome != 'skipped'
+        timeout-minutes: 3
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: image-gen-startup-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/image-gen-startup-diagnostics
+          if-no-files-found: error
+          retention-days: 30
 
       - name: Restore captured image-gen release
         if: failure() && steps.deploy.outcome != 'skipped'
