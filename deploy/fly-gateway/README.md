@@ -41,7 +41,7 @@ npm run deploy:gateway
 Direct invocation is reserved for an explicitly approved emergency. Do not use
 `fly machine run`; detached Machines are rejected by the deployment drift gate.
 
-### Temporary production route-guard hotfix
+### Gateway deployment remains blocked
 
 The 2026-08-01 production upgrade to OpenClaw 2026.7.1 was rolled back because
 the mounted state contains conflicting legacy and canonical Memory Core index
@@ -50,18 +50,13 @@ state migration has been rehearsed on a copy, backed up, and explicitly
 approved. Do not run `openclaw doctor --fix` against production state as an
 unreviewed deploy step.
 
-Until that migration is resolved, the reproducible containment deployment keeps
-the last known-good OpenClaw 2026.6.11 image and overlays only the reviewed
-public route guard:
-
-```bash
-fly deploy --config fly.toml
-```
-
-This hotfix does not upgrade the bundled Facebook plugin, OpenClaw runtime, or
-`start-gateway.mjs`. It therefore does **not** contain the personal-workspace
-containment controls described below. Do not use the hotfix command to claim or
-test this isolation port.
+The former direct `fly deploy --config fly.toml` containment command is retired.
+The current config hard-blocks both Facebook webhook paths, so deploying it
+before Meta's canonical callback is proven to reach image-gen would interrupt
+Messenger delivery. A direct Fly command would also bypass the protected
+workflow's pre-deploy callback check. Do not deploy this gateway while the
+production manifest keeps it disabled, and do not use a direct command as a
+temporary hotfix.
 
 The isolation port requires a reviewed immutable image built from the standard
 `deploy/fly-gateway/Dockerfile`. The production manifest currently blocks that
@@ -70,6 +65,11 @@ on a volume copy and both the rollout image and a rollback image contain the
 same isolation controls. Rolling back to an older startup script would recreate
 shared `MEMORY.md` and re-enable shared memory, so such an image is not an
 acceptable rollback target.
+
+Only the protected deployment workflow may deploy the gateway after all of
+those prerequisites are recorded and the canonical image-gen Facebook callback
+and direct delivery have been proven. Until then there is no approved gateway
+deployment command.
 
 Verify `/healthz` and protected route near-misses after every deployment. Portal,
 legal and Mollie routes belong to `app.leaderbot.live`/image-gen and must return
