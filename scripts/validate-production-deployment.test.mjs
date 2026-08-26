@@ -2607,18 +2607,21 @@ describe("production deployment contract", () => {
     [
       '.status=="completed" and (.conclusion|IN("failure","cancelled","timed_out","action_required","stale","startup_failure")) and .head_branch=="main"',
       '.status=="completed" and .conclusion!="success" and .head_branch=="main"',
+      "must remain a secretless exact-attempt selector with one protected recovery dispatch",
     ],
     [
       '.event=="workflow_dispatch" and .path==".github/workflows/deploy-production.yml"',
       '.event=="workflow_dispatch" and .path==".github/workflows/untrusted.yml"',
+      "must remain a secretless exact-attempt selector with one protected recovery dispatch",
     ],
     [
       "[.artifacts[] | select(.expired==false and .name==$name)] | length==1",
       "[.artifacts[] | select(.expired==false and .name==$name)] | length>=1",
+      "must revalidate exactly one target-bound rollback plan before dispatch",
     ],
   ])(
     "blocks completion dispatch when completed source metadata or artifact binding is untrusted %#",
-    (before, after) => {
+    (before, after, expectedError) => {
       const root = createRepositoryFixture();
       replaceFixtureText(
         root,
@@ -2627,7 +2630,9 @@ describe("production deployment contract", () => {
         after,
       );
 
-      expect(() => validateProductionRepository(root)).toThrow();
+      expect(() => validateProductionRepository(root)).toThrow(
+        expectedError,
+      );
     },
   );
 
@@ -2805,7 +2810,11 @@ describe("production deployment contract", () => {
       "on:\n  push:\n    branches: [main]\n",
     );
 
-    expect(() => validateProductionRepository(root)).toThrow();
+    expect(() => validateProductionRepository(root)).toThrow(
+      workflowPath.endsWith("reconcile-production-deployment.yml")
+        ? "must keep all three recovery jobs independent, exact-source, and least-privileged"
+        : "must remain a secretless exact-attempt selector with one protected recovery dispatch",
+    );
   });
 
   it("binds every recovery successor to an exact approved source root", () => {

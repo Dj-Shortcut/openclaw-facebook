@@ -1028,6 +1028,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
+      # Required only to POST the protected reconciliation workflow dispatch.
       actions: write
       contents: read
     steps:
@@ -1067,6 +1068,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
+      # Required only to POST the protected reconciliation workflow dispatch.
       actions: write
       contents: read
     steps:
@@ -1106,6 +1108,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
+      # Required only to POST the protected reconciliation workflow dispatch.
       actions: write
       contents: read
     steps:
