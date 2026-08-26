@@ -163,11 +163,9 @@
   },
   "meta": {
     "page": {
-      "expectedCallback": "https://leaderbot-openclaw-gateway.fly.dev/facebook/webhook",
-      "temporarilyAllowedCallbacks": [
-        "https://leaderbot-fb-image-gen.fly.dev/facebook/webhook"
-      ],
-      "migrationState": "pending_gateway_cutover",
+      "expectedCallback": "https://leaderbot-fb-image-gen.fly.dev/facebook/webhook",
+      "temporarilyAllowedCallbacks": [],
+      "migrationState": "canonical",
       "allowedFields": [
         "messages",
         "messaging_postbacks",

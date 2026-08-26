@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import test from "node:test";
+import { MemoryStore } from "express-rate-limit";
 import { Redis } from "ioredis";
 
 import {
@@ -351,6 +352,35 @@ test("the edge limiter ignores spoofed forwarding headers and keeps health live"
     assert.equal(health.status, 200);
     assert.equal(health.headers.get("x-content-type-options"), "nosniff");
     assert.equal(health.headers.get("x-powered-by"), null);
+  } finally {
+    await closeServer(server);
+  }
+});
+
+test("readiness stays public while storage routes require authentication", async () => {
+  const app = (await import("./index.ts")).createStorageProxyApp(
+    buildTestConfig(),
+    {
+      backend: {
+        edgeStore: new MemoryStore(),
+        scopeStore: new MemoryStore(),
+        assertReady: async () => undefined,
+        close: async () => undefined,
+      },
+    }
+  );
+  const { baseUrl, server } = await listenOnLoopback(app);
+  try {
+    const ready = await fetch(`${baseUrl}/readyz`);
+    assert.equal(ready.status, 200);
+    assert.deepEqual(await ready.json(), {
+      ok: true,
+      rateLimiter: "shared_redis",
+    });
+
+    const storage = await fetch(`${baseUrl}/v1/storage/downloadUrl`);
+    assert.equal(storage.status, 401);
+    assert.deepEqual(await storage.json(), { error: "Unauthorized" });
   } finally {
     await closeServer(server);
   }

@@ -620,6 +620,64 @@ jobs:
           printf '%s\n' "$candidate_identity" > "$diagnostics_dir/candidate-identity.txt"
           printf '%s\n' "$candidate_started_at" > "$diagnostics_dir/candidate-started-at.txt"
           printf '%s\n' "pending" > "$diagnostics_dir/capture-status.txt"
+      - name: Probe production billing triggers before rollout
+        timeout-minutes: 5
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_IMAGE_GEN_DEPLOY_TOKEN }}
+          REVIEWED_IMAGE: ${{ inputs.rollback_image }}
+        run: |
+          set -euo pipefail
+          probe_container=""
+          probe_machine_id=""
+          remote_probe=""
+          remote_uploaded=false
+          cleanup_probe() {
+            if [[ "$probe_container" =~ ^[a-f0-9]{64}$ ]]; then
+              docker rm -f "$probe_container" > /dev/null 2>&1 || true
+            fi
+            if [[ "$remote_uploaded" = true && "$probe_machine_id" =~ ^[0-9a-f]{14}$ && "$remote_probe" =~ ^/tmp/leaderbot-billing-trigger-preflight-[0-9]+-[0-9]+\.cjs$ ]]; then
+              timeout --signal=TERM 30s flyctl ssh console \
+                --app leaderbot-fb-image-gen \
+                --machine "$probe_machine_id" \
+                --quiet \
+                --command "/bin/rm -f $remote_probe" > /dev/null 2>&1 || true
+            fi
+          }
+          trap cleanup_probe EXIT
+
+          machines="$(flyctl machine list --app leaderbot-fb-image-gen --json)"
+          probe_machine_id="$(jq -er '[.[] | select(.state=="started" and .config.metadata.fly_process_group=="app")] | sort_by(.id) | if length>=1 then .[0].id else error("no started image-gen app Machine") end' <<<"$machines")"
+          [[ "$probe_machine_id" =~ ^[0-9a-f]{14}$ ]]
+
+          probe_container="$(docker create "$REVIEWED_IMAGE")"
+          [[ "$probe_container" =~ ^[a-f0-9]{64}$ ]]
+          local_probe="$RUNNER_TEMP/billing-trigger-runtime-preflight.cjs"
+          docker cp "$probe_container:/app/dist/billing-trigger-runtime-preflight.cjs" "$local_probe"
+          docker rm "$probe_container" > /dev/null
+          probe_container=""
+          test -s "$local_probe"
+
+          remote_probe="/tmp/leaderbot-billing-trigger-preflight-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.cjs"
+          [[ "$remote_probe" =~ ^/tmp/leaderbot-billing-trigger-preflight-[0-9]+-[0-9]+\.cjs$ ]]
+          remote_uploaded=true
+          timeout --signal=TERM 30s flyctl ssh sftp put \
+            "$local_probe" "$remote_probe" \
+            --app leaderbot-fb-image-gen \
+            --machine "$probe_machine_id" \
+            --mode 0400
+          probe_output="$(timeout --signal=TERM 45s flyctl ssh console \
+            --app leaderbot-fb-image-gen \
+            --machine "$probe_machine_id" \
+            --quiet \
+            --command "node $remote_probe")"
+          test "$probe_output" = "Billing trigger runtime preflight passed."
+          cleanup_probe
+          timeout --signal=TERM 30s flyctl ssh console \
+            --app leaderbot-fb-image-gen \
+            --machine "$probe_machine_id" \
+            --quiet \
+            --command "test ! -e $remote_probe"
+          trap - EXIT
 
       - name: Deploy reviewed image-gen config
         id: deploy
@@ -1122,41 +1180,122 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-  recover-gateway:
-    name: Finish a failed gateway rollback
+  queue-recovery-gateway:
+    name: Queue exact gateway recovery after failed deploy
     needs:
       - validate
       - deploy-gateway
     if: ${{ always() && (failure() || cancelled()) && inputs.target == 'gateway' && needs.validate.result == 'success' && (needs.deploy-gateway.result == 'failure' || needs.deploy-gateway.result == 'cancelled') }}
-    uses: ./.github/workflows/reconcile-production-deployment.yml
-    with:
-      invocation_mode: inline
-      recovery_run_id: ${{ github.run_id }}
-      recovery_run_attempt: ${{ github.run_attempt }}
-      target: gateway
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      # Required only to POST the protected reconciliation workflow dispatch.
+      actions: write
+      contents: read
+    steps:
+      - name: Dispatch exact protected recovery
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RECOVERY_RUN_ID: ${{ github.run_id }}
+          RECOVERY_RUN_ATTEMPT: ${{ github.run_attempt }}
+          RECOVERY_SOURCE_SHA: ${{ github.sha }}
+          RECOVERY_TARGET: gateway
+        run: |
+          test "$GITHUB_REF" = "refs/heads/main"
+          [[ "$RECOVERY_RUN_ID" =~ ^[0-9]+$ ]]
+          [[ "$RECOVERY_RUN_ATTEMPT" =~ ^[0-9]+$ ]]
+          [[ "$RECOVERY_SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$RECOVERY_TARGET" =~ ^(gateway|image-gen|storage-proxy)$ ]]
+          run="$(gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$RECOVERY_RUN_ID/attempts/$RECOVERY_RUN_ATTEMPT")"
+          jq -e --argjson runId "$RECOVERY_RUN_ID" --argjson runAttempt "$RECOVERY_RUN_ATTEMPT" --arg sourceSha "$RECOVERY_SOURCE_SHA" '.id==$runId and .run_attempt==$runAttempt and .status=="in_progress" and .head_branch=="main" and .head_sha==$sourceSha and .event=="workflow_dispatch" and .path==".github/workflows/deploy-production.yml"' <<<"$run" > /dev/null
+          artifact_name="${RECOVERY_TARGET}-rollback-${RECOVERY_RUN_ID}-${RECOVERY_RUN_ATTEMPT}"
+          artifacts="$(gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$RECOVERY_RUN_ID/artifacts?per_page=100")"
+          jq -e --arg name "$artifact_name" '[.artifacts[] | select(.expired==false and .name==$name)] | length==1' <<<"$artifacts" > /dev/null
+          payload="$(jq -cn \
+            --arg runId "$RECOVERY_RUN_ID" \
+            --arg runAttempt "$RECOVERY_RUN_ATTEMPT" \
+            --arg target "$RECOVERY_TARGET" \
+            '{ref:"main",inputs:{recovery_run_id:$runId,recovery_run_attempt:$runAttempt,target:$target}}')"
+          gh api --method POST \
+            "/repos/$GITHUB_REPOSITORY/actions/workflows/reconcile-production-deployment.yml/dispatches" \
+            --input - <<<"$payload"
 
-  recover-image-gen:
-    name: Finish a failed image-gen rollback
+  queue-recovery-image-gen:
+    name: Queue exact image-gen recovery after failed deploy
     needs:
       - validate
       - deploy-image-gen
     if: ${{ always() && (failure() || cancelled()) && inputs.target == 'image-gen' && needs.validate.result == 'success' && (needs.deploy-image-gen.result == 'failure' || needs.deploy-image-gen.result == 'cancelled') }}
-    uses: ./.github/workflows/reconcile-production-deployment.yml
-    with:
-      invocation_mode: inline
-      recovery_run_id: ${{ github.run_id }}
-      recovery_run_attempt: ${{ github.run_attempt }}
-      target: image-gen
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      # Required only to POST the protected reconciliation workflow dispatch.
+      actions: write
+      contents: read
+    steps:
+      - name: Dispatch exact protected recovery
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RECOVERY_RUN_ID: ${{ github.run_id }}
+          RECOVERY_RUN_ATTEMPT: ${{ github.run_attempt }}
+          RECOVERY_SOURCE_SHA: ${{ github.sha }}
+          RECOVERY_TARGET: image-gen
+        run: |
+          test "$GITHUB_REF" = "refs/heads/main"
+          [[ "$RECOVERY_RUN_ID" =~ ^[0-9]+$ ]]
+          [[ "$RECOVERY_RUN_ATTEMPT" =~ ^[0-9]+$ ]]
+          [[ "$RECOVERY_SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$RECOVERY_TARGET" =~ ^(gateway|image-gen|storage-proxy)$ ]]
+          run="$(gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$RECOVERY_RUN_ID/attempts/$RECOVERY_RUN_ATTEMPT")"
+          jq -e --argjson runId "$RECOVERY_RUN_ID" --argjson runAttempt "$RECOVERY_RUN_ATTEMPT" --arg sourceSha "$RECOVERY_SOURCE_SHA" '.id==$runId and .run_attempt==$runAttempt and .status=="in_progress" and .head_branch=="main" and .head_sha==$sourceSha and .event=="workflow_dispatch" and .path==".github/workflows/deploy-production.yml"' <<<"$run" > /dev/null
+          artifact_name="${RECOVERY_TARGET}-rollback-${RECOVERY_RUN_ID}-${RECOVERY_RUN_ATTEMPT}"
+          artifacts="$(gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$RECOVERY_RUN_ID/artifacts?per_page=100")"
+          jq -e --arg name "$artifact_name" '[.artifacts[] | select(.expired==false and .name==$name)] | length==1' <<<"$artifacts" > /dev/null
+          payload="$(jq -cn \
+            --arg runId "$RECOVERY_RUN_ID" \
+            --arg runAttempt "$RECOVERY_RUN_ATTEMPT" \
+            --arg target "$RECOVERY_TARGET" \
+            '{ref:"main",inputs:{recovery_run_id:$runId,recovery_run_attempt:$runAttempt,target:$target}}')"
+          gh api --method POST \
+            "/repos/$GITHUB_REPOSITORY/actions/workflows/reconcile-production-deployment.yml/dispatches" \
+            --input - <<<"$payload"
 
-  recover-storage-proxy:
-    name: Finish a failed storage-proxy rollback
+  queue-recovery-storage-proxy:
+    name: Queue exact storage-proxy recovery after failed deploy
     needs:
       - validate
       - deploy-storage-proxy
     if: ${{ always() && (failure() || cancelled()) && inputs.target == 'storage-proxy' && needs.validate.result == 'success' && (needs.deploy-storage-proxy.result == 'failure' || needs.deploy-storage-proxy.result == 'cancelled') }}
-    uses: ./.github/workflows/reconcile-production-deployment.yml
-    with:
-      invocation_mode: inline
-      recovery_run_id: ${{ github.run_id }}
-      recovery_run_attempt: ${{ github.run_attempt }}
-      target: storage-proxy
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      # Required only to POST the protected reconciliation workflow dispatch.
+      actions: write
+      contents: read
+    steps:
+      - name: Dispatch exact protected recovery
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RECOVERY_RUN_ID: ${{ github.run_id }}
+          RECOVERY_RUN_ATTEMPT: ${{ github.run_attempt }}
+          RECOVERY_SOURCE_SHA: ${{ github.sha }}
+          RECOVERY_TARGET: storage-proxy
+        run: |
+          test "$GITHUB_REF" = "refs/heads/main"
+          [[ "$RECOVERY_RUN_ID" =~ ^[0-9]+$ ]]
+          [[ "$RECOVERY_RUN_ATTEMPT" =~ ^[0-9]+$ ]]
+          [[ "$RECOVERY_SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$RECOVERY_TARGET" =~ ^(gateway|image-gen|storage-proxy)$ ]]
+          run="$(gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$RECOVERY_RUN_ID/attempts/$RECOVERY_RUN_ATTEMPT")"
+          jq -e --argjson runId "$RECOVERY_RUN_ID" --argjson runAttempt "$RECOVERY_RUN_ATTEMPT" --arg sourceSha "$RECOVERY_SOURCE_SHA" '.id==$runId and .run_attempt==$runAttempt and .status=="in_progress" and .head_branch=="main" and .head_sha==$sourceSha and .event=="workflow_dispatch" and .path==".github/workflows/deploy-production.yml"' <<<"$run" > /dev/null
+          artifact_name="${RECOVERY_TARGET}-rollback-${RECOVERY_RUN_ID}-${RECOVERY_RUN_ATTEMPT}"
+          artifacts="$(gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$RECOVERY_RUN_ID/artifacts?per_page=100")"
+          jq -e --arg name "$artifact_name" '[.artifacts[] | select(.expired==false and .name==$name)] | length==1' <<<"$artifacts" > /dev/null
+          payload="$(jq -cn \
+            --arg runId "$RECOVERY_RUN_ID" \
+            --arg runAttempt "$RECOVERY_RUN_ATTEMPT" \
+            --arg target "$RECOVERY_TARGET" \
+            '{ref:"main",inputs:{recovery_run_id:$runId,recovery_run_attempt:$runAttempt,target:$target}}')"
+          gh api --method POST \
+            "/repos/$GITHUB_REPOSITORY/actions/workflows/reconcile-production-deployment.yml/dispatches" \
+            --input - <<<"$payload"
