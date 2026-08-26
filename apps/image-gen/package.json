@@ -77,7 +77,7 @@
   "devDependencies": {
     "@builder.io/vite-plugin-jsx-loc": "^0.1.1",
     "@eslint/js": "^10.0.1",
-    "@tailwindcss/vite": "^4.2.1",
+    "@tailwindcss/vite": "^4.3.3",
     "@typescript/native": "npm:typescript@7.0.2",
     "@types/express": "5.0.6",
     "@types/google.maps": "^3.65.5",
