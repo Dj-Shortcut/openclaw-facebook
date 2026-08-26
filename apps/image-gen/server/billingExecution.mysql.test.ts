@@ -239,22 +239,32 @@ suite("billing execution MySQL safety boundary", () => {
     const url = process.env.DATABASE_URL;
     if (!url) throw new Error("DATABASE_URL is required");
     const connection = await mysql.createConnection(url);
-    let autoIncrementBefore: unknown;
-    let autoIncrementAfter: unknown;
+    let autoIncrementBefore: Record<string, string> = {};
+    let autoIncrementAfter: Record<string, string> = {};
     try {
       const [beforeCounterRows] = await connection.query(
-        "SELECT `AUTO_INCREMENT` AS autoIncrement FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='billing_outbox'"
+        "SELECT `TABLE_NAME` AS tableName,`AUTO_INCREMENT` AS autoIncrement FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN ('workspaces','billing_scheduler_tenants','billing_outbox') ORDER BY `TABLE_NAME`"
       );
-      autoIncrementBefore = (
-        beforeCounterRows as Array<{ autoIncrement: unknown }>
-      )[0]?.autoIncrement;
+      autoIncrementBefore = Object.fromEntries(
+        (
+          beforeCounterRows as Array<{
+            tableName: string;
+            autoIncrement: unknown;
+          }>
+        ).map(row => [row.tableName, String(row.autoIncrement)])
+      );
       await assertBillingTriggerRuntimePreflight(connection, "test");
       const [afterCounterRows] = await connection.query(
-        "SELECT `AUTO_INCREMENT` AS autoIncrement FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='billing_outbox'"
+        "SELECT `TABLE_NAME` AS tableName,`AUTO_INCREMENT` AS autoIncrement FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN ('workspaces','billing_scheduler_tenants','billing_outbox') ORDER BY `TABLE_NAME`"
       );
-      autoIncrementAfter = (
-        afterCounterRows as Array<{ autoIncrement: unknown }>
-      )[0]?.autoIncrement;
+      autoIncrementAfter = Object.fromEntries(
+        (
+          afterCounterRows as Array<{
+            tableName: string;
+            autoIncrement: unknown;
+          }>
+        ).map(row => [row.tableName, String(row.autoIncrement)])
+      );
     } finally {
       await connection.end();
     }
@@ -278,8 +288,15 @@ suite("billing execution MySQL safety boundary", () => {
 
     expect(afterLanes).toEqual(beforeLanes);
     expect(afterOutbox).toEqual(beforeOutbox);
-    expect(String(autoIncrementBefore)).toMatch(/^[1-9][0-9]*$/);
-    expect(String(autoIncrementAfter)).toBe(String(autoIncrementBefore));
+    expect(Object.keys(autoIncrementBefore).sort()).toEqual([
+      "billing_outbox",
+      "billing_scheduler_tenants",
+      "workspaces",
+    ]);
+    for (const counter of Object.values(autoIncrementBefore)) {
+      expect(counter).toMatch(/^[1-9][0-9]*$/);
+    }
+    expect(autoIncrementAfter).toEqual(autoIncrementBefore);
   });
 
   it("contains provider results that crash before domain attachment", async () => {
