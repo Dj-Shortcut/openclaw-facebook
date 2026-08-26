@@ -142,9 +142,26 @@ export function validateFlyGatewayConfig(text) {
   requireTomlTableMatch(
     text,
     "env",
-    /^OPENCLAW_PUBLIC_GATEWAY_PATHS\s*=\s*"\/facebook\/webhook,\/healthz"$/m,
-    "fly.toml must keep the public gateway path allowlist",
+    /^OPENCLAW_FACEBOOK_UNKNOWN_SENDER_MODE\s*=\s*"pairing"$/m,
+    "fly.toml must keep unknown Facebook senders in pairing mode",
   );
+  requireTomlTableMatch(
+    text,
+    "env",
+    /^OPENCLAW_FACEBOOK_LEADERBOT_BRIDGE_ENABLED\s*=\s*"0"$/m,
+    "fly.toml must keep the Leaderbot bridge disabled",
+  );
+  requireTomlTableMatch(
+    text,
+    "env",
+    /^OPENCLAW_PUBLIC_GATEWAY_PATHS\s*=\s*"\/healthz"$/m,
+    "fly.toml must expose only the public health route",
+  );
+  if (/^\s*LEADERBOT_IMAGE_GEN_URL\s*=/m.test(text)) {
+    throw new Error(
+      "fly.toml must not configure the retired Leaderbot bridge URL",
+    );
+  }
   requireTomlTableMatch(
     text,
     "vm",

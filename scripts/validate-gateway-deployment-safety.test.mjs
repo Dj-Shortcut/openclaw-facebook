@@ -10,8 +10,10 @@ const validFlyConfig = [
   "[env]",
   'OPENCLAW_AGENT_MODEL = "openai/gpt-5.4-mini"',
   'NODE_OPTIONS = "--max-old-space-size=1536"',
+  'OPENCLAW_FACEBOOK_UNKNOWN_SENDER_MODE = "pairing"',
+  'OPENCLAW_FACEBOOK_LEADERBOT_BRIDGE_ENABLED = "0"',
   'OPENCLAW_PUBLIC_GATEWAY_GUARD = "1"',
-  'OPENCLAW_PUBLIC_GATEWAY_PATHS = "/facebook/webhook,/healthz"',
+  'OPENCLAW_PUBLIC_GATEWAY_PATHS = "/healthz"',
   "",
   "[[vm]]",
   'memory = "4096"',
@@ -58,6 +60,27 @@ describe("gateway deployment safety validation", () => {
       ),
     ).toThrow("route guard enabled");
     expect(() =>
+      validateFlyGatewayConfig(
+        validFlyConfig.replace(
+          'UNKNOWN_SENDER_MODE = "pairing"',
+          'UNKNOWN_SENDER_MODE = "leaderbot_free_tier"',
+        ),
+      ),
+    ).toThrow("pairing mode");
+    expect(() =>
+      validateFlyGatewayConfig(
+        validFlyConfig.replace(
+          'LEADERBOT_BRIDGE_ENABLED = "0"',
+          'LEADERBOT_BRIDGE_ENABLED = "1"',
+        ),
+      ),
+    ).toThrow("bridge disabled");
+    expect(() =>
+      validateFlyGatewayConfig(
+        `${validFlyConfig}\nLEADERBOT_IMAGE_GEN_URL = "https://image-gen.example.test"`,
+      ),
+    ).toThrow("retired Leaderbot bridge URL");
+    expect(() =>
       validateFlyGatewayConfig(validFlyConfig.replace("4096", "2048")),
     ).toThrow("VM allocation");
   });
@@ -65,8 +88,10 @@ describe("gateway deployment safety validation", () => {
   it.each([
     ["OPENCLAW_AGENT_MODEL", "provider-qualified"],
     ["NODE_OPTIONS", "heap limit"],
+    ["OPENCLAW_FACEBOOK_UNKNOWN_SENDER_MODE", "pairing mode"],
+    ["OPENCLAW_FACEBOOK_LEADERBOT_BRIDGE_ENABLED", "bridge disabled"],
     ["OPENCLAW_PUBLIC_GATEWAY_GUARD", "route guard enabled"],
-    ["OPENCLAW_PUBLIC_GATEWAY_PATHS", "path allowlist"],
+    ["OPENCLAW_PUBLIC_GATEWAY_PATHS", "public health route"],
     ["memory", "VM allocation"],
   ])("rejects %s outside its reviewed Fly table", (setting, message) => {
     expect(() =>

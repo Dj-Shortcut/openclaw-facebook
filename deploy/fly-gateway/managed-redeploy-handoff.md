@@ -158,12 +158,13 @@ curl -fsS https://leaderbot-openclaw-gateway.fly.dev/healthz
 
 Then verify:
 
-- Public routes still expose only `/facebook/webhook` and `/healthz` by default.
-  The legacy `/messenger/webhook` route is allowed only when the deployed
-  channel explicitly uses it and `OPENCLAW_PUBLIC_GATEWAY_PATHS` opts in.
+- Public gateway routes still expose only `/healthz` by default.
+  `/facebook/webhook` and the legacy `/messenger/webhook` must both remain
+  blocked; the canonical multi-tenant Page callback belongs to image-gen.
 - Dashboard/admin/API access still requires `OPENCLAW_ADMIN_TOKEN` and an
   allowed admin host.
-- Messenger webhook verification still succeeds.
+- The separately authorized image-gen callback verification succeeds; this
+  personal gateway must not answer either Facebook webhook path.
 - Existing state remains on `/data`, not in the image layer.
 - Logs contain request ids and health metadata, not raw customer content or
   secrets.

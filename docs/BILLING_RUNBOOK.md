@@ -11,6 +11,11 @@ description and quota come from the server catalog. Billing operators may use
 provider IDs for reconciliation, but must not copy customer data or secrets into
 logs, prompts, tickets, or shared diagnostics.
 
+Startpilot runs on the direct multi-tenant image-gen customer path, not on the
+personal-only OpenClaw transcript path. Operators may rely on that separation
+only after the protected production callback/routing cutover is recorded; a
+green image-gen `/readyz` alone does not prove the route boundary.
+
 ## Configuration and test-to-live switch
 
 Required variables are documented in `apps/image-gen/.env.example`.

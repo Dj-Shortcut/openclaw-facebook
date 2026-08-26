@@ -7098,7 +7098,7 @@ describe("settled production identity", () => {
 });
 
 describe("Meta callback contract", () => {
-  it("reports the reviewed temporary Page callback without failing", async () => {
+  it("accepts the canonical image-gen Page callback without drift", async () => {
     const result = await checkMetaCallbacks({
       rootDir: repoRoot,
       appId: "test-app",
@@ -7108,7 +7108,22 @@ describe("Meta callback contract", () => {
     });
 
     expect(result.errors).toEqual([]);
-    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings).toEqual([]);
+  });
+
+  it("rejects the retired personal OpenClaw gateway Page callback", async () => {
+    const result = await checkMetaCallbacks({
+      rootDir: repoRoot,
+      appId: "test-app",
+      appSecret: "test-secret",
+      fetchImpl: async () =>
+        metaResponse(
+          "https://leaderbot-openclaw-gateway.fly.dev/facebook/webhook",
+        ),
+    });
+
+    expect(result.errors).toContain("page uses an unreviewed callback");
+    expect(result.warnings).toEqual([]);
   });
 
   it("rejects an unreviewed callback host", async () => {

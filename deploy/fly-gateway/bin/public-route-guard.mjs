@@ -1,23 +1,10 @@
 import crypto from "node:crypto";
 import http from "node:http";
-import https from "node:https";
 
-const DEFAULT_ALLOWED_PATHS = "/facebook/webhook,/healthz";
-const PORTAL_PAGE_PATHS = new Set(["/", "/portal", "/privacy", "/terms", "/billing-policy", "/data-deletion", "/handoff"]);
-const PORTAL_PAGE_PREFIXES = ["/handoff/"];
-const PORTAL_ASSET_PREFIXES = ["/assets/"];
-const PORTAL_GET_PATHS = new Set([
-  "/api/facebook/connect/callback",
-  "/api/oauth/callback",
-  "/api/public/config",
-  "/api/portal/billing/export.csv",
-  "/api/portal/snapshot",
-]);
-const PORTAL_GET_PREFIXES = ["/api/portal/billing/receipts/"];
-const PORTAL_POST_PATHS = new Set([
-  "/api/portal/ai-identity",
-  "/api/portal/facebook/start",
-  "/api/webhooks/mollie/payments",
+const DEFAULT_ALLOWED_PATHS = "/healthz";
+const RETIRED_CUSTOMER_WEBHOOK_PATHS = new Set([
+  "/facebook/webhook",
+  "/messenger/webhook",
 ]);
 const ADMIN_COOKIE_NAME = "openclaw_admin";
 const ADMIN_LOGIN_PATH = "/admin/login";
@@ -64,12 +51,7 @@ export function buildGatewayLaunchPlan(argv = process.argv.slice(2), env = proce
   const guardEnabled = env.OPENCLAW_PUBLIC_GATEWAY_GUARD === "1";
 
   if (!guardEnabled) {
-    return {
-      guardEnabled,
-      publicPort,
-      internalPort: publicPort,
-      openclawArgs: argv,
-    };
+    throw new Error("The personal OpenClaw gateway requires its public route guard");
   }
 
   return {
@@ -80,13 +62,8 @@ export function buildGatewayLaunchPlan(argv = process.argv.slice(2), env = proce
   };
 }
 
-function allowedPathsFromEnv(env = process.env) {
-  return new Set(
-    (env.OPENCLAW_PUBLIC_GATEWAY_PATHS || DEFAULT_ALLOWED_PATHS)
-      .split(",")
-      .map((item) => item.trim())
-      .filter(Boolean),
-  );
+function allowedPublicPaths() {
+  return new Set(DEFAULT_ALLOWED_PATHS.split(","));
 }
 
 function setSecurityHeaders(res) {
@@ -101,23 +78,6 @@ function readProxyTimeoutMs(env = process.env) {
     return Math.floor(configured);
   }
   return 10_000;
-}
-
-function readPortalOrigin(env = process.env) {
-  const raw = String(env.LEADERBOT_PORTAL_ORIGIN || env.OPENCLAW_PUBLIC_PORTAL_ORIGIN || "").trim();
-  if (!raw) {
-    return null;
-  }
-
-  try {
-    const origin = new URL(raw);
-    if (origin.protocol !== "https:" && origin.protocol !== "http:") {
-      return null;
-    }
-    return origin;
-  } catch {
-    return null;
-  }
 }
 
 function readAdminSessionSeconds(env = process.env) {
@@ -217,31 +177,6 @@ function isAllowedPublicRequest(method, pathname, allowedPaths) {
     return method === "GET" || method === "HEAD";
   }
   return method === "GET" || method === "POST";
-}
-
-function isTrpcPath(pathname) {
-  return pathname === "/api/trpc" || pathname.startsWith("/api/trpc/");
-}
-
-function isAllowedPortalReadPath(pathname) {
-  return (
-    PORTAL_PAGE_PATHS.has(pathname) ||
-    PORTAL_PAGE_PREFIXES.some((prefix) => pathname.startsWith(prefix)) ||
-    PORTAL_ASSET_PREFIXES.some((prefix) => pathname.startsWith(prefix)) ||
-    PORTAL_GET_PREFIXES.some((prefix) => pathname.startsWith(prefix)) ||
-    PORTAL_GET_PATHS.has(pathname) ||
-    isTrpcPath(pathname)
-  );
-}
-
-function isAllowedPortalRequest(method, pathname) {
-  if (method === "GET" || method === "HEAD") {
-    return isAllowedPortalReadPath(pathname);
-  }
-  if (method === "POST") {
-    return PORTAL_POST_PATHS.has(pathname) || isTrpcPath(pathname);
-  }
-  return false;
 }
 
 function writeBlocked(res) {
@@ -375,22 +310,6 @@ function createProxyHeaders(req, { targetHost, targetPort, includeUpgrade = fals
   return headers;
 }
 
-function createOriginProxyHeaders(req, origin) {
-  const headers = { ...req.headers };
-  delete headers.connection;
-  delete headers["keep-alive"];
-  delete headers["proxy-authenticate"];
-  delete headers["proxy-authorization"];
-  delete headers.te;
-  delete headers.trailer;
-  delete headers["transfer-encoding"];
-  delete headers.upgrade;
-  headers.host = origin.host;
-  headers["x-forwarded-host"] = req.headers.host || "";
-  headers["x-forwarded-proto"] = "https";
-  return headers;
-}
-
 function proxyRequest(req, res, { targetHost, targetPort, proxyTimeoutMs }) {
   const headers = createProxyHeaders(req, { targetHost, targetPort });
 
@@ -428,50 +347,6 @@ function proxyRequest(req, res, { targetHost, targetPort, proxyTimeoutMs }) {
 
   proxyReq.on("error", () => {
     writeProxyFailure(502, "Gateway starting");
-  });
-
-  req.pipe(proxyReq);
-}
-
-function proxyOriginRequest(req, res, { origin, proxyTimeoutMs }) {
-  const headers = createOriginProxyHeaders(req, origin);
-  const requestModule = origin.protocol === "https:" ? https : http;
-  const port = origin.port || (origin.protocol === "https:" ? 443 : 80);
-
-  const proxyReq = requestModule.request(
-    {
-      host: origin.hostname,
-      port,
-      method: req.method,
-      path: req.url,
-      headers,
-    },
-    (proxyRes) => {
-      setSecurityHeaders(res);
-      res.writeHead(proxyRes.statusCode || 502, proxyRes.headers);
-      proxyRes.pipe(res);
-    },
-  );
-
-  let proxyFailureWritten = false;
-  const writeProxyFailure = (statusCode, message) => {
-    if (proxyFailureWritten || res.writableEnded) {
-      return;
-    }
-    proxyFailureWritten = true;
-    setSecurityHeaders(res);
-    res.statusCode = statusCode;
-    res.end(message);
-  };
-
-  proxyReq.setTimeout(proxyTimeoutMs, () => {
-    req.unpipe(proxyReq);
-    proxyReq.destroy();
-    writeProxyFailure(504, "Portal timeout");
-  });
-
-  proxyReq.on("error", () => {
-    writeProxyFailure(502, "Portal starting");
   });
 
   req.pipe(proxyReq);
@@ -542,11 +417,14 @@ export function startPublicRouteGuard({
   targetHost = "127.0.0.1",
   env = process.env,
 }) {
-  const allowedPaths = allowedPathsFromEnv(env);
+  const allowedPaths = allowedPublicPaths();
   const proxyTimeoutMs = readProxyTimeoutMs(env);
-  const portalOrigin = readPortalOrigin(env);
   const server = http.createServer((req, res) => {
     const pathname = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`).pathname;
+    if (RETIRED_CUSTOMER_WEBHOOK_PATHS.has(pathname)) {
+      writeBlocked(res);
+      return;
+    }
     if (pathname === ADMIN_LOGIN_PATH || pathname === ADMIN_LOGOUT_PATH) {
       handleAdminRequest(req, res, pathname, env).catch(() => {
         if (!res.writableEnded) {
@@ -563,10 +441,6 @@ export function startPublicRouteGuard({
     }
 
     if (!isAllowedPublicRequest(req.method || "GET", pathname, allowedPaths)) {
-      if (portalOrigin && isAllowedPortalRequest(req.method || "GET", pathname)) {
-        proxyOriginRequest(req, res, { origin: portalOrigin, proxyTimeoutMs });
-        return;
-      }
       writeBlocked(res);
       return;
     }
@@ -575,6 +449,14 @@ export function startPublicRouteGuard({
   });
 
   server.on("upgrade", (req, socket, head) => {
+    const pathname = new URL(
+      req.url || "/",
+      `http://${req.headers.host || "localhost"}`,
+    ).pathname;
+    if (RETIRED_CUSTOMER_WEBHOOK_PATHS.has(pathname)) {
+      socket.destroy();
+      return;
+    }
     if (!hasAdminSession(req, env)) {
       socket.destroy();
       return;
