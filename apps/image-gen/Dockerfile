@@ -49,6 +49,7 @@ COPY --from=build /app/dist ./dist
 COPY --from=build /app/drizzle ./drizzle
 COPY --from=build /app/public ./public
 RUN test -s /app/dist/provision-whatsapp-binding.cjs
+RUN test -s /app/dist/billing-trigger-runtime-preflight.cjs
 
 EXPOSE 8080
 CMD ["node", "dist/index.cjs"]

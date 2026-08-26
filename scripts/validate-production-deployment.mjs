@@ -2010,6 +2010,10 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
       "META_GRAPH_VERSION: v21.0",
       "must pin the reviewed Meta Graph API version",
     ],
+    [
+      "Probe production billing triggers before rollout",
+      "must exercise the DML runtime against every billing trigger before rollout",
+    ],
   ];
   for (const [needle, message] of requirements) {
     const matched =
@@ -2198,6 +2202,67 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
         `${PRODUCTION_WORKFLOW_PATH} ${stepName} must leave room for the 10m release command, 5m worker drain, rollout, and verification`,
       );
     }
+  }
+  const [billingTriggerProbeStep] = namedWorkflowStepBodies(
+    workflow,
+    "Probe production billing triggers before rollout",
+  );
+  const billingTriggerProbeIndex = workflow.indexOf(
+    "      - name: Probe production billing triggers before rollout",
+  );
+  const imageGenDeployIndex = workflow.indexOf(
+    "      - name: Deploy reviewed image-gen config",
+  );
+  const remoteCleanupArmIndex = billingTriggerProbeStep?.indexOf(
+    "remote_uploaded=true",
+  );
+  const remoteUploadIndex = billingTriggerProbeStep?.indexOf(
+    "timeout --signal=TERM 30s flyctl ssh sftp put",
+  );
+  if (
+    !billingTriggerProbeStep ||
+    billingTriggerProbeIndex < 0 ||
+    imageGenDeployIndex <= billingTriggerProbeIndex ||
+    namedWorkflowStepTimeout(
+      workflow,
+      "Probe production billing triggers before rollout",
+    ) !== 5 ||
+    !billingTriggerProbeStep.includes(
+      "FLY_API_TOKEN: ${{ secrets.FLY_IMAGE_GEN_DEPLOY_TOKEN }}",
+    ) ||
+    !billingTriggerProbeStep.includes(
+      'select(.state=="started" and .config.metadata.fly_process_group=="app")',
+    ) ||
+    !billingTriggerProbeStep.includes(
+      'docker cp "$probe_container:/app/dist/billing-trigger-runtime-preflight.cjs"',
+    ) ||
+    !billingTriggerProbeStep.includes(
+      "timeout --signal=TERM 30s flyctl ssh sftp put",
+    ) ||
+    remoteCleanupArmIndex === undefined ||
+    remoteUploadIndex === undefined ||
+    remoteCleanupArmIndex < 0 ||
+    remoteUploadIndex < 0 ||
+    remoteCleanupArmIndex >= remoteUploadIndex ||
+    !billingTriggerProbeStep.includes(
+      "timeout --signal=TERM 45s flyctl ssh console",
+    ) ||
+    !billingTriggerProbeStep.includes(
+      "Billing trigger runtime preflight passed.",
+    ) ||
+    !billingTriggerProbeStep.includes(
+      'test "$probe_output" = "Billing trigger runtime preflight passed."',
+    ) ||
+    !billingTriggerProbeStep.includes(
+      'remote_probe="/tmp/leaderbot-billing-trigger-preflight-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.cjs"',
+    ) ||
+    !billingTriggerProbeStep.includes('docker rm -f "$probe_container"') ||
+    !billingTriggerProbeStep.includes("trap cleanup_probe EXIT") ||
+    !billingTriggerProbeStep.includes('--command "test ! -e $remote_probe"')
+  ) {
+    fail(
+      `${PRODUCTION_WORKFLOW_PATH} must run the exact bounded, reversible billing-trigger probe before image-gen rollout`,
+    );
   }
   const [imageGenStartupDiagnosticStep] = namedWorkflowStepBodies(
     workflow,
@@ -2439,8 +2504,8 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
     ],
     [
       /^\s*timeout-minutes: 5\s*$/gm,
-      11,
-      "must bound drift, rollback capture, restore verification, and recovery dispatch",
+      12,
+      "must bound drift, trigger probing, rollback capture, restore verification, and recovery dispatch",
     ],
     [
       /^\s*timeout-minutes: 6\s*$/gm,
@@ -4937,6 +5002,22 @@ export function validateProductionRepository(rootDir = process.cwd()) {
       "must keep automatic recovery outside the database privilege boundary",
     ],
     [
+      "persistent trigger definer: table-level `SELECT, TRIGGER` on",
+      "must document the exact persistent trigger-definer privilege boundary",
+    ],
+    [
+      "`billing_scheduler_tenants`, with no rights on any other table",
+      "must restrict the persistent trigger definer to the two subject tables",
+    ],
+    [
+      "Never repair it by adding `TRIGGER`",
+      "must keep trigger remediation least-privileged and outside the app runtime",
+    ],
+    [
+      "three-trigger metadata/body tuple plus exact two-table grant check",
+      "must use an executable dedicated-definer verification gate",
+    ],
+    [
       "contains only these three app rollback tokens and this one",
       "must keep production-recovery free of database-provider write authority",
     ],
@@ -5524,6 +5605,16 @@ export function validateProductionRepository(rootDir = process.cwd()) {
           );
         }
       }
+      for (const requiredTriggerProbeFragment of [
+        "scripts/run-billing-trigger-runtime-preflight.mjs",
+        "--outfile=dist/billing-trigger-runtime-preflight.cjs",
+      ]) {
+        if (!dockerBuild.includes(requiredTriggerProbeFragment)) {
+          fail(
+            "image-gen build:docker must bundle the reversible billing-trigger runtime probe",
+          );
+        }
+      }
       const dockerfile = fs.readFileSync(
         path.join(rootDir, "apps/image-gen/Dockerfile"),
         "utf8",
@@ -5557,6 +5648,7 @@ export function validateProductionRepository(rootDir = process.cwd()) {
         "'migration-bridge' > /app/.leaderbot-artifact-kind",
         "'runtime' > /app/.leaderbot-artifact-kind",
         "RUN test -s /app/dist/provision-whatsapp-binding.cjs",
+        "RUN test -s /app/dist/billing-trigger-runtime-preflight.cjs",
       ]) {
         if (!dockerfile.includes(requiredDockerFragment)) {
           fail(
@@ -5585,6 +5677,20 @@ export function validateProductionRepository(rootDir = process.cwd()) {
       ) {
         fail(
           "image-gen CI must inspect the bundled WhatsApp provisioning command",
+        );
+      }
+      if (
+        !imageGenCi.includes(
+          'docker run --rm "$image" test -s /app/dist/billing-trigger-runtime-preflight.cjs',
+        )
+      ) {
+        fail(
+          "image-gen CI must inspect the bundled billing-trigger runtime probe",
+        );
+      }
+      if (!imageGenCi.includes("server/billingExecution.mysql.test.ts")) {
+        fail(
+          "image-gen CI must run the billing trigger probe against disposable MySQL",
         );
       }
       const migrationRunner = fs.readFileSync(

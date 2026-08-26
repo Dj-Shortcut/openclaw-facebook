@@ -1663,6 +1663,55 @@ describe("production deployment contract", () => {
     );
   });
 
+  it("requires the reversible billing-trigger probe before image-gen rollout", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/deploy-production.yml",
+      "Billing trigger runtime preflight passed.",
+      "Billing trigger probe skipped.",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must run the exact bounded, reversible billing-trigger probe before image-gen rollout",
+    );
+  });
+
+  it("requires exact cleanup of the uploaded billing-trigger probe", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/deploy-production.yml",
+      '--command "test ! -e $remote_probe"',
+      '--command "true"',
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must run the exact bounded, reversible billing-trigger probe before image-gen rollout",
+    );
+  });
+
+  it("arms remote cleanup before a partial billing-trigger probe upload", () => {
+    const root = createRepositoryFixture();
+    const workflowPath = path.join(
+      root,
+      ".github/workflows/deploy-production.yml",
+    );
+    const cleanupArm = "          remote_uploaded=true\n";
+    const uploadEnd = "            --mode 0400\n";
+    const workflow = fs.readFileSync(workflowPath, "utf8");
+    fs.writeFileSync(
+      workflowPath,
+      workflow
+        .replace(cleanupArm, "")
+        .replace(uploadEnd, `${uploadEnd}${cleanupArm}`),
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must run the exact bounded, reversible billing-trigger probe before image-gen rollout",
+    );
+  });
+
   it("captures bounded classified image-gen startup diagnostics before rollback", () => {
     const root = createRepositoryFixture();
     replaceFixtureText(
@@ -1705,6 +1754,34 @@ describe("production deployment contract", () => {
 
     expect(() => validateProductionRepository(root)).toThrow(
       "image-gen build:docker must bundle the provider-silent WhatsApp provisioning command",
+    );
+  });
+
+  it("requires the reversible billing-trigger probe in the runtime artifact", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      "apps/image-gen/package.json",
+      "--outfile=dist/billing-trigger-runtime-preflight.cjs",
+      "--outfile=dist/missing-billing-trigger-runtime-preflight.cjs",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "image-gen build:docker must bundle the reversible billing-trigger runtime probe",
+    );
+  });
+
+  it("requires the billing trigger probe in the disposable MySQL lane", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/image-gen-ci.yml",
+      "server/billingExecution.mysql.test.ts",
+      "server/missingBillingExecution.mysql.test.ts",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "image-gen CI must run the billing trigger probe against disposable MySQL",
     );
   });
 

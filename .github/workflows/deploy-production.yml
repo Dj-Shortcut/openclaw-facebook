@@ -605,6 +605,65 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      - name: Probe production billing triggers before rollout
+        timeout-minutes: 5
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_IMAGE_GEN_DEPLOY_TOKEN }}
+          REVIEWED_IMAGE: ${{ inputs.rollback_image }}
+        run: |
+          set -euo pipefail
+          probe_container=""
+          probe_machine_id=""
+          remote_probe=""
+          remote_uploaded=false
+          cleanup_probe() {
+            if [[ "$probe_container" =~ ^[a-f0-9]{64}$ ]]; then
+              docker rm -f "$probe_container" > /dev/null 2>&1 || true
+            fi
+            if [[ "$remote_uploaded" = true && "$probe_machine_id" =~ ^[0-9a-f]{14}$ && "$remote_probe" =~ ^/tmp/leaderbot-billing-trigger-preflight-[0-9]+-[0-9]+\.cjs$ ]]; then
+              timeout --signal=TERM 30s flyctl ssh console \
+                --app leaderbot-fb-image-gen \
+                --machine "$probe_machine_id" \
+                --quiet \
+                --command "/bin/rm -f $remote_probe" > /dev/null 2>&1 || true
+            fi
+          }
+          trap cleanup_probe EXIT
+
+          machines="$(flyctl machine list --app leaderbot-fb-image-gen --json)"
+          probe_machine_id="$(jq -er '[.[] | select(.state=="started" and .config.metadata.fly_process_group=="app")] | sort_by(.id) | if length>=1 then .[0].id else error("no started image-gen app Machine") end' <<<"$machines")"
+          [[ "$probe_machine_id" =~ ^[0-9a-f]{14}$ ]]
+
+          probe_container="$(docker create "$REVIEWED_IMAGE")"
+          [[ "$probe_container" =~ ^[a-f0-9]{64}$ ]]
+          local_probe="$RUNNER_TEMP/billing-trigger-runtime-preflight.cjs"
+          docker cp "$probe_container:/app/dist/billing-trigger-runtime-preflight.cjs" "$local_probe"
+          docker rm "$probe_container" > /dev/null
+          probe_container=""
+          test -s "$local_probe"
+
+          remote_probe="/tmp/leaderbot-billing-trigger-preflight-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.cjs"
+          [[ "$remote_probe" =~ ^/tmp/leaderbot-billing-trigger-preflight-[0-9]+-[0-9]+\.cjs$ ]]
+          remote_uploaded=true
+          timeout --signal=TERM 30s flyctl ssh sftp put \
+            "$local_probe" "$remote_probe" \
+            --app leaderbot-fb-image-gen \
+            --machine "$probe_machine_id" \
+            --mode 0400
+          probe_output="$(timeout --signal=TERM 45s flyctl ssh console \
+            --app leaderbot-fb-image-gen \
+            --machine "$probe_machine_id" \
+            --quiet \
+            --command "node $remote_probe")"
+          test "$probe_output" = "Billing trigger runtime preflight passed."
+          cleanup_probe
+          timeout --signal=TERM 30s flyctl ssh console \
+            --app leaderbot-fb-image-gen \
+            --machine "$probe_machine_id" \
+            --quiet \
+            --command "test ! -e $remote_probe"
+          trap - EXIT
+
       - name: Deploy reviewed image-gen config
         id: deploy
         timeout-minutes: 35
