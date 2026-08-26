@@ -96,8 +96,9 @@ deploying outside the protected workflows.
       or accounting approval complete.
 - [x] Keep `docs/operations/todo.md`, this checklist, the billing runbook and
       the test-result matrix aligned with the exact reviewed release. They now
-      share the credential-free `ee59b09` evidence boundary, while every
-      production/provider/human gate remains explicitly open.
+      share the credential-free `ee59b09` evidence boundary, while each
+      incomplete gateway, provider and human-approval gate remains explicitly
+      open.
 
 ## Protected production rollout gates
 
@@ -220,3 +221,8 @@ image-gen routing gate above passes, that host capability is not a prerequisite
 for the image-generation sandbox or live decision. If any customer image-gen
 turn still creates an OpenClaw session, the exception does not apply and host
 erasure remains a live blocker.
+
+The gateway state-rebaseline workflow and encrypted isolated-volume rehearsal
+remain required before a future personal OpenClaw runtime rollout. They are a
+separate safety track and do not gate the direct image-generation Mollie
+sandbox once the direct-route boundary above is proven.

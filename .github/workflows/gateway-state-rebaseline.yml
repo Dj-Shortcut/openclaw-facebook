@@ -1,0 +1,568 @@
+name: Rehearse stateful gateway rebaseline
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  attestations: read
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  FLYCTL_VERSION: 0.4.85
+  REHEARSAL_PROTOCOL: leaderbot-gateway-state-rehearsal-v1
+
+concurrency:
+  group: production-gateway-state-rebaseline
+  cancel-in-progress: false
+
+jobs:
+  rehearse:
+    name: Snapshot and observe the reviewed gateway image on an isolated copy
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    environment: production
+    steps:
+      - name: Require the reviewed main branch
+        run: test "$GITHUB_REF" = "refs/heads/main"
+
+      - name: Checkout exact source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install root validation dependencies
+        run: npm ci
+
+      - name: Refuse an incomplete or enabled rebaseline contract
+        run: |
+          set -euo pipefail
+          node scripts/verify-gateway-state-rebaseline.mjs \
+            --require-approved deploy/production/apps.json
+          test "$(jq -er '.apps.gateway.deploymentEnabled' deploy/production/apps.json)" = "false"
+          test "$(jq -er '.apps.gateway.stateRebaseline.enforcementEnabled' deploy/production/apps.json)" = "false"
+          test "$(jq -er '.apps.gateway.stateRebaseline.reviewedArtifact.state' deploy/production/apps.json)" = "reviewed"
+
+      - name: Require green CI for the exact reviewed source and artifact source
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          artifact_source="$(jq -er '.apps.gateway.stateRebaseline.reviewedArtifact.sourceCommit' deploy/production/apps.json)"
+          node scripts/validate-production-deployment.mjs --verify-source-ci "$GITHUB_SHA"
+          node scripts/validate-production-deployment.mjs --verify-source-ci "$artifact_source"
+
+      - name: Install exact verified flyctl
+        timeout-minutes: 3
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$RUNNER_OS" = "Linux"
+          test "$RUNNER_ARCH" = "X64"
+          install_root="$(mktemp -d "$RUNNER_TEMP/leaderbot-flyctl.XXXXXX")"
+          archive="$install_root/flyctl_0.4.85_Linux_x86_64.tar.gz"
+          extract_dir="$install_root/extract"
+          bin_dir="$install_root/bin"
+          install -d -m 0700 "$extract_dir" "$bin_dir"
+          curl --fail --show-error --silent --location \
+            --proto '=https' --proto-redir '=https' --tlsv1.2 \
+            --retry 3 --retry-all-errors \
+            --output "$archive" \
+            "https://github.com/superfly/flyctl/releases/download/v0.4.85/flyctl_0.4.85_Linux_x86_64.tar.gz"
+          printf '%s  %s\n' \
+            "c3b5ed05319adf8a265d68171758ea7b37bd340c5c3dc4e09e17fb6344b8ff90" \
+            "$archive" | sha256sum --check --strict
+          tar --extract --gzip --file "$archive" --directory "$extract_dir" flyctl
+          test -f "$extract_dir/flyctl"
+          test ! -L "$extract_dir/flyctl"
+          install -m 0755 "$extract_dir/flyctl" "$bin_dir/flyctl"
+          ln -s flyctl "$bin_dir/fly"
+          version_output="$("$bin_dir/flyctl" version)"
+          [[ "$version_output" =~ ^flyctl\ v0\.4\.85([[:space:]]|$) ]]
+          printf '%s\n' "$bin_dir" >> "$GITHUB_PATH"
+
+      - name: Load the exact committed rebaseline tuple
+        run: |
+          set -euo pipefail
+          gateway_app="$(jq -er '.apps.gateway.stateRebaseline.baseline.app' deploy/production/apps.json)"
+          baseline_machine="$(jq -er '.apps.gateway.stateRebaseline.baseline.machineId' deploy/production/apps.json)"
+          source_volume="$(jq -er '.apps.gateway.stateRebaseline.baseline.volumeId' deploy/production/apps.json)"
+          mount_path="$(jq -er '.apps.gateway.stateRebaseline.baseline.mountPath' deploy/production/apps.json)"
+          region="$(jq -er '.apps.gateway.stateRebaseline.baseline.region' deploy/production/apps.json)"
+          reviewed_image="$(jq -er '.apps.gateway.stateRebaseline.reviewedArtifact.image' deploy/production/apps.json)"
+          reviewed_source="$(jq -er '.apps.gateway.stateRebaseline.reviewedArtifact.sourceCommit' deploy/production/apps.json)"
+          builder_workflow="$(jq -er '.apps.gateway.stateRebaseline.reviewedArtifact.builderWorkflow' deploy/production/apps.json)"
+          predicate_type="$(jq -er '.apps.gateway.stateRebaseline.reviewedArtifact.predicateType' deploy/production/apps.json)"
+          attestation_bundle_sha="$(jq -er '.apps.gateway.stateRebaseline.reviewedArtifact.attestationBundleSha256' deploy/production/apps.json)"
+          vm_cpu_kind="$(jq -er '.apps.gateway.desiredScale.app.cpuKind' deploy/production/apps.json)"
+          vm_cpus="$(jq -er '.apps.gateway.desiredScale.app.cpus' deploy/production/apps.json)"
+          vm_memory="$(jq -er '.apps.gateway.desiredScale.app.memoryMb' deploy/production/apps.json)"
+          test "$gateway_app" = "leaderbot-openclaw-gateway"
+          [[ "$baseline_machine" =~ ^[a-f0-9]{14}$ ]]
+          [[ "$source_volume" =~ ^vol_[a-z0-9]+$ ]]
+          test "$mount_path" = "/data"
+          [[ "$region" =~ ^[a-z0-9]{3}$ ]]
+          [[ "$reviewed_image" =~ ^registry\.fly\.io/leaderbot-openclaw-gateway@sha256:[a-f0-9]{64}$ ]]
+          [[ "$reviewed_source" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$builder_workflow" =~ ^\.github/workflows/[a-z0-9-]+\.yml$ ]]
+          [[ "$predicate_type" =~ ^https://leaderbot\.live/attestations/[a-z0-9-]+/v1$ ]]
+          [[ "$attestation_bundle_sha" =~ ^[a-f0-9]{64}$ ]]
+          [[ "$vm_cpu_kind" =~ ^(shared|performance)$ ]]
+          test "$vm_cpus" -ge 1
+          test "$vm_cpus" -le 32
+          test "$vm_memory" -ge 512
+          test "$vm_memory" -le 16384
+          {
+            echo "GATEWAY_APP=$gateway_app"
+            echo "BASELINE_MACHINE_ID=$baseline_machine"
+            echo "SOURCE_VOLUME_ID=$source_volume"
+            echo "MOUNT_PATH=$mount_path"
+            echo "GATEWAY_REGION=$region"
+            echo "REVIEWED_IMAGE=$reviewed_image"
+            echo "REVIEWED_SOURCE=$reviewed_source"
+            echo "BUILDER_WORKFLOW=$builder_workflow"
+            echo "ARTIFACT_PREDICATE_TYPE=$predicate_type"
+            echo "ATTESTATION_BUNDLE_SHA256=$attestation_bundle_sha"
+            echo "REHEARSAL_VM_CPU_KIND=$vm_cpu_kind"
+            echo "REHEARSAL_VM_CPUS=$vm_cpus"
+            echo "REHEARSAL_VM_MEMORY_MB=$vm_memory"
+          } >> "$GITHUB_ENV"
+
+      - name: Verify the reviewed real-runtime artifact before Fly mutation
+        timeout-minutes: 10
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_GATEWAY_DEPLOY_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test -n "$FLY_API_TOKEN"
+          umask 077
+          artifact_root="$RUNNER_TEMP/gateway-reviewed-artifact"
+          runs="$artifact_root/runs.json"
+          matches="$artifact_root/matches"
+          install -d -m 0700 "$artifact_root"
+          : > "$matches"
+          gh run list \
+            --repo "$GITHUB_REPOSITORY" \
+            --workflow "$BUILDER_WORKFLOW" \
+            --commit "$REVIEWED_SOURCE" \
+            --event workflow_dispatch \
+            --status success \
+            --limit 100 \
+            --json databaseId,headSha,event,conclusion > "$runs"
+          while IFS= read -r run_id; do
+            candidate="$artifact_root/$run_id"
+            artifact_name="production-artifact-gateway-runtime-${REVIEWED_SOURCE}-${run_id}"
+            install -d -m 0700 "$candidate"
+            if ! gh run download "$run_id" \
+              --repo "$GITHUB_REPOSITORY" \
+              --name "$artifact_name" \
+              --dir "$candidate"; then
+              continue
+            fi
+            bundle="$candidate/gateway-runtime.json"
+            metadata="$candidate/artifact.json"
+            test -f "$bundle"
+            test ! -L "$bundle"
+            test -f "$metadata"
+            test ! -L "$metadata"
+            if test "$(sha256sum "$bundle" | cut -d' ' -f1)" != "$ATTESTATION_BUNDLE_SHA256"; then
+              continue
+            fi
+            jq -e \
+              --arg repo "$GITHUB_REPOSITORY" \
+              --arg workflow "$BUILDER_WORKFLOW" \
+              --arg image "$REVIEWED_IMAGE" \
+              --arg source "$REVIEWED_SOURCE" \
+              '(.target=="gateway-runtime") and
+               (.kind=="gateway-runtime") and
+               (.image==$image) and
+               (.sourceCommit==$source) and
+               (.sourceRef=="refs/heads/main") and
+               (.builderWorkflow==($repo+"/"+$workflow+"@refs/heads/main"))' \
+              "$metadata" > /dev/null
+            printf '%s\t%s\n' "$run_id" "$bundle" >> "$matches"
+          done < <(
+            jq -r \
+              --arg source "$REVIEWED_SOURCE" \
+              '.[] | select(
+                .headSha==$source and
+                .event=="workflow_dispatch" and
+                .conclusion=="success"
+              ) | .databaseId' \
+              "$runs"
+          )
+          test "$(wc -l < "$matches" | tr -d ' ')" = "1"
+          IFS=$'\t' read -r artifact_run_id gateway_runtime_bundle < "$matches"
+          test -n "$artifact_run_id"
+          test -f "$gateway_runtime_bundle"
+          verification="$artifact_root/verification.json"
+          gh attestation verify "oci://$REVIEWED_IMAGE" \
+            --bundle "$gateway_runtime_bundle" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/$BUILDER_WORKFLOW" \
+            --source-digest "$REVIEWED_SOURCE" \
+            --source-ref refs/heads/main \
+            --predicate-type "$ARTIFACT_PREDICATE_TYPE" \
+            --deny-self-hosted-runners \
+            --format json > "$verification"
+          flyctl auth docker
+          docker pull "$REVIEWED_IMAGE"
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$REVIEWED_IMAGE")" = "$REVIEWED_SOURCE"
+          test "$(docker image inspect --format '{{ index .Config.Labels "io.leaderbot.gateway.state-rehearsal" }}' "$REVIEWED_IMAGE")" = "real-openclaw-v1"
+          docker run --rm --entrypoint /usr/bin/test "$REVIEWED_IMAGE" \
+            -f /app/deploy/fly-gateway/bin/rehearse-mounted-state.mjs
+
+      - name: Remove gateway registry credential
+        if: always()
+        run: docker logout registry.fly.io
+
+      - name: Capture and verify the exact live baseline without logs or SSH
+        timeout-minutes: 5
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_GATEWAY_DEPLOY_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$FLY_API_TOKEN"
+          evidence_dir="$RUNNER_TEMP/gateway-state-rebaseline"
+          install -d -m 0700 "$evidence_dir"
+          umask 077
+          flyctl machine list --app "$GATEWAY_APP" --json > "$evidence_dir/machines.json"
+          flyctl volumes list --app "$GATEWAY_APP" --json > "$evidence_dir/volumes.json"
+          flyctl config show --app "$GATEWAY_APP" > "$evidence_dir/generated-config.json"
+          node scripts/verify-gateway-state-rebaseline.mjs \
+            --verify-baseline \
+            deploy/production/apps.json \
+            "$evidence_dir/machines.json" \
+            "$evidence_dir/volumes.json" \
+            "$evidence_dir/generated-config.json" \
+            fly.toml \
+            "$evidence_dir/baseline-evidence.json"
+          source_size="$(jq -er --arg id "$SOURCE_VOLUME_ID" '[.[] | select(.id==$id)] | if length==1 then .[0].size_gb else error("source volume mismatch") end' "$evidence_dir/volumes.json")"
+          test "$source_size" -ge 1
+          test "$source_size" -le 500
+          echo "SOURCE_VOLUME_SIZE_GB=$source_size" >> "$GITHUB_ENV"
+          rm -f \
+            "$evidence_dir/machines.json" \
+            "$evidence_dir/volumes.json" \
+            "$evidence_dir/generated-config.json"
+
+      - name: Upload verified baseline evidence before any Fly mutation
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: gateway-state-baseline-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/gateway-state-rebaseline/baseline-evidence.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Create and select one fresh source-volume snapshot
+        timeout-minutes: 20
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_GATEWAY_DEPLOY_TOKEN }}
+        run: |
+          set -euo pipefail
+          evidence_dir="$RUNNER_TEMP/gateway-state-rebaseline"
+          before="$evidence_dir/snapshots-before.json"
+          current="$evidence_dir/snapshots-current.json"
+          umask 077
+          flyctl volumes snapshots list "$SOURCE_VOLUME_ID" --app "$GATEWAY_APP" --json > "$before"
+          snapshot_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          flyctl volumes snapshots create "$SOURCE_VOLUME_ID" --app "$GATEWAY_APP"
+          selection=''
+          for _ in $(seq 1 90); do
+            flyctl volumes snapshots list "$SOURCE_VOLUME_ID" --app "$GATEWAY_APP" --json > "$current"
+            selection="$(node scripts/select-fresh-fly-snapshot.mjs "$before" "$current" "$snapshot_started_at")"
+            test "$(jq -er '.state' <<<"$selection")" = "ready" && break
+            sleep 10
+          done
+          test "$(jq -er '.state' <<<"$selection")" = "ready"
+          snapshot_id="$(jq -er '.snapshot.id' <<<"$selection")"
+          snapshot_digest="$(jq -er '.snapshot.digest' <<<"$selection")"
+          snapshot_created_at="$(jq -er '.snapshot.createdAt' <<<"$selection")"
+          [[ "$snapshot_id" =~ ^[A-Za-z0-9_-]{16,80}$ ]]
+          test -n "$snapshot_digest"
+          jq -n \
+            --arg protocol "$REHEARSAL_PROTOCOL" \
+            --arg app "$GATEWAY_APP" \
+            --arg sourceVolume "$SOURCE_VOLUME_ID" \
+            --arg snapshotId "$snapshot_id" \
+            --arg snapshotDigest "$snapshot_digest" \
+            --arg snapshotCreatedAt "$snapshot_created_at" \
+            --arg sourceCommit "$GITHUB_SHA" \
+            --arg runId "$GITHUB_RUN_ID" \
+            --arg runAttempt "$GITHUB_RUN_ATTEMPT" \
+            '{protocol:$protocol,app:$app,sourceVolumeId:$sourceVolume,snapshot:{id:$snapshotId,digest:$snapshotDigest,createdAt:$snapshotCreatedAt},sourceCommit:$sourceCommit,runId:$runId,runAttempt:$runAttempt,metadataOnly:true}' \
+            > "$evidence_dir/snapshot-evidence.json"
+          {
+            echo "REHEARSAL_SNAPSHOT_ID=$snapshot_id"
+            echo "REHEARSAL_SNAPSHOT_DIGEST=$snapshot_digest"
+            echo "REHEARSAL_SNAPSHOT_CREATED_AT=$snapshot_created_at"
+          } >> "$GITHUB_ENV"
+          rm -f "$before" "$current"
+
+      - name: Upload exact snapshot evidence before restore or Machine creation
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: gateway-state-snapshot-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/gateway-state-rebaseline/snapshot-evidence.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Restore the snapshot into one exact disposable encrypted volume
+        timeout-minutes: 18
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_GATEWAY_DEPLOY_TOKEN }}
+        run: |
+          set -euo pipefail
+          evidence_dir="$RUNNER_TEMP/gateway-state-rebaseline"
+          name="lbgr_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
+          test "${#name}" -le 30
+          printf '%s\n' "$name" > "$evidence_dir/restore-volume-name.txt"
+          restored="$(flyctl volumes create "$name" \
+            --app "$GATEWAY_APP" \
+            --region "$GATEWAY_REGION" \
+            --size "$SOURCE_VOLUME_SIZE_GB" \
+            --snapshot-id "$REHEARSAL_SNAPSHOT_ID" \
+            --scheduled-snapshots=false \
+            --yes \
+            --json)"
+          restore_volume_id="$(jq -er 'if type=="array" and length==1 then .[0].id elif type=="object" then .id else error("restore volume response mismatch") end' <<<"$restored")"
+          [[ "$restore_volume_id" =~ ^vol_[a-z0-9]+$ ]]
+          printf '%s\n' "$restore_volume_id" > "$evidence_dir/restore-volume-id.txt"
+          echo "RESTORE_VOLUME_ID=$restore_volume_id" >> "$GITHUB_ENV"
+          restored=''
+          for _ in $(seq 1 90); do
+            restored="$(flyctl volumes list --app "$GATEWAY_APP" --json | jq -cer --arg id "$restore_volume_id" '[.[] | select(.id==$id)] | if length==1 then .[0] else error("restore volume disappeared") end')"
+            test "$(jq -er '.state' <<<"$restored")" = "created" && break
+            sleep 10
+          done
+          test "$(jq -er '.state' <<<"$restored")" = "created"
+          test "$(jq -r '.encrypted' <<<"$restored")" = "true"
+          test "$(jq -er '.region' <<<"$restored")" = "$GATEWAY_REGION"
+          test "$(jq -er '.size_gb' <<<"$restored")" = "$SOURCE_VOLUME_SIZE_GB"
+          test "$(jq -er '.name' <<<"$restored")" = "$name"
+          test -z "$(jq -er '.attached_machine_id // ""' <<<"$restored")"
+
+      - name: Start the reviewed image with the scrubbed production-shaped Facebook configuration
+        timeout-minutes: 15
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_GATEWAY_DEPLOY_TOKEN }}
+        run: |
+          set -euo pipefail
+          evidence_dir="$RUNNER_TEMP/gateway-state-rebaseline"
+          machine_name="lbgr-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          printf '%s\n' "$machine_name" > "$evidence_dir/rehearsal-machine-name.txt"
+          flyctl machine run "$REVIEWED_IMAGE" \
+            --app "$GATEWAY_APP" \
+            --name "$machine_name" \
+            --region "$GATEWAY_REGION" \
+            --vm-cpu-kind "$REHEARSAL_VM_CPU_KIND" \
+            --vm-cpus "$REHEARSAL_VM_CPUS" \
+            --vm-memory "$REHEARSAL_VM_MEMORY_MB" \
+            --volume "$RESTORE_VOLUME_ID:$MOUNT_PATH" \
+            --restart no \
+            --detach \
+            --skip-dns-registration \
+            --metadata "leaderbot_gateway_rehearsal=$GITHUB_RUN_ID" \
+            --metadata "leaderbot_gateway_rehearsal_attempt=$GITHUB_RUN_ATTEMPT" \
+            --env "LEADERBOT_GATEWAY_STATE_REHEARSAL=1" \
+            --env "LEADERBOT_GATEWAY_STATE_REHEARSAL_PROTOCOL=$REHEARSAL_PROTOCOL"
+          rehearsal_machine=''
+          for _ in $(seq 1 90); do
+            machines="$(flyctl machine list --app "$GATEWAY_APP" --json)"
+            rehearsal_machine="$(jq -cer \
+              --arg name "$machine_name" \
+              --arg run "$GITHUB_RUN_ID" \
+              --arg attempt "$GITHUB_RUN_ATTEMPT" \
+              --arg volume "$RESTORE_VOLUME_ID" \
+              --arg mount "$MOUNT_PATH" \
+              '[.[] | select(.name==$name and (.config.metadata.leaderbot_gateway_rehearsal // "")==$run and (.config.metadata.leaderbot_gateway_rehearsal_attempt // "")==$attempt and ([.config.mounts[]? | select(.volume==$volume and .path==$mount)] | length)==1 and (.config.mounts|length)==1)] | if length==1 then .[0] elif length>1 then error("duplicate rehearsal Machines") else empty end' \
+              <<<"$machines")" || true
+            if test -n "$rehearsal_machine" && test "$(jq -er '.state' <<<"$rehearsal_machine")" = "started"; then
+              break
+            fi
+            sleep 10
+          done
+          test -n "$rehearsal_machine"
+          test "$(jq -er '.state' <<<"$rehearsal_machine")" = "started"
+          rehearsal_machine_id="$(jq -er '.id' <<<"$rehearsal_machine")"
+          [[ "$rehearsal_machine_id" =~ ^[a-f0-9]{14}$ ]]
+          jq -e \
+            --arg volume "$RESTORE_VOLUME_ID" \
+            --arg mount "$MOUNT_PATH" \
+            --arg run "$GITHUB_RUN_ID" \
+            --arg attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg cpuKind "$REHEARSAL_VM_CPU_KIND" \
+            --argjson cpus "$REHEARSAL_VM_CPUS" \
+            --argjson memory "$REHEARSAL_VM_MEMORY_MB" \
+            '(.config.services // [])==[] and (.config.dns.skip_registration // false)==true and (.config.restart.policy // "") == "no" and .config.guest.cpu_kind==$cpuKind and .config.guest.cpus==$cpus and .config.guest.memory_mb==$memory and (.config.metadata.leaderbot_gateway_rehearsal // "")==$run and (.config.metadata.leaderbot_gateway_rehearsal_attempt // "")==$attempt and ([.config.mounts[]? | select(.volume==$volume and .path==$mount)] | length)==1 and (.config.mounts|length)==1' \
+            <<<"$rehearsal_machine" > /dev/null
+          printf '%s\n' "$rehearsal_machine_id" > "$evidence_dir/rehearsal-machine-id.txt"
+          echo "REHEARSAL_MACHINE_ID=$rehearsal_machine_id" >> "$GITHUB_ENV"
+
+      - name: Observe no-transport health pass one
+        timeout-minutes: 5
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_GATEWAY_DEPLOY_TOKEN }}
+        run: |
+          set -euo pipefail
+          verify='node /app/deploy/fly-gateway/bin/rehearse-mounted-state.mjs --verify-running --expected-starts 1 >/dev/null'
+          timeout --signal=TERM 4m flyctl ssh console \
+            --app "$GATEWAY_APP" \
+            --machine "$REHEARSAL_MACHINE_ID" \
+            --quiet \
+            --command "/bin/sh -lc '$verify'"
+
+      - name: Restart the same isolated Machine for the idempotency pass
+        timeout-minutes: 12
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_GATEWAY_DEPLOY_TOKEN }}
+        run: |
+          set -euo pipefail
+          flyctl machine stop "$REHEARSAL_MACHINE_ID" --app "$GATEWAY_APP"
+          for _ in $(seq 1 60); do
+            state="$(flyctl machine list --app "$GATEWAY_APP" --json | jq -er --arg id "$REHEARSAL_MACHINE_ID" '[.[] | select(.id==$id)] | if length==1 then .[0].state else error("rehearsal Machine mismatch") end')"
+            test "$state" = "stopped" && break
+            sleep 5
+          done
+          test "$state" = "stopped"
+          flyctl machine start "$REHEARSAL_MACHINE_ID" --app "$GATEWAY_APP"
+          for _ in $(seq 1 90); do
+            state="$(flyctl machine list --app "$GATEWAY_APP" --json | jq -er --arg id "$REHEARSAL_MACHINE_ID" '[.[] | select(.id==$id)] | if length==1 then .[0].state else error("rehearsal Machine mismatch") end')"
+            test "$state" = "started" && break
+            sleep 10
+          done
+          test "$state" = "started"
+
+      - name: Observe no-transport health pass two
+        timeout-minutes: 5
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_GATEWAY_DEPLOY_TOKEN }}
+        run: |
+          set -euo pipefail
+          verify='node /app/deploy/fly-gateway/bin/rehearse-mounted-state.mjs --verify-running --expected-starts 2 >/dev/null'
+          timeout --signal=TERM 4m flyctl ssh console \
+            --app "$GATEWAY_APP" \
+            --machine "$REHEARSAL_MACHINE_ID" \
+            --quiet \
+            --command "/bin/sh -lc '$verify'"
+
+      - name: Stop the clone and verify the live baseline remained unchanged
+        timeout-minutes: 12
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_GATEWAY_DEPLOY_TOKEN }}
+        run: |
+          set -euo pipefail
+          flyctl machine stop "$REHEARSAL_MACHINE_ID" --app "$GATEWAY_APP"
+          state=''
+          for _ in $(seq 1 60); do
+            state="$(flyctl machine list --app "$GATEWAY_APP" --json | jq -er --arg id "$REHEARSAL_MACHINE_ID" '[.[] | select(.id==$id)] | if length==1 then .[0].state else error("rehearsal Machine mismatch") end')"
+            test "$state" = "stopped" && break
+            sleep 5
+          done
+          test "$state" = "stopped"
+          evidence_dir="$RUNNER_TEMP/gateway-state-rebaseline"
+          umask 077
+          flyctl machine list --app "$GATEWAY_APP" --json > "$evidence_dir/post-machines.json"
+          flyctl volumes list --app "$GATEWAY_APP" --json > "$evidence_dir/post-volumes.json"
+          flyctl config show --app "$GATEWAY_APP" > "$evidence_dir/post-generated-config.json"
+          node scripts/verify-gateway-state-rebaseline.mjs \
+            --verify-baseline \
+            deploy/production/apps.json \
+            "$evidence_dir/post-machines.json" \
+            "$evidence_dir/post-volumes.json" \
+            "$evidence_dir/post-generated-config.json" \
+            fly.toml \
+            "$evidence_dir/post-baseline-evidence.json"
+          curl --fail --show-error --silent \
+            --proto '=https' --tlsv1.2 \
+            --output /dev/null \
+            "https://leaderbot-openclaw-gateway.fly.dev/healthz"
+          baseline_evidence_sha="$(sha256sum "$evidence_dir/post-baseline-evidence.json" | cut -d' ' -f1)"
+          [[ "$baseline_evidence_sha" =~ ^[a-f0-9]{64}$ ]]
+          jq -n \
+            --arg protocol "$REHEARSAL_PROTOCOL" \
+            --arg app "$GATEWAY_APP" \
+            --arg sourceCommit "$GITHUB_SHA" \
+            --arg reviewedImage "$REVIEWED_IMAGE" \
+            --arg sourceVolume "$SOURCE_VOLUME_ID" \
+            --arg snapshotId "$REHEARSAL_SNAPSHOT_ID" \
+            --arg snapshotDigest "$REHEARSAL_SNAPSHOT_DIGEST" \
+            --arg restoredVolume "$RESTORE_VOLUME_ID" \
+            --arg machine "$REHEARSAL_MACHINE_ID" \
+            --arg liveBaselineEvidenceSha "$baseline_evidence_sha" \
+            --arg runId "$GITHUB_RUN_ID" \
+            --arg runAttempt "$GITHUB_RUN_ATTEMPT" \
+            '{protocol:$protocol,app:$app,sourceCommit:$sourceCommit,reviewedImage:$reviewedImage,sourceVolumeId:$sourceVolume,snapshot:{id:$snapshotId,digest:$snapshotDigest},isolated:{volumeId:$restoredVolume,machineId:$machine},observations:{cloneVolumeMounted:true,noPublicServiceConfigured:true,dnsRegistrationDisabled:true,reviewedImageStarted:true,reviewedImageRestarted:true,liveBaselinePreserved:true},checks:{startupPassed:false,tenantIsolationPassed:false,rollbackPassed:false,metadataOnlyEvidence:true,starts:2},limitations:{providerCallAbsenceProven:false,productionShapedPluginReadinessProven:false},liveBaselineEvidenceSha256:$liveBaselineEvidenceSha,runId:$runId,runAttempt:$runAttempt}' \
+            > "$evidence_dir/rehearsal-evidence.json"
+          rm -f \
+            "$evidence_dir/post-machines.json" \
+            "$evidence_dir/post-volumes.json" \
+            "$evidence_dir/post-generated-config.json"
+
+      - name: Upload bounded metadata-only rehearsal observations before cleanup
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: gateway-state-rehearsal-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/gateway-state-rebaseline/rehearsal-evidence.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Remove the exact isolated Machine and then its unattached volume
+        if: always()
+        timeout-minutes: 10
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_GATEWAY_DEPLOY_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$FLY_API_TOKEN"
+          app="leaderbot-openclaw-gateway"
+          evidence_dir="$RUNNER_TEMP/gateway-state-rebaseline"
+          if ! test -f "$evidence_dir/restore-volume-name.txt" && \
+            ! test -f "$evidence_dir/rehearsal-machine-name.txt"; then
+            exit 0
+          fi
+          expected_machine_name="lbgr-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          expected_volume_name="lbgr_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
+          volume_id=''
+          if test -f "$evidence_dir/restore-volume-id.txt"; then
+            volume_id="$(cat "$evidence_dir/restore-volume-id.txt")"
+          fi
+          if ! [[ "$volume_id" =~ ^vol_[a-z0-9]+$ ]] && test -f "$evidence_dir/restore-volume-name.txt"; then
+            test "$(cat "$evidence_dir/restore-volume-name.txt")" = "$expected_volume_name"
+            volume_id="$(flyctl volumes list --app "$app" --json | jq -er --arg name "$expected_volume_name" '[.[] | select(.name==$name)] | if length==1 then .[0].id elif length==0 then "" else error("duplicate rehearsal volumes") end')"
+          fi
+          machines="$(flyctl machine list --app "$app" --json)"
+          mapfile -t machine_ids < <(jq -er \
+            --arg name "$expected_machine_name" \
+            --arg run "$GITHUB_RUN_ID" \
+            --arg attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg volume "$volume_id" \
+            '.[] | select(.name==$name and (.config.metadata.leaderbot_gateway_rehearsal // "")==$run and (.config.metadata.leaderbot_gateway_rehearsal_attempt // "")==$attempt and $volume!="" and ([.config.mounts[]? | select(.volume==$volume and .path=="/data")] | length)==1 and (.config.mounts|length)==1) | .id' \
+            <<<"$machines")
+          test "${#machine_ids[@]}" -le 1
+          for machine_id in "${machine_ids[@]}"; do
+            [[ "$machine_id" =~ ^[a-f0-9]{14}$ ]]
+            flyctl machine destroy "$machine_id" --app "$app" --force
+          done
+          if [[ "$volume_id" =~ ^vol_[a-z0-9]+$ ]]; then
+            for _ in $(seq 1 60); do
+              volume="$(flyctl volumes list --app "$app" --json | jq -cer --arg id "$volume_id" '[.[] | select(.id==$id)] | if length<=1 then .[0] // {} else error("duplicate rehearsal volume id") end')"
+              test "$(jq -r 'length' <<<"$volume")" = 0 && break
+              test "$(jq -er '.name' <<<"$volume")" = "$expected_volume_name"
+              attached="$(jq -er '.attached_machine_id // ""' <<<"$volume")"
+              if test -z "$attached"; then
+                flyctl volumes destroy "$volume_id" --app "$app" --yes
+              fi
+              sleep 5
+            done
+            remaining="$(flyctl volumes list --app "$app" --json | jq -r --arg id "$volume_id" '[.[] | select(.id==$id)] | length')"
+            test "$remaining" = 0
+          fi

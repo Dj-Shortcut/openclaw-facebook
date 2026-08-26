@@ -8,6 +8,9 @@ import {
 } from "./validate-gateway-deployment-safety.mjs";
 
 const validFlyConfig = [
+  "[build]",
+  'dockerfile = "deploy/fly-gateway/Dockerfile"',
+  "",
   "[env]",
   'OPENCLAW_AGENT_MODEL = "openai/gpt-5.4-mini"',
   'NODE_OPTIONS = "--max-old-space-size=1536"',
@@ -15,6 +18,7 @@ const validFlyConfig = [
   'OPENCLAW_FACEBOOK_LEADERBOT_BRIDGE_ENABLED = "0"',
   'OPENCLAW_PUBLIC_GATEWAY_GUARD = "1"',
   'OPENCLAW_PUBLIC_GATEWAY_PATHS = "/healthz"',
+  'LEADERBOT_AI_ANSWER_ENFORCEMENT_ENABLED = "false"',
   "",
   "[[vm]]",
   'memory = "4096"',
@@ -100,6 +104,8 @@ describe("gateway deployment safety validation", () => {
     ["OPENCLAW_FACEBOOK_LEADERBOT_BRIDGE_ENABLED", "bridge disabled"],
     ["OPENCLAW_PUBLIC_GATEWAY_GUARD", "route guard enabled"],
     ["OPENCLAW_PUBLIC_GATEWAY_PATHS", "public health route"],
+    ["LEADERBOT_AI_ANSWER_ENFORCEMENT_ENABLED", "enforcement disabled"],
+    ["dockerfile", "full gateway Dockerfile"],
     ["memory", "VM allocation"],
   ])("rejects %s outside its reviewed Fly table", (setting, message) => {
     expect(() =>

@@ -8,6 +8,68 @@
       "deployScript": "deploy:gateway",
       "deploymentEnabled": false,
       "deploymentBlockReason": "Bootstrap is blocked until the stateful volume migration is rehearsed and a separate reviewed manifest-bound rebaseline proves the live identity, exact volume and Machine configuration, plus an attested artifact built from fully pinned inputs.",
+      "stateRebaseline": {
+        "state": "awaiting_rehearsal",
+        "enforcementEnabled": false,
+        "baseline": {
+          "app": "leaderbot-openclaw-gateway",
+          "machineId": "28621d2c559558",
+          "deploymentIdentity": "legacy_unlabeled",
+          "image": "registry.fly.io/leaderbot-openclaw-gateway:codex-codex-disabled-20260803@sha256:b0992d818d6fde9790f010f4866c97d78fd1d8c376492b515d50efa4778c704e",
+          "volumeId": "vol_v8elpyo26xwdmk1v",
+          "mountPath": "/data",
+          "region": "ams",
+          "encrypted": true,
+          "configIdentity": {
+            "machineConfigSha256": null,
+            "flyConfigSha256": null,
+            "generatedConfigSha256": null
+          }
+        },
+        "reviewedArtifact": {
+          "state": "unreviewed",
+          "image": null,
+          "sourceCommit": null,
+          "builderWorkflow": null,
+          "predicateType": null,
+          "attestationBundleSha256": null
+        },
+        "rehearsal": {
+          "state": "pending",
+          "evidenceArtifact": null,
+          "evidenceSha256": null,
+          "sourceVolumeId": null,
+          "mountPath": "/data",
+          "region": "ams",
+          "encrypted": true,
+          "contentInspectionAllowed": false,
+          "checks": {
+            "startupPassed": false,
+            "tenantIsolationPassed": false,
+            "rollbackPassed": false,
+            "metadataOnlyEvidence": false
+          }
+        },
+        "recovery": {
+          "state": "unreviewed",
+          "identity": null,
+          "image": null,
+          "sourceCommit": null,
+          "configSha256": null
+        },
+        "successor": {
+          "state": "unreviewed",
+          "identity": null,
+          "image": null,
+          "sourceCommit": null,
+          "configSha256": null
+        },
+        "historicalResources": {
+          "automaticDeletionAllowed": false,
+          "preserveUnlistedMachines": true,
+          "preserveUnlistedVolumes": true
+        }
+      },
       "strategy": "rolling",
       "serviceProcessGroups": ["app"],
       "serviceCheckPath": "/healthz",

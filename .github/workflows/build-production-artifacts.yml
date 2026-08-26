@@ -9,6 +9,7 @@ on:
         required: true
         type: choice
         options:
+          - gateway-runtime
           - image-gen-bridge
           - image-gen-runtime
           - storage-proxy
@@ -113,9 +114,19 @@ jobs:
           TARGET: ${{ inputs.target }}
         run: |
           case "$TARGET" in
+            gateway-runtime)
+              app="leaderbot-openclaw-gateway"
+              context="."
+              dockerfile="deploy/fly-gateway/Dockerfile"
+              kind="gateway-runtime"
+              schema_minimum=""
+              schema_maximum=""
+              base_image=""
+              ;;
             image-gen-bridge)
               app="leaderbot-fb-image-gen"
               context="apps/image-gen"
+              dockerfile=""
               kind="migration-bridge"
               schema_minimum="0015_base"
               schema_maximum="0016_expand"
@@ -124,6 +135,7 @@ jobs:
             image-gen-runtime)
               app="leaderbot-fb-image-gen"
               context="apps/image-gen"
+              dockerfile=""
               kind="runtime"
               schema_minimum="0016_expand"
               schema_maximum="0016_expand"
@@ -132,6 +144,7 @@ jobs:
             storage-proxy)
               app="leaderbot-storage-proxy"
               context="apps/image-gen/storage-proxy"
+              dockerfile=""
               kind="runtime"
               schema_minimum=""
               schema_maximum=""
@@ -147,6 +160,7 @@ jobs:
           {
             echo "ARTIFACT_APP=$app"
             echo "ARTIFACT_CONTEXT=$context"
+            echo "ARTIFACT_DOCKERFILE=$dockerfile"
             echo "ARTIFACT_KIND=$kind"
             echo "ARTIFACT_SCHEMA_MINIMUM=$schema_minimum"
             echo "ARTIFACT_SCHEMA_MAXIMUM=$schema_maximum"
@@ -159,7 +173,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Authenticate to the image-gen registry
-        if: inputs.target != 'storage-proxy'
+        if: startsWith(inputs.target, 'image-gen-')
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_IMAGE_GEN_DEPLOY_TOKEN }}
         run: |
@@ -170,6 +184,14 @@ jobs:
         if: inputs.target == 'storage-proxy'
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_STORAGE_PROXY_DEPLOY_TOKEN }}
+        run: |
+          test -n "$FLY_API_TOKEN"
+          flyctl auth docker
+
+      - name: Authenticate to the gateway registry
+        if: inputs.target == 'gateway-runtime'
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_GATEWAY_DEPLOY_TOKEN }}
         run: |
           test -n "$FLY_API_TOKEN"
           flyctl auth docker
@@ -185,6 +207,9 @@ jobs:
             --build-arg "SOURCE_REVISION=$GITHUB_SHA"
             --tag "$ARTIFACT_TAG"
           )
+          if [[ -n "$ARTIFACT_DOCKERFILE" ]]; then
+            args+=(--file "$ARTIFACT_DOCKERFILE")
+          fi
           if [[ "$ARTIFACT_KIND" = "migration-bridge" ]]; then
             args+=(
               --target migration_bridge
@@ -218,6 +243,14 @@ jobs:
           if [[ "$ARTIFACT_KIND" = "runtime" ]]; then
             node_base="$(docker image inspect --format '{{ index .Config.Labels "io.leaderbot.base.node" }}' "$ARTIFACT_IMAGE")"
             test "$node_base" = "node:24-alpine@sha256:d32cdf619f63fe0471182d08996dd516c6275bb5fd31ae06e55a570bd9e1ad43"
+          fi
+          if [[ "$ARTIFACT_KIND" = "gateway-runtime" ]]; then
+            node_base="$(docker image inspect --format '{{ index .Config.Labels "io.leaderbot.base.node" }}' "$ARTIFACT_IMAGE")"
+            test "$node_base" = "node:24-bookworm-slim@sha256:a9f5f7c91a432850b2a8a7797adf5eadb6c733ceed61167806cee7ea7fbc29df"
+            rehearsal_interface="$(docker image inspect --format '{{ index .Config.Labels "io.leaderbot.gateway.state-rehearsal" }}' "$ARTIFACT_IMAGE")"
+            test "$rehearsal_interface" = "real-openclaw-v1"
+            marker="$(docker run --rm --entrypoint cat "$ARTIFACT_IMAGE" /app/.leaderbot-artifact-kind)"
+            test "$marker" = "gateway-runtime"
           fi
           if [[ "$ARTIFACT_APP" = "leaderbot-fb-image-gen" && "$ARTIFACT_KIND" = "runtime" ]]; then
             ffmpeg_version="$(docker image inspect --format '{{ index .Config.Labels "io.leaderbot.runtime.ffmpeg" }}' "$ARTIFACT_IMAGE")"
@@ -279,6 +312,30 @@ jobs:
             --env LEADERBOT_PRODUCTION_MIGRATION_MODE=verify-artifact \
             "$ARTIFACT_IMAGE" node dist/migrate-production.cjs
 
+      - name: Prove gateway runtime and mounted-state rehearsal
+        if: inputs.target == 'gateway-runtime'
+        run: |
+          docker run --rm --entrypoint node "$ARTIFACT_IMAGE" --check /app/deploy/fly-gateway/bin/start-gateway.mjs
+          docker run --rm --entrypoint node "$ARTIFACT_IMAGE" /app/scripts/validate-openclaw-runtime.mjs /app --gateway
+          container="$(docker run --detach --network none --env LEADERBOT_GATEWAY_STATE_REHEARSAL=1 "$ARTIFACT_IMAGE")"
+          trap 'docker rm --force "$container" >/dev/null 2>&1 || true' EXIT
+          for attempt in $(seq 1 30); do
+            if docker exec "$container" node /app/deploy/fly-gateway/bin/rehearse-mounted-state.mjs --verify-running --expected-starts 1; then
+              break
+            fi
+            test "$attempt" -lt 30
+            sleep 1
+          done
+          docker stop --time 10 "$container"
+          docker start "$container"
+          for attempt in $(seq 1 30); do
+            if docker exec "$container" node /app/deploy/fly-gateway/bin/rehearse-mounted-state.mjs --verify-running --expected-starts 2; then
+              break
+            fi
+            test "$attempt" -lt 30
+            sleep 1
+          done
+
       - name: Remove registry credential before attestation
         if: always()
         run: docker logout registry.fly.io
@@ -303,6 +360,22 @@ jobs:
             '{baseImage:$baseImage,sourceCommit:$sourceCommit,sourceRef:$sourceRef,schema:{minimum:$schemaMinimum,maximum:$schemaMaximum}}' \
             > "$RUNNER_TEMP/leaderbot-bridge-predicate.json"
 
+      - name: Create gateway-runtime predicate
+        if: inputs.target == 'gateway-runtime'
+        run: |
+          runtime_lock_sha256="$(sha256sum deploy/fly-gateway/runtime/package-lock.json | cut -d' ' -f1)"
+          [[ "$runtime_lock_sha256" =~ ^[a-f0-9]{64}$ ]]
+          jq -n \
+            --arg sourceCommit "$GITHUB_SHA" \
+            --arg sourceRef "$GITHUB_REF" \
+            --arg artifactKind "$ARTIFACT_KIND" \
+            --arg nodeBase "node:24-bookworm-slim@sha256:a9f5f7c91a432850b2a8a7797adf5eadb6c733ceed61167806cee7ea7fbc29df" \
+            --arg runtimeLockSha256 "$runtime_lock_sha256" \
+            --arg openClawVersion "2026.7.2-beta.7" \
+            --arg rehearsalInterface "real-openclaw-v1" \
+            '{sourceCommit:$sourceCommit,sourceRef:$sourceRef,artifactKind:$artifactKind,nodeBase:$nodeBase,runtimeLockSha256:$runtimeLockSha256,openClawVersion:$openClawVersion,rehearsalInterface:$rehearsalInterface}' \
+            > "$RUNNER_TEMP/leaderbot-gateway-runtime-predicate.json"
+
       - name: Attest exact bridge base material
         if: inputs.target == 'image-gen-bridge'
         id: bridge-material
@@ -314,6 +387,17 @@ jobs:
           predicate-path: ${{ runner.temp }}/leaderbot-bridge-predicate.json
           push-to-registry: false
 
+      - name: Attest exact gateway runtime contract
+        if: inputs.target == 'gateway-runtime'
+        id: gateway-runtime
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-name: registry.fly.io/${{ steps.contract.outputs.app }}
+          subject-digest: ${{ steps.image.outputs.digest }}
+          predicate-type: https://leaderbot.live/attestations/gateway-runtime/v1
+          predicate-path: ${{ runner.temp }}/leaderbot-gateway-runtime-predicate.json
+          push-to-registry: false
+
       - name: Package reviewed artifact metadata
         env:
           ARTIFACT_TARGET: ${{ inputs.target }}
@@ -323,12 +407,18 @@ jobs:
           BRIDGE_ATTESTATION_ID: ${{ steps.bridge-material.outputs.attestation-id }}
           BRIDGE_ATTESTATION_URL: ${{ steps.bridge-material.outputs.attestation-url }}
           BRIDGE_BUNDLE: ${{ steps.bridge-material.outputs.bundle-path }}
+          GATEWAY_RUNTIME_ATTESTATION_ID: ${{ steps.gateway-runtime.outputs.attestation-id }}
+          GATEWAY_RUNTIME_ATTESTATION_URL: ${{ steps.gateway-runtime.outputs.attestation-url }}
+          GATEWAY_RUNTIME_BUNDLE: ${{ steps.gateway-runtime.outputs.bundle-path }}
         run: |
           output="$RUNNER_TEMP/leaderbot-production-artifact"
           mkdir -p "$output"
           cp "$PROVENANCE_BUNDLE" "$output/provenance.json"
           if [[ -n "$BRIDGE_BUNDLE" ]]; then
             cp "$BRIDGE_BUNDLE" "$output/bridge-material.json"
+          fi
+          if [[ -n "$GATEWAY_RUNTIME_BUNDLE" ]]; then
+            cp "$GATEWAY_RUNTIME_BUNDLE" "$output/gateway-runtime.json"
           fi
           jq -n \
             --arg target "$ARTIFACT_TARGET" \
@@ -344,7 +434,9 @@ jobs:
             --arg provenanceAttestationUrl "$PROVENANCE_ATTESTATION_URL" \
             --arg bridgeAttestationId "$BRIDGE_ATTESTATION_ID" \
             --arg bridgeAttestationUrl "$BRIDGE_ATTESTATION_URL" \
-            '{target:$target,image:$image,sourceCommit:$sourceCommit,sourceRef:$sourceRef,kind:$kind,baseImage:(if ($baseImage|length)>0 then $baseImage else null end),schema:(if ($schemaMinimum|length)>0 then {minimum:$schemaMinimum,maximum:$schemaMaximum} else null end),builderWorkflow:$builderWorkflow,attestations:{provenance:{id:$provenanceAttestationId,url:$provenanceAttestationUrl},bridgeMaterial:(if ($bridgeAttestationId|length)>0 then {id:$bridgeAttestationId,url:$bridgeAttestationUrl} else null end)}}' \
+            --arg gatewayRuntimeAttestationId "$GATEWAY_RUNTIME_ATTESTATION_ID" \
+            --arg gatewayRuntimeAttestationUrl "$GATEWAY_RUNTIME_ATTESTATION_URL" \
+            '{target:$target,image:$image,sourceCommit:$sourceCommit,sourceRef:$sourceRef,kind:$kind,baseImage:(if ($baseImage|length)>0 then $baseImage else null end),schema:(if ($schemaMinimum|length)>0 then {minimum:$schemaMinimum,maximum:$schemaMaximum} else null end),builderWorkflow:$builderWorkflow,attestations:{provenance:{id:$provenanceAttestationId,url:$provenanceAttestationUrl},bridgeMaterial:(if ($bridgeAttestationId|length)>0 then {id:$bridgeAttestationId,url:$bridgeAttestationUrl} else null end),gatewayRuntime:(if ($gatewayRuntimeAttestationId|length)>0 then {id:$gatewayRuntimeAttestationId,url:$gatewayRuntimeAttestationUrl} else null end)}}' \
             > "$output/artifact.json"
 
       - name: Upload immutable build record

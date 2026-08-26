@@ -34,9 +34,53 @@ const defaultAgentModel = process.env.OPENCLAW_AGENT_MODEL || "";
 const defaultAgentThinking = process.env.OPENCLAW_AGENT_THINKING_DEFAULT || "";
 const allowOpen = process.env.OPENCLAW_FACEBOOK_ALLOW_OPEN === "1";
 const allowedUnknownSenderModes = new Set(["pairing", "leaderbot_free_tier"]);
+const rehearsalMarkerPath = path.join(
+  stateDir,
+  ".leaderbot-gateway-state-rehearsal-v1.json",
+);
+const rehearsalMarkerSchema = "leaderbot-gateway-state-rehearsal-v1";
+const rehearsalConfigPath =
+  "/tmp/leaderbot-gateway-state-rehearsal/openclaw.json";
+const rehearsalRuntimeStateDir =
+  "/tmp/leaderbot-gateway-state-rehearsal-runtime";
+const rehearsalExplicitCredentialNames = Object.freeze([
+  "DATABASE_URL",
+  "FACEBOOK_APP_SECRET",
+  "FACEBOOK_PAGE_ACCESS_TOKEN",
+  "FACEBOOK_VERIFY_TOKEN",
+  "INTERNAL_IMAGE_REQUEST_TOKEN",
+  "LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN",
+  "MESSENGER_APP_SECRET",
+  "MESSENGER_PAGE_ACCESS_TOKEN",
+  "MESSENGER_VERIFY_TOKEN",
+  "OPENAI_API_KEY",
+  "REDIS_URL",
+]);
+const rehearsalMessengerCredentialFields = Object.freeze([
+  "pageAccessToken",
+  "tokenFile",
+  "appSecret",
+  "appSecretFile",
+  "verifyToken",
+  "verifyTokenFile",
+]);
 
 function isObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function removeRehearsalMessengerCredentials(channelConfig) {
+  if (!isObject(channelConfig)) return;
+  for (const field of rehearsalMessengerCredentialFields) {
+    delete channelConfig[field];
+  }
+  if (!isObject(channelConfig.accounts)) return;
+  for (const accountConfig of Object.values(channelConfig.accounts)) {
+    if (!isObject(accountConfig)) continue;
+    for (const field of rehearsalMessengerCredentialFields) {
+      delete accountConfig[field];
+    }
+  }
 }
 
 function readJsonFile(filePath) {
@@ -57,6 +101,7 @@ function writeJsonFile(filePath, value) {
   fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, {
     mode: 0o600,
   });
+  fs.chmodSync(filePath, 0o600);
 }
 
 function uniquePush(list, value) {
@@ -191,7 +236,7 @@ function copyIfMissing(sourcePath, destPath) {
   return true;
 }
 
-function migrateLegacyWorkspaceFiles() {
+function migrateLegacyWorkspaceFiles({ verifyOnly = false } = {}) {
   if (path.resolve(legacyWorkspaceDir) === path.resolve(workspaceDir)) {
     return;
   }
@@ -202,11 +247,14 @@ function migrateLegacyWorkspaceFiles() {
   const entries = ["AGENTS.md", "SOUL.md", "TOOLS.md", "IDENTITY.md"];
   let copied = 0;
   for (const entry of entries) {
+    const source = path.join(legacyWorkspaceDir, entry);
+    const destination = path.join(workspaceDir, entry);
+    if (verifyOnly && fs.existsSync(source) && !fs.existsSync(destination)) {
+      throw new Error("Gateway mounted state still needs workspace migration");
+    }
     if (
-      copyIfMissing(
-        path.join(legacyWorkspaceDir, entry),
-        path.join(workspaceDir, entry),
-      )
+      !verifyOnly &&
+      copyIfMissing(source, destination)
     ) {
       copied += 1;
     }
@@ -304,7 +352,10 @@ function isPathInside(parentPath, candidatePath) {
   );
 }
 
-function assertSafeQuarantineDirectory(directoryPath) {
+function assertSafeQuarantineDirectory(
+  directoryPath,
+  { verifyOnly = false } = {},
+) {
   const directoryStat = lstatIfPresent(directoryPath);
   if (
     directoryStat &&
@@ -312,10 +363,15 @@ function assertSafeQuarantineDirectory(directoryPath) {
   ) {
     throw new Error("Public memory quarantine path is not a safe directory");
   }
-  if (directoryStat) fs.chmodSync(directoryPath, 0o700);
+  if (directoryStat) {
+    if (verifyOnly && (directoryStat.mode & 0o777) !== 0o700) {
+      throw new Error("Public memory quarantine permissions are not canonical");
+    }
+    if (!verifyOnly) fs.chmodSync(directoryPath, 0o700);
+  }
 }
 
-function quarantineSharedPublicMemory(config) {
+function quarantineSharedPublicMemory(config, { verifyOnly = false } = {}) {
   const quarantineDir = path.resolve(stateDir, "private-memory-quarantine-v1");
   const envWorkspace = path.resolve(workspaceDir);
   const effectiveMainWorkspace = resolveEffectiveMainWorkspace(config);
@@ -348,9 +404,9 @@ function quarantineSharedPublicMemory(config) {
     }
     targets.push(target);
   }
-  assertSafeQuarantineDirectory(quarantineDir);
+  assertSafeQuarantineDirectory(quarantineDir, { verifyOnly });
   for (const target of targets.slice(1)) {
-    assertSafeQuarantineDirectory(target.quarantine);
+    assertSafeQuarantineDirectory(target.quarantine, { verifyOnly });
   }
 
   // Resolve every collision and cross-workspace overlap before moving anything.
@@ -395,6 +451,9 @@ function quarantineSharedPublicMemory(config) {
     }
   }
 
+  if (verifyOnly && moves.length > 0) {
+    throw new Error("Gateway mounted state still contains public memory");
+  }
   for (const move of moves) {
     fs.mkdirSync(move.quarantine, { recursive: true, mode: 0o700 });
     fs.chmodSync(quarantineDir, 0o700);
@@ -571,25 +630,415 @@ function ensurePublicMessengerBaseline(config) {
   return config;
 }
 
-export function prepareGatewayConfig() {
-  fs.mkdirSync(stateDir, { recursive: true });
-  fs.mkdirSync(workspaceDir, { recursive: true });
-  migrateLegacyWorkspaceFiles();
-  const config = ensurePublicMessengerBaseline(readJsonFile(configPath));
-  quarantineSharedPublicMemory(config);
-  writeJsonFile(configPath, config);
+function ensureStateRehearsalNoTransport(config) {
+  const facebookChannel = isObject(config.channels?.facebook)
+    ? config.channels.facebook
+    : {};
+  removeRehearsalMessengerCredentials(facebookChannel);
+  config.channels = { facebook: facebookChannel };
+  config.cron = {
+    enabled: false,
+    triggers: { enabled: false },
+  };
+  config.hooks = {
+    enabled: false,
+    internal: { enabled: false },
+  };
+  config.models = {
+    catalogRefresh: { enabled: false },
+  };
+  config.update = {
+    checkOnStart: false,
+    auto: { enabled: false },
+  };
+  config.transcripts = {
+    enabled: false,
+    autoStart: [],
+  };
+  config.discovery = {
+    mdns: { mode: "off" },
+  };
+  config.acp = {
+    enabled: false,
+    dispatch: { enabled: false },
+  };
+  config.env = {
+    shellEnv: { enabled: false },
+    vars: {},
+  };
+  delete config.secrets;
+  config.cloudWorkers = { profiles: {} };
+  ensureAgentDefaults(config);
+  config.agents.defaults.heartbeat = { every: "0m" };
+  delete config.agents.list;
+  if (isObject(config.agents.entries)) {
+    for (const entry of Object.values(config.agents.entries)) {
+      if (isObject(entry)) {
+        delete entry.compaction;
+        delete entry.heartbeat;
+        delete entry.memory;
+      }
+    }
+  }
+  config.plugins = {
+    enabled: true,
+    allow: ["facebook"],
+    load: { paths: [pluginPath] },
+    entries: { facebook: { enabled: true } },
+  };
+  if (!isObject(config.gateway)) config.gateway = {};
+  config.gateway.bind = "loopback";
+  config.gateway.tailscale = { mode: "off", resetOnExit: false };
+  delete config.gateway.remote;
   return config;
 }
 
-export function startGateway() {
-  prepareGatewayConfig();
+export function assertGatewayStateRehearsalConfig(config) {
+  const entries = config?.plugins?.entries;
+  const channelKeys = isObject(config?.channels)
+    ? Object.keys(config.channels).sort().join(",")
+    : "";
+  const pluginKeys = isObject(config?.plugins)
+    ? Object.keys(config.plugins).sort().join(",")
+    : "";
+  const pluginEntryKeys = isObject(entries)
+    ? Object.keys(entries).sort().join(",")
+    : "";
+  const cronKeys = isObject(config?.cron)
+    ? Object.keys(config.cron).sort().join(",")
+    : "";
+  const triggerKeys = isObject(config?.cron?.triggers)
+    ? Object.keys(config.cron.triggers).sort().join(",")
+    : "";
+  const hooksKeys = isObject(config?.hooks)
+    ? Object.keys(config.hooks).sort().join(",")
+    : "";
+  const internalHookKeys = isObject(config?.hooks?.internal)
+    ? Object.keys(config.hooks.internal).sort().join(",")
+    : "";
+  const modelKeys = isObject(config?.models)
+    ? Object.keys(config.models).sort().join(",")
+    : "";
+  const catalogRefreshKeys = isObject(config?.models?.catalogRefresh)
+    ? Object.keys(config.models.catalogRefresh).sort().join(",")
+    : "";
+  const updateKeys = isObject(config?.update)
+    ? Object.keys(config.update).sort().join(",")
+    : "";
+  const updateAutoKeys = isObject(config?.update?.auto)
+    ? Object.keys(config.update.auto).sort().join(",")
+    : "";
+  const transcriptKeys = isObject(config?.transcripts)
+    ? Object.keys(config.transcripts).sort().join(",")
+    : "";
+  const discoveryKeys = isObject(config?.discovery)
+    ? Object.keys(config.discovery).sort().join(",")
+    : "";
+  const mdnsKeys = isObject(config?.discovery?.mdns)
+    ? Object.keys(config.discovery.mdns).sort().join(",")
+    : "";
+  const acpKeys = isObject(config?.acp)
+    ? Object.keys(config.acp).sort().join(",")
+    : "";
+  const acpDispatchKeys = isObject(config?.acp?.dispatch)
+    ? Object.keys(config.acp.dispatch).sort().join(",")
+    : "";
+  const envKeys = isObject(config?.env)
+    ? Object.keys(config.env).sort().join(",")
+    : "";
+  const shellEnvKeys = isObject(config?.env?.shellEnv)
+    ? Object.keys(config.env.shellEnv).sort().join(",")
+    : "";
+  const cloudWorkerKeys = isObject(config?.cloudWorkers)
+    ? Object.keys(config.cloudWorkers).sort().join(",")
+    : "";
+  const tailscaleKeys = isObject(config?.gateway?.tailscale)
+    ? Object.keys(config.gateway.tailscale).sort().join(",")
+    : "";
+  const agentEntries = isObject(config?.agents?.entries)
+    ? Object.values(config.agents.entries)
+    : [];
+  const messengerChannelConfigs = [
+    config?.channels?.facebook,
+    config?.channels?.messenger,
+  ].filter(isObject);
+  const messengerAccountConfigs = messengerChannelConfigs.flatMap((channel) =>
+    isObject(channel.accounts)
+      ? Object.values(channel.accounts).filter(isObject)
+      : [],
+  );
+  if (
+    !isObject(config) ||
+    !isObject(config.channels) ||
+    channelKeys !== "facebook" ||
+    !isObject(config.channels.facebook) ||
+    [...messengerChannelConfigs, ...messengerAccountConfigs].some((entry) =>
+      rehearsalMessengerCredentialFields.some((field) =>
+        Object.hasOwn(entry, field),
+      ),
+    ) ||
+    cronKeys !== "enabled,triggers" ||
+    config.cron.enabled !== false ||
+    triggerKeys !== "enabled" ||
+    config.cron.triggers.enabled !== false ||
+    hooksKeys !== "enabled,internal" ||
+    config.hooks.enabled !== false ||
+    internalHookKeys !== "enabled" ||
+    config.hooks.internal.enabled !== false ||
+    modelKeys !== "catalogRefresh" ||
+    catalogRefreshKeys !== "enabled" ||
+    config.models.catalogRefresh.enabled !== false ||
+    updateKeys !== "auto,checkOnStart" ||
+    config.update.checkOnStart !== false ||
+    updateAutoKeys !== "enabled" ||
+    config.update.auto.enabled !== false ||
+    transcriptKeys !== "autoStart,enabled" ||
+    config.transcripts.enabled !== false ||
+    !Array.isArray(config.transcripts.autoStart) ||
+    config.transcripts.autoStart.length !== 0 ||
+    discoveryKeys !== "mdns" ||
+    mdnsKeys !== "mode" ||
+    config.discovery.mdns.mode !== "off" ||
+    acpKeys !== "dispatch,enabled" ||
+    config.acp.enabled !== false ||
+    acpDispatchKeys !== "enabled" ||
+    config.acp.dispatch.enabled !== false ||
+    envKeys !== "shellEnv,vars" ||
+    shellEnvKeys !== "enabled" ||
+    config.env.shellEnv.enabled !== false ||
+    !isObject(config.env.vars) ||
+    Object.keys(config.env.vars).length !== 0 ||
+    Object.hasOwn(config, "secrets") ||
+    cloudWorkerKeys !== "profiles" ||
+    !isObject(config.cloudWorkers.profiles) ||
+    Object.keys(config.cloudWorkers.profiles).length !== 0 ||
+    config.agents?.defaults?.heartbeat?.every !== "0m" ||
+    Object.keys(config.agents.defaults.heartbeat).length !== 1 ||
+    Object.hasOwn(config.agents, "list") ||
+    agentEntries.some(
+      (entry) =>
+        isObject(entry) &&
+        ["compaction", "heartbeat", "memory"].some((field) =>
+          Object.hasOwn(entry, field),
+        ),
+    ) ||
+    config.session?.dmScope !== "per-account-channel-peer" ||
+    pluginKeys !== "allow,enabled,entries,load" ||
+    config.plugins?.enabled !== true ||
+    !Array.isArray(config.plugins?.allow) ||
+    config.plugins.allow.length !== 1 ||
+    config.plugins.allow[0] !== "facebook" ||
+    !Array.isArray(config.plugins?.load?.paths) ||
+    config.plugins.load.paths.length !== 1 ||
+    config.plugins.load.paths[0] !== pluginPath ||
+    !isObject(entries) ||
+    pluginEntryKeys !== "facebook" ||
+    !isObject(entries.facebook) ||
+    Object.keys(entries.facebook).sort().join(",") !== "enabled" ||
+    entries.facebook.enabled !== true ||
+    config.gateway?.bind !== "loopback" ||
+    Object.hasOwn(config.gateway, "remote") ||
+    tailscaleKeys !== "mode,resetOnExit" ||
+    config.gateway.tailscale.mode !== "off" ||
+    config.gateway.tailscale.resetOnExit !== false
+  ) {
+    throw new Error("Gateway state rehearsal transport boundary is invalid");
+  }
+  return config;
+}
+
+export function prepareGatewayConfig({ verifyOnly = false } = {}) {
+  if (verifyOnly) {
+    if (!fs.existsSync(stateDir) || !fs.existsSync(workspaceDir)) {
+      throw new Error("Gateway mounted state is not prepared");
+    }
+  } else {
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.mkdirSync(workspaceDir, { recursive: true });
+  }
+  migrateLegacyWorkspaceFiles({ verifyOnly });
+  const originalConfig = verifyOnly
+    ? fs.readFileSync(configPath, "utf8")
+    : null;
+  const config = ensurePublicMessengerBaseline(readJsonFile(configPath));
+  quarantineSharedPublicMemory(config, { verifyOnly });
+  const canonicalConfig = `${JSON.stringify(config, null, 2)}\n`;
+  if (verifyOnly) {
+    if (originalConfig !== canonicalConfig) {
+      throw new Error("Gateway mounted configuration is not canonical");
+    }
+    const configMode = fs.statSync(configPath).mode & 0o777;
+    if (configMode !== 0o600) {
+      throw new Error(
+        "Gateway mounted configuration permissions are not canonical",
+      );
+    }
+  } else {
+    writeJsonFile(configPath, config);
+  }
+  return config;
+}
+
+export function prepareGatewayStateRehearsalConfig() {
+  const productionConfig = prepareGatewayConfig();
+  const rehearsalConfig = ensureStateRehearsalNoTransport(
+    structuredClone(productionConfig),
+  );
+  fs.rmSync(rehearsalRuntimeStateDir, { recursive: true, force: true });
+  fs.mkdirSync(rehearsalRuntimeStateDir, {
+    recursive: true,
+    mode: 0o700,
+  });
+  writeJsonFile(rehearsalConfigPath, rehearsalConfig);
+  return rehearsalConfigPath;
+}
+
+export function verifyGatewayStateRehearsalConfig() {
+  const source = fs.readFileSync(rehearsalConfigPath, "utf8");
+  const config = readJsonFile(rehearsalConfigPath);
+  assertGatewayStateRehearsalConfig(config);
+  const canonical = ensureStateRehearsalNoTransport(structuredClone(config));
+  if (`${JSON.stringify(canonical, null, 2)}\n` !== source) {
+    throw new Error("Gateway state rehearsal configuration is not canonical");
+  }
+  if ((fs.statSync(rehearsalConfigPath).mode & 0o777) !== 0o600) {
+    throw new Error(
+      "Gateway state rehearsal configuration permissions are not canonical",
+    );
+  }
+  return rehearsalConfigPath;
+}
+
+function isRehearsalProviderCredential(name) {
+  return (
+    rehearsalExplicitCredentialNames.includes(name) ||
+    /(?:^|_)(?:ACCESS_KEY_ID|ACCESS_TOKEN|API_KEY|APP_SECRET|AUTH_TOKEN|CLIENT_SECRET|CREDENTIALS?|ID_TOKEN|PASSWORD|PRIVATE_KEY|REFRESH_TOKEN|SECRET|SECRET_ACCESS_KEY|TOKEN|VERIFY_TOKEN)$/u.test(
+      name,
+    )
+  );
+}
+
+export function assertGatewayStateRehearsalChildEnv(
+  childEnv,
+  sourceEnv = process.env,
+) {
+  for (const name of Object.keys(sourceEnv)) {
+    if (isRehearsalProviderCredential(name) && childEnv[name] !== undefined) {
+      throw new Error(
+        "Gateway state rehearsal child retained a provider credential",
+      );
+    }
+  }
+  if (
+    childEnv.LEADERBOT_IMAGE_GEN_URL !== "" ||
+    childEnv.OPENCLAW_STATE_DIR !== rehearsalRuntimeStateDir ||
+    childEnv.OPENCLAW_CONFIG_PATH !== rehearsalConfigPath ||
+    childEnv.OPENCLAW_WORKSPACE_DIR !== workspaceDir ||
+    childEnv.OPENCLAW_SKIP_CHANNELS !== "1" ||
+    childEnv.OPENCLAW_SKIP_PROVIDERS !== "1" ||
+    childEnv.OPENCLAW_SKIP_GMAIL_WATCHER !== "1" ||
+    childEnv.OPENCLAW_SKIP_STARTUP_MODEL_PREWARM !== "1" ||
+    childEnv.OPENCLAW_SKIP_CRON !== "1" ||
+    childEnv.OPENCLAW_DISABLE_BONJOUR !== "1" ||
+    childEnv.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER !== "1" ||
+    childEnv.OPENCLAW_SKIP_CANVAS_HOST !== "1" ||
+    childEnv.OPENCLAW_SKIP_ACPX_RUNTIME !== "1" ||
+    childEnv.OPENCLAW_SKIP_ACPX_RUNTIME_PROBE !== "1" ||
+    childEnv.OPENCLAW_LOAD_SHELL_ENV !== "0" ||
+    childEnv.OPENCLAW_NO_AUTO_UPDATE !== "1"
+  ) {
+    throw new Error("Gateway state rehearsal child transport fence is invalid");
+  }
+  return childEnv;
+}
+
+export function buildGatewayChildEnv({
+  rehearsal = false,
+  openclawConfigPath = configPath,
+} = {}) {
+  const childEnv = {
+    ...process.env,
+    OPENCLAW_STATE_DIR: stateDir,
+    OPENCLAW_CONFIG_PATH: openclawConfigPath,
+    OPENCLAW_WORKSPACE_DIR: workspaceDir,
+  };
+  if (rehearsal) {
+    for (const name of Object.keys(childEnv)) {
+      if (isRehearsalProviderCredential(name)) delete childEnv[name];
+    }
+    childEnv.LEADERBOT_IMAGE_GEN_URL = "";
+    childEnv.OPENCLAW_SKIP_CHANNELS = "1";
+    childEnv.OPENCLAW_SKIP_PROVIDERS = "1";
+    childEnv.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
+    childEnv.OPENCLAW_SKIP_STARTUP_MODEL_PREWARM = "1";
+    childEnv.OPENCLAW_SKIP_CRON = "1";
+    childEnv.OPENCLAW_DISABLE_BONJOUR = "1";
+    childEnv.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER = "1";
+    childEnv.OPENCLAW_SKIP_CANVAS_HOST = "1";
+    childEnv.OPENCLAW_SKIP_ACPX_RUNTIME = "1";
+    childEnv.OPENCLAW_SKIP_ACPX_RUNTIME_PROBE = "1";
+    childEnv.OPENCLAW_LOAD_SHELL_ENV = "0";
+    childEnv.OPENCLAW_NO_AUTO_UPDATE = "1";
+    childEnv.OPENCLAW_STATE_DIR = rehearsalRuntimeStateDir;
+    assertGatewayStateRehearsalChildEnv(childEnv);
+  }
+  return childEnv;
+}
+
+function readRehearsalMarker() {
+  const marker = readJsonFile(rehearsalMarkerPath);
+  if (
+    !isObject(marker) ||
+    Object.keys(marker).sort().join(",") !== "schema,starts,status" ||
+    marker.schema !== rehearsalMarkerSchema ||
+    marker.status !== "prepared" ||
+    !Number.isSafeInteger(marker.starts) ||
+    marker.starts < 1
+  ) {
+    throw new Error("Gateway state rehearsal marker is invalid");
+  }
+  return marker;
+}
+
+export function recordGatewayStateRehearsalStart() {
+  let starts = 0;
+  if (fs.existsSync(rehearsalMarkerPath)) {
+    starts = readRehearsalMarker().starts;
+  }
+  const marker = {
+    schema: rehearsalMarkerSchema,
+    status: "prepared",
+    starts: starts + 1,
+  };
+  writeJsonFile(rehearsalMarkerPath, marker);
+  return marker;
+}
+
+export function verifyGatewayStateRehearsalMarker(expectedStarts) {
+  const marker = readRehearsalMarker();
+  if (marker.starts !== expectedStarts) {
+    throw new Error("Gateway state rehearsal start count is not exact");
+  }
+  return marker;
+}
+
+export function startGateway({
+  skipPrepare = false,
+  rehearsal = false,
+  openclawConfigPath = configPath,
+} = {}) {
+  if (!skipPrepare) prepareGatewayConfig();
   const openclawBin = path.join(
     process.cwd(),
     "node_modules",
     "openclaw",
     "openclaw.mjs",
   );
-  const launchPlan = buildGatewayLaunchPlan();
+  const launchPlan = buildGatewayLaunchPlan(
+    rehearsal
+      ? ["--allow-unconfigured", "--port", "3000", "--bind", "loopback"]
+      : process.argv.slice(2),
+  );
   if (launchPlan.guardEnabled) {
     startPublicRouteGuard({
       publicPort: launchPlan.publicPort,
@@ -599,12 +1048,7 @@ export function startGateway() {
   const args = [openclawBin, "gateway", ...launchPlan.openclawArgs];
   const child = spawn(process.execPath, args, {
     stdio: "inherit",
-    env: {
-      ...process.env,
-      OPENCLAW_STATE_DIR: stateDir,
-      OPENCLAW_CONFIG_PATH: configPath,
-      OPENCLAW_WORKSPACE_DIR: workspaceDir,
-    },
+    env: buildGatewayChildEnv({ rehearsal, openclawConfigPath }),
   });
 
   child.on("exit", (code, signal) => {
@@ -617,5 +1061,12 @@ export function startGateway() {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  startGateway();
+  if (process.env.LEADERBOT_GATEWAY_STATE_REHEARSAL === "1") {
+    const openclawConfigPath = prepareGatewayStateRehearsalConfig();
+    recordGatewayStateRehearsalStart();
+    process.env.OPENCLAW_PUBLIC_GATEWAY_GUARD = "0";
+    startGateway({ skipPrepare: true, rehearsal: true, openclawConfigPath });
+  } else {
+    startGateway();
+  }
 }

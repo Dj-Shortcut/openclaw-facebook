@@ -55,6 +55,8 @@ function createRepositoryFixture() {
     "docs/operations/production-deployments.md",
     "deploy/fly-gateway/Dockerfile",
     "deploy/fly-gateway/Dockerfile.route-guard-hotfix",
+    "deploy/fly-gateway/runtime/package.json",
+    "deploy/fly-gateway/runtime/package-lock.json",
     "package.json",
     "fly.toml",
     "apps/image-gen/fly.toml",
@@ -68,6 +70,7 @@ function createRepositoryFixture() {
     ".github/workflows/build-production-artifacts.yml",
     ".github/workflows/cleanup-image-gen-schema-probes.yml",
     ".github/workflows/deploy-production.yml",
+    ".github/workflows/gateway-state-rebaseline.yml",
     ".github/workflows/image-gen-ci.yml",
     ".github/workflows/image-gen-migration-smoke.yml",
     ".github/workflows/image-gen-schema-transition.yml",
@@ -76,6 +79,7 @@ function createRepositoryFixture() {
     ".github/workflows/recover-completed-production-deployment.yml",
     ".github/workflows/reconcile-production-deployment.yml",
     "scripts/select-fresh-fly-snapshot.mjs",
+    "scripts/verify-gateway-state-rebaseline.mjs",
     "scripts/validate-production-deployment.mjs",
   ]) {
     fs.mkdirSync(path.dirname(path.join(root, relativePath)), {
@@ -169,6 +173,89 @@ function stageStorageProxyRuntime(manifest, sourceCommit = "b".repeat(40)) {
   app.reviewedRollbackSourceCommits = {};
   app.artifactTransition.state = "runtime_reviewed";
   return { app, legacyImage, runtimeImage, sourceCommit };
+}
+
+function stageSettledGatewayRebaseline(manifest) {
+  const app = manifest.apps.gateway;
+  const contract = app.stateRebaseline;
+  const sourceCommit = "d".repeat(40);
+  const rolloutImage = `registry.fly.io/${app.app}@sha256:${"e".repeat(64)}`;
+  const recoveryImage = `registry.fly.io/${app.app}@sha256:${"f".repeat(64)}`;
+  contract.state = "settled";
+  contract.baseline.configIdentity = {
+    machineConfigSha256: "1".repeat(64),
+    flyConfigSha256: "2".repeat(64),
+    generatedConfigSha256: "3".repeat(64),
+  };
+  contract.reviewedArtifact = {
+    state: "reviewed",
+    image: rolloutImage,
+    sourceCommit,
+    builderWorkflow: ".github/workflows/build-production-artifacts.yml",
+    predicateType: "https://leaderbot.live/attestations/gateway-runtime/v1",
+    attestationBundleSha256: "4".repeat(64),
+  };
+  contract.rehearsal = {
+    state: "passed",
+    evidenceArtifact: "gateway-state-rehearsal-123-1",
+    evidenceSha256: "5".repeat(64),
+    sourceVolumeId: contract.baseline.volumeId,
+    mountPath: contract.baseline.mountPath,
+    region: contract.baseline.region,
+    encrypted: true,
+    contentInspectionAllowed: false,
+    checks: {
+      startupPassed: true,
+      tenantIsolationPassed: true,
+      rollbackPassed: true,
+      metadataOnlyEvidence: true,
+    },
+  };
+  contract.recovery = {
+    state: "reviewed",
+    identity: "deploy-122-1",
+    image: recoveryImage,
+    sourceCommit: "c".repeat(40),
+    configSha256: "6".repeat(64),
+  };
+  contract.successor = {
+    state: "reviewed",
+    identity: "deploy-123-1",
+    image: rolloutImage,
+    sourceCommit,
+    configSha256: "7".repeat(64),
+  };
+  return contract;
+}
+
+function stageGatewayRehearsalApproved(manifest) {
+  const contract = stageSettledGatewayRebaseline(manifest);
+  contract.state = "rehearsal_approved";
+  contract.rehearsal = {
+    state: "pending",
+    evidenceArtifact: null,
+    evidenceSha256: null,
+    sourceVolumeId: contract.baseline.volumeId,
+    mountPath: contract.baseline.mountPath,
+    region: contract.baseline.region,
+    encrypted: true,
+    contentInspectionAllowed: false,
+    checks: {
+      startupPassed: false,
+      tenantIsolationPassed: false,
+      rollbackPassed: false,
+      metadataOnlyEvidence: false,
+    },
+  };
+  contract.recovery = {
+    state: "unreviewed",
+    identity: null,
+    image: null,
+    sourceCommit: null,
+    configSha256: null,
+  };
+  contract.successor = structuredClone(contract.recovery);
+  return contract;
 }
 
 afterEach(() => {
@@ -1020,6 +1107,36 @@ describe("production deployment contract", () => {
 
     expect(() => validateProductionRepository(root)).toThrow(
       "must download the exact Linux x86_64 flyctl asset",
+    );
+  });
+
+  it("requires the exact verified flyctl contract in the gateway rehearsal", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/gateway-state-rebaseline.yml",
+      "flyctl_0.4.85_Linux_x86_64.tar.gz",
+      "flyctl_0.4.85_Linux_arm64.tar.gz",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must download the exact Linux x86_64 flyctl asset",
+    );
+  });
+
+  it("rejects a second gateway rehearsal Fly-token job without verified flyctl", () => {
+    const root = createRepositoryFixture();
+    const workflowPath = path.join(
+      root,
+      ".github/workflows/gateway-state-rebaseline.yml",
+    );
+    fs.appendFileSync(
+      workflowPath,
+      "\n  unsafe-rehearsal:\n    runs-on: ubuntu-latest\n    steps:\n      - name: Unsafe Fly access\n        env:\n          FLY_API_TOKEN: ${{ secrets.FLY_GATEWAY_DEPLOY_TOKEN }}\n        run: flyctl status --app leaderbot-openclaw-gateway\n",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "every Fly-token job must install only the exact verified flyctl binary",
     );
   });
 
@@ -1919,7 +2036,7 @@ describe("production deployment contract", () => {
     );
 
     expect(() => validateProductionRepository(root)).toThrow(
-      "must pin both attestation steps",
+      "must pin every attestation step",
     );
   });
 
@@ -4264,6 +4381,246 @@ describe("production deployment contract", () => {
     expect(() => validateProductionRepository(root)).toThrow(
       "gateway must remain deployment-disabled",
     );
+    expect(() => validateDeploymentEnabled("gateway", root)).toThrow(
+      "gateway production deployment is blocked",
+    );
+  });
+
+  it.each([
+    ["machineId", "wrong-machine"],
+    ["deploymentIdentity", "unreviewed-label"],
+    ["image", "registry.fly.io/leaderbot-openclaw-gateway:mutable"],
+    ["volumeId", "vol_wrong"],
+    ["mountPath", "/wrong"],
+    ["region", "ord"],
+    ["encrypted", false],
+  ])("rejects an unreviewed gateway baseline %s", (field, value) => {
+    const root = createRepositoryFixture();
+    const manifestPath = path.join(root, "deploy/production/apps.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    manifest.apps.gateway.stateRebaseline.baseline[field] = value;
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "gateway rebaseline must bind the exact live Machine and encrypted volume tuple",
+    );
+  });
+
+  it("keeps all gateway configuration hashes unresolved together before rehearsal", () => {
+    const root = createRepositoryFixture();
+    const manifestPath = path.join(root, "deploy/production/apps.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    manifest.apps.gateway.stateRebaseline.baseline.configIdentity.flyConfigSha256 =
+      "a".repeat(64);
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "gateway awaiting-rehearsal configuration hashes must remain unresolved together",
+    );
+  });
+
+  it.each([
+    ["builderWorkflow", ".github/workflows/untrusted.yml"],
+    ["predicateType", "https://example.invalid/untrusted"],
+    ["sourceCommit", "not-a-git-sha"],
+    ["attestationBundleSha256", "not-a-sha"],
+  ])("rejects wrong gateway artifact provenance in %s", (field, value) => {
+    const root = createRepositoryFixture();
+    const manifestPath = path.join(root, "deploy/production/apps.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    const contract = stageSettledGatewayRebaseline(manifest);
+    contract.reviewedArtifact[field] = value;
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "gateway reviewed artifact lacks exact trusted provenance",
+    );
+  });
+
+  it.each([
+    "startupPassed",
+    "tenantIsolationPassed",
+    "rollbackPassed",
+    "metadataOnlyEvidence",
+  ])("requires the gateway rehearsal check %s", (check) => {
+    const root = createRepositoryFixture();
+    const manifestPath = path.join(root, "deploy/production/apps.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    const contract = stageSettledGatewayRebaseline(manifest);
+    contract.rehearsal.checks[check] = false;
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "gateway rehearsal lacks complete exact metadata-only evidence",
+    );
+  });
+
+  it("rejects a rehearsed gateway contract with an unresolved configuration hash", () => {
+    const root = createRepositoryFixture();
+    const manifestPath = path.join(root, "deploy/production/apps.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    const contract = stageSettledGatewayRebaseline(manifest);
+    contract.state = "rehearsed";
+    contract.baseline.configIdentity.generatedConfigSha256 = null;
+    contract.recovery = {
+      state: "unreviewed",
+      identity: null,
+      image: null,
+      sourceCommit: null,
+      configSha256: null,
+    };
+    contract.successor = structuredClone(contract.recovery);
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "gateway rebaseline needs all exact configuration hashes before rehearsal can pass",
+    );
+  });
+
+  it.each(["recovery", "successor"])(
+    "rejects an unreviewed gateway %s from a settled contract",
+    (transition) => {
+      const root = createRepositoryFixture();
+      const manifestPath = path.join(root, "deploy/production/apps.json");
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+      const contract = stageSettledGatewayRebaseline(manifest);
+      contract[transition] = {
+        state: "unreviewed",
+        identity: null,
+        image: null,
+        sourceCommit: null,
+        configSha256: null,
+      };
+      fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+      expect(() => validateProductionRepository(root)).toThrow(
+        `gateway ${transition} lacks an exact reviewed identity and provenance`,
+      );
+    },
+  );
+
+  it("rejects a successor that does not match the reviewed gateway artifact", () => {
+    const root = createRepositoryFixture();
+    const manifestPath = path.join(root, "deploy/production/apps.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    const contract = stageSettledGatewayRebaseline(manifest);
+    contract.successor.sourceCommit = "b".repeat(40);
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "gateway successor must match the exact reviewed rollout artifact",
+    );
+  });
+
+  it("keeps gateway quota enforcement disabled throughout the preparatory rebaseline", () => {
+    const root = createRepositoryFixture();
+    const manifestPath = path.join(root, "deploy/production/apps.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    manifest.apps.gateway.stateRebaseline.enforcementEnabled = true;
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "gateway quota enforcement must remain disabled throughout the preparatory rebaseline",
+    );
+  });
+
+  it("rejects Fly gateway quota enforcement throughout the preparatory rebaseline", () => {
+    const root = createRepositoryFixture();
+    const configPath = path.join(root, "fly.toml");
+    const config = fs.readFileSync(configPath, "utf8");
+    fs.writeFileSync(
+      configPath,
+      config.replace(
+        '[env]\nNODE_ENV = "production"',
+        '[env]\nLEADERBOT_AI_ANSWER_ENFORCEMENT_ENABLED = "true"\nNODE_ENV = "production"',
+      ),
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "fly.toml must keep gateway quota enforcement disabled throughout the preparatory rebaseline",
+    );
+  });
+
+  it("accepts only the fully bound approved state before the protected rehearsal", () => {
+    const root = createRepositoryFixture();
+    const manifestPath = path.join(root, "deploy/production/apps.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    stageGatewayRehearsalApproved(manifest);
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    expect(validateProductionRepository(root)).toEqual({
+      apps: 3,
+      callbacks: 2,
+    });
+    expect(() => validateDeploymentEnabled("gateway", root)).toThrow(
+      "gateway production deployment is blocked",
+    );
+  });
+
+  it("rejects a forged jump from approved inputs to rehearsed without evidence", () => {
+    const root = createRepositoryFixture();
+    const manifestPath = path.join(root, "deploy/production/apps.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    const contract = stageGatewayRehearsalApproved(manifest);
+    contract.state = "rehearsed";
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "gateway rehearsal lacks complete exact metadata-only evidence",
+    );
+  });
+
+  it("rejects rehearsal evidence before the contract is in the approved start state", () => {
+    const root = createRepositoryFixture();
+    const manifestPath = path.join(root, "deploy/production/apps.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    const contract = stageSettledGatewayRebaseline(manifest);
+    contract.state = "rehearsal_approved";
+    contract.recovery = {
+      state: "unreviewed",
+      identity: null,
+      image: null,
+      sourceCommit: null,
+      configSha256: null,
+    };
+    contract.successor = structuredClone(contract.recovery);
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "gateway rehearsal evidence must remain pending until the protected rehearsal completes",
+    );
+  });
+
+  it.each([
+    ["automaticDeletionAllowed", true],
+    ["preserveUnlistedMachines", false],
+    ["preserveUnlistedVolumes", false],
+  ])(
+    "never permits gateway historical resource drift in %s",
+    (field, value) => {
+      const root = createRepositoryFixture();
+      const manifestPath = path.join(root, "deploy/production/apps.json");
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+      manifest.apps.gateway.stateRebaseline.historicalResources[field] = value;
+      fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+      expect(() => validateProductionRepository(root)).toThrow(
+        "gateway state rebaseline must never auto-delete historical Machines or volumes",
+      );
+    },
+  );
+
+  it("accepts a structurally complete settled gateway contract while keeping deployment blocked", () => {
+    const root = createRepositoryFixture();
+    const manifestPath = path.join(root, "deploy/production/apps.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    stageSettledGatewayRebaseline(manifest);
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    expect(validateProductionRepository(root)).toEqual({
+      apps: 3,
+      callbacks: 2,
+    });
     expect(() => validateDeploymentEnabled("gateway", root)).toThrow(
       "gateway production deployment is blocked",
     );

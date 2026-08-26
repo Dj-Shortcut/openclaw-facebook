@@ -5,7 +5,7 @@ app = "leaderbot-openclaw-gateway"
 primary_region = "ams"
 
 [build]
-dockerfile = "deploy/fly-gateway/Dockerfile.route-guard-hotfix"
+dockerfile = "deploy/fly-gateway/Dockerfile"
 
 [env]
 NODE_ENV = "production"
@@ -23,6 +23,7 @@ OPENCLAW_ADMIN_HOSTS = "leaderbot-openclaw-gateway.fly.dev"
 # Reviewed production alias; see deploy/fly-gateway/README.md before changing.
 OPENCLAW_AGENT_MODEL = "openai/gpt-5.4-mini"
 OPENCLAW_AGENT_THINKING_DEFAULT = "low"
+LEADERBOT_AI_ANSWER_ENFORCEMENT_ENABLED = "false"
 # Deliberately leaves more than half of the 4 GiB VM outside V8 for runtime/native overhead.
 NODE_OPTIONS = "--max-old-space-size=1536"
 
