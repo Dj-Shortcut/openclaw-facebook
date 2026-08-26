@@ -2199,6 +2199,49 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
       );
     }
   }
+  const [imageGenStartupDiagnosticStep] = namedWorkflowStepBodies(
+    workflow,
+    "Capture bounded image-gen startup diagnostics",
+  );
+  const imageGenStartupDiagnosticIndex = workflow.indexOf(
+    "      - name: Capture bounded image-gen startup diagnostics",
+  );
+  const imageGenRestoreIndex = workflow.indexOf(
+    "      - name: Restore captured image-gen release",
+  );
+  if (
+    !imageGenStartupDiagnosticStep ||
+    imageGenStartupDiagnosticIndex < 0 ||
+    imageGenRestoreIndex <= imageGenStartupDiagnosticIndex ||
+    namedWorkflowStepTimeout(
+      workflow,
+      "Capture bounded image-gen startup diagnostics",
+    ) !== 2 ||
+    !imageGenStartupDiagnosticStep.includes(
+      "if: failure() && steps.deploy.outcome != 'skipped'",
+    ) ||
+    !imageGenStartupDiagnosticStep.includes(
+      "FLY_API_TOKEN: ${{ secrets.FLY_IMAGE_GEN_DEPLOY_TOKEN }}",
+    ) ||
+    !imageGenStartupDiagnosticStep.includes(
+      "timeout --signal=TERM 30s",
+    ) ||
+    !imageGenStartupDiagnosticStep.includes(
+      "flyctl logs --app leaderbot-fb-image-gen --no-tail --json",
+    ) ||
+    !imageGenStartupDiagnosticStep.includes(
+      'event: "machine_memory_failure"',
+    ) ||
+    !imageGenStartupDiagnosticStep.includes(
+      'else "unclassified_start_failure"',
+    ) ||
+    !imageGenStartupDiagnosticStep.includes("tail -n 120") ||
+    imageGenStartupDiagnosticStep.includes("message: $raw")
+  ) {
+    fail(
+      `${PRODUCTION_WORKFLOW_PATH} must capture only bounded, classified image-gen startup metadata before rollback`,
+    );
+  }
   const rollbackCaptureSteps = namedWorkflowStepBodies(
     workflow,
     "Record rollback release",
@@ -2365,7 +2408,11 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
       16,
       "must bound setup and rollback-plan uploads",
     ],
-    [/^\s*timeout-minutes: 2\s*$/gm, 5, "must bound config and Meta checks"],
+    [
+      /^\s*timeout-minutes: 2\s*$/gm,
+      6,
+      "must bound config, Meta, and startup diagnostic checks",
+    ],
     [
       /^\s*timeout-minutes: 5\s*$/gm,
       8,

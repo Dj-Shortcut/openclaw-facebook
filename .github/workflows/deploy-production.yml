@@ -635,6 +635,71 @@ jobs:
           test "$ready_status" = "200"
           jq -e '.ok == true' "$ready_body"
 
+      - name: Capture bounded image-gen startup diagnostics
+        if: failure() && steps.deploy.outcome != 'skipped'
+        timeout-minutes: 2
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_IMAGE_GEN_DEPLOY_TOKEN }}
+        run: |
+          set +e
+          timeout --signal=TERM 30s \
+            flyctl logs --app leaderbot-fb-image-gen --no-tail --json |
+            jq -rc '
+              (.message // "") as $raw
+              | (try (
+                  if ($raw | type) == "string" then ($raw | fromjson)
+                  else $raw
+                  end
+                ) catch {}) as $payload
+              | if ([
+                  "boot",
+                  "version",
+                  "generator_startup_config",
+                  "mollie_billing_disabled",
+                  "mollie_commercial_billing_disabled_provider_drain_active",
+                  "server_listening",
+                  "server_start_failed",
+                  "billing_outbox_dispatch_failed",
+                  "billing_notification_receiver_worker_failed"
+                ] | index($payload.event)) != null then
+                  {
+                    timestamp,
+                    instance,
+                    event: $payload.event,
+                    level: ($payload.level // .level // "unknown"),
+                    errorName: (
+                      $payload.error.name //
+                      $payload.errorName //
+                      $payload.errorCode //
+                      null
+                    ),
+                    failureClass: (
+                      if $payload.event != "server_start_failed" then null
+                      elif (($payload.error.message // "") | test("notification"; "i")) then "notification_config"
+                      elif (($payload.error.message // "") | test("MOLLIE_API_KEY")) then "mollie_key_config"
+                      elif (($payload.error.message // "") | test("MOLLIE_MODE")) then "mollie_mode_config"
+                      elif (($payload.error.message // "") | test("MOLLIE_BILLING_DRAIN_ENABLED")) then "billing_drain_lifecycle"
+                      elif (($payload.error.message // "") | test("APP_BASE_URL|PORTAL_BASE_URL|MOLLIE_PAYMENT_WEBHOOK_URL")) then "billing_url_config"
+                      else "unclassified_start_failure"
+                      end
+                    )
+                  }
+                elif (($raw | tostring) | test("out of memory|oom|killed process"; "i")) then
+                  {
+                    timestamp,
+                    instance,
+                    event: "machine_memory_failure",
+                    level: "error",
+                    errorName: null,
+                    failureClass: "machine_memory"
+                  }
+                else empty
+                end
+            ' |
+            tail -n 120
+          exit 0
+
       - name: Restore captured image-gen release
         if: failure() && steps.deploy.outcome != 'skipped'
         timeout-minutes: 35
