@@ -452,7 +452,7 @@ describe("Fly gateway startup", () => {
   );
 
   it(
-    "keeps explicit pairing-only unknown sender mode and bridge setting",
+    "keeps explicit safer persisted Facebook settings when env requests public mode",
     () => {
       const { stateDir } = configureTempGatewayEnv();
       fs.mkdirSync(stateDir, { recursive: true });
@@ -471,6 +471,7 @@ describe("Fly gateway startup", () => {
 
       const result = runPrepareGatewayConfig({
         OPENCLAW_FACEBOOK_UNKNOWN_SENDER_MODE: "leaderbot_free_tier",
+        OPENCLAW_FACEBOOK_LEADERBOT_BRIDGE_ENABLED: "1",
       });
 
       expect(result.config.channels.facebook.dmPolicy).toBe("pairing");
@@ -478,6 +479,81 @@ describe("Fly gateway startup", () => {
       expect(result.config.channels.facebook.leaderbotBridgeEnabled).toBe(
         false,
       );
+    },
+    prepareGatewayConfigTimeoutMs,
+  );
+
+  it(
+    "makes reviewed personal-only env settings authoritative over persisted public mode",
+    () => {
+      const { stateDir } = configureTempGatewayEnv();
+      fs.mkdirSync(stateDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(stateDir, "openclaw.json"),
+        `${JSON.stringify({
+          channels: {
+            facebook: {
+              dmPolicy: "pairing",
+              unknownSenderMode: "leaderbot_free_tier",
+              leaderbotBridgeEnabled: true,
+            },
+          },
+        })}\n`,
+      );
+
+      const result = runPrepareGatewayConfig({
+        OPENCLAW_FACEBOOK_UNKNOWN_SENDER_MODE: "pairing",
+        OPENCLAW_FACEBOOK_LEADERBOT_BRIDGE_ENABLED: "0",
+      });
+
+      expect(result.config.channels.facebook.dmPolicy).toBe("pairing");
+      expect(result.config.channels.facebook.unknownSenderMode).toBe("pairing");
+      expect(result.config.channels.facebook.leaderbotBridgeEnabled).toBe(
+        false,
+      );
+    },
+    prepareGatewayConfigTimeoutMs,
+  );
+
+  it(
+    "makes reviewed personal-only env settings authoritative for persisted account overrides",
+    () => {
+      const { stateDir } = configureTempGatewayEnv();
+      fs.mkdirSync(stateDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(stateDir, "openclaw.json"),
+        `${JSON.stringify({
+          channels: {
+            facebook: {
+              dmPolicy: "pairing",
+              accounts: {
+                customer: {
+                  pageId: "synthetic-page-id",
+                  tokenFile: "/data/secrets/facebook-customer-token",
+                  dmPolicy: "open",
+                  allowFrom: ["*"],
+                  unknownSenderMode: "leaderbot_free_tier",
+                  leaderbotBridgeEnabled: true,
+                },
+              },
+            },
+          },
+        })}\n`,
+      );
+
+      const result = runPrepareGatewayConfig({
+        OPENCLAW_FACEBOOK_UNKNOWN_SENDER_MODE: "pairing",
+        OPENCLAW_FACEBOOK_LEADERBOT_BRIDGE_ENABLED: "0",
+      });
+
+      expect(result.config.channels.facebook.accounts.customer).toEqual({
+        pageId: "synthetic-page-id",
+        tokenFile: "/data/secrets/facebook-customer-token",
+        dmPolicy: "pairing",
+        allowFrom: ["*"],
+        unknownSenderMode: "pairing",
+        leaderbotBridgeEnabled: false,
+      });
     },
     prepareGatewayConfigTimeoutMs,
   );
@@ -812,7 +888,16 @@ describe("Fly gateway startup", () => {
     });
   }, 15000);
 
-  it("only proxies the public webhook and health routes by default", async () => {
+  it("refuses to start the personal gateway without the public guard", () => {
+    expect(() =>
+      buildGatewayLaunchPlan(
+        ["--allow-unconfigured", "--port", "3000", "--bind", "lan"],
+        { OPENCLAW_PUBLIC_GATEWAY_GUARD: "0" },
+      ),
+    ).toThrow("requires its public route guard");
+  });
+
+  it("only proxies the public health route by default", async () => {
     const seenPaths = [];
     const target = http.createServer((req, res) => {
       seenPaths.push(req.url);
@@ -827,6 +912,9 @@ describe("Fly gateway startup", () => {
     await waitForListening(guard);
 
     const publicPort = guard.address().port;
+    const healthResponse = await fetch(
+      `http://127.0.0.1:${publicPort}/healthz?status=ok`,
+    );
     const webhookResponse = await fetch(
       `http://127.0.0.1:${publicPort}/facebook/webhook?hub.challenge=ok`,
     );
@@ -835,22 +923,24 @@ describe("Fly gateway startup", () => {
     );
     const blockedResponse = await fetch(`http://127.0.0.1:${publicPort}/`);
 
-    expect(webhookResponse.status).toBe(200);
-    expect(await webhookResponse.json()).toEqual({
+    expect(healthResponse.status).toBe(200);
+    expect(await healthResponse.json()).toEqual({
       ok: true,
-      path: "/facebook/webhook?hub.challenge=ok",
+      path: "/healthz?status=ok",
     });
+    expect(webhookResponse.status).toBe(404);
+    expect(await webhookResponse.text()).toBe("Not found");
     expect(legacyWebhookResponse.status).toBe(404);
     expect(await legacyWebhookResponse.text()).toBe("Not found");
     expect(blockedResponse.status).toBe(404);
     expect(await blockedResponse.text()).toBe("Not found");
-    expect(seenPaths).toEqual(["/facebook/webhook?hub.challenge=ok"]);
+    expect(seenPaths).toEqual(["/healthz?status=ok"]);
 
     await closeServer(guard);
     await closeServer(target);
   }, 15000);
 
-  it("requires an explicit route override for a configured legacy webhook path", async () => {
+  it("ignores stale public-path overrides for both customer webhook paths", async () => {
     const seenPaths = [];
     const target = http.createServer((req, res) => {
       seenPaths.push(req.url);
@@ -864,7 +954,8 @@ describe("Fly gateway startup", () => {
       publicPort: 0,
       targetPort: target.address().port,
       env: {
-        OPENCLAW_PUBLIC_GATEWAY_PATHS: "/messenger/webhook,/healthz",
+        OPENCLAW_PUBLIC_GATEWAY_PATHS:
+          "/facebook/webhook,/messenger/webhook,/healthz",
       },
     });
     await waitForListening(guard);
@@ -876,21 +967,26 @@ describe("Fly gateway startup", () => {
     const defaultWebhookResponse = await fetch(
       `http://127.0.0.1:${publicPort}/facebook/webhook?hub.challenge=ok`,
     );
+    const healthResponse = await fetch(
+      `http://127.0.0.1:${publicPort}/healthz?status=ok`,
+    );
 
-    expect(legacyWebhookResponse.status).toBe(200);
-    expect(await legacyWebhookResponse.json()).toEqual({
-      ok: true,
-      path: "/messenger/webhook?hub.challenge=ok",
-    });
+    expect(legacyWebhookResponse.status).toBe(404);
+    expect(await legacyWebhookResponse.text()).toBe("Not found");
     expect(defaultWebhookResponse.status).toBe(404);
     expect(await defaultWebhookResponse.text()).toBe("Not found");
-    expect(seenPaths).toEqual(["/messenger/webhook?hub.challenge=ok"]);
+    expect(healthResponse.status).toBe(200);
+    expect(await healthResponse.json()).toEqual({
+      ok: true,
+      path: "/healthz?status=ok",
+    });
+    expect(seenPaths).toEqual(["/healthz?status=ok"]);
 
     await closeServer(guard);
     await closeServer(target);
   }, 15000);
 
-  it("proxies customer portal routes to the configured portal origin without exposing gateway UI", async () => {
+  it("ignores a stale portal origin and keeps every customer route off the personal gateway", async () => {
     const seenGatewayPaths = [];
     const gatewayTarget = http.createServer((req, res) => {
       seenGatewayPaths.push(req.url);
@@ -914,167 +1010,45 @@ describe("Fly gateway startup", () => {
       targetPort: gatewayTarget.address().port,
       env: {
         LEADERBOT_PORTAL_ORIGIN: `http://127.0.0.1:${portalTarget.address().port}`,
+        OPENCLAW_PUBLIC_PORTAL_ORIGIN: `http://127.0.0.1:${portalTarget.address().port}`,
       },
     });
     await waitForListening(guard);
 
-    const publicPort = guard.address().port;
-    const portalRoot = await fetch(`http://127.0.0.1:${publicPort}/`);
-    const portalDashboard = await fetch(
-      `http://127.0.0.1:${publicPort}/portal`,
-    );
-    const portalHandoff = await fetch(`http://127.0.0.1:${publicPort}/handoff`);
-    const portalHandoffToken = await fetch(
-      `http://127.0.0.1:${publicPort}/handoff/setup-token`,
-    );
-    const portalHandoffPost = await fetch(
-      `http://127.0.0.1:${publicPort}/handoff/setup-token`,
-      {
-        method: "POST",
-      },
-    );
-    const portalAsset = await fetch(
-      `http://127.0.0.1:${publicPort}/assets/app.js`,
-    );
-    const portalAssetPost = await fetch(
-      `http://127.0.0.1:${publicPort}/assets/app.js`,
-      {
-        method: "POST",
-      },
-    );
-    const portalOauthCallback = await fetch(
-      `http://127.0.0.1:${publicPort}/api/oauth/callback?code=ok&state=state-value`,
-    );
-    const portalFacebookCallback = await fetch(
-      `http://127.0.0.1:${publicPort}/api/facebook/connect/callback?code=ok&state=state-value`,
-    );
-    const publicConfig = await fetch(
-      `http://127.0.0.1:${publicPort}/api/public/config`,
-    );
-    const publicConfigPost = await fetch(
-      `http://127.0.0.1:${publicPort}/api/public/config`,
-      {
-        method: "POST",
-      },
-    );
-    const portalSnapshot = await fetch(
-      `http://127.0.0.1:${publicPort}/api/portal/snapshot`,
-    );
-    const portalAiIdentity = await fetch(
-      `http://127.0.0.1:${publicPort}/api/portal/ai-identity`,
-      {
-        method: "POST",
-      },
-    );
-    const portalFacebookStart = await fetch(
-      `http://127.0.0.1:${publicPort}/api/portal/facebook/start`,
-      {
-        method: "POST",
-      },
-    );
-    const portalTrpcRoot = await fetch(
-      `http://127.0.0.1:${publicPort}/api/trpc`,
-    );
-    const portalApi = await fetch(
-      `http://127.0.0.1:${publicPort}/api/trpc/portal.auth.session`,
-    );
-    const webhookResponse = await fetch(
-      `http://127.0.0.1:${publicPort}/facebook/webhook?hub.challenge=ok`,
-    );
-    const blockedPortalMutationGet = await fetch(
-      `http://127.0.0.1:${publicPort}/api/portal/ai-identity`,
-    );
-    const blockedPortalAdmin = await fetch(
-      `http://127.0.0.1:${publicPort}/api/portal/admin`,
-    );
-    const blockedOauthToken = await fetch(
-      `http://127.0.0.1:${publicPort}/api/oauth/token`,
-    );
-    const blockedFacebookAdmin = await fetch(
-      `http://127.0.0.1:${publicPort}/api/facebook/connect/admin`,
-    );
-    const blockedTrpcNearMiss = await fetch(
-      `http://127.0.0.1:${publicPort}/api/trpc-admin`,
-    );
-    const blockedDashboard = await fetch(
-      `http://127.0.0.1:${publicPort}/dashboard`,
-    );
-    const blockedDebug = await fetch(
-      `http://127.0.0.1:${publicPort}/debug/build`,
+    const publicUrl = `http://127.0.0.1:${guard.address().port}`;
+    const customerRequests = [
+      ["/", undefined],
+      ["/portal", undefined],
+      ["/api/trpc/portal.auth.session", undefined],
+      ["/api/facebook/connect/callback?code=ok&state=state-value", undefined],
+      ["/api/portal/ai-identity", { method: "POST" }],
+      [
+        "/api/webhooks/mollie/payments",
+        {
+          method: "POST",
+          headers: { "content-type": "application/x-www-form-urlencoded" },
+          body: "id=tr_payment123",
+        },
+      ],
+    ];
+    const responses = await Promise.all(
+      customerRequests.map(([pathname, init]) =>
+        fetch(`${publicUrl}${pathname}`, init),
+      ),
     );
 
-    expect(portalRoot.status).toBe(200);
-    expect(await portalRoot.text()).toBe("portal:/");
-    expect(portalDashboard.status).toBe(200);
-    expect(await portalDashboard.text()).toBe("portal:/portal");
-    expect(portalHandoff.status).toBe(200);
-    expect(await portalHandoff.text()).toBe("portal:/handoff");
-    expect(portalHandoffToken.status).toBe(200);
-    expect(await portalHandoffToken.text()).toBe("portal:/handoff/setup-token");
-    expect(portalHandoffPost.status).toBe(404);
-    expect(portalAsset.status).toBe(200);
-    expect(await portalAsset.text()).toBe("portal:/assets/app.js");
-    expect(portalAssetPost.status).toBe(404);
-    expect(portalOauthCallback.status).toBe(200);
-    expect(await portalOauthCallback.text()).toBe(
-      "portal:/api/oauth/callback?code=ok&state=state-value",
-    );
-    expect(portalFacebookCallback.status).toBe(200);
-    expect(await portalFacebookCallback.text()).toBe(
-      "portal:/api/facebook/connect/callback?code=ok&state=state-value",
-    );
-    expect(publicConfig.status).toBe(200);
-    expect(await publicConfig.text()).toBe("portal:/api/public/config");
-    expect(publicConfigPost.status).toBe(404);
-    expect(portalSnapshot.status).toBe(200);
-    expect(await portalSnapshot.text()).toBe("portal:/api/portal/snapshot");
-    expect(portalAiIdentity.status).toBe(200);
-    expect(await portalAiIdentity.text()).toBe(
-      "portal:/api/portal/ai-identity",
-    );
-    expect(portalFacebookStart.status).toBe(200);
-    expect(await portalFacebookStart.text()).toBe(
-      "portal:/api/portal/facebook/start",
-    );
-    expect(portalTrpcRoot.status).toBe(200);
-    expect(await portalTrpcRoot.text()).toBe("portal:/api/trpc");
-    expect(portalApi.status).toBe(200);
-    expect(await portalApi.text()).toBe("portal:/api/trpc/portal.auth.session");
-    expect(webhookResponse.status).toBe(200);
-    expect(await webhookResponse.json()).toEqual({
-      target: "gateway",
-      path: "/facebook/webhook?hub.challenge=ok",
-    });
-    expect(blockedPortalMutationGet.status).toBe(404);
-    expect(blockedPortalAdmin.status).toBe(404);
-    expect(blockedOauthToken.status).toBe(404);
-    expect(blockedFacebookAdmin.status).toBe(404);
-    expect(blockedTrpcNearMiss.status).toBe(404);
-    expect(blockedDashboard.status).toBe(404);
-    expect(blockedDebug.status).toBe(404);
-    expect(seenGatewayPaths).toEqual(["/facebook/webhook?hub.challenge=ok"]);
-    expect(seenPortalPaths).toEqual([
-      "/",
-      "/portal",
-      "/handoff",
-      "/handoff/setup-token",
-      "/assets/app.js",
-      "/api/oauth/callback?code=ok&state=state-value",
-      "/api/facebook/connect/callback?code=ok&state=state-value",
-      "/api/public/config",
-      "/api/portal/snapshot",
-      "/api/portal/ai-identity",
-      "/api/portal/facebook/start",
-      "/api/trpc",
-      "/api/trpc/portal.auth.session",
-    ]);
+    for (const response of responses) {
+      expect(response.status).toBe(404);
+    }
+    expect(seenGatewayPaths).toEqual([]);
+    expect(seenPortalPaths).toEqual([]);
 
     await closeServer(guard);
     await closeServer(portalTarget);
     await closeServer(gatewayTarget);
   }, 15000);
 
-  it("allows only the exact Mollie payment webhook POST route", async () => {
+  it("ignores a stale portal origin for the Mollie payment webhook", async () => {
     const seenGatewayRequests = [];
     const gatewayTarget = http.createServer((req, res) => {
       seenGatewayRequests.push({ method: req.method, path: req.url });
@@ -1135,19 +1109,13 @@ describe("Fly gateway startup", () => {
         ),
       ]);
 
-      expect(allowed.status).toBe(200);
-      expect(await allowed.text()).toBe("portal");
+      expect(allowed.status).toBe(404);
+      expect(await allowed.text()).toBe("Not found");
       expect(blockedGet.status).toBe(404);
       expect(blockedNearMisses.map((response) => response.status)).toEqual([
         404, 404, 404,
       ]);
-      expect(seenPortalRequests).toEqual([
-        {
-          method: "POST",
-          path: "/api/webhooks/mollie/payments",
-          body: "id=tr_payment123",
-        },
-      ]);
+      expect(seenPortalRequests).toEqual([]);
       expect(seenGatewayRequests).toEqual([]);
     } finally {
       await closeServer(guard);
@@ -1156,7 +1124,7 @@ describe("Fly gateway startup", () => {
     }
   }, 15000);
 
-  it("allows only supported billing export and receipt gateway routes", async () => {
+  it("ignores a stale portal origin for billing export and receipt routes", async () => {
     const seenGatewayRequests = [];
     const gatewayTarget = http.createServer((req, res) => {
       seenGatewayRequests.push({ method: req.method, path: req.url });
@@ -1202,7 +1170,7 @@ describe("Fly gateway startup", () => {
         allowedExportHead.status,
         allowedReceiptGet.status,
         allowedReceiptHead.status,
-      ]).toEqual([200, 200, 200, 200]);
+      ]).toEqual([404, 404, 404, 404]);
 
       const blockedResponses = await Promise.all([
         fetch(`${publicUrl}/api/portal/billing/export.csv`, { method: "POST" }),
@@ -1219,12 +1187,7 @@ describe("Fly gateway startup", () => {
       expect(blockedResponses.map((response) => response.status)).toEqual([
         404, 404, 404, 404, 404, 404, 404,
       ]);
-      expect(seenPortalRequests).toEqual([
-        { method: "GET", path: exportPath },
-        { method: "HEAD", path: exportPath },
-        { method: "GET", path: receiptPath },
-        { method: "HEAD", path: receiptPath },
-      ]);
+      expect(seenPortalRequests).toEqual([]);
       expect(seenGatewayRequests).toEqual([]);
     } finally {
       await closeServer(guard);
@@ -1305,6 +1268,10 @@ describe("Fly gateway startup", () => {
         },
       },
     );
+    const retiredWebhookResponse = await fetch(
+      `http://127.0.0.1:${publicPort}/facebook/webhook`,
+      { headers: { cookie } },
+    );
 
     expect(loginPage.status).toBe(200);
     expect(await loginPage.text()).toContain("OpenClaw Admin");
@@ -1313,6 +1280,7 @@ describe("Fly gateway startup", () => {
     expect(successfulLogin.headers.get("location")).toBe("/");
     expect(cookie).toContain("openclaw_admin=");
     expect(dashboardResponse.status).toBe(200);
+    expect(retiredWebhookResponse.status).toBe(404);
     expect(await dashboardResponse.json()).toEqual({
       ok: true,
       path: "/dashboard?tab=plugins",
@@ -1423,6 +1391,11 @@ describe("Fly gateway startup", () => {
       },
     );
     const cookie = successfulLogin.headers.get("set-cookie") || "";
+    const retiredWebhookUpgrade = await requestRawUpgrade({
+      port: publicPort,
+      path: "/facebook/webhook",
+      cookie,
+    });
     const proxiedUpgrade = await requestRawUpgrade({
       port: publicPort,
       path: "/ws",
@@ -1430,6 +1403,7 @@ describe("Fly gateway startup", () => {
     });
 
     expect(blockedUpgrade).toBe("");
+    expect(retiredWebhookUpgrade).toBe("");
     expect(proxiedUpgrade).toContain("HTTP/1.1 101 Switching Protocols");
     expect(proxiedUpgrade).toContain("upgraded");
     expect(seenUpgrades).toEqual([

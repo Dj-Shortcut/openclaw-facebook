@@ -13,7 +13,9 @@
   Public `/healthz` and `/readyz` returned HTTP 200; billing readiness reported
   `phase: "offline"` with no Mollie API or payment call.
 - Current direction: generic prompt-first image generation; legacy style-picker UI, quick-reply flows, and director-mode preset plumbing are removed. Internal style-preset compatibility may remain only as backend fallback.
-- Product direction: `leaderbot.live` becomes a tenant/customer portal for managing each customer's own AI. The OpenClaw/Messenger gateway remains shielded and is not the customer-facing app.
+- Product direction: `leaderbot.live` and `apps/image-gen` form the direct
+  multi-tenant customer path. OpenClaw is personal-only, remains shielded, and
+  is not the customer-facing image-generation runtime.
 - 2026-08-25 production update: the protected bridge, encrypted snapshot,
   isolated restore proof, `0016_expand` transition and attested runtime deploy
   completed. Every Mollie commercial, live, drain, entitlement, notification,
@@ -25,9 +27,15 @@
 
 - Root `src/` is the generic OpenClaw Facebook/Messenger plugin surface. Keep it channel-integration oriented and avoid moving Leaderbot image-generation runtime ownership into this layer.
 - `apps/image-gen/server/_core` is the Leaderbot image-generation runtime. Keep image-generation behavior, prompt-first orchestration, and runtime primitives owned there rather than in Messenger transport code.
+- OpenClaw is personal-only and must not own or persist multi-tenant customer
+  conversations. The customer image-generation path must terminate directly in
+  `apps/image-gen`, which owns its workspace-scoped state, assets, queues,
+  quotas, billing and deletion.
 - Leaderbot-specific bridge code that currently lives in `src/monitor.ts` is temporary. It must stay behind an adapter boundary and remain explicitly opt-in (`leaderbotBridgeEnabled`) so ClawHub/private installs do not forward Messenger content to the external image-generation service just because host-level bridge tokens exist.
 - Conversation modules must not import Messenger or WhatsApp transport APIs. They should expose channel-neutral conversation responses/actions for renderers to translate into platform-specific controls.
-- State, quota, and storage boundaries must later become explicitly tenant-, workspace-, and channel-scoped before broader customer rollout, with no shared customer-content paths across tenants.
+- Every multi-tenant image-gen state, quota, storage and deletion boundary must
+  remain explicitly tenant-, workspace- and channel-scoped, with no shared
+  customer-content path across tenants.
 - The root Facebook gateway now has a root-only `sharedStateStore` boundary.
   `memory` remains the default for one replica; `redis` uses versioned HMAC-only
   account/Page keys and atomically shares webhook deduplication plus the optional
@@ -477,7 +485,9 @@ traffic cannot reach internal gateway admin/API surfaces.
 - [x] Add initial customer-facing free-plan usage balance and upgrade prompt to the portal dashboard
 - [x] Add portal-rendered privacy, terms, and data-deletion pages with local footer links
 - [x] Add customer-facing bot instructions for prompt-first image use, workspace context, and data controls
-- [x] Keep ordinary Messenger conversations on the OpenClaw turn instead of falling back to image-generation help copy
+- [x] Transitional gateway behavior: keep ordinary Messenger conversations on
+      the OpenClaw turn instead of falling back to image-generation help copy.
+      This does not satisfy or define the direct multi-tenant customer route.
 - [x] Add tenant-checked Messenger disconnect control that clears stored page token data
 - [x] Add portal authentication before broad customer launch
 - [x] Enforce Facebook Login-only customer portal sessions
@@ -523,18 +533,15 @@ traffic cannot reach internal gateway admin/API surfaces.
   - Public production surface must expose only the customer portal, legal pages, health/readiness/metrics as intended, and required webhook routes; internal gateway/admin APIs must remain shielded.
 - [x] Verify GDPR deletion end-to-end before broad customer launch. Operator-verified on 2026-06-30.
 - [ ] Keep the internal OpenClaw gateway unavailable as a public UI/API; expose only required webhook/health/legal/customer-app surfaces
-  - 2026-08-01 pre-deploy route audit: the Fly public route guard now exposes
-    only `/facebook/webhook` and `/healthz` to the OpenClaw gateway by default.
-    The unregistered legacy `/messenger/webhook` route was removed from the
-    default allowlist after production returned the internal UI fallback there;
-    an actual legacy deployment must explicitly opt in with
-    `OPENCLAW_PUBLIC_GATEWAY_PATHS`. When `LEADERBOT_PORTAL_ORIGIN` is
-    configured, customer portal proxying is constrained to portal/legal pages,
-    handoff pages, static assets, exact OAuth/Facebook/portal REST endpoints,
-    and exact `/api/trpc` or `/api/trpc/...` paths. Near-miss API paths and
-    gateway UI/debug routes are covered by
-    `deploy/fly-gateway/start-gateway.test.mjs`. Production route verification
-    remains open.
+  - 2026-08-26 target route audit: the Fly public route guard exposes only
+    `/healthz` to the personal OpenClaw gateway by default. Both
+    `/facebook/webhook` and the legacy `/messenger/webhook` must return `404`;
+    the canonical multi-tenant Page callback belongs to image-gen. When
+    stale `LEADERBOT_PORTAL_ORIGIN`, `OPENCLAW_PUBLIC_PORTAL_ORIGIN`, guard or
+    path-allowlist values cannot restore portal, Mollie or Facebook routing.
+    Customer portal, legal, OAuth, billing and webhook endpoints terminate
+    directly in image-gen. Gateway UI/debug routes remain admin-gated and
+    production route verification remains open.
 - [x] Move public legal routes (`/privacy`, `/terms`, `/data-deletion`) into the portal surface before pointing customer traffic there. React portal pages and local footer links exist; production route verification remains part of the public route audit.
 - [x] Remove legacy campaign/style assets that do not support the portal direction
 - [ ] Deferred: observe generic text-to-image quality before removing remaining internal style-preset backend compatibility
@@ -580,7 +587,7 @@ Validated controls:
 22. [x] Optional owner cost alerts (`MESSENGER_OWNER_COST_ALERTS=1`) notify on remaining audio/video spend-cap blocks with metadata-only budget details.
 23. [x] Retire the root-gateway daily image-forward cap so one customer's use can never block another customer before tenant-scoped image quota runs.
 24. [x] Optional root-gateway daily audio transcription cap (`MESSENGER_GATEWAY_DAILY_AUDIO_TRANSCRIPTION_CAP`) blocks Facebook voice attachment transcription before media download or model transcription.
-25. [x] Retire the root-gateway daily Leaderbot event-forward cap so unknown senders' first photos and interactive image actions always reach tenant-scoped Leaderbot controls; the production validator rejects the stale environment variable.
+25. [x] Historical bridge hardening: retire the root-gateway daily Leaderbot event-forward cap so unknown senders' first photos and interactive image actions reached tenant-scoped Leaderbot controls. The 2026-08-26 target cutover supersedes this path: the personal OpenClaw gateway is pairing-only, its bridge is disabled, and multi-tenant actions terminate directly in image-gen.
 26. [x] Optional audio transcription cost estimate (`OPENAI_AUDIO_TRANSCRIPTION_ESTIMATED_COST_USD`) feeds spend-cap checks and reconciles successful audio ledger attempts with final cost.
 27. [x] Optional video generation cost estimate (`OPENAI_VIDEO_GENERATION_ESTIMATED_COST_USD`) feeds spend-cap checks and reconciles successful video ledger attempts with final cost.
 28. [x] Exact `MESSENGER_ADMIN_IDS` owner accounts retain the existing customer-quota/entitlement behavior; all image attempts remain auditable by count and outcome without image-price calculations.
@@ -685,7 +692,15 @@ Historical branch review note:
       last-slot/same-request race proof. PR #417 and protected deploy run
       32860967800 shipped it before any Mollie Test Mode checkout exposure.
 - [ ] Prove the Page-to-workspace mapping and both paid quota gates in a production-like end-to-end test after the duplicate-Page preflight and migration, without any free-tier fallback.
-- [ ] After the sandbox matrix and the first strictly limited live payment are complete, return to the separately reviewed OpenClaw gateway state/rollback work. Keep it out of the critical Mollie payment path, but preserve and complete it as the planned final conversation-route step.
+- [ ] Prove the production Meta callback and customer routing terminate directly
+      in image-gen without creating an OpenClaw host session transcript. Until
+      this cutover evidence exists, host transcript erasure remains a
+      conservative live blocker. After it passes, exact non-archiving OpenClaw
+      erasure is a separate, non-blocking image-gen follow-up.
+- [ ] Separately complete the personal-only OpenClaw gateway state/rollback work
+      and exact non-archiving transcript erasure before enabling any OpenClaw
+      transcript or customer feature. Keep it outside the critical Mollie and
+      multi-tenant image-generation paths.
 - [x] Replace the isolated worker with a durable tenant-partitioned scheduler
       and explicit `pilot_pin`/`multi_tenant` rollout, per-lane epochs,
       heartbeats, safety drain, backlog and dead-letter readiness.

@@ -1,18 +1,37 @@
 # Leaderbot Mollie launch readiness
 
-Status on 2026-08-25: **NO-GO for a Mollie payment or live billing**.
+Status on 2026-08-26: **NO-GO for a Mollie payment or live billing**.
 
 The protected schema transition, reviewed image-gen runtime deployment,
 provider-silent offline preflight and idempotent workspace-wide paid image
 counter are complete. Production `/readyz` is green with `phase: "offline"`.
 The remaining rollout must prove the operational worker state for one exact
-pilot workspace and then run the provider sandbox matrix. OpenClaw remains a
-planned later product step, but is not a dependency of the image-generation
-offer or the first Mollie sandbox payment.
+pilot workspace and then run the provider sandbox matrix. OpenClaw is
+personal-only; the multi-tenant customer image-generation path is direct and
+independent. That separation is not live-proven until the callback/routing gate
+below passes.
 
 No step in this document authorizes printing a secret, making an unreviewed
 provider call, running a payment, applying SQL from a shell, merging a PR, or
 deploying outside the protected workflows.
+
+## Release scope and gate classes
+
+- **Merge-ready / code:** tenant isolation, workspace-bound billing and quota,
+  image-gen deletion/tombstone behavior, migration contracts and required CI
+  must be green on the exact reviewed bytes. Merge readiness does not authorize
+  deployment, provider access or payment exposure.
+- **Live-ready / deployment:** a recoverable backup with isolated restore proof,
+  the canonical migration, an attested immutable image, protected exposure-off
+  deployment, redacted green `phase: "offline"` readiness and the direct
+  image-gen callback/routing cutover must all be proven for the deployed bytes.
+- **Provider:** Mollie Test Mode, controlled Meta delivery and bounded image
+  provider scenarios remain separate hard gates.
+- **Human:** legal, privacy, accounting, refund/withdrawal, retention,
+  operations, monitoring and incident approvals remain separate hard gates.
+- **OpenClaw:** exact non-archiving transcript erasure blocks any OpenClaw
+  transcript or customer feature. It is non-blocking for image-gen only after
+  production proves that the direct customer path creates no OpenClaw session.
 
 ## Credential-free implementation evidence
 
@@ -102,8 +121,12 @@ deploying outside the protected workflows.
       shipped exact runtime digest `sha256:01ccf154e0ac4c314f68775a0fd00fe925aaba92fee997a32f932c8d4c36d806`;
       its real MySQL race proves exactly one winner for the last slot and one
       receipt for a replayed request.
+- [ ] Prove that the production Meta callback and customer image-generation
+      routing terminate directly in image-gen and create no OpenClaw host
+      session transcript. A green image-gen `/readyz` does not prove this route
+      boundary.
 
-## External provider and human gates
+## External provider gates
 
 - [ ] Confirm Bancontact is available in the Mollie Test profile.
 - [ ] Run every sandbox scenario in `MOLLIE_TEST_RESULTS.md` with approved test
@@ -111,6 +134,9 @@ deploying outside the protected workflows.
       metadata-only evidence; do not expose the key or customer data.
 - [ ] Run the paid image-provider smoke and confirm the provider-account hard
       limit separately from Leaderbot's customer quotas.
+
+## Human approval gates
+
 - [ ] Approve Belgian B2C terms, withdrawal/refund handling, privacy wording,
       small-enterprise VAT-exemption wording, proof/invoice numbering and
       financial retention with qualified legal/accounting review.
@@ -169,17 +195,25 @@ deploying outside the protected workflows.
 
 ## Decision rule
 
-- **GO for sandbox:** reviewed/deployed paid image counter, green operational
-  readiness, human-visible operator incidents, and one approved isolated Test
-  Mode pilot workspace.
+- **GO for merge:** every code/documentation gate is green on the exact reviewed
+  bytes. Deployment, provider and human evidence may remain open because merge
+  does not expose the product.
+- **GO for sandbox:** reviewed/deployed paid image counter, verified direct
+  image-gen routing, green operational readiness, human-visible operator
+  incidents, and one approved isolated Test Mode pilot workspace.
 - **GO for live:** every checkbox above complete, sandbox matrix passed and all
   live accounting/legal/operational approvals recorded.
-- **NO-GO:** any schema, entitlement, tenant, cancellation, notification,
-  provider, legal, accounting or live-key control remains unproven.
+- **NO-GO:** any routing, schema, entitlement, tenant, image-gen deletion,
+  cancellation, notification, provider, legal, accounting or live-key control
+  remains unproven.
 
 Current decision: **NO-GO**.
 
-After the sandbox matrix, legal/accounting approvals and one limited live
-payment, resume the separate OpenClaw gateway state/rollback rollout. It remains
-an explicit final step of the intended end product, not a prerequisite for
-selling image generation safely.
+## OpenClaw privacy follow-up
+
+Exact non-archiving host transcript erasure remains mandatory before any
+personal OpenClaw transcript or customer feature is enabled. Once the direct
+image-gen routing gate above passes, that host capability is not a prerequisite
+for the image-generation sandbox or live decision. If any customer image-gen
+turn still creates an OpenClaw session, the exception does not apply and host
+erasure remains a live blocker.
