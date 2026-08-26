@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   validateFlyGatewayConfig,
   validateGatewayDeploymentSafety,
+  validateManagedRedeployHandoff,
   validateManagedUpdateWorkflow,
   validatePluginWorkflow,
 } from "./validate-gateway-deployment-safety.mjs";
@@ -25,6 +26,13 @@ const validUpdateWorkflow = [
   'gh pr ready "$branch" --undo',
   'git push --force-with-lease origin "$branch"',
   "gh pr create --draft",
+].join("\n");
+
+const validManagedRedeployHandoff = [
+  "gh workflow run deploy-production.yml --ref main \\",
+  "  -f target=gateway \\",
+  '  -f rollback_image="$APPROVED_REVIEWED_IMAGE"',
+  "recover-gateway",
 ].join("\n");
 
 function moveTomlAssignmentToOtherTable(text, setting) {
@@ -217,5 +225,34 @@ describe("gateway deployment safety validation", () => {
         "on:\n  pull_request:\n  push:\n    branches: [main]",
       ),
     ).not.toThrow();
+  });
+
+  it("requires protected gateway deployment and recovery instructions", () => {
+    expect(() =>
+      validateManagedRedeployHandoff(validManagedRedeployHandoff),
+    ).not.toThrow();
+    expect(() =>
+      validateManagedRedeployHandoff(
+        `${validManagedRedeployHandoff}\nfly deploy -a leaderbot-openclaw-gateway`,
+      ),
+    ).toThrow("direct Fly deploy or rollback commands");
+    expect(() =>
+      validateManagedRedeployHandoff(
+        `${validManagedRedeployHandoff}\nfly deploy --image previous -a leaderbot-openclaw-gateway`,
+      ),
+    ).toThrow("direct Fly deploy or rollback commands");
+    expect(() =>
+      validateManagedRedeployHandoff(
+        validManagedRedeployHandoff.replace(
+          "gh workflow run deploy-production.yml",
+          "gh workflow view deploy-production.yml",
+        ),
+      ),
+    ).toThrow("protected production workflow");
+    expect(() =>
+      validateManagedRedeployHandoff(
+        validManagedRedeployHandoff.replace("recover-gateway", "recovery"),
+      ),
+    ).toThrow("protected rollback recovery");
   });
 });

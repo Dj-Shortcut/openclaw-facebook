@@ -242,6 +242,34 @@ export function validatePluginWorkflow(text) {
   );
 }
 
+export function validateManagedRedeployHandoff(text) {
+  if (/\bfly\s+deploy\b/.test(text)) {
+    throw new Error(
+      "The managed gateway handoff must not contain direct Fly deploy or rollback commands",
+    );
+  }
+  requireMatch(
+    text,
+    /\bgh\s+workflow\s+run\s+deploy-production\.yml\b/,
+    "The managed gateway handoff must dispatch the protected production workflow",
+  );
+  requireMatch(
+    text,
+    /-f\s+target=gateway\b/,
+    "The managed gateway handoff must target the gateway through the protected workflow",
+  );
+  requireMatch(
+    text,
+    /-f\s+rollback_image=/,
+    "The managed gateway handoff must provide the exact reviewed image",
+  );
+  requireMatch(
+    text,
+    /\brecover-gateway\b/,
+    "The managed gateway handoff must retain protected rollback recovery",
+  );
+}
+
 export function validateGatewayDeploymentSafety(rootDir = process.cwd()) {
   const flyConfig = fs.readFileSync(path.join(rootDir, "fly.toml"), "utf8");
   const updateWorkflow = fs.readFileSync(
@@ -252,9 +280,14 @@ export function validateGatewayDeploymentSafety(rootDir = process.cwd()) {
     path.join(rootDir, ".github/workflows/main.yml"),
     "utf8",
   );
+  const managedRedeployHandoff = fs.readFileSync(
+    path.join(rootDir, "deploy/fly-gateway/managed-redeploy-handoff.md"),
+    "utf8",
+  );
   const result = validateFlyGatewayConfig(flyConfig);
   validateManagedUpdateWorkflow(updateWorkflow);
   validatePluginWorkflow(pluginWorkflow);
+  validateManagedRedeployHandoff(managedRedeployHandoff);
   return result;
 }
 
