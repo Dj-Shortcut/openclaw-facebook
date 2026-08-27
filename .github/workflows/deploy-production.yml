@@ -1095,6 +1095,10 @@ jobs:
           FLY_API_TOKEN: ${{ secrets.FLY_STORAGE_PROXY_DEPLOY_TOKEN }}
           FLY_STORAGE_PROXY_REVIEWED_IMAGE: ${{ inputs.rollback_image }}
         run: |
+          set -euo pipefail
+          fly secrets list --app leaderbot-storage-proxy --json \
+            | jq -e '[.[] | select((.name == "R2_LIFECYCLE_ACCESS_KEY_ID" or .name == "R2_LIFECYCLE_SECRET_ACCESS_KEY") and (.status == "Deployed" or .status == "Staged")) | .name] | sort == ["R2_LIFECYCLE_ACCESS_KEY_ID", "R2_LIFECYCLE_SECRET_ACCESS_KEY"]' \
+            >/dev/null
           args=(--remote-only --yes --image-label "git-${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
             --env "LEADERBOT_DEPLOYMENT_IDENTITY=deploy-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}")
           npm run deploy:storage-proxy -- "${args[@]}"
@@ -1123,6 +1127,10 @@ jobs:
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_STORAGE_PROXY_DEPLOY_TOKEN }}
         run: |
+          set -euo pipefail
+          fly secrets list --app leaderbot-storage-proxy --json \
+            | jq -e '[.[] | select((.name == "R2_LIFECYCLE_ACCESS_KEY_ID" or .name == "R2_LIFECYCLE_SECRET_ACCESS_KEY") and (.status == "Deployed" or .status == "Staged" or .status == "Partial")) | .name] | sort == ["R2_LIFECYCLE_ACCESS_KEY_ID", "R2_LIFECYCLE_SECRET_ACCESS_KEY"]' \
+            >/dev/null
           rollback_image="$(cat "$RUNNER_TEMP/leaderbot-release/rollback-image.txt")"
           rollback_config="$RUNNER_TEMP/leaderbot-release/before.fly.toml"
           prior_identity="$(cat "$RUNNER_TEMP/leaderbot-release/rollback-identity.txt")"

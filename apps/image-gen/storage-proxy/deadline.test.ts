@@ -1,16 +1,19 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import test from "node:test";
+import { S3Client } from "@aws-sdk/client-s3";
 import { MemoryStore } from "express-rate-limit";
 import { Redis } from "ioredis";
 
 import {
+  assertR2LifecycleCredentialIsolation,
   assertRequiredR2LifecycleRules,
   buildStorageRequestSignature,
   createSharedStorageRateLimitBackend,
   parseStorageObjectKey,
   runStorageOperationWithDeadline,
   StorageOperationTimeoutError,
+  verifyRequiredR2LifecycleConfig,
   verifyStorageRequestAuthorization,
 } from "./index.ts";
 
@@ -34,6 +37,17 @@ function buildTestConfig(
     rateLimitRedisUrl: "redis://127.0.0.1:6379/13",
     rateLimitKeySecret,
     trustFlyClientIp: false,
+  };
+}
+
+function buildLifecycleTestConfig(r2Endpoint: string) {
+  return {
+    r2Bucket: "test-bucket",
+    r2Endpoint,
+    r2ObjectAccessKeyId: "object-access",
+    r2LifecycleAccessKeyId: "lifecycle-access",
+    r2LifecycleSecretAccessKey: "lifecycle-secret",
+    storageOperationTimeoutMs: 1_000,
   };
 }
 
@@ -76,6 +90,28 @@ async function closeServer(server: import("node:http").Server): Promise<void> {
     server.close(error => (error ? reject(error) : resolve()))
   );
 }
+
+async function listenHttpStub(
+  handler: import("node:http").RequestListener
+): Promise<{
+  baseUrl: string;
+  server: import("node:http").Server;
+}> {
+  const server = await new Promise<import("node:http").Server>(resolve => {
+    const created = createServer(handler);
+    created.listen(0, "127.0.0.1", () => resolve(created));
+  });
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  return { baseUrl: `http://127.0.0.1:${address.port}`, server };
+}
+
+const requiredLifecycleConfigurationXml = `<?xml version="1.0" encoding="UTF-8"?>
+<LifecycleConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+  <Rule><ID>expire-inbound-source-after-30-days</ID><Status>Enabled</Status><Filter><Prefix>inbound-source/</Prefix></Filter><Expiration><Days>30</Days></Expiration></Rule>
+  <Rule><ID>expire-generated-images-after-30-days</ID><Status>Enabled</Status><Filter><Prefix>generated/images/</Prefix></Filter><Expiration><Days>30</Days></Expiration></Rule>
+  <Rule><ID>expire-generated-videos-after-30-days</ID><Status>Enabled</Status><Filter><Prefix>generated/videos/</Prefix></Filter><Expiration><Days>30</Days></Expiration></Rule>
+</LifecycleConfiguration>`;
 
 test("a storage operation cannot outlive its configured deadline", async () => {
   let operationSignal: AbortSignal | undefined;
@@ -152,6 +188,178 @@ test("startup requires the exact source and generated retention rules", () => {
       ]),
     /missing or unsafe/
   );
+});
+
+test("lifecycle credentials fail closed when missing or reused", async () => {
+  const credentials = {
+    r2ObjectAccessKeyId: "object-access",
+    r2LifecycleAccessKeyId: "lifecycle-access",
+    r2LifecycleSecretAccessKey: "lifecycle-secret",
+  };
+  assert.doesNotThrow(() =>
+    assertR2LifecycleCredentialIsolation(credentials)
+  );
+  const config = buildLifecycleTestConfig("https://127.0.0.1.invalid");
+  await assert.rejects(
+    verifyRequiredR2LifecycleConfig({
+      ...config,
+      r2LifecycleAccessKeyId: "",
+    }),
+    /lifecycle access key ID is missing/
+  );
+  await assert.rejects(
+    verifyRequiredR2LifecycleConfig({
+      ...config,
+      r2LifecycleSecretAccessKey: " ",
+    }),
+    /lifecycle secret access key is missing/
+  );
+  await assert.rejects(
+    verifyRequiredR2LifecycleConfig({
+      ...config,
+      r2LifecycleAccessKeyId: config.r2ObjectAccessKeyId,
+    }),
+    /requires a separate read-only credential ID/
+  );
+});
+
+test("lifecycle preflight signs its one GET with the lifecycle credential and destroys its client", async () => {
+  const requests: Array<{
+    method: string | undefined;
+    url: string | undefined;
+    authorization: string | undefined;
+  }> = [];
+  const storage = await listenHttpStub((req, res) => {
+    requests.push({
+      method: req.method,
+      url: req.url,
+      authorization: req.headers.authorization,
+    });
+    res.statusCode = 200;
+    res.setHeader("content-type", "application/xml");
+    res.setHeader("connection", "close");
+    res.end(requiredLifecycleConfigurationXml);
+  });
+  const originalDestroy = S3Client.prototype.destroy;
+  let destroyCalls = 0;
+  S3Client.prototype.destroy = function destroyLifecycleClient(): void {
+    destroyCalls += 1;
+    originalDestroy.call(this);
+  };
+
+  try {
+    await verifyRequiredR2LifecycleConfig(
+      buildLifecycleTestConfig(storage.baseUrl)
+    );
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0]?.method, "GET");
+    assert.equal(
+      new URL(requests[0]?.url ?? "", storage.baseUrl).searchParams.has(
+        "lifecycle"
+      ),
+      true
+    );
+    assert.match(
+      requests[0]?.authorization ?? "",
+      /Credential=lifecycle-access\//
+    );
+    assert.doesNotMatch(
+      requests[0]?.authorization ?? "",
+      /Credential=object-access\//
+    );
+    assert.equal(destroyCalls, 1);
+  } finally {
+    S3Client.prototype.destroy = originalDestroy;
+    await closeServer(storage.server);
+  }
+});
+
+test("lifecycle preflight fails closed on 403 and still destroys its client", async () => {
+  let authorization: string | undefined;
+  const storage = await listenHttpStub((req, res) => {
+    authorization = req.headers.authorization;
+    res.statusCode = 403;
+    res.setHeader("content-type", "application/xml");
+    res.setHeader("connection", "close");
+    res.end(
+      "<Error><Code>AccessDenied</Code><Message>denied</Message></Error>"
+    );
+  });
+  const originalDestroy = S3Client.prototype.destroy;
+  let destroyCalls = 0;
+  S3Client.prototype.destroy = function destroyLifecycleClient(): void {
+    destroyCalls += 1;
+    originalDestroy.call(this);
+  };
+
+  try {
+    await assert.rejects(
+      verifyRequiredR2LifecycleConfig(
+        buildLifecycleTestConfig(storage.baseUrl)
+      ),
+      error =>
+        typeof error === "object" &&
+        error !== null &&
+        "$metadata" in error &&
+        (error as { $metadata?: { httpStatusCode?: number } }).$metadata
+          ?.httpStatusCode === 403
+    );
+    assert.match(authorization ?? "", /Credential=lifecycle-access\//);
+    assert.equal(destroyCalls, 1);
+  } finally {
+    S3Client.prototype.destroy = originalDestroy;
+    await closeServer(storage.server);
+  }
+});
+
+test("object route signs its R2 request with only the object credential", async () => {
+  let storageRequest:
+    | {
+        method: string | undefined;
+        authorization: string | undefined;
+      }
+    | undefined;
+  const storage = await listenHttpStub((req, res) => {
+    storageRequest = {
+      method: req.method,
+      authorization: req.headers.authorization,
+    };
+    res.statusCode = 200;
+    res.setHeader("content-length", "0");
+    res.setHeader("connection", "close");
+    res.end();
+  });
+  const app = (await import("./index.ts")).createStorageProxyApp({
+    ...buildTestConfig(),
+    r2Endpoint: storage.baseUrl,
+    r2AccessKeyId: "object-access",
+    r2SecretAccessKey: "object-secret",
+    storageOperationTimeoutMs: 1_000,
+  });
+  const proxy = await listenOnLoopback(app);
+
+  try {
+    const response = await fetch(
+      `${proxy.baseUrl}/v1/storage/downloadUrl?path=${encodeURIComponent(scopedObjectKey)}`,
+      { headers: buildSignedStorageHeaders("GET") }
+    );
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+      url: `https://assets.example/${scopedObjectKey}`,
+    });
+    assert.equal(storageRequest?.method, "HEAD");
+    assert.match(
+      storageRequest?.authorization ?? "",
+      /Credential=object-access\//
+    );
+    assert.doesNotMatch(
+      storageRequest?.authorization ?? "",
+      /Credential=lifecycle-access\//
+    );
+  } finally {
+    await closeServer(proxy.server);
+    await closeServer(storage.server);
+  }
 });
 
 test("storage signatures bind method, exact key, scope, and short expiry", () => {

@@ -44,10 +44,22 @@ therefore raises an alert without making Meta's webhook callback unreachable or
 blocking a liveness-only recovery rollout.
 
 The storage-proxy Fly app separately requires the runtime secret names
-`STORAGE_RATE_LIMIT_REDIS_URL` and `STORAGE_RATE_LIMIT_KEY_SECRET`. The Redis
+`STORAGE_RATE_LIMIT_REDIS_URL`, `STORAGE_RATE_LIMIT_KEY_SECRET`,
+`R2_LIFECYCLE_ACCESS_KEY_ID`, and `R2_LIFECYCLE_SECRET_ACCESS_KEY`. The Redis
 endpoint must be private and shared by every proxy Machine; the key secret must
-contain at least 32 random bytes. Never put either value in repository or CI
-logs. Startup and `/readyz` prove the shared limiter, while `/healthz` remains a
+contain at least 32 random bytes. The lifecycle pair must be a separate
+Cloudflare R2 Admin Read only credential. That provider grant is account-wide
+bucket listing/configuration, object read/list, and read-only R2 Data Catalog
+table/metadata access, while the ordinary object credential stays bucket-scoped
+Object Read & Write. The proxy consumes the lifecycle pair only once per process
+startup for `GetBucketLifecycleConfiguration`, before it listens; request
+handling and the proxy do not use Data Catalog. Never use Admin Read & Write or
+put any credential value in repository or CI logs. The runtime can prove that the two
+access-key IDs differ and that the lifecycle read succeeds, but the S3
+credential contract cannot technically attest the Cloudflare permission level.
+Verify that grant in the Cloudflare UI.
+
+Startup and `/readyz` prove the shared limiter, while `/healthz` remains a
 liveness-only signal. Deploy and rollback/recovery gates for an attested runtime
 check `/readyz` separately. During the exact `legacy-bootstrap` /
 `awaiting_attested_runtime` transition, the scheduled uptime gate checks only
@@ -306,6 +318,21 @@ deployment candidate; it is not yet evidence of the live image. The exact
 rollback until the runtime deploy succeeds. Record only an immutable digest in
 `reviewedImage`, then move to `runtime_deployed` in the reviewed follow-up after
 the live checks pass.
+
+Current metadata-only evidence from 2026-08-27 records that the Cloudflare UI
+showed the dedicated credential as **Admin Read only** and exactly one bucket in
+the current account, uniquely named `leaderbot-images`. No access-key or secret
+value was captured. This is provider-side operator evidence only; it neither
+proves which credential is installed in Fly nor replaces startup/readiness
+evidence.
+
+The protected deployment of the reviewed candidate
+`sha256:d2a2be7a61d7668ec1665ab459eee2b0717020c0542a78a7faccd494a68c47cc`
+failed. Its rollback completed and the restored baseline is healthy, so this
+digest is not deployed-runtime evidence and the manifest must not advance to
+`runtime_deployed`. A next attempt requires a new image built and attested from
+reviewed source, its immutable digest and source recorded in a reviewed manifest
+change, and a fresh protected deploy that passes `/healthz` and `/readyz`.
 
 ### Image-gen database migration gate
 

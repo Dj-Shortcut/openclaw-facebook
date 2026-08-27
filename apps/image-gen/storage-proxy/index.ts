@@ -14,7 +14,7 @@ import {
   S3Client,
 } from "@aws-sdk/client-s3";
 
-type ProxyEnv = {
+type StorageProxyAppConfig = {
   forgeApiKey: string;
   publicBaseUrl: string;
   r2Bucket: string;
@@ -30,6 +30,20 @@ type ProxyEnv = {
   rateLimitKeySecret: string;
   trustFlyClientIp: boolean;
 };
+
+type R2LifecyclePreflightConfig = {
+  r2Bucket: string;
+  r2Endpoint: string;
+  r2ObjectAccessKeyId: string;
+  r2LifecycleAccessKeyId: string;
+  r2LifecycleSecretAccessKey: string;
+  storageOperationTimeoutMs: number;
+};
+
+type StorageProxyStartupConfig = Readonly<{
+  appConfig: StorageProxyAppConfig;
+  lifecycleConfig: R2LifecyclePreflightConfig;
+}>;
 
 const DEFAULT_MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 const DEFAULT_STORAGE_OPERATION_TIMEOUT_MS = 60_000;
@@ -128,6 +142,8 @@ const REQUIRED_ENV_KEYS = [
   "R2_ACCOUNT_ID",
   "R2_ACCESS_KEY_ID",
   "R2_SECRET_ACCESS_KEY",
+  "R2_LIFECYCLE_ACCESS_KEY_ID",
+  "R2_LIFECYCLE_SECRET_ACCESS_KEY",
   "R2_BUCKET",
 ] as const;
 
@@ -221,7 +237,7 @@ function buildR2Endpoint(accountId: string): string {
   return `https://${accountId}.r2.cloudflarestorage.com`;
 }
 
-function loadConfig(): ProxyEnv {
+function loadConfig(): StorageProxyStartupConfig {
   logEnvPresence();
 
   const configuredEndpoint = readEnv("R2_ENDPOINT").trim();
@@ -241,32 +257,79 @@ function loadConfig(): ProxyEnv {
     throw new Error("PUBLIC_BASE_URL must be a trusted HTTPS origin/base path");
   }
 
-  return {
+  const r2Bucket = getEnv("R2_BUCKET");
+  const r2Endpoint =
+    configuredEndpoint || buildR2Endpoint(getEnv("R2_ACCOUNT_ID"));
+  const r2AccessKeyId = getEnv("R2_ACCESS_KEY_ID");
+  const storageOperationTimeoutMs = readBoundedPositiveIntegerEnv(
+    "STORAGE_OPERATION_TIMEOUT_MS",
+    DEFAULT_STORAGE_OPERATION_TIMEOUT_MS,
+    MAX_STORAGE_OPERATION_TIMEOUT_MS
+  );
+  const appConfig: StorageProxyAppConfig = {
     forgeApiKey: getEnv("FORGE_API_KEY"),
     publicBaseUrl: publicBaseUrl.replace(/\/+$/, ""),
-    r2Bucket: getEnv("R2_BUCKET"),
-    r2Endpoint: configuredEndpoint || buildR2Endpoint(getEnv("R2_ACCOUNT_ID")),
-    r2AccessKeyId: getEnv("R2_ACCESS_KEY_ID"),
+    r2Bucket,
+    r2Endpoint,
+    r2AccessKeyId,
     r2SecretAccessKey: getEnv("R2_SECRET_ACCESS_KEY"),
     port: Number.parseInt(process.env.PORT ?? "8787", 10) || 8787,
     maxUploadBytes: readPositiveIntegerEnv(
       "MAX_UPLOAD_BYTES",
       DEFAULT_MAX_UPLOAD_BYTES
     ),
-    storageOperationTimeoutMs: readBoundedPositiveIntegerEnv(
-      "STORAGE_OPERATION_TIMEOUT_MS",
-      DEFAULT_STORAGE_OPERATION_TIMEOUT_MS,
-      MAX_STORAGE_OPERATION_TIMEOUT_MS
-    ),
+    storageOperationTimeoutMs,
     allowLegacyBearerAuth: readBooleanEnv("STORAGE_ALLOW_LEGACY_BEARER_AUTH"),
     allowLegacyObjectKeys: readBooleanEnv("STORAGE_ALLOW_LEGACY_KEYS"),
     rateLimitRedisUrl: getEnv("STORAGE_RATE_LIMIT_REDIS_URL"),
     rateLimitKeySecret: readRateLimitKeySecret(),
     trustFlyClientIp: readBooleanEnv("STORAGE_TRUST_FLY_CLIENT_IP"),
   };
+  const lifecycleConfig: R2LifecyclePreflightConfig = {
+    r2Bucket,
+    r2Endpoint,
+    r2ObjectAccessKeyId: r2AccessKeyId,
+    r2LifecycleAccessKeyId: getEnv("R2_LIFECYCLE_ACCESS_KEY_ID"),
+    r2LifecycleSecretAccessKey: getEnv("R2_LIFECYCLE_SECRET_ACCESS_KEY"),
+    storageOperationTimeoutMs,
+  };
+  assertR2LifecycleCredentialIsolation(lifecycleConfig);
+  return { appConfig, lifecycleConfig };
 }
 
-function createS3Client(config: ProxyEnv): S3Client {
+export function assertR2LifecycleCredentialIsolation(
+  config: Pick<
+    R2LifecyclePreflightConfig,
+    | "r2ObjectAccessKeyId"
+    | "r2LifecycleAccessKeyId"
+    | "r2LifecycleSecretAccessKey"
+  >
+): void {
+  if (!config.r2ObjectAccessKeyId.trim()) {
+    throw new Error("R2 object access key ID is missing");
+  }
+  if (!config.r2LifecycleAccessKeyId.trim()) {
+    throw new Error("R2 lifecycle access key ID is missing");
+  }
+  if (!config.r2LifecycleSecretAccessKey.trim()) {
+    throw new Error("R2 lifecycle secret access key is missing");
+  }
+  if (
+    config.r2LifecycleAccessKeyId.trim() ===
+    config.r2ObjectAccessKeyId.trim()
+  ) {
+    throw new Error(
+      "R2 lifecycle inspection requires a separate read-only credential ID"
+    );
+  }
+}
+
+function createObjectS3Client(
+  config: Pick<
+    StorageProxyAppConfig,
+    "r2Endpoint" | "r2AccessKeyId" | "r2SecretAccessKey"
+  >
+): S3Client {
   return new S3Client({
     region: "auto",
     endpoint: config.r2Endpoint,
@@ -278,6 +341,22 @@ function createS3Client(config: ProxyEnv): S3Client {
     // One bounded attempt keeps the worst-case operation window far below the
     // Messenger privacy-fence cooldown. Application-level retries use a new,
     // independently inventoried operation instead of hidden SDK retries.
+    maxAttempts: 1,
+  });
+}
+
+function createLifecycleS3Client(
+  config: R2LifecyclePreflightConfig
+): S3Client {
+  assertR2LifecycleCredentialIsolation(config);
+  return new S3Client({
+    region: "auto",
+    endpoint: config.r2Endpoint,
+    forcePathStyle: true,
+    credentials: {
+      accessKeyId: config.r2LifecycleAccessKeyId,
+      secretAccessKey: config.r2LifecycleSecretAccessKey,
+    },
     maxAttempts: 1,
   });
 }
@@ -334,24 +413,31 @@ export function assertRequiredR2LifecycleRules(
   }
 }
 
-async function verifyRequiredR2LifecycleConfig(
-  config: ProxyEnv
+export async function verifyRequiredR2LifecycleConfig(
+  config: R2LifecyclePreflightConfig
 ): Promise<void> {
-  const s3 = createS3Client(config);
-  const lifecycle = await runStorageOperationWithDeadline(
-    abortSignal =>
-      s3.send(
-        new GetBucketLifecycleConfigurationCommand({
-          Bucket: config.r2Bucket,
-        }),
-        { abortSignal }
-      ),
-    config.storageOperationTimeoutMs
-  );
-  assertRequiredR2LifecycleRules(lifecycle.Rules ?? []);
+  const s3 = createLifecycleS3Client(config);
+  try {
+    const lifecycle = await runStorageOperationWithDeadline(
+      abortSignal =>
+        s3.send(
+          new GetBucketLifecycleConfigurationCommand({
+            Bucket: config.r2Bucket,
+          }),
+          { abortSignal }
+        ),
+      config.storageOperationTimeoutMs
+    );
+    assertRequiredR2LifecycleRules(lifecycle.Rules ?? []);
+  } finally {
+    s3.destroy();
+  }
 }
 
-function buildPublicUrl(config: ProxyEnv, objectKey: string): string {
+function buildPublicUrl(
+  config: StorageProxyAppConfig,
+  objectKey: string
+): string {
   return new URL(
     objectKey,
     ensureTrailingSlash(config.publicBaseUrl)
@@ -634,7 +720,7 @@ function opaqueRateLimitKey(
 
 function getRateLimitClientAddress(
   req: express.Request,
-  config: ProxyEnv
+  config: StorageProxyAppConfig
 ): string {
   if (config.trustFlyClientIp) {
     const flyClientIp = req.header("fly-client-ip")?.trim() ?? "";
@@ -853,7 +939,7 @@ function readObjectKeyQuery(req: express.Request): string | null {
 function authorizeObjectRequest(
   req: express.Request,
   res: express.Response,
-  config: ProxyEnv
+  config: StorageProxyAppConfig
 ): ParsedStorageObjectKey | null {
   const rawObjectKey = readObjectKeyQuery(req);
   const parsedKey = rawObjectKey
@@ -887,7 +973,7 @@ function authorizeObjectRequest(
 }
 
 function createStorageAuthorizationMiddleware(
-  config: ProxyEnv
+  config: StorageProxyAppConfig
 ): express.RequestHandler {
   return (req, res, next) => {
     const parsedKey = authorizeObjectRequest(req, res, config);
@@ -898,7 +984,7 @@ function createStorageAuthorizationMiddleware(
 }
 
 export function createStorageProxyApp(
-  config: ProxyEnv,
+  config: StorageProxyAppConfig,
   rateLimitOverrides: Readonly<{
     windowMs?: number;
     authMaxRequests?: number;
@@ -906,9 +992,6 @@ export function createStorageProxyApp(
     backend?: StorageRateLimitBackend;
   }> = {}
 ): express.Express {
-  const app = express();
-  app.use(helmet());
-  const s3 = createS3Client(config);
   const windowMs = rateLimitOverrides.windowMs ?? STORAGE_RATE_LIMIT_WINDOW_MS;
   const backend = rateLimitOverrides.backend;
   if (process.env.NODE_ENV === "production" && !backend) {
@@ -916,6 +999,9 @@ export function createStorageProxyApp(
       "production storage proxy requires shared Redis rate limiting"
     );
   }
+  const app = express();
+  app.use(helmet());
+  const s3 = createObjectS3Client(config);
 
   const authRateLimiter = rateLimit({
     windowMs,
@@ -1153,36 +1239,38 @@ export function createStorageProxyApp(
 }
 
 export async function startStorageProxy(): Promise<void> {
-  const config = loadConfig();
+  const { appConfig, lifecycleConfig } = loadConfig();
   const rateLimitBackend = await createSharedStorageRateLimitBackend(
-    config.rateLimitRedisUrl
+    appConfig.rateLimitRedisUrl
   );
   try {
-    const app = createStorageProxyApp(config, { backend: rateLimitBackend });
     await rateLimitBackend.assertReady();
-    await verifyRequiredR2LifecycleConfig(config);
-    if (config.allowLegacyBearerAuth || config.allowLegacyObjectKeys) {
+    await verifyRequiredR2LifecycleConfig(lifecycleConfig);
+    const app = createStorageProxyApp(appConfig, {
+      backend: rateLimitBackend,
+    });
+    if (appConfig.allowLegacyBearerAuth || appConfig.allowLegacyObjectKeys) {
       logJson("warn", {
         msg: "storage_proxy_legacy_bridge_enabled",
-        allowLegacyBearerAuth: config.allowLegacyBearerAuth,
-        allowLegacyObjectKeys: config.allowLegacyObjectKeys,
+        allowLegacyBearerAuth: appConfig.allowLegacyBearerAuth,
+        allowLegacyObjectKeys: appConfig.allowLegacyObjectKeys,
       });
     }
     const host = "0.0.0.0";
 
-    app.listen(config.port, host, () => {
+    app.listen(appConfig.port, host, () => {
       logJson("info", {
         msg: "storage_proxy_started",
         host,
-        port: config.port,
-        bind: `${host}:${config.port}`,
-        publicBaseUrl: config.publicBaseUrl,
-        r2Bucket: config.r2Bucket,
-        r2Endpoint: config.r2Endpoint,
-        storageOperationTimeoutMs: config.storageOperationTimeoutMs,
+        port: appConfig.port,
+        bind: `${host}:${appConfig.port}`,
+        publicBaseUrl: appConfig.publicBaseUrl,
+        r2Bucket: appConfig.r2Bucket,
+        r2Endpoint: appConfig.r2Endpoint,
+        storageOperationTimeoutMs: appConfig.storageOperationTimeoutMs,
         rateLimiter: "shared_redis",
-        allowLegacyBearerAuth: config.allowLegacyBearerAuth,
-        allowLegacyObjectKeys: config.allowLegacyObjectKeys,
+        allowLegacyBearerAuth: appConfig.allowLegacyBearerAuth,
+        allowLegacyObjectKeys: appConfig.allowLegacyObjectKeys,
       });
     });
   } catch (error) {

@@ -74,12 +74,23 @@ These show up in the repo and can be mistaken for the main OpenAI path.
 | `STORAGE_ALLOW_LEGACY_BEARER_AUTH`         | Storage-proxy rolling bridge                                     | Proxy-only, default `false`; enable only while old app instances still send bearer-only requests, then disable immediately after that phase.             |
 | `STORAGE_RATE_LIMIT_REDIS_URL`             | Storage-proxy shared rate limiting                               | Required storage-proxy secret. Use a private Redis URL; startup, `/readyz`, and storage operations fail closed when it is unavailable.                   |
 | `STORAGE_RATE_LIMIT_KEY_SECRET`            | Storage-proxy rate-limit key privacy                             | Required storage-proxy secret of at least 32 random bytes; HMACs client and tenant bucket identities before Redis storage.                               |
+| `R2_LIFECYCLE_ACCESS_KEY_ID`               | Storage-proxy retention-policy inspection                        | Required separate Cloudflare R2 Admin Read only access-key ID; must differ from the bucket-scoped object access key. The provider grant is account-wide bucket listing/configuration, object read/list, and read-only R2 Data Catalog table/metadata access. The proxy does not use Data Catalog. Never use Admin Read & Write. |
+| `R2_LIFECYCLE_SECRET_ACCESS_KEY`           | Storage-proxy retention-policy inspection                        | Secret paired with the separate Admin Read only access key. The proxy uses it for one lifecycle read per process startup. Store only as a Fly secret; never log or commit it. |
 | `STORAGE_TRUST_FLY_CLIENT_IP`              | Storage-proxy edge-client address trust                          | Defaults false. Set true only for the reviewed public Fly-Proxy path; turn it off before any direct 6PN or alternate-proxy ingress is introduced.        |
 | `REDIS_URL`                                | Replay protection, rate limiting, state and customer photo quota | Required in production; the Messenger photo quota fails closed without atomic Redis storage.                                                             |
 | `WHATSAPP_WEBHOOK_REPLAY_TTL_SECONDS`      | Durable WhatsApp replay/fallback phase                           | Default and maximum `86400`; must cover `WEBHOOK_INGRESS_CONTENT_TTL_SECONDS`. Stores only the opaque replay identity and phase.                         |
 | `WHATSAPP_WEBHOOK_REPLAY_LEASE_SECONDS`    | WhatsApp replay owner lease                                      | Default `300`; short, renewable and never longer than `WEBHOOK_INGRESS_DELIVERY_LEASE_SECONDS` (default `900`).                                          |
 | `HTTP_RATE_LIMIT_REDIS_GUARD_MAX_REQUESTS` | Global HTTP rate limiting                                        | Optional pre-Redis guard cap per window; defaults to `max(1000, HTTP_RATE_LIMIT_MAX_REQUESTS * 10)`.                                                     |
 | `ADMIN_TOKEN`                              | Debug/admin endpoints                                            | Required for `/admin/disable-face-memory` and `/debug/build`; those endpoints also have a stricter admin-auth rate limit.                                |
+
+The storage proxy can prove only that the lifecycle access-key ID differs from
+the object access-key ID and that `GetBucketLifecycleConfiguration` succeeds.
+The S3 credential contract cannot prove the provider permission level. Verify
+**Admin Read only** in Cloudflare; never infer it from a successful startup. A
+metadata-only UI inspection on 2026-08-27 confirmed that grant and exactly one
+current-account bucket, uniquely named `leaderbot-images`; it recorded no
+access-key or secret value and does not prove which credential is installed in
+Fly.
 
 ## 5. Portal authentication
 
