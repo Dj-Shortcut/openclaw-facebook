@@ -6211,6 +6211,15 @@ export function validateProductionRepository(rootDir = process.cwd()) {
     if (!serviceCheckPaths.includes(app.serviceCheckPath)) {
       fail(`${app.config} must define a /healthz service check`);
     }
+    if (
+      target === "storage-proxy" &&
+      (app.readinessCheckPath !== "/readyz" ||
+        app.readinessMonitor !== ".github/workflows/production-uptime.yml")
+    ) {
+      fail(
+        "storage-proxy must retain its exact external readiness monitor contract",
+      );
+    }
     if (target === "image-gen") {
       const configuredChecks = tableAssignmentGroups(
         text,
@@ -6253,10 +6262,29 @@ export function validateProductionRepository(rootDir = process.cwd()) {
         fail(`${app.readinessMonitor} must monitor ${app.readinessCheckPath}`);
       }
       if (target === "storage-proxy") {
+        const checkoutSteps = namedWorkflowStepBodies(
+          monitor,
+          "Check out production readiness contract",
+        );
         const readinessSteps = namedWorkflowStepBodies(
           monitor,
           "Check storage proxy readiness",
         );
+        if (
+          checkoutSteps.length !== 1 ||
+          !checkoutSteps[0].includes(
+            "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6",
+          ) ||
+          !checkoutSteps[0].includes("persist-credentials: false") ||
+          /^\s+(?:ref|repository):/mu.test(checkoutSteps[0]) ||
+          !checkoutSteps[0].includes(
+            "if: github.event_name != 'pull_request'",
+          )
+        ) {
+          fail(
+            `${app.readinessMonitor} must check out the exact manifest without persisting credentials`,
+          );
+        }
         if (
           readinessSteps.length !== 1 ||
           !referencesExactHttpUrl(readinessSteps[0], readinessUrl) ||
@@ -6266,6 +6294,29 @@ export function validateProductionRepository(rootDir = process.cwd()) {
         ) {
           fail(
             `${app.readinessMonitor} must verify storage-proxy shared Redis readiness`,
+          );
+        }
+        if (
+          !readinessSteps[0].includes(
+            '.apps["storage-proxy"].reviewedArtifactKind',
+          ) ||
+          !readinessSteps[0].includes(
+            '.apps["storage-proxy"].artifactTransition.state',
+          ) ||
+          !readinessSteps[0].includes(
+            '"$artifact_kind" == "legacy-bootstrap" && "$transition_state" == "awaiting_attested_runtime"',
+          ) ||
+          !referencesExactHttpUrl(
+            readinessSteps[0],
+            `https://${app.app}.fly.dev${app.serviceCheckPath}`,
+          ) ||
+          !readinessSteps[0].includes('grep -Fx "ok" "$body"') ||
+          !readinessSteps[0].includes(
+            '"$artifact_kind" != "runtime" || ( "$transition_state" != "runtime_reviewed" && "$transition_state" != "complete" )',
+          )
+        ) {
+          fail(
+            `${app.readinessMonitor} must bind legacy liveness and runtime readiness to the exact storage-proxy artifact transition`,
           );
         }
         if (

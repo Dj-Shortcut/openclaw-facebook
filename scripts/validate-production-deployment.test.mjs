@@ -1509,9 +1509,117 @@ describe("production deployment contract", () => {
     );
   });
 
-  it("does not require an undeployed storage-proxy readiness route on pull requests", () => {
+  it("does not allow the storage-proxy readiness path to be removed", () => {
+    const root = createRepositoryFixture();
+    const manifestPath = path.join(root, "deploy/production/apps.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    delete manifest.apps["storage-proxy"].readinessCheckPath;
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "storage-proxy must retain its exact external readiness monitor contract",
+    );
+  });
+
+  it("does not allow the storage-proxy readiness monitor to be removed", () => {
+    const root = createRepositoryFixture();
+    const manifestPath = path.join(root, "deploy/production/apps.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    delete manifest.apps["storage-proxy"].readinessMonitor;
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "storage-proxy must retain its exact external readiness monitor contract",
+    );
+  });
+
+  it("binds the legacy storage-proxy liveness fallback to its exact transition", () => {
     const root = createRepositoryFixture();
     replaceFixtureText(
+      root,
+      ".github/workflows/production-uptime.yml",
+      '"$artifact_kind" == "legacy-bootstrap" && "$transition_state" == "awaiting_attested_runtime"',
+      '"$artifact_kind" == "legacy-bootstrap"',
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must bind legacy liveness and runtime readiness to the exact storage-proxy artifact transition",
+    );
+  });
+
+  it("fails closed for storage-proxy states outside the reviewed runtime transition", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/production-uptime.yml",
+      '"$artifact_kind" != "runtime" || ( "$transition_state" != "runtime_reviewed" && "$transition_state" != "complete" )',
+      '"$artifact_kind" != "runtime"',
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must bind legacy liveness and runtime readiness to the exact storage-proxy artifact transition",
+    );
+  });
+
+  it("requires a credentialless manifest checkout for storage readiness", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/production-uptime.yml",
+      "          persist-credentials: false\n",
+      "",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must check out the exact manifest without persisting credentials",
+    );
+  });
+
+  it("refuses a storage readiness manifest checkout from another ref", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/production-uptime.yml",
+      "          persist-credentials: false\n",
+      "          persist-credentials: false\n          ref: deadbeef\n",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must check out the exact manifest without persisting credentials",
+    );
+  });
+
+  it("requires exact liveness proof for the legacy storage-proxy transition", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/production-uptime.yml",
+      '            grep -Fx "ok" "$body"\n',
+      "",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must bind legacy liveness and runtime readiness to the exact storage-proxy artifact transition",
+    );
+  });
+
+  it("requires shared Redis readiness for the attested storage-proxy runtime", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/production-uptime.yml",
+      "          jq -e '.ok == true and .rateLimiter == \"shared_redis\"' \"$body\"\n",
+      "          jq -e '.ok == true' \"$body\"\n",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must verify storage-proxy shared Redis readiness",
+    );
+  });
+
+  it("does not require an undeployed storage-proxy readiness route on pull requests", () => {
+    const root = createRepositoryFixture();
+    replaceLastFixtureText(
       root,
       ".github/workflows/production-uptime.yml",
       "        if: github.event_name != 'pull_request'\n",

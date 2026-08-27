@@ -64,6 +64,12 @@ jobs:
     name: Production dependencies
     runs-on: ubuntu-latest
     steps:
+      - name: Check out production readiness contract
+        if: github.event_name != 'pull_request'
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
       - name: Check image generation readiness
         run: |
           set -euo pipefail
@@ -86,6 +92,32 @@ jobs:
         if: github.event_name != 'pull_request'
         run: |
           set -euo pipefail
+          artifact_kind="$(jq -er '.apps["storage-proxy"].reviewedArtifactKind' deploy/production/apps.json)"
+          transition_state="$(jq -er '.apps["storage-proxy"].artifactTransition.state' deploy/production/apps.json)"
+
+          if [[ "$artifact_kind" == "legacy-bootstrap" && "$transition_state" == "awaiting_attested_runtime" ]]; then
+            body="$(mktemp)"
+            status="$(
+              curl --ipv4 --silent --show-error --location \
+                --max-time 20 \
+                --retry 2 \
+                --retry-delay 5 \
+                --retry-all-errors \
+                --output "$body" \
+                --write-out "%{http_code}" \
+                https://leaderbot-storage-proxy.fly.dev/healthz
+            )"
+            cat "$body"
+            test "$status" = "200"
+            grep -Fx "ok" "$body"
+            exit 0
+          fi
+
+          if [[ "$artifact_kind" != "runtime" || ( "$transition_state" != "runtime_reviewed" && "$transition_state" != "complete" ) ]]; then
+            echo "Unsupported storage-proxy readiness transition" >&2
+            exit 1
+          fi
+
           body="$(mktemp)"
           status="$(
             curl --ipv4 --silent --show-error --location \

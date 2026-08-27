@@ -48,9 +48,14 @@ The storage-proxy Fly app separately requires the runtime secret names
 endpoint must be private and shared by every proxy Machine; the key secret must
 contain at least 32 random bytes. Never put either value in repository or CI
 logs. Startup and `/readyz` prove the shared limiter, while `/healthz` remains a
-liveness-only signal. The deploy, rollback/recovery, and scheduled uptime gates
-check `/readyz` separately. Storage operations fail closed when the limiter
-cannot be reached.
+liveness-only signal. Deploy and rollback/recovery gates for an attested runtime
+check `/readyz` separately. During the exact `legacy-bootstrap` /
+`awaiting_attested_runtime` transition, the scheduled uptime gate checks only
+`/healthz` because that legacy image has no public readiness route. The
+repository validator makes this fallback state-specific and switches the gate
+to `/readyz` with `rateLimiter: "shared_redis"` as soon as the manifest records
+an attested runtime. Storage operations fail closed when the limiter cannot be
+reached.
 
 ## Required GitHub configuration
 
