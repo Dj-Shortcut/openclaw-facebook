@@ -6695,6 +6695,19 @@ function flyDurationsEqual(actual, expected) {
   );
 }
 
+function explicitFlyDurationStringsEqual(actual, expected) {
+  const isExplicitDuration = (value) =>
+    typeof value === "string" &&
+    value === value.trim() &&
+    /(?:ms|h|m|s)/.test(value) &&
+    parseFlyDurationMilliseconds(value) !== null;
+  return (
+    isExplicitDuration(actual) &&
+    isExplicitDuration(expected) &&
+    flyDurationsEqual(actual, expected)
+  );
+}
+
 function splitFlyProcessCommand(command) {
   if (typeof command !== "string" || command.trim() === "") return [];
   const words = [];
@@ -7016,7 +7029,7 @@ function compareObject(actual, expected, label, errors, durationKeys = []) {
       actualValue !== expectedValue &&
       !(
         normalizedDurationKeys.has(key) &&
-        flyDurationsEqual(actualValue, expectedValue)
+        explicitFlyDurationStringsEqual(actualValue, expectedValue)
       )
     ) {
       errors.push(
@@ -7752,6 +7765,7 @@ export function checkLiveFlyDrift(target, options = {}) {
           expectedCheck,
           `http_service.checks[${index}]`,
           reconcilableDrift,
+          ["interval", "timeout", "grace_period"],
         );
       });
     }
