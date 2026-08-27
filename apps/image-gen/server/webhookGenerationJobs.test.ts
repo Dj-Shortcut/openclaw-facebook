@@ -2510,18 +2510,11 @@ describe("messenger generation job safety", () => {
       }
     }
 
-    expect(sendButtonTemplateMock).toHaveBeenCalledWith(
+    expect(sendTextMock).toHaveBeenCalledWith(
       "quota-exhausted-user",
-      `${t("en", "outOfDailyImageCredits")}\nToday you have 0 of 0 photos left. This month you have 20 of 20 left.`,
-      [
-        {
-          type: "web_url",
-          title: "Open Leaderbot",
-          url: "https://leaderbot.live/?upgrade=startpilot#pricing",
-          webview_height_ratio: "full",
-        },
-      ]
+      `${t("en", "outOfDailyImageCredits")}\nToday you have 0 of 0 photos left. This month you have 20 of 20 left.`
     );
+    expect(sendButtonTemplateMock).not.toHaveBeenCalled();
     expect(sendQuickRepliesMock).not.toHaveBeenCalled();
     expect(executeGenerationFlowMock).not.toHaveBeenCalled();
     expect(getState("quota-exhausted-user")?.stage).toBe(

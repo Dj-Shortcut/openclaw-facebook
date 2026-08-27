@@ -27,19 +27,13 @@ afterEach(() => {
 });
 
 describe("Startpilot upgrade action", () => {
-  it("builds a channel-neutral portal action without a PSID", () => {
+  it("does not expose the obsolete static Startpilot checkout", () => {
     process.env.NODE_ENV = "production";
     process.env.APP_BASE_URL = "https://leaderbot-fb-image-gen.fly.dev";
     process.env.PORTAL_BASE_URL = "https://leaderbot.live";
 
     const response = buildStartpilotQuotaReachedResponse("nl");
-    expect(response.actions).toEqual([
-      {
-        id: "open_startpilot_upgrade",
-        label: "Open Leaderbot",
-        url: "https://leaderbot.live/?upgrade=startpilot#pricing",
-      },
-    ]);
+    expect(response.actions).toEqual([]);
     expect(JSON.stringify(response)).not.toMatch(/psid|sender/i);
   });
 
@@ -56,34 +50,22 @@ describe("Startpilot upgrade action", () => {
     expect(daily.actions).toEqual(total.actions);
   });
 
-  it("renders allowlisted HTTPS URLs as Messenger web buttons, not quick replies", () => {
+  it("does not render an upgrade button before the scoped checkout exists", () => {
     process.env.NODE_ENV = "production";
     process.env.PORTAL_BASE_URL = "https://leaderbot.live";
     const actions = buildStartpilotQuotaReachedResponse("en").actions;
 
     expect(renderMessengerQuickReplies(actions)).toEqual([]);
-    expect(renderMessengerUrlButtons(actions)).toEqual([
-      {
-        type: "web_url",
-        title: "Open Leaderbot",
-        url: "https://leaderbot.live/?upgrade=startpilot#pricing",
-        webview_height_ratio: "full",
-      },
-    ]);
+    expect(renderMessengerUrlButtons(actions)).toEqual([]);
   });
 
-  it("offers free users a portal CTA when their daily image allowance ends", () => {
+  it("keeps the free-quota message informational until credit checkout exists", () => {
     process.env.NODE_ENV = "production";
     process.env.PORTAL_BASE_URL = "https://leaderbot.live";
 
     const response = buildFreeQuotaReachedResponse("nl");
     expect(response.text).toContain("gratis credits");
-    expect(response.actions).toEqual([
-      expect.objectContaining({
-        id: "open_startpilot_upgrade",
-        url: "https://leaderbot.live/?upgrade=startpilot#pricing",
-      }),
-    ]);
+    expect(response.actions).toEqual([]);
   });
 
   it("omits the upgrade action when only the backend host is configured", () => {

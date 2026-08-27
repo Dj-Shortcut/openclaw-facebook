@@ -216,6 +216,10 @@ export function createHandlerContext({
     reqId: string,
     deliveryControl?: Parameters<HandlerContext["sendLoggedActions"]>[4]
   ): Promise<MessengerSendOutcome> {
+    if (actions.length === 0) {
+      return await sendLoggedText(psid, text, reqId, deliveryControl);
+    }
+
     const postbackButtons = renderMessengerPostbackButtons(actions);
     if (
       postbackButtons.length > 0 &&
