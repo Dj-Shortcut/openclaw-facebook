@@ -97,12 +97,23 @@ ClawHub, install, release, and rollback routes are proven.
   and GitHub provenance attestation `43482590`. The initial attempt stopped
   before building because exact-source main CI was still running; attempt 2
   started only after that CI passed.
-- The manifest now records only that new diagnostics artifact as
-  `runtime_reviewed`, keeps the healthy legacy digest as the sole rollback, and
-  leaves the failed `99ea...` digest undispatchable.
-- Next: deploy the exact `a6bb...` digest through the protected workflow, use
-  the safe startup phase code if it fails, and prove health, shared-Redis
-  readiness and rollback before recording `runtime_deployed`.
+- Protected deploy run `33105621166` admitted the exact `a6bb...` artifact and
+  source, then failed closed in startup phase `r2_lifecycle_preflight`. The
+  bounded diagnostics proved that configuration, Redis connection and
+  readiness, and app construction had already passed. Read-only inspection of
+  the production R2 bucket then confirmed that only Cloudflare's default
+  multipart-abort rule exists; the three required 30-day prefix expiration
+  rules are absent.
+- The deploy restored and verified reviewed legacy digest `334f...`; public
+  `/healthz` returned `200`, recovery run `33106363152` passed, and completed-run
+  reconciliation `33106369992` also passed. The manifest is returned to
+  `awaiting_attested_runtime`, so neither failed runtime candidate is
+  dispatchable.
+- Next: obtain explicit owner approval for the destructive retention boundary,
+  apply and verify the exact rules in
+  `apps/image-gen/infra/cloudflare/r2-lifecycle.json`, then build, attest, and
+  review a new diagnostics runtime through the protected artifact process and
+  repeat the bounded rollout.
 - No direct Page callback or legacy gateway is disabled before that production
   proof and its rollback identity exist.
 

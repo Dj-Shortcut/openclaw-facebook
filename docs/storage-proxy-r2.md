@@ -254,10 +254,20 @@ reviewed main source `1da8da74f301fb368563cd094912e159d3bf6998`. Trusted build
 run `33104393266`, attempt 2, produced runtime digest
 `sha256:a6bb22fcdbdfa6cc211afabfae86cc2423f501e589113f2f0a7e32db0f22083d`
 and GitHub provenance attestation `43482590`; attempt 1 stopped before building
-while exact-source main CI was still running. The manifest now records the new
-diagnostics runtime as `runtime_reviewed` and retains the healthy legacy digest
-as the sole rollback. Only this exact digest may enter the next protected
-diagnostic rollout.
+while exact-source main CI was still running. Protected deploy run
+`33105621166` admitted that exact diagnostics artifact and source, then failed
+closed at `r2_lifecycle_preflight`. The metadata-only stage records proved that
+configuration, Redis connection and readiness, and app construction had
+passed. Read-only inspection of the production bucket showed only Cloudflare's
+default multipart-abort rule: the three required 30-day prefix expiration
+rules are absent. The workflow restored and verified the healthy legacy digest,
+public `/healthz` returned `200`, recovery run `33106363152` passed, and
+completed-run reconciliation `33106369992` passed. The manifest is back at
+`awaiting_attested_runtime`; `a6bb...` must not be dispatched again from that
+reviewed slot. Applying the exact lifecycle policy requires explicit owner
+approval because existing matching objects older than 30 days can be deleted.
+After application and verification, build, attest, and review a new diagnostics
+runtime through the protected artifact process before another rollout.
 
 Protected run `33080233054` stopped before production mutation. The live
 comparison after two releases during the 2026-08-27 credential rotation showed

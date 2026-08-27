@@ -367,10 +367,20 @@ diagnostics runtime
 from reviewed main source `1da8da74f301fb368563cd094912e159d3bf6998`;
 GitHub provenance attestation `43482590` binds the exact pair. Attempt 1
 stopped before building because exact-source main CI was still in progress.
-The manifest records the new digest as `runtime_reviewed` and retains healthy
-legacy digest `334f...` as the sole rollback. The diagnostic rollout must prove
-`/healthz`, shared-Redis `/readyz`, and rollback before the transition can
-advance.
+Protected deploy run `33105621166` admitted that exact artifact and source, then
+failed closed in startup phase `r2_lifecycle_preflight`. The safe phase record
+proved configuration, Redis connection and readiness, and app construction had
+passed. Read-only inspection confirmed that the production bucket has only the
+default multipart-abort rule and lacks all three required 30-day prefix
+expiration rules. The workflow restored and verified legacy digest `334f...`;
+public `/healthz` returned `200`, exact recovery run `33106363152` passed, and
+completed-run reconciliation `33106369992` passed. The manifest is therefore
+back at `awaiting_attested_runtime`; digest `a6bb...` is failed rollout evidence
+and is not dispatchable. Applying the retention rules requires explicit owner
+approval because objects already older than 30 days can become eligible for
+deletion. After the rules are applied and verified, a new runtime must be built,
+attested, and reviewed through the protected artifact process before another
+deployment.
 
 ### Image-gen database migration gate
 
