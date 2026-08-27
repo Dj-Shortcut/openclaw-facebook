@@ -60,7 +60,9 @@ const BILLING_PLANS = Object.freeze({
     }),
     mollieDescription: "Leaderbot Startpilot - eenmalig 30 dagen",
     active: true,
-    publiclyAvailable: true,
+    // Retain historical plan snapshots and reconciliation support, but never
+    // offer this workspace product as the Messenger credit purchase.
+    publiclyAvailable: false,
   }),
 }) satisfies Readonly<Record<string, BillingPlan>>;
 
@@ -94,10 +96,7 @@ export function listPublicBillingPlans() {
       offerType: plan.offerType,
       interval: plan.interval,
       accessDurationDays: plan.accessDurationDays,
-      // The root OpenClaw gateway is a separate, optional product surface.
-      // Keep its dormant AI-answer allowance out of the public launch offer
-      // until that gateway has its own reviewed rollout. The first paid
-      // product is the independently enforced Messenger image experience.
+      // Historical plan snapshots retain their exact entitlement shape.
       entitlements:
         plan.code === STARTPILOT_PLAN_CODE
           ? Object.freeze({
