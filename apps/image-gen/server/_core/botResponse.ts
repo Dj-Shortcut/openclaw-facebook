@@ -6,6 +6,11 @@ export type ConversationAction = {
   url?: string;
 };
 
+export type ImageQuotaBalance = {
+  daily: { used: number; limit: number; remaining: number };
+  monthly: { used: number; limit: number; remaining: number };
+};
+
 type ImageOutput = {
   imageUrl: string;
   caption?: string;

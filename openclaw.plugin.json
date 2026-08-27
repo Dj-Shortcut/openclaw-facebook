@@ -47,12 +47,6 @@
             "enum": ["nl", "en"],
             "default": "nl"
           },
-          "customerPortalUrl": {
-            "type": "string",
-            "format": "uri",
-            "pattern": "^https://(?![^/]*@)",
-            "default": "https://leaderbot.live/"
-          },
           "responsePrefix": { "type": "string" },
           "webhookPath": { "type": "string" },
           "defaultTo": { "type": "string" },
@@ -98,11 +92,6 @@
                   "type": "string",
                   "enum": ["nl", "en"]
                 },
-                "customerPortalUrl": {
-                  "type": "string",
-                  "format": "uri",
-                  "pattern": "^https://(?![^/]*@)"
-                },
                 "responsePrefix": { "type": "string" },
                 "webhookPath": { "type": "string" },
                 "defaultTo": { "type": "string" },
@@ -122,10 +111,9 @@
         "verifyTokenFile": { "label": "Webhook verify token file" },
         "webhookPath": { "label": "Webhook path", "placeholder": "/facebook/webhook" },
         "dmPolicy": { "label": "Direct message policy" },
-        "unknownSenderMode": { "label": "Unknown sender mode" },
-        "leaderbotBridgeEnabled": { "label": "Enable Leaderbot image-generation bridge" },
+        "unknownSenderMode": { "label": "Unknown sender mode (legacy bridge compatibility)" },
+        "leaderbotBridgeEnabled": { "label": "Enable legacy Leaderbot bridge" },
         "defaultLang": { "label": "Default response language" },
-        "customerPortalUrl": { "label": "Customer portal URL (HTTPS)" },
         "sharedStateStore": { "label": "Shared dedupe and budget store" },
         "allowFrom": { "label": "Allowed Page-scoped sender IDs" }
       }

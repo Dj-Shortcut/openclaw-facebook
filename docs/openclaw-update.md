@@ -1,6 +1,10 @@
 # OpenClaw Update, Release, and Rollback Workflow
 
 This is the single supported workflow for updating OpenClaw in this repository.
+It applies only to the repository owner's personal Messenger/OpenClaw gateway,
+is low priority, and never blocks Leaderbot customer, portal, image, quota or
+billing releases. Customer Meta webhooks terminate directly in
+`apps/image-gen`.
 Do not update OpenClaw by editing files under `node_modules`, patching installed
 packages, shelling into running machines, or using dashboard actions that mutate
 runtime package directories.

@@ -2,14 +2,14 @@
   channels: {
     facebook: {
       accounts: {
-        leaderbot: {
-          name: "Leaderbot",
+        page_one: {
+          name: "My OpenClaw",
           pageId: "<FACEBOOK_PAGE_ID>",
           pageAccessToken: "<FACEBOOK_PAGE_ACCESS_TOKEN>",
           appSecret: "<FACEBOOK_APP_SECRET>",
           verifyToken: "<FACEBOOK_VERIFY_TOKEN>",
           // Optional account-specific path. Omit to use /facebook/webhook.
-          webhookPath: "/facebook/leaderbot",
+          webhookPath: "/facebook/page-one",
           dmPolicy: "pairing"
         }
       }

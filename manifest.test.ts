@@ -36,7 +36,6 @@ describe("openclaw plugin manifest", () => {
         dmPolicy?: { default?: unknown };
         leaderbotBridgeEnabled?: { default?: unknown };
         defaultLang?: { default?: unknown; enum?: unknown };
-        customerPortalUrl?: { default?: unknown; pattern?: unknown };
         sharedStateStore?: { default?: unknown; enum?: unknown };
         accounts?: {
           additionalProperties?: {
@@ -44,7 +43,6 @@ describe("openclaw plugin manifest", () => {
               dmPolicy?: { default?: unknown };
               leaderbotBridgeEnabled?: { default?: unknown };
               defaultLang?: { default?: unknown; enum?: unknown };
-              customerPortalUrl?: { default?: unknown; pattern?: unknown };
             };
           };
         };
@@ -58,10 +56,6 @@ describe("openclaw plugin manifest", () => {
     expect(facebookSchema.properties?.defaultLang).toMatchObject({
       default: "nl",
       enum: ["nl", "en"],
-    });
-    expect(facebookSchema.properties?.customerPortalUrl).toMatchObject({
-      default: "https://leaderbot.live/",
-      pattern: "^https://(?![^/]*@)",
     });
     expect(facebookSchema.properties?.sharedStateStore).toMatchObject({
       default: "memory",
@@ -79,19 +73,6 @@ describe("openclaw plugin manifest", () => {
       facebookSchema.properties?.accounts?.additionalProperties?.properties
         ?.defaultLang?.default,
     ).toBeUndefined();
-    expect(
-      facebookSchema.properties?.accounts?.additionalProperties?.properties
-        ?.customerPortalUrl?.default,
-    ).toBeUndefined();
-    expect(
-      facebookSchema.properties?.accounts?.additionalProperties?.properties
-        ?.customerPortalUrl?.pattern,
-    ).toBe("^https://(?![^/]*@)");
-    const portalPattern = new RegExp(
-      String(facebookSchema.properties?.customerPortalUrl?.pattern),
-    );
-    expect(portalPattern.test("https://portal.example.test/account")).toBe(true);
-    expect(portalPattern.test("https://user:secret@portal.example.test/")).toBe(false);
   });
 });
 
@@ -155,7 +136,6 @@ describe("facebook config safety defaults", () => {
     expect(parsed.dmPolicy).toBe("pairing");
     expect(parsed.leaderbotBridgeEnabled).toBe(false);
     expect(parsed.defaultLang).toBe("nl");
-    expect(parsed.customerPortalUrl).toBe("https://leaderbot.live/");
     expect(parsed.sharedStateStore).toBe("memory");
     expect(parsed.allowFrom).toBeUndefined();
   });
@@ -173,7 +153,6 @@ describe("facebook config safety defaults", () => {
     expect(parsed.leaderbotBridgeEnabled).toBe(true);
     expect(parsed.accounts?.public?.leaderbotBridgeEnabled).toBeUndefined();
     expect(parsed.accounts?.public?.defaultLang).toBeUndefined();
-    expect(parsed.accounts?.public?.customerPortalUrl).toBeUndefined();
   });
 
   it("accepts English globally and as an explicit named-account override", () => {
@@ -189,24 +168,6 @@ describe("facebook config safety defaults", () => {
     expect(parsed.accounts?.dutch?.defaultLang).toBe("nl");
     expect(parsed.accounts?.inherited?.defaultLang).toBeUndefined();
     expect(() => MessengerConfigSchema.parse({ defaultLang: "fr" })).toThrow();
-  });
-
-  it("accepts only safe HTTPS customer portal URLs", () => {
-    expect(
-      MessengerConfigSchema.parse({
-        customerPortalUrl: "https://portal.example.test/account",
-      }).customerPortalUrl,
-    ).toBe("https://portal.example.test/account");
-    expect(() =>
-      MessengerConfigSchema.parse({
-        customerPortalUrl: "http://portal.example.test/account",
-      }),
-    ).toThrow();
-    expect(() =>
-      MessengerConfigSchema.parse({
-        customerPortalUrl: "https://user:secret@portal.example.test/account",
-      }),
-    ).toThrow();
   });
 
   it("supports Redis only as a root shared-state setting", () => {

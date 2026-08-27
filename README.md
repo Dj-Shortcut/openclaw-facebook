@@ -43,11 +43,13 @@ openclaw plugins install @dj-shortcut/facebook
 
 ## Repository Layout
 
-This repository is a monorepo containing the Facebook/OpenClaw integration and the Leaderbot customer portal.
+This repository is a monorepo containing two deliberately separate products:
+the generic Facebook/OpenClaw plugin and the tenant-owned Leaderbot customer
+runtime. Leaderbot customers do not pass through OpenClaw.
 
-- **Facebook Plugin (Root):** The core OpenClaw channel plugin for Facebook Page Messenger. It handles webhooks and message transport.
-- **Leaderbot Portal (`apps/image-gen`):** A full-stack application (Vite/React + Node/Express) that serves as the customer portal (`leaderbot.live`) and the image-generation service.
-- **Fly Gateway (`deploy/fly-gateway`):** Deployment configuration for the OpenClaw gateway with a public route guard.
+- **Facebook Plugin (Root):** The OpenClaw channel plugin used by the repository owner and reusable private installs.
+- **Leaderbot (`apps/image-gen`):** The customer-facing full-stack runtime. It owns customer Meta webhooks, tenant conversations, portal (`leaderbot.live`), image generation, quota, billing, privacy and deletion.
+- **Fly Gateway (`deploy/fly-gateway`):** Deployment configuration for the owner's private OpenClaw Messenger gateway. It is not a Leaderbot customer ingress.
 
 ```text
 .
@@ -72,7 +74,8 @@ can be restored and then applies only the backwards-compatible 0016 addition.
 Migration 0017 is blocked. Do not run production migrations, `fly deploy`, or
 `fly machine run` by hand. See
 [`docs/operations/production-deployments.md`](docs/operations/production-deployments.md).
-The gateway remains blocked until its volume migration is safely rehearsed.
+Personal gateway maintenance is independent and never blocks a Leaderbot
+customer release.
 
 ## Configure
 
@@ -123,10 +126,11 @@ repository; it is not required for Facebook Page Messenger DMs.
 ## Access model
 
 Default setup uses `dmPolicy: "pairing"` so unknown Facebook users receive a
-pairing code before they can talk to the assistant. For a public Page bot, use
-`dmPolicy: "open"` with `allowFrom: ["*"]` to let anyone message the Page only
-after you have published privacy and data-retention terms for that public
-Messenger experience. For private installs, prefer `pairing` or `allowlist`.
+pairing code before they can talk to the assistant. Generic third-party public
+Page bots may use `dmPolicy: "open"` with `allowFrom: ["*"]` after publishing
+appropriate privacy and retention terms. The checked-in Fly gateway stays on
+`pairing` or an explicit allowlist. Leaderbot customer Pages connect directly
+to `apps/image-gen`; do not use this OpenClaw access model for them.
 
 Open means the conversation entry point is public; it should not grant unknown users
 privileged tools, private memory, files, git/deploy access, or admin actions.
@@ -137,12 +141,13 @@ your OpenClaw host, model provider, logs, memory, and any enabled tools accordin
 to your runtime configuration. Publish a privacy policy, disclose automated/AI
 handling where required, and decide what data is retained, deleted, or shared
 with third-party providers before enabling this for a public Page.
-For paid or public assistants, keep billing, credits, model selection, and tool
-budgets in the OpenClaw host runtime where provider calls execute.
+For generic paid or public OpenClaw assistants, keep billing, credits, model
+selection, and tool budgets in the OpenClaw host runtime where provider calls
+execute. Leaderbot customer billing and quota live in `apps/image-gen` instead.
 
-## Optional Leaderbot image-generation bridge
+## Legacy optional Leaderbot image-generation bridge
 
-This package can optionally forward Messenger events and image-generation
+For compatibility with older deployments, this package can optionally forward Messenger events and image-generation
 prompts to the separate Leaderbot image-generation service. That path can send
 Messenger event payloads, Page-scoped sender IDs, prompt text, and Messenger
 media URLs outside the OpenClaw host. It is disabled by default for ClawHub and
@@ -160,7 +165,6 @@ and the Page's privacy/data-retention terms disclose that processing:
       leaderbotBridgeEnabled: true,
       unknownSenderMode: "leaderbot_free_tier",
       defaultLang: "nl",
-      customerPortalUrl: "https://leaderbot.live/",
       sharedStateStore: "memory",
     },
   },
@@ -169,11 +173,13 @@ and the Page's privacy/data-retention terms disclose that processing:
 
 The bridge still requires a valid internal token and an HTTPS
 `LEADERBOT_IMAGE_GEN_URL` unless you are using localhost for development.
+
+This bridge is not part of the current Leaderbot customer architecture and is
+disabled in the checked-in Fly deployment. New customer Pages must point Meta
+webhooks directly at `apps/image-gen`. Do not add bridge, gateway state, or
+OpenClaw quota work to the Leaderbot launch critical path.
 Set `defaultLang` to `"nl"` or `"en"` globally or per named Messenger account.
 Dutch remains the default for existing installations.
-`customerPortalUrl` controls the plan-neutral quota handoff and must be an HTTPS
-URL without embedded credentials; named accounts may override it.
-
 `sharedStateStore` is a root-only gateway setting. The default, `"memory"`, is
 safe for a single gateway replica. Before running more than one replica, set it
 to `"redis"` and configure `MESSENGER_SHARED_STATE_REDIS_URL`,

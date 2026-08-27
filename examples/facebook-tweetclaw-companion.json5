@@ -2,7 +2,7 @@
   channels: {
     facebook: {
       enabled: true,
-      name: "Leaderbot",
+      name: "My OpenClaw",
       pageId: "<FACEBOOK_PAGE_ID>",
       pageAccessToken: "<FACEBOOK_PAGE_ACCESS_TOKEN>",
       appSecret: "<FACEBOOK_APP_SECRET>",

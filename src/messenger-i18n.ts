@@ -1,18 +1,8 @@
-import {
-  DEFAULT_MESSENGER_CUSTOMER_PORTAL_URL,
-  DEFAULT_MESSENGER_PRIVACY_CONTACT,
-  MESSENGER_CUSTOMER_PORTAL_NAME,
-} from "./leaderbot-bridge.js";
-
 export type MessengerLanguage = "nl" | "en";
-
-export { DEFAULT_MESSENGER_CUSTOMER_PORTAL_URL } from "./leaderbot-bridge.js";
 
 type MessengerTranslationKey =
   | "missingReferencedPrompt"
   | "gatewayAudioBudgetReached"
-  | "planQuotaReached"
-  | "planQuotaUnavailable"
   | "internalActionFailed"
   | "deleteRequestFallback"
   | "imageGeneratorUnavailable"
@@ -43,13 +33,10 @@ const translations: Record<
       "Ik vind die prompt niet meer terug. Plak hem even opnieuw, dan maak ik de afbeelding.",
     gatewayAudioBudgetReached:
       "Even pauze, ons dagbudget voor voiceberichten is bereikt. Typ je bericht even uit, dan help ik meteen verder.",
-    planQuotaReached:
-      "Je tegoed voor je huidige plan is opgebruikt. Open je klantenportaal om je gebruik te bekijken.",
-    planQuotaUnavailable:
-      "Ik kan je tegoed nu niet veilig controleren. Probeer zo meteen opnieuw.",
     internalActionFailed:
       "Ik kon een interne actie niet uitvoeren. Probeer het zo meteen opnieuw.",
-    deleteRequestFallback: `Ik kon je verwijderverzoek nu niet automatisch verwerken. Mail ${DEFAULT_MESSENGER_PRIVACY_CONTACT} met je verzoek, dan behandelen we het via de privacyflow.`,
+    deleteRequestFallback:
+      "Ik kon je verwijderverzoek nu niet automatisch verwerken. Neem contact op met de Pagebeheerder via het gepubliceerde privacykanaal.",
     imageGeneratorUnavailable:
       "Ik kon de image generator nu niet bereiken. Probeer zo meteen opnieuw.",
     interactiveActionUnavailable:
@@ -61,7 +48,8 @@ const translations: Record<
       "Ik kan korte vragen beantwoorden, meedenken met taken en herkennen wanneer je een afbeelding wilt maken. Stuur gewoon wat je nodig hebt.",
     fastLaneStatus:
       "Online. Messenger is verbonden en ik kan je berichten ontvangen.",
-    fastLaneDeleteData: `Ik kan je data niet vanuit deze Messenger-gateway verwijderen. Gebruik de privacy- of data-verwijdering link van ${MESSENGER_CUSTOMER_PORTAL_NAME}, of mail ${DEFAULT_MESSENGER_PRIVACY_CONTACT} met je verzoek. Berichten die al in Messenger staan, blijven door Meta beheerd.`,
+    fastLaneDeleteData:
+      "Ik kan je data niet automatisch vanuit deze persoonlijke Messenger-gateway verwijderen. Neem contact op met de Pagebeheerder via het gepubliceerde privacykanaal. Berichten die al in Messenger staan, blijven door Meta beheerd.",
     attachmentAudioInstruction:
       "De gebruiker stuurde een voice/audio-bericht. Luister of transcribeer de bijlage als dat beschikbaar is en reageer inhoudelijk.",
     attachmentImageInstruction:
@@ -86,13 +74,10 @@ const translations: Record<
       "I can no longer find that prompt. Paste it again and I will create the image.",
     gatewayAudioBudgetReached:
       "Quick pause: our daily voice-message budget has been reached. Type your message and I will help right away.",
-    planQuotaReached:
-      "The credit for your current plan has been used up. Open your customer portal to review your usage.",
-    planQuotaUnavailable:
-      "I cannot safely check your credit right now. Please try again shortly.",
     internalActionFailed:
       "I could not complete an internal action. Please try again shortly.",
-    deleteRequestFallback: `I could not process your deletion request automatically. Email ${DEFAULT_MESSENGER_PRIVACY_CONTACT} and we will handle it through the privacy process.`,
+    deleteRequestFallback:
+      "I could not process your deletion request automatically. Contact the Page owner through the published privacy channel.",
     imageGeneratorUnavailable:
       "I could not reach the image generator. Please try again shortly.",
     interactiveActionUnavailable:
@@ -105,7 +90,8 @@ const translations: Record<
       "I can answer short questions, help with tasks, and recognize when you want to create an image. Just send what you need.",
     fastLaneStatus:
       "Online. Messenger is connected and I can receive your messages.",
-    fastLaneDeleteData: `I cannot delete your data from this Messenger gateway. Use ${MESSENGER_CUSTOMER_PORTAL_NAME}'s privacy or data-deletion link, or email ${DEFAULT_MESSENGER_PRIVACY_CONTACT}. Messages already stored in Messenger remain managed by Meta.`,
+    fastLaneDeleteData:
+      "I cannot automatically delete your data from this personal Messenger gateway. Contact the Page owner through the published privacy channel. Messages already stored in Messenger remain managed by Meta.",
     attachmentAudioInstruction:
       "The user sent a voice/audio message. Listen to or transcribe the attachment when available and respond to its content.",
     attachmentImageInstruction:
@@ -137,33 +123,6 @@ export function tMessenger(
   key: MessengerTranslationKey,
 ): string {
   return translations[lang][key];
-}
-
-export function normalizeMessengerCustomerPortalUrl(
-  value: string | null | undefined,
-): string {
-  try {
-    const portalUrl = new URL(
-      value?.trim() || DEFAULT_MESSENGER_CUSTOMER_PORTAL_URL,
-    );
-    if (
-      portalUrl.protocol !== "https:" ||
-      portalUrl.username ||
-      portalUrl.password
-    ) {
-      return DEFAULT_MESSENGER_CUSTOMER_PORTAL_URL;
-    }
-    return portalUrl.toString();
-  } catch {
-    return DEFAULT_MESSENGER_CUSTOMER_PORTAL_URL;
-  }
-}
-
-export function buildMessengerPlanQuotaReachedReply(
-  lang: MessengerLanguage,
-  customerPortalUrl: string | null | undefined,
-): string {
-  return `${tMessenger(lang, "planQuotaReached")} ${normalizeMessengerCustomerPortalUrl(customerPortalUrl)}`;
 }
 
 export function buildMessengerPairingReply(

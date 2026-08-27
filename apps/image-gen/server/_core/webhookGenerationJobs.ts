@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { MessengerSendOutcome } from "./messengerApi";
+import type { ImageQuotaBalance } from "./botResponse";
 import { safeLog } from "./messengerApi";
 import { getGenerationMetrics } from "./image-generation/openAiImageClient";
 import { executeGenerationFlow } from "./generationFlow";
@@ -206,6 +207,15 @@ class MessengerImageQuotaRecoveryError extends Error {
     );
     this.name = "MessengerImageQuotaRecoveryError";
   }
+}
+
+function toConversationImageQuotaBalance(
+  status: MessengerImageQuotaStatus
+): ImageQuotaBalance {
+  return {
+    daily: { ...status.daily },
+    monthly: { ...status.monthly },
+  };
 }
 
 /** Creates the Messenger image-generation job runner and queue/dead-letter entry points. */
@@ -1326,7 +1336,7 @@ async function reserveGenerationQuota(input: {
 
   const response = buildFreeQuotaReachedResponse(
     input.lang,
-    decision.quotaStatus
+    toConversationImageQuotaBalance(decision.quotaStatus)
   );
   const outcome = await input.deps.sendLoggedActions(
     input.psid,
@@ -1661,7 +1671,10 @@ async function sendGenerationAmbiguousBalanceNotice(input: {
     userId: input.userId,
     completionFence: input.completionFence,
   });
-  const response = buildImageQuotaBalanceResponse(input.lang, quotaStatus);
+  const response = buildImageQuotaBalanceResponse(
+    input.lang,
+    toConversationImageQuotaBalance(quotaStatus)
+  );
   let outcome: MessengerSendOutcome;
   try {
     outcome = await input.deps.sendLoggedText(
@@ -1814,6 +1827,8 @@ async function sendGenerationSuccessActions(input: {
   const successResponse = buildGenerationSuccessResponse(
     input.lang,
     input.quotaStatus
+      ? toConversationImageQuotaBalance(input.quotaStatus)
+      : undefined
   );
   let outcome: MessengerSendOutcome;
   try {

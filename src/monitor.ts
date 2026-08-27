@@ -41,20 +41,6 @@ import {
   type LeaderbotBridgeTrace,
 } from "./leaderbot-bridge.js";
 import {
-  createLeaderbotAiAnswerQuotaToken,
-  createLeaderbotAiAnswerIdempotencyKey,
-  finalizeLeaderbotAiAnswerQuota,
-  getLeaderbotAiAnswerQuotaReadiness,
-  heartbeatLeaderbotAiAnswerQuota,
-  isLeaderbotAiAnswerEnforcementEnabled,
-  markLeaderbotAiAnswerDeliveryKnownRejected,
-  markLeaderbotAiAnswerDeliveryStarted,
-  reserveLeaderbotAiAnswerQuota,
-  startLeaderbotAiAnswerQuotaHeartbeat,
-  type LeaderbotAiAnswerQuotaHeartbeat,
-  type LeaderbotAiAnswerQuotaLease,
-} from "./leaderbot-bridge.js";
-import {
   classifyMessengerFastLaneIntent,
   hasMessengerImageGenerationIntent,
   normalizeFastLaneText,
@@ -65,8 +51,6 @@ import {
 } from "./messenger-product-intents.js";
 import {
   buildMessengerPairingReply,
-  buildMessengerPlanQuotaReachedReply,
-  normalizeMessengerCustomerPortalUrl,
   normalizeMessengerLanguage,
   tMessenger,
   type MessengerLanguage,
@@ -86,11 +70,7 @@ import {
   stripFacebookTargetPrefix,
 } from "./naming.js";
 import { getMessengerRuntime } from "./runtime.js";
-import {
-  MessengerDeliveryError,
-  sendMessengerSenderAction,
-  sendMessengerText,
-} from "./send.js";
+import { sendMessengerSenderAction, sendMessengerText } from "./send.js";
 import { validateMessengerSignature } from "./signature.js";
 import {
   decodeOpenClawActionPayload,
@@ -213,21 +193,6 @@ const FACEBOOK_UNTRUSTED_TOOL_DENY = [
 ] as const;
 const messengerEventLoopDelay = monitorEventLoopDelay({ resolution: 20 });
 let activeMessengerEventJobs = 0;
-
-type LeaderbotAiAnswerDeliveryState =
-  "not_started" | "started" | "succeeded" | "known_rejected" | "ambiguous";
-
-function shouldCommitLeaderbotAiAnswerQuota(
-  state: LeaderbotAiAnswerDeliveryState,
-  visibleReplySent: boolean,
-): boolean {
-  return (
-    visibleReplySent ||
-    state === "started" ||
-    state === "succeeded" ||
-    state === "ambiguous"
-  );
-}
 
 messengerEventLoopDelay.enable();
 
@@ -1610,7 +1575,6 @@ export async function processMessengerEvent(params: {
 }) {
   activeMessengerEventJobs += 1;
   let transientMedia: ChannelInboundMediaInput[] = [];
-  let aiAnswerQuotaHeartbeat: LeaderbotAiAnswerQuotaHeartbeat | null = null;
   try {
     const ingressDecision = await shouldProcessMessengerEvent(params);
     if (ingressDecision.action === "stop") {
@@ -1620,9 +1584,6 @@ export async function processMessengerEvent(params: {
     const stateStore =
       params.stateStore ?? getMemoryMessengerEphemeralStateStore();
     const lang = normalizeMessengerLanguage(params.account.config.defaultLang);
-    const customerPortalUrl = normalizeMessengerCustomerPortalUrl(
-      params.account.config.customerPortalUrl,
-    );
     const openClawActionText = getOpenClawActionText(params.event);
     const text = openClawActionText ?? params.event.message?.text ?? "";
     const timestamp = params.event.timestamp ?? Date.now();
@@ -2187,54 +2148,6 @@ export async function processMessengerEvent(params: {
       ...mediaPayload,
     });
     const core = getMessengerRuntime();
-    let aiAnswerQuotaLease: LeaderbotAiAnswerQuotaLease | null = null;
-    if (isLeaderbotAiAnswerEnforcementEnabled()) {
-      const ownerToken = createLeaderbotAiAnswerQuotaToken();
-      const quotaDecision = await reserveLeaderbotAiAnswerQuota({
-        pageId: params.account.pageId,
-        idempotencyKey: createLeaderbotAiAnswerIdempotencyKey({
-          accountId: params.account.accountId,
-          pageId: params.account.pageId,
-          messageId: params.event.message?.mid,
-          traceRequestId: params.trace.reqId,
-          timestamp,
-        }),
-        ownerToken,
-      });
-      if (quotaDecision.status === "exhausted") {
-        await sendMessengerText(
-          senderId,
-          buildMessengerPlanQuotaReachedReply(lang, customerPortalUrl),
-          {
-            cfg: params.cfg,
-            accountId: params.account.accountId,
-          },
-        );
-        return;
-      }
-      if (quotaDecision.status === "unavailable") {
-        await sendMessengerText(
-          senderId,
-          tMessenger(lang, "planQuotaUnavailable"),
-          {
-            cfg: params.cfg,
-            accountId: params.account.accountId,
-          },
-        );
-        return;
-      }
-      if (quotaDecision.status === "duplicate") {
-        return;
-      }
-      if (quotaDecision.status === "reserved") {
-        aiAnswerQuotaLease = {
-          reservationId: quotaDecision.reservationId,
-          ownerToken: quotaDecision.ownerToken,
-        };
-        aiAnswerQuotaHeartbeat =
-          startLeaderbotAiAnswerQuotaHeartbeat(aiAnswerQuotaLease);
-      }
-    }
     const typingScopeKey = beginMessengerTypingTurn({
       accountId: params.account.accountId,
       pageId: params.account.pageId,
@@ -2259,9 +2172,6 @@ export async function processMessengerEvent(params: {
     logVerbose(
       `messenger: dispatching inbound turn session=${redactedSessionKey} account=${route.accountId}`,
     );
-    let aiAnswerDeliveryState: LeaderbotAiAnswerDeliveryState = "not_started";
-    let aiAnswerDeliveryAttemptToken: string | null = null;
-    let visibleAiReplySent = false;
     let turnResult:
       Awaited<ReturnType<typeof core.channel.inbound.run>> | undefined;
     let openClawError: unknown;
@@ -2314,82 +2224,15 @@ export async function processMessengerEvent(params: {
                 logMessengerStage(params.trace, "first_response_ready", {
                   openclawSessionId: redactedSessionKey,
                 });
-                if (
-                  aiAnswerQuotaLease &&
-                  (aiAnswerDeliveryState === "known_rejected" ||
-                    aiAnswerDeliveryState === "ambiguous")
-                ) {
-                  throw new Error(
-                    "Messenger paid AI answer delivery cannot be retried safely",
-                  );
-                }
-                if (
-                  aiAnswerQuotaLease &&
-                  aiAnswerDeliveryState === "not_started"
-                ) {
-                  const leaseRenewed = aiAnswerQuotaHeartbeat
-                    ? await aiAnswerQuotaHeartbeat.renewBeforeDelivery()
-                    : await heartbeatLeaderbotAiAnswerQuota(aiAnswerQuotaLease);
-                  if (!leaseRenewed) {
-                    throw new Error(
-                      "Messenger paid AI answer quota lease is unavailable",
-                    );
-                  }
-                  aiAnswerDeliveryAttemptToken =
-                    createLeaderbotAiAnswerQuotaToken();
-                  const deliveryStarted =
-                    await markLeaderbotAiAnswerDeliveryStarted({
-                      ...aiAnswerQuotaLease,
-                      pageId: params.account.pageId,
-                      deliveryAttemptToken: aiAnswerDeliveryAttemptToken,
-                    });
-                  if (!deliveryStarted) {
-                    aiAnswerDeliveryAttemptToken = null;
-                    throw new Error(
-                      "Messenger paid AI answer delivery fence is unavailable",
-                    );
-                  }
-                  aiAnswerDeliveryState = "started";
-                }
-                let result: Awaited<ReturnType<typeof sendMessengerText>>;
-                try {
-                  result = await sendMessengerText(
-                    senderId,
-                    deliveryPayload.text,
-                    {
-                      cfg: params.cfg,
-                      accountId: params.account.accountId,
-                      quickReplies: getMessengerQuickReplies(deliveryPayload),
-                    },
-                  );
-                } catch (error) {
-                  if (
-                    aiAnswerQuotaLease &&
-                    aiAnswerDeliveryState === "started" &&
-                    aiAnswerDeliveryAttemptToken
-                  ) {
-                    if (
-                      error instanceof MessengerDeliveryError &&
-                      error.outcome === "known_rejected"
-                    ) {
-                      const rejectionRecorded =
-                        await markLeaderbotAiAnswerDeliveryKnownRejected({
-                          ...aiAnswerQuotaLease,
-                          pageId: params.account.pageId,
-                          deliveryAttemptToken: aiAnswerDeliveryAttemptToken,
-                        });
-                      aiAnswerDeliveryState = rejectionRecorded
-                        ? "known_rejected"
-                        : "ambiguous";
-                    } else {
-                      aiAnswerDeliveryState = "ambiguous";
-                    }
-                  }
-                  throw error;
-                }
-                if (aiAnswerQuotaLease && aiAnswerDeliveryState === "started") {
-                  aiAnswerDeliveryState = "succeeded";
-                }
+                const result = await sendMessengerText(
+                  senderId,
+                  deliveryPayload.text,
+                  {
+                    cfg: params.cfg,
+                    accountId: params.account.accountId,
+                    quickReplies: getMessengerQuickReplies(deliveryPayload),
+                  },
+                );
                 rememberMessengerAssistantPrompt({
                   accountId: params.account.accountId,
                   pageId: params.account.pageId,
@@ -2406,7 +2249,6 @@ export async function processMessengerEvent(params: {
                     senderId,
                   )} message=${redactMessengerIdentifier(result.messageId)}`,
                 );
-                visibleAiReplySent = true;
                 return {
                   messageIds: [result.messageId],
                   receipt: result.receipt,
@@ -2441,32 +2283,6 @@ export async function processMessengerEvent(params: {
         }
       }
     }
-    if (aiAnswerQuotaLease) {
-      await aiAnswerQuotaHeartbeat?.stop();
-      const outcome = shouldCommitLeaderbotAiAnswerQuota(
-        aiAnswerDeliveryState,
-        visibleAiReplySent,
-      )
-        ? "committed"
-        : "released";
-      let finalized = false;
-      try {
-        finalized = await finalizeLeaderbotAiAnswerQuota({
-          pageId: params.account.pageId,
-          ...aiAnswerQuotaLease,
-          outcome,
-        });
-      } catch {
-        finalized = false;
-      }
-      if (!finalized) {
-        params.runtime.error?.(
-          danger(
-            `messenger paid AI answer quota finalization failed outcome=${outcome} account=${params.account.accountId}`,
-          ),
-        );
-      }
-    }
     if (openClawError) {
       throw openClawError;
     }
@@ -2493,7 +2309,6 @@ export async function processMessengerEvent(params: {
       );
     }
   } finally {
-    await aiAnswerQuotaHeartbeat?.stop();
     await cleanupMessengerMedia(transientMedia);
     logMessengerStage(params.trace, "request_completed", {
       activeMessengerEventJobs,
@@ -2529,20 +2344,6 @@ async function processScheduledMessengerEvents(params: {
         danger(`messenger webhook background error: ${String(error)}`),
       );
     }
-  }
-}
-
-export async function assertMessengerPaidAnswerQuotaReadiness(): Promise<void> {
-  if (!isLeaderbotAiAnswerEnforcementEnabled()) {
-    return;
-  }
-  const readiness = await getLeaderbotAiAnswerQuotaReadiness();
-  if (
-    !readiness?.preflightReady ||
-    !readiness.admissionEnabled ||
-    !readiness.drainEnabled
-  ) {
-    throw new Error("Messenger paid AI answer quota readiness is unavailable");
   }
 }
 

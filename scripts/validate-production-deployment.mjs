@@ -948,12 +948,12 @@ function validateGatewayPreparatoryEnforcement(contract, flyConfig) {
     );
   }
   if (
-    /(?:^|\n)\s*LEADERBOT_AI_ANSWER_ENFORCEMENT_ENABLED\s*=\s*(?:"1"|"true"|true)\s*(?:#.*)?(?:\n|$)/i.test(
+    /(?:^|\n)\s*LEADERBOT_AI_ANSWER_ENFORCEMENT_ENABLED\s*=/i.test(
       flyConfig,
     )
   ) {
     fail(
-      "fly.toml must keep gateway quota enforcement disabled throughout the preparatory rebaseline",
+      "fly.toml personal gateway must not configure customer AI answer enforcement",
     );
   }
 }
@@ -5659,13 +5659,11 @@ export function validateProductionRepository(rootDir = process.cwd()) {
     !gatewayFlyConfig.includes(
       'dockerfile = "deploy/fly-gateway/Dockerfile"',
     ) ||
-    !gatewayFlyConfig.includes(
-      'LEADERBOT_AI_ANSWER_ENFORCEMENT_ENABLED = "false"',
-    ) ||
+    gatewayFlyConfig.includes("LEADERBOT_AI_ANSWER_ENFORCEMENT_ENABLED") ||
     gatewayFlyConfig.includes("Dockerfile.route-guard-hotfix")
   ) {
     fail(
-      "gateway must select the pinned full runtime while AI answer enforcement remains disabled",
+      "personal gateway must select the pinned full runtime without customer AI answer enforcement",
     );
   }
   for (const retiredGatewayCap of [

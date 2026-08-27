@@ -5,21 +5,12 @@ import {
 import { requireChannelOpenAllowFrom } from "openclaw/plugin-sdk/extension-shared";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 import { z } from "zod";
-import { DEFAULT_MESSENGER_CUSTOMER_PORTAL_URL } from "./messenger-i18n.js";
 import type { ResolvedMessengerAccount } from "./types.js";
 
 const DmPolicySchema = z.enum(["open", "allowlist", "pairing", "disabled"]);
 const UnknownSenderModeSchema = z.enum(["pairing", "leaderbot_free_tier"]);
 const MessengerLanguageSchema = z.enum(["nl", "en"]);
 const MessengerSharedStateStoreSchema = z.enum(["memory", "redis"]);
-const MessengerCustomerPortalUrlSchema = z
-  .string()
-  .url()
-  .refine((value) => {
-    const url = new URL(value);
-    return url.protocol === "https:" && !url.username && !url.password;
-  }, "Customer portal URL must use HTTPS without embedded credentials");
-
 const MessengerCommonConfigShape = {
   enabled: z.boolean().optional(),
   pageId: z.string().optional(),
@@ -35,7 +26,6 @@ const MessengerCommonConfigShape = {
   unknownSenderMode: UnknownSenderModeSchema.optional(),
   leaderbotBridgeEnabled: z.boolean().optional().default(false),
   defaultLang: MessengerLanguageSchema.optional(),
-  customerPortalUrl: MessengerCustomerPortalUrlSchema.optional(),
   responsePrefix: z.string().optional(),
   webhookPath: z.string().optional(),
   defaultTo: z.string().optional(),
@@ -45,9 +35,6 @@ const MessengerCommonConfigShape = {
 const MessengerCommonConfigSchemaBase = z.object({
   ...MessengerCommonConfigShape,
   defaultLang: MessengerLanguageSchema.optional().default("nl"),
-  customerPortalUrl: MessengerCustomerPortalUrlSchema.optional().default(
-    DEFAULT_MESSENGER_CUSTOMER_PORTAL_URL,
-  ),
 });
 
 const MessengerAccountConfigSchema = z

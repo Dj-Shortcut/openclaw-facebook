@@ -18,7 +18,6 @@ const validFlyConfig = [
   'OPENCLAW_FACEBOOK_LEADERBOT_BRIDGE_ENABLED = "0"',
   'OPENCLAW_PUBLIC_GATEWAY_GUARD = "1"',
   'OPENCLAW_PUBLIC_GATEWAY_PATHS = "/healthz"',
-  'LEADERBOT_AI_ANSWER_ENFORCEMENT_ENABLED = "false"',
   "",
   "[[vm]]",
   'memory = "4096"',
@@ -88,11 +87,6 @@ describe("gateway deployment safety validation", () => {
       ),
     ).toThrow("bridge disabled");
     expect(() =>
-      validateFlyGatewayConfig(
-        `${validFlyConfig}\nLEADERBOT_IMAGE_GEN_URL = "https://image-gen.example.test"`,
-      ),
-    ).toThrow("retired Leaderbot bridge URL");
-    expect(() =>
       validateFlyGatewayConfig(validFlyConfig.replace("4096", "2048")),
     ).toThrow("VM allocation");
   });
@@ -104,7 +98,6 @@ describe("gateway deployment safety validation", () => {
     ["OPENCLAW_FACEBOOK_LEADERBOT_BRIDGE_ENABLED", "bridge disabled"],
     ["OPENCLAW_PUBLIC_GATEWAY_GUARD", "route guard enabled"],
     ["OPENCLAW_PUBLIC_GATEWAY_PATHS", "public health route"],
-    ["LEADERBOT_AI_ANSWER_ENFORCEMENT_ENABLED", "enforcement disabled"],
     ["dockerfile", "full gateway Dockerfile"],
     ["memory", "VM allocation"],
   ])("rejects %s outside its reviewed Fly table", (setting, message) => {
@@ -113,6 +106,19 @@ describe("gateway deployment safety validation", () => {
         moveTomlAssignmentToOtherTable(validFlyConfig, setting),
       ),
     ).toThrow(message);
+  });
+
+  it.each([
+    "LEADERBOT_IMAGE_GEN_URL",
+    "LEADERBOT_PORTAL_ORIGIN",
+    "OPENCLAW_PUBLIC_PORTAL_ORIGIN",
+    "LEADERBOT_AI_ANSWER_ENFORCEMENT_ENABLED",
+  ])("rejects customer-only setting %s on the personal gateway", (setting) => {
+    expect(() =>
+      validateFlyGatewayConfig(
+        `${validFlyConfig}\n${setting} = "configured"`,
+      ),
+    ).toThrow(`must not configure customer setting ${setting}`);
   });
 
   it("rejects table-like settings hidden inside TOML multiline strings", () => {

@@ -4730,7 +4730,7 @@ describe("production deployment contract", () => {
     );
   });
 
-  it("rejects Fly gateway quota enforcement throughout the preparatory rebaseline", () => {
+  it("rejects customer AI answer enforcement on the personal gateway", () => {
     const root = createRepositoryFixture();
     const configPath = path.join(root, "fly.toml");
     const config = fs.readFileSync(configPath, "utf8");
@@ -4743,7 +4743,7 @@ describe("production deployment contract", () => {
     );
 
     expect(() => validateProductionRepository(root)).toThrow(
-      "fly.toml must keep gateway quota enforcement disabled throughout the preparatory rebaseline",
+      "personal gateway must select the pinned full runtime without customer AI answer enforcement",
     );
   });
 

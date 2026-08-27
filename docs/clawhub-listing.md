@@ -145,7 +145,7 @@ may pass messages to model providers or tools according to your configuration.
 ## Optional Leaderbot Image Generation
 
 The package contains a guarded bridge for Leaderbot image generation. When
-`leaderbotBridgeEnabled: true` is configured, a valid internal token is present,
+the legacy `leaderbotBridgeEnabled: true` compatibility option is configured, a valid internal token is present,
 and `LEADERBOT_IMAGE_GEN_URL` points to the image-generation service (or
 localhost during development), selected Messenger events and image prompts may
 be sent to the separate Leaderbot image-generation service. That forwarded data
@@ -161,6 +161,9 @@ The bridge is disabled by default, even if `LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN`
 or `INTERNAL_IMAGE_REQUEST_TOKEN` is set on the host. Do not enable it unless
 you intend Messenger content and identifiers to be processed by that external
 service and have disclosed the behavior to Page users.
+
+This compatibility bridge is not used by current Leaderbot customers. New
+Leaderbot customer Pages send Meta webhooks directly to `apps/image-gen`.
 
 ## Production Notes
 

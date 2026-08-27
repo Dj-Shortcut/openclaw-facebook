@@ -131,14 +131,13 @@ Use `channels.facebook` for new installs:
   channels: {
     facebook: {
       enabled: true,
-      name: "Leaderbot",
+      name: "My Assistant",
       pageId: "<FACEBOOK_PAGE_ID>",
       pageAccessToken: "<FACEBOOK_PAGE_ACCESS_TOKEN>",
       appSecret: "<FACEBOOK_APP_SECRET>",
       verifyToken: "<FACEBOOK_VERIFY_TOKEN>",
       dmPolicy: "pairing",
       defaultLang: "nl",
-      customerPortalUrl: "https://leaderbot.live/",
       sharedStateStore: "memory",
     },
   },
@@ -150,9 +149,6 @@ which Page-scoped sender IDs may use the assistant. Use `open` for a public Page
 only after publishing privacy and data-retention terms.
 Set `defaultLang` to `"nl"` or `"en"`; named accounts may override the global
 value. Omitting it preserves the existing Dutch response language.
-Set `customerPortalUrl` to the tenant's HTTPS portal. It is used for the visible,
-plan-neutral quota handoff and rejects embedded URL credentials.
-
 `sharedStateStore` is global for the Facebook channel and cannot be overridden
 per named account. Keep the default `"memory"` only with one gateway replica.
 For shared deduplication and the optional atomic daily audio-transcription cap
@@ -183,12 +179,16 @@ This store does not persist webhook work after Meta receives the HTTP
 acknowledgement. Keep a single gateway replica until a durable tenant-scoped
 ingress queue/outbox closes that availability gap.
 
-The optional Leaderbot image-generation bridge is off by default. If you enable
+The legacy optional Leaderbot image-generation bridge is off by default. If you enable
 `leaderbotBridgeEnabled: true`, selected Messenger events, Page-scoped sender
 IDs, image prompts, and Messenger media URLs can be forwarded to the separate
 Leaderbot image-generation service. Do not enable that bridge unless the Page is
 intended to use external Leaderbot image generation and the behavior is
 disclosed to users.
+
+New Leaderbot customer Pages do not use this bridge. Their Meta webhook points
+directly to `apps/image-gen`; the checked-in personal OpenClaw gateway remains
+pairing-only with the bridge disabled.
 
 You can also provide the same values through the default environment variables:
 
@@ -218,7 +218,7 @@ Examples:
 
 ```text
 https://example.com/facebook/webhook
-https://leaderbot-live.fly.dev/facebook/webhook
+https://openclaw-gateway.example.com/facebook/webhook
 https://your-tunnel.ngrok-free.app/facebook/webhook
 ```
 
