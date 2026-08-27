@@ -166,4 +166,31 @@ describe("package-manager contract", () => {
       ".github/workflows/clawhub-plugin-publish.yml: dry-run source must bind the exact pull-request head commit",
     );
   });
+
+  it("rejects broad product paths in ClawHub plugin CI", () => {
+    const fixture = makeFixture();
+    const workflowPath = path.join(
+      fixture,
+      ".github/workflows/clawhub-plugin-publish.yml",
+    );
+    const workflow = fs
+      .readFileSync(workflowPath, "utf8")
+      .replace('      - "docs/clawhub.md"\n', '      - "docs/**"\n');
+    fs.writeFileSync(workflowPath, workflow);
+
+    expect(validatePackageManagerContract(fixture)).toContain(
+      ".github/workflows/clawhub-plugin-publish.yml: ClawHub CI must not run for unrelated product paths",
+    );
+  });
+
+  it("keeps plugin packaging out of product contract CI", () => {
+    const fixture = makeFixture();
+    const workflowPath = path.join(fixture, ".github/workflows/main.yml");
+    const workflow = `${fs.readFileSync(workflowPath, "utf8")}\n      - name: Duplicate plugin validation\n        run: npm run openclaw:validate\n`;
+    fs.writeFileSync(workflowPath, workflow);
+
+    expect(validatePackageManagerContract(fixture)).toContain(
+      ".github/workflows/main.yml: source CI must run product contracts without duplicating plugin packaging",
+    );
+  });
 });

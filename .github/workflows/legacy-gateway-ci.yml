@@ -1,0 +1,55 @@
+name: Legacy gateway CI
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/legacy-gateway-ci.yml"
+      - ".github/workflows/gateway-state-rebaseline.yml"
+      - "deploy/fly-gateway/**"
+      - "fly.toml"
+      - "scripts/gateway-state-rebaseline-workflow.test.mjs"
+      - "scripts/select-fresh-fly-snapshot.mjs"
+      - "scripts/select-fresh-fly-snapshot.test.mjs"
+      - "scripts/validate-gateway-deployment-safety.mjs"
+      - "scripts/validate-gateway-deployment-safety.test.mjs"
+      - "scripts/verify-gateway-state-rebaseline.mjs"
+      - "scripts/verify-gateway-state-rebaseline.test.mjs"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/legacy-gateway-ci.yml"
+      - ".github/workflows/gateway-state-rebaseline.yml"
+      - "deploy/fly-gateway/**"
+      - "fly.toml"
+      - "scripts/gateway-state-rebaseline-workflow.test.mjs"
+      - "scripts/select-fresh-fly-snapshot.mjs"
+      - "scripts/select-fresh-fly-snapshot.test.mjs"
+      - "scripts/validate-gateway-deployment-safety.mjs"
+      - "scripts/validate-gateway-deployment-safety.test.mjs"
+      - "scripts/verify-gateway-state-rebaseline.mjs"
+      - "scripts/verify-gateway-state-rebaseline.test.mjs"
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate the disabled gateway boundary
+        run: npm run gateway:deployment-safety
+
+      - name: Test only the transitional gateway runtime
+        run: npm run test:legacy-gateway

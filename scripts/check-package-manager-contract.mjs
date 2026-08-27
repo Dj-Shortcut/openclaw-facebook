@@ -237,6 +237,30 @@ export function validatePackageManagerContract(repoRoot = process.cwd()) {
         `${clawhubWorkflowPath}: dry-run source must bind the exact pull-request head commit`,
       );
     }
+    for (const forbiddenPath of [
+      '      - "docs/**"',
+      '      - "scripts/**"',
+      '      - "deploy/fly-gateway/**"',
+    ]) {
+      if (source.includes(forbiddenPath)) {
+        failures.push(
+          `${clawhubWorkflowPath}: ClawHub CI must not run for unrelated product paths`,
+        );
+        break;
+      }
+    }
+    for (const required of [
+      "run: npm run test:plugin",
+      "TEST_MESSENGER_REDIS_URL: redis://127.0.0.1:6379",
+      "run: npm audit --audit-level=moderate",
+    ]) {
+      if (!source.includes(required)) {
+        failures.push(
+          `${clawhubWorkflowPath}: must own the scoped plugin validation and package audit`,
+        );
+        break;
+      }
+    }
   }
 
   const tauriConfigPath = "apps/customer-app/src-tauri/tauri.conf.json";
@@ -305,6 +329,16 @@ export function validatePackageManagerContract(repoRoot = process.cwd()) {
     ) {
       failures.push(
         `${mainWorkflowPath}: must run the package-manager contract guard`,
+      );
+    }
+    if (
+      !source.includes("run: npm run test:production-contracts") ||
+      source.includes("run: npm run test:plugin") ||
+      source.includes("run: npm run openclaw:validate") ||
+      source.includes("run: npm run pack:dry")
+    ) {
+      failures.push(
+        `${mainWorkflowPath}: source CI must run product contracts without duplicating plugin packaging`,
       );
     }
     if (!workflowRunsForAllPullRequestPaths(source)) {

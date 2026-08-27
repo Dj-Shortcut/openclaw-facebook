@@ -8,10 +8,21 @@ on:
       - "package-lock.json"
       - "openclaw.plugin.json"
       - "README.md"
-      - "docs/**"
-      - "deploy/fly-gateway/**"
+      - "docs/clawhub-listing.md"
+      - "docs/clawhub.md"
+      - "docs/facebook-complete-tutorial.md"
+      - "docs/openclaw-update.md"
+      - "docs/operator-prompt-routing.md"
+      - "docs/setup.md"
       - "examples/**"
-      - "scripts/**"
+      - "scripts/openclaw-login-command.mjs"
+      - "scripts/openclaw-login-command.test.mjs"
+      - "scripts/openclaw-login.mjs"
+      - "scripts/run-vitest.mjs"
+      - "scripts/update-openclaw.mjs"
+      - "scripts/update-openclaw.test.mjs"
+      - "scripts/validate-openclaw-runtime.mjs"
+      - "scripts/validate-release-versions.mjs"
       - "src/**"
       - "*.ts"
       - "tsconfig.json"
@@ -34,6 +45,17 @@ jobs:
   package-artifact:
     runs-on: ubuntu-latest
 
+    services:
+      redis:
+        image: redis:7-alpine@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
     steps:
       - name: Checkout
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -54,7 +76,12 @@ jobs:
         run: npm run openclaw:validate
 
       - name: Test
-        run: npm test
+        run: npm run test:plugin
+        env:
+          TEST_MESSENGER_REDIS_URL: redis://127.0.0.1:6379
+
+      - name: Audit plugin dependencies
+        run: npm audit --audit-level=moderate
 
       - name: Dry-run npm pack
         run: npm run pack:dry

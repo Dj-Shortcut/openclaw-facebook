@@ -17,6 +17,7 @@ const result = spawnSync(
   vitestBin,
   [
     'run',
+    ...process.argv.slice(2),
   ],
   {
   stdio: 'inherit',
