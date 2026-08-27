@@ -8,10 +8,21 @@ on:
       - "package-lock.json"
       - "openclaw.plugin.json"
       - "README.md"
-      - "docs/**"
-      - "deploy/fly-gateway/**"
+      - "docs/clawhub-listing.md"
+      - "docs/clawhub.md"
+      - "docs/facebook-complete-tutorial.md"
+      - "docs/openclaw-update.md"
+      - "docs/operator-prompt-routing.md"
+      - "docs/setup.md"
       - "examples/**"
-      - "scripts/**"
+      - "scripts/openclaw-login-command.mjs"
+      - "scripts/openclaw-login-command.test.mjs"
+      - "scripts/openclaw-login.mjs"
+      - "scripts/run-vitest.mjs"
+      - "scripts/update-openclaw.mjs"
+      - "scripts/update-openclaw.test.mjs"
+      - "scripts/validate-openclaw-runtime.mjs"
+      - "scripts/validate-release-versions.mjs"
       - "src/**"
       - "*.ts"
       - "tsconfig.json"
@@ -23,6 +34,31 @@ on:
         required: true
         default: false
   push:
+    branches: [main]
+    paths:
+      - ".github/workflows/clawhub-plugin-publish.yml"
+      - "package.json"
+      - "package-lock.json"
+      - "openclaw.plugin.json"
+      - "README.md"
+      - "docs/clawhub-listing.md"
+      - "docs/clawhub.md"
+      - "docs/facebook-complete-tutorial.md"
+      - "docs/openclaw-update.md"
+      - "docs/operator-prompt-routing.md"
+      - "docs/setup.md"
+      - "examples/**"
+      - "scripts/openclaw-login-command.mjs"
+      - "scripts/openclaw-login-command.test.mjs"
+      - "scripts/openclaw-login.mjs"
+      - "scripts/run-vitest.mjs"
+      - "scripts/update-openclaw.mjs"
+      - "scripts/update-openclaw.test.mjs"
+      - "scripts/validate-openclaw-runtime.mjs"
+      - "scripts/validate-release-versions.mjs"
+      - "src/**"
+      - "*.ts"
+      - "tsconfig.json"
     tags:
       - "v*"
 
@@ -33,6 +69,17 @@ permissions:
 jobs:
   package-artifact:
     runs-on: ubuntu-latest
+
+    services:
+      redis:
+        image: redis:7-alpine@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
 
     steps:
       - name: Checkout
@@ -54,7 +101,12 @@ jobs:
         run: npm run openclaw:validate
 
       - name: Test
-        run: npm test
+        run: npm run test:plugin
+        env:
+          TEST_MESSENGER_REDIS_URL: redis://127.0.0.1:6379
+
+      - name: Audit plugin dependencies
+        run: npm audit --audit-level=moderate
 
       - name: Dry-run npm pack
         run: npm run pack:dry
@@ -117,7 +169,7 @@ jobs:
       dry_run: false
 
   clawhub-publish-token:
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs: package-artifact
     permissions:
       contents: read

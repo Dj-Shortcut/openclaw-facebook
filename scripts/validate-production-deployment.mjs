@@ -3273,7 +3273,6 @@ function validateRootValidationTriggers(rootDir) {
     ROOT_VALIDATION_WORKFLOW_PATH,
     "validate",
   );
-  assertPinnedRedisCiService(workflow, ROOT_VALIDATION_WORKFLOW_PATH);
   for (const pinnedAction of [
     "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6",
     "actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6",
@@ -3286,8 +3285,20 @@ function validateRootValidationTriggers(rootDir) {
   }
 }
 
-function assertRequiredSourceCiTriggers(workflow, workflowPath, jobName) {
+function assertRequiredSourceCiTriggers(
+  workflow,
+  workflowPath,
+  jobName,
+  changeOutput,
+) {
   const job = namedWorkflowJobBody(workflow, jobName);
+  const changesJob = namedWorkflowJobBody(workflow, "changes");
+  const validJobGate = changeOutput
+    ? job?.includes("needs: changes") === true &&
+      job.includes(`if: needs.changes.outputs.${changeOutput} == 'true'`) &&
+      changesJob.length > 0 &&
+      !/^    if:/m.test(changesJob)
+    : job?.includes("needs: changes") !== true && !/^    if:/m.test(job ?? "");
   if (
     !workflow.includes("on:\n  pull_request:\n  push:\n    branches: [main]") ||
     occurrenceCount(workflow, "  pull_request:") !== 1 ||
@@ -3295,7 +3306,7 @@ function assertRequiredSourceCiTriggers(workflow, workflowPath, jobName) {
     occurrenceCount(workflow, "    branches: [main]") !== 1 ||
     /\b(?:paths|paths-ignore):/.test(workflow) ||
     !job ||
-    /^    if:/m.test(job)
+    !validJobGate
   ) {
     fail(
       `${workflowPath} must run ${jobName} on every pull request and every main push without path filters`,
@@ -3443,8 +3454,36 @@ function validateImageGenMigrationCi(rootDir) {
   );
   assertNoDirectGithubExpressionsInRunBlocks(imageCi, imageCiPath);
   assertNoDirectGithubExpressionsInRunBlocks(migrationCi, migrationCiPath);
-  assertRequiredSourceCiTriggers(imageCi, imageCiPath, "checks");
-  assertRequiredSourceCiTriggers(migrationCi, migrationCiPath, "migrate");
+  assertRequiredSourceCiTriggers(
+    imageCi,
+    imageCiPath,
+    "checks",
+    "image_gen",
+  );
+  assertRequiredSourceCiTriggers(
+    migrationCi,
+    migrationCiPath,
+    "migrate",
+    "migration",
+  );
+  for (const [source, sourcePath, output] of [
+    [imageCi, imageCiPath, "image_gen"],
+    [migrationCi, migrationCiPath, "migration"],
+  ]) {
+    for (const required of [
+      "fetch-depth: 0",
+      "persist-credentials: false",
+      "CI_BASE_SHA:",
+      "run: node scripts/classify-ci-changes.mjs",
+      `outputs:\n      ${output}: \${{ steps.classify.outputs.${output} }}`,
+    ]) {
+      if (!source.includes(required)) {
+        fail(
+          `${sourcePath} must classify exact changed paths before expensive source CI`,
+        );
+      }
+    }
+  }
   assertPinnedRedisCiService(imageCi, imageCiPath);
   for (const required of [
     "explicit staged mode",

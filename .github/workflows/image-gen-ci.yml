@@ -12,7 +12,27 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  changes:
+    name: Classify image-gen changes
+    runs-on: ubuntu-latest
+    outputs:
+      image_gen: ${{ steps.classify.outputs.image_gen }}
+    steps:
+      - name: Checkout history for exact change classification
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Classify changed paths
+        id: classify
+        env:
+          CI_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: node scripts/classify-ci-changes.mjs
+
   checks:
+    needs: changes
+    if: needs.changes.outputs.image_gen == 'true'
     runs-on: ubuntu-latest
     services:
       redis:

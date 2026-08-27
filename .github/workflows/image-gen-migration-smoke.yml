@@ -14,8 +14,28 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: Classify migration changes
+    runs-on: ubuntu-latest
+    outputs:
+      migration: ${{ steps.classify.outputs.migration }}
+    steps:
+      - name: Checkout history for exact change classification
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Classify changed paths
+        id: classify
+        env:
+          CI_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: node scripts/classify-ci-changes.mjs
+
   migrate:
     name: Drizzle migration smoke
+    needs: changes
+    if: needs.changes.outputs.migration == 'true'
     runs-on: ubuntu-latest
     services:
       mysql:

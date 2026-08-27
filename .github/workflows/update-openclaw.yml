@@ -89,7 +89,7 @@ jobs:
 
       - name: Test
         if: steps.latest.outputs.changed == 'true'
-        run: npm test
+        run: npm run test:plugin
 
       - name: Dry-run npm pack
         if: steps.latest.outputs.changed == 'true'

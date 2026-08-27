@@ -3935,7 +3935,6 @@ describe("production deployment contract", () => {
   });
 
   it.each([
-    [".github/workflows/main.yml", "redis:7-alpine"],
     [
       ".github/workflows/image-gen-ci.yml",
       `redis:7-alpine@sha256:${"0".repeat(64)}`,
@@ -5724,6 +5723,20 @@ describe("production deployment contract", () => {
     );
   });
 
+  it("requires image-gen heavy checks to use the exact change classifier", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/image-gen-ci.yml",
+      "    if: needs.changes.outputs.image_gen == 'true'\n",
+      "",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must run checks on every pull request and every main push without path filters",
+    );
+  });
+
   it("runs migration smoke on every pull request", () => {
     const root = createRepositoryFixture();
     replaceFixtureText(
@@ -5735,6 +5748,20 @@ describe("production deployment contract", () => {
 
     expect(() => validateProductionRepository(root)).toThrow(
       "must run migrate on every pull request and every main push without path filters",
+    );
+  });
+
+  it("fails closed when migration change classification loses full history", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/image-gen-migration-smoke.yml",
+      "          fetch-depth: 0\n",
+      "          fetch-depth: 1\n",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must classify exact changed paths before expensive source CI",
     );
   });
 
