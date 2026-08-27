@@ -53,7 +53,12 @@ Eigen pagina -> Meta webhook -> OpenClaw Facebook-plugin -> persoonlijke OpenCla
 - [ ] **P5 - Release en rollback afronden.** Deploy uitsluitend goedgekeurde,
       ondertekende `apps/image-gen`- en storage-proxyimages; bewijs schema,
       back-up/restore, monitoring, queue/dead-letterhealth en rollback. Herhaal
-      daarna P3 zonder privacy-, quota-, tenant- of deliveryregressie.
+      daarna P3 zonder privacy-, quota-, tenant- of deliveryregressie. De
+      storage-proxydeploy van `sha256:d2a2...` is op 2026-08-27 mislukt; de
+      rollback is gezond, maar dat is geen geslaagde runtimepromotie. Voor de
+      volgende poging zijn nog een nieuwe attested image, een gereviewde
+      manifestwijziging en een nieuwe beschermde deploy met health- en
+      readinessbewijs vereist.
 
 ## Definition of done
 
@@ -97,6 +102,10 @@ Onderhoud krijgt geen productiecheckbox en mag P1-P5 niet onderbreken.
 - De image-gen releaseweg gebruikt immutable artifacts en scheidt appdeploy van
   databasemigratie; de beschermde `0016_expand`-overgang en restorecontrole zijn
   uitgevoerd op 2026-08-25.
+- Een metadata-only Cloudflare UI-controle op 2026-08-27 bevestigde **Admin Read
+  only** voor de aparte lifecyclecredential en exact één bucket in het actuele
+  account, uniek genaamd `leaderbot-images`; er zijn geen access-key- of
+  secretwaarden vastgelegd. Dit bewijst niet welke credential in Fly staat.
 - Mollie en entitlementfoundation bestaan fail-closed; live commerciële flags
   blijven uit.
 - De persoonlijke OpenClaw-gateway blijft afgeschermd en wordt niet meer als

@@ -10,6 +10,13 @@ primary_region = 'ams'
   STORAGE_TRUST_FLY_CLIENT_IP = "true"
   # STORAGE_RATE_LIMIT_REDIS_URL and STORAGE_RATE_LIMIT_KEY_SECRET are required
   # Fly secrets. Startup and /readyz fail closed when shared Redis is unavailable.
+  # R2_LIFECYCLE_ACCESS_KEY_ID and R2_LIFECYCLE_SECRET_ACCESS_KEY must be a
+  # separate Cloudflare R2 Admin Read only credential: account-wide bucket
+  # listing/configuration, object read/list, and read-only Data Catalog
+  # table/metadata access. The proxy uses it only for one lifecycle read per
+  # startup and never uses Data Catalog; provider scope cannot be inferred here.
+  # The object credential stays bucket-scoped Object Read & Write. Never deploy
+  # Admin Read & Write.
   # Phase 1 bridge: the currently running image-gen release still sends only
   # bearer auth and uses unscoped historical keys. Remove bearer auth only
   # after every image-gen Machine is on signed requests; retain legacy keys

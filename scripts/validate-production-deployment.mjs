@@ -34,6 +34,12 @@ const PINNED_FLYCTL_ASSET_URL =
 const PINNED_FLYCTL_ASSET_SHA256 =
   "c3b5ed05319adf8a265d68171758ea7b37bd340c5c3dc4e09e17fb6344b8ff90";
 const FORBIDDEN_FLY_API_HOSTNAME = "api.fly.io";
+const STORAGE_PROXY_DEPLOY_LIFECYCLE_SECRET_GATE = String.raw`fly secrets list --app leaderbot-storage-proxy --json \
+            | jq -e '[.[] | select((.name == "R2_LIFECYCLE_ACCESS_KEY_ID" or .name == "R2_LIFECYCLE_SECRET_ACCESS_KEY") and (.status == "Deployed" or .status == "Staged")) | .name] | sort == ["R2_LIFECYCLE_ACCESS_KEY_ID", "R2_LIFECYCLE_SECRET_ACCESS_KEY"]' \
+            >/dev/null`;
+const STORAGE_PROXY_ROLLBACK_LIFECYCLE_SECRET_GATE = String.raw`fly secrets list --app leaderbot-storage-proxy --json \
+            | jq -e '[.[] | select((.name == "R2_LIFECYCLE_ACCESS_KEY_ID" or .name == "R2_LIFECYCLE_SECRET_ACCESS_KEY") and (.status == "Deployed" or .status == "Staged" or .status == "Partial")) | .name] | sort == ["R2_LIFECYCLE_ACCESS_KEY_ID", "R2_LIFECYCLE_SECRET_ACCESS_KEY"]' \
+            >/dev/null`;
 const VERIFIED_FLYCTL_WORKFLOW_JOBS = Object.freeze({
   [TRUSTED_ARTIFACT_WORKFLOW_PATH]: ["build"],
   [SCHEMA_PROBE_CLEANUP_WORKFLOW_PATH]: ["cleanup"],
@@ -311,6 +317,113 @@ function namedWorkflowJobBody(workflow, jobName) {
     "m",
   );
   return workflow.match(pattern)?.[0] ?? null;
+}
+
+function validateStorageProxyLifecycleSecretMutationGates(workflow) {
+  const requirementMessage = `${PRODUCTION_WORKFLOW_PATH} must gate every storage-proxy Fly mutation on exact usable lifecycle-secret metadata without exposing secret metadata`;
+  const storageProxyJob = namedWorkflowJobBody(
+    workflow,
+    "deploy-storage-proxy",
+  );
+  const mutationSteps = [
+    {
+      name: "Deploy reviewed storage-proxy config",
+      gate: STORAGE_PROXY_DEPLOY_LIFECYCLE_SECRET_GATE,
+      mutations: ["npm run deploy:storage-proxy"],
+    },
+    {
+      name: "Restore captured storage-proxy release",
+      gate: STORAGE_PROXY_ROLLBACK_LIFECYCLE_SECRET_GATE,
+      mutations: [
+        "npm run deploy:storage-proxy",
+        "fly scale count 1 --process-group app",
+      ],
+    },
+  ];
+  if (
+    !storageProxyJob ||
+    occurrenceCount(
+      storageProxyJob,
+      STORAGE_PROXY_DEPLOY_LIFECYCLE_SECRET_GATE,
+    ) !== 1 ||
+    occurrenceCount(
+      storageProxyJob,
+      STORAGE_PROXY_ROLLBACK_LIFECYCLE_SECRET_GATE,
+    ) !== 1 ||
+    occurrenceCount(storageProxyJob, "fly secrets list") !==
+      mutationSteps.length ||
+    occurrenceCount(
+      storageProxyJob,
+      'fly secrets list --app leaderbot-storage-proxy --json',
+    ) !== mutationSteps.length ||
+    occurrenceCount(
+      storageProxyJob,
+      '"R2_LIFECYCLE_ACCESS_KEY_ID"',
+    ) !==
+      mutationSteps.length * 2 ||
+    occurrenceCount(
+      storageProxyJob,
+      '"R2_LIFECYCLE_SECRET_ACCESS_KEY"',
+    ) !==
+      mutationSteps.length * 2 ||
+    occurrenceCount(storageProxyJob, '.status == "Deployed"') !==
+      mutationSteps.length ||
+    occurrenceCount(storageProxyJob, '.status == "Staged"') !==
+      mutationSteps.length ||
+    occurrenceCount(storageProxyJob, '.status == "Partial"') !== 1 ||
+    occurrenceCount(storageProxyJob, "npm run deploy:storage-proxy") !== 2 ||
+    occurrenceCount(
+      storageProxyJob,
+      "fly scale count 1 --process-group app",
+    ) !== 1
+  ) {
+    fail(requirementMessage);
+  }
+  for (const { name, gate, mutations } of mutationSteps) {
+    const steps = namedWorkflowStepBodies(workflow, name);
+    const step = steps[0];
+    const strictModeIndex = step?.indexOf("set -euo pipefail") ?? -1;
+    const gateIndex = step?.indexOf(gate) ?? -1;
+    const gateEndIndex = gateIndex + gate.length;
+    if (
+      steps.length !== 1 ||
+      !step.includes(
+        "FLY_API_TOKEN: ${{ secrets.FLY_STORAGE_PROXY_DEPLOY_TOKEN }}",
+      ) ||
+      strictModeIndex < 0 ||
+      gateIndex <= strictModeIndex ||
+      occurrenceCount(step, gate) !== 1 ||
+      mutations.some((mutation) => step.indexOf(mutation) <= gateEndIndex)
+    ) {
+      fail(requirementMessage);
+    }
+  }
+  const mutatingRunBlocks = yamlRunBlocks(storageProxyJob).filter((block) =>
+    /\b(?:npm run deploy:storage-proxy|(?:fly|flyctl)\s+(?:deploy|releases\s+rollback|scale\s+(?:count|vm)|secrets\s+(?:import|set|unset)|(?:machine|machines)\s+(?:clone|destroy|restart|run|start|stop|update)|apps\s+(?:create|destroy)))\b/u.test(
+      block,
+    ),
+  );
+  if (
+    mutatingRunBlocks.length !== mutationSteps.length ||
+    mutatingRunBlocks.some((block) => {
+      const gate = [
+        STORAGE_PROXY_DEPLOY_LIFECYCLE_SECRET_GATE,
+        STORAGE_PROXY_ROLLBACK_LIFECYCLE_SECRET_GATE,
+      ].find((candidate) => block.includes(candidate));
+      if (!gate) {
+        return true;
+      }
+      const gateEndIndex = block.indexOf(gate) + gate.length;
+      const mutations = [
+        ...block.matchAll(
+          /\b(?:npm run deploy:storage-proxy|(?:fly|flyctl)\s+(?:deploy|releases\s+rollback|scale\s+(?:count|vm)|secrets\s+(?:import|set|unset)|(?:machine|machines)\s+(?:clone|destroy|restart|run|start|stop|update)|apps\s+(?:create|destroy)))\b/gu,
+        ),
+      ];
+      return mutations.some((match) => match.index < gateEndIndex);
+    })
+  ) {
+    fail(requirementMessage);
+  }
 }
 
 function workflowJobNames(workflow) {
@@ -2494,6 +2607,7 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
       `${PRODUCTION_WORKFLOW_PATH} must authenticate each Fly config validation with its exact app-scoped token`,
     );
   }
+  validateStorageProxyLifecycleSecretMutationGates(workflow);
   const [gatewayImageValidationStep] = namedWorkflowStepBodies(
     workflow,
     "Require an exact allowlisted image for gateway",
@@ -3190,6 +3304,43 @@ function validateStorageProxySafety(rootDir) {
   const imageGenPackage = readJson(packagePath);
   const workflow = fs.readFileSync(workflowPath, "utf8");
   if (
+    occurrenceCount(
+      source,
+      'const configuredEndpoint = readEnv("R2_ENDPOINT").trim();',
+    ) !== 1 ||
+    occurrenceCount(source, 'getEnv("R2_ACCOUNT_ID")') !== 1 ||
+    occurrenceCount(
+      source,
+      'const r2Endpoint =\n    configuredEndpoint || buildR2Endpoint(getEnv("R2_ACCOUNT_ID"));',
+    ) !== 1
+  ) {
+    fail(
+      "storage proxy must keep R2_ENDPOINT as the exact alternative to R2_ACCOUNT_ID",
+    );
+  }
+  for (const credentialWiring of [
+    'const r2AccessKeyId = getEnv("R2_ACCESS_KEY_ID");',
+    'r2SecretAccessKey: getEnv("R2_SECRET_ACCESS_KEY")',
+    'r2LifecycleAccessKeyId: getEnv("R2_LIFECYCLE_ACCESS_KEY_ID")',
+    'r2LifecycleSecretAccessKey: getEnv("R2_LIFECYCLE_SECRET_ACCESS_KEY")',
+    "r2ObjectAccessKeyId: r2AccessKeyId",
+    "config.r2LifecycleAccessKeyId.trim() ===\n    config.r2ObjectAccessKeyId.trim()",
+    "accessKeyId: config.r2LifecycleAccessKeyId",
+    "secretAccessKey: config.r2LifecycleSecretAccessKey",
+    "accessKeyId: config.r2AccessKeyId",
+    "secretAccessKey: config.r2SecretAccessKey",
+    "const s3 = createLifecycleS3Client(config);",
+    "const s3 = createObjectS3Client(config);",
+    "await verifyRequiredR2LifecycleConfig(lifecycleConfig);",
+    "const app = createStorageProxyApp(appConfig, {",
+  ]) {
+    if (occurrenceCount(source, credentialWiring) !== 1) {
+      fail(
+        "storage proxy must wire the exact separate lifecycle and object R2 credentials to their own clients",
+      );
+    }
+  }
+  if (
     allAssignments(config, "STORAGE_OPERATION_TIMEOUT_MS").length !== 1 ||
     allAssignments(config, "STORAGE_OPERATION_TIMEOUT_MS")[0] !== "60000"
   ) {
@@ -3198,7 +3349,7 @@ function validateStorageProxySafety(rootDir) {
   for (const requiredSource of [
     "GetBucketLifecycleConfigurationCommand",
     "assertRequiredR2LifecycleRules",
-    "await verifyRequiredR2LifecycleConfig(config)",
+    "await verifyRequiredR2LifecycleConfig(lifecycleConfig)",
     "maxAttempts: 1",
   ]) {
     if (!source.includes(requiredSource)) {

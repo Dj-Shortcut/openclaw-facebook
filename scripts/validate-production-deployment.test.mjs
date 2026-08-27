@@ -128,6 +128,54 @@ function replaceLastFixtureText(root, relativePath, before, after) {
   );
 }
 
+function storageProxyLifecycleJqFilters(root) {
+  const workflow = fs.readFileSync(
+    path.join(root, ".github/workflows/deploy-production.yml"),
+    "utf8",
+  );
+  const extractFilter = (stepName, nextStepName) => {
+    const stepStart = workflow.indexOf(`      - name: ${stepName}\n`);
+    const stepEnd = workflow.indexOf(`      - name: ${nextStepName}\n`, stepStart);
+    if (stepStart < 0 || stepEnd <= stepStart) {
+      throw new Error(`Missing workflow step boundary for ${stepName}`);
+    }
+    const step = workflow.slice(stepStart, stepEnd);
+    const commandCount =
+      step.split("fly secrets list --app leaderbot-storage-proxy --json")
+        .length - 1;
+    if (commandCount !== 1) {
+      throw new Error(`Missing exact storage-proxy secret listing in ${stepName}`);
+    }
+    const filter = step.match(/\| jq -e '([^'\r\n]+)' \\/u)?.[1];
+    if (!filter) throw new Error(`Missing lifecycle jq filter in ${stepName}`);
+    return filter;
+  };
+  return {
+    deploy: extractFilter(
+      "Deploy reviewed storage-proxy config",
+      "Verify deployed storage-proxy drift",
+    ),
+    rollback: extractFilter(
+      "Restore captured storage-proxy release",
+      "Verify restored storage-proxy release",
+    ),
+  };
+}
+
+function lifecycleJqFilterAccepts(filter, metadata) {
+  try {
+    execFileSync("jq", ["-e", filter], {
+      input: `${JSON.stringify(metadata)}\n`,
+      encoding: "utf8",
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    return true;
+  } catch (error) {
+    if (error && typeof error === "object" && error.status === 1) return false;
+    throw error;
+  }
+}
+
 function stageImageGenBridge(manifest, sourceCommit = "a".repeat(40)) {
   const app = manifest.apps["image-gen"];
   const legacyImage = app.databaseSchemaTransition.legacyBaseImage;
@@ -5100,6 +5148,261 @@ describe("production deployment contract", () => {
 
     expect(() => validateProductionRepository(root)).toThrow(
       "must use an app-scoped storage-proxy deploy token",
+    );
+  });
+
+  it("accepts the exact metadata-only lifecycle gates and split R2 clients", () => {
+    const root = createRepositoryFixture();
+    const workflow = fs.readFileSync(
+      path.join(root, ".github/workflows/deploy-production.yml"),
+      "utf8",
+    );
+    const deployStepStart = workflow.indexOf(
+      "      - name: Deploy reviewed storage-proxy config",
+    );
+    const rollbackStepStart = workflow.indexOf(
+      "      - name: Restore captured storage-proxy release",
+    );
+    const rollbackStepEnd = workflow.indexOf(
+      "      - name: Verify restored storage-proxy release",
+      rollbackStepStart,
+    );
+    const deployStep = workflow.slice(deployStepStart, rollbackStepStart);
+    const rollbackStep = workflow.slice(rollbackStepStart, rollbackStepEnd);
+
+    expect(
+      workflow.split(
+        "fly secrets list --app leaderbot-storage-proxy --json",
+      ).length - 1,
+    ).toBe(2);
+    expect(deployStep).toContain('.name == "R2_LIFECYCLE_ACCESS_KEY_ID"');
+    expect(deployStep).toContain('.status == "Staged"');
+    expect(deployStep).not.toContain('.status == "Partial"');
+    expect(rollbackStep).toContain('.name == "R2_LIFECYCLE_ACCESS_KEY_ID"');
+    expect(rollbackStep).toContain('.status == "Partial"');
+    expect(workflow).not.toContain('.status == "Unknown"');
+    expect(`${deployStep}\n${rollbackStep}`).not.toContain(".Name ==");
+    expect(`${deployStep}\n${rollbackStep}`).not.toContain(".Status ==");
+    expect(validateProductionRepository(root)).toEqual({
+      apps: 3,
+      callbacks: 2,
+    });
+  });
+
+  it("executes the exact lifecycle jq gates against lowercase flyctl v0.4.85 metadata", () => {
+    const root = createRepositoryFixture();
+    const filters = storageProxyLifecycleJqFilters(root);
+    const record = (name, status) => ({
+      name,
+      digest: "metadata-only-test-digest",
+      created_at: "2026-08-27T00:00:00Z",
+      status,
+    });
+    const accessKey = (status) =>
+      record("R2_LIFECYCLE_ACCESS_KEY_ID", status);
+    const secretKey = (status) =>
+      record("R2_LIFECYCLE_SECRET_ACCESS_KEY", status);
+    const unrelatedObjectKey = record("R2_ACCESS_KEY_ID", "Deployed");
+
+    for (const [accessStatus, secretStatus] of [
+      ["Deployed", "Deployed"],
+      ["Deployed", "Staged"],
+      ["Staged", "Deployed"],
+      ["Staged", "Staged"],
+    ]) {
+      expect(
+        lifecycleJqFilterAccepts(filters.deploy, [
+          accessKey(accessStatus),
+          secretKey(secretStatus),
+          unrelatedObjectKey,
+        ]),
+      ).toBe(true);
+    }
+    for (const unusableStatus of ["Partial", "Unknown"]) {
+      expect(
+        lifecycleJqFilterAccepts(filters.deploy, [
+          accessKey(unusableStatus),
+          secretKey("Deployed"),
+        ]),
+      ).toBe(false);
+    }
+    expect(
+      lifecycleJqFilterAccepts(filters.deploy, [accessKey("Deployed")]),
+    ).toBe(false);
+    expect(
+      lifecycleJqFilterAccepts(filters.deploy, [
+        accessKey("Deployed"),
+        accessKey("Staged"),
+        secretKey("Deployed"),
+      ]),
+    ).toBe(false);
+
+    for (const [accessStatus, secretStatus] of [
+      ["Partial", "Deployed"],
+      ["Staged", "Partial"],
+      ["Partial", "Partial"],
+    ]) {
+      expect(
+        lifecycleJqFilterAccepts(filters.rollback, [
+          accessKey(accessStatus),
+          secretKey(secretStatus),
+          unrelatedObjectKey,
+        ]),
+      ).toBe(true);
+    }
+    for (const [accessStatus, secretStatus] of [
+      ["Unknown", "Deployed"],
+      ["Deployed", "Unknown"],
+    ]) {
+      expect(
+        lifecycleJqFilterAccepts(filters.rollback, [
+          accessKey(accessStatus),
+          secretKey(secretStatus),
+        ]),
+      ).toBe(false);
+    }
+  });
+
+  it("rejects a storage-proxy lifecycle gate missing one required name", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/deploy-production.yml",
+      '(.name == "R2_LIFECYCLE_ACCESS_KEY_ID" or .name == "R2_LIFECYCLE_SECRET_ACCESS_KEY")',
+      '(.name == "R2_LIFECYCLE_ACCESS_KEY_ID")',
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must gate every storage-proxy Fly mutation on exact usable lifecycle-secret metadata without exposing secret metadata",
+    );
+  });
+
+  it("rejects a wrong storage-proxy lifecycle secret name", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/deploy-production.yml",
+      '.name == "R2_LIFECYCLE_ACCESS_KEY_ID"',
+      '.name == "R2_LIFECYCLE_ACCESS_KEY"',
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must gate every storage-proxy Fly mutation on exact usable lifecycle-secret metadata without exposing secret metadata",
+    );
+  });
+
+  it("rejects uppercase flyctl secret metadata field names", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/deploy-production.yml",
+      '.name == "R2_LIFECYCLE_ACCESS_KEY_ID"',
+      '.Name == "R2_LIFECYCLE_ACCESS_KEY_ID"',
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must gate every storage-proxy Fly mutation on exact usable lifecycle-secret metadata without exposing secret metadata",
+    );
+  });
+
+  it("rejects Partial as a usable deploy-gate status", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/deploy-production.yml",
+      '(.status == "Deployed" or .status == "Staged")',
+      '(.status == "Deployed" or .status == "Staged" or .status == "Partial")',
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must gate every storage-proxy Fly mutation on exact usable lifecycle-secret metadata without exposing secret metadata",
+    );
+  });
+
+  it("rejects a lifecycle gate inspecting the wrong Fly app", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/deploy-production.yml",
+      "fly secrets list --app leaderbot-storage-proxy --json",
+      "fly secrets list --app storage-proxy --json",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must gate every storage-proxy Fly mutation on exact usable lifecycle-secret metadata without exposing secret metadata",
+    );
+  });
+
+  it("rejects an Unknown lifecycle secret status", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/deploy-production.yml",
+      '(.status == "Deployed" or .status == "Staged")',
+      '(.status == "Deployed" or .status == "Unknown")',
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must gate every storage-proxy Fly mutation on exact usable lifecycle-secret metadata without exposing secret metadata",
+    );
+  });
+
+  it("rejects a storage-proxy Fly mutation with its lifecycle gate removed", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/deploy-production.yml",
+      `          fly secrets list --app leaderbot-storage-proxy --json \\
+            | jq -e '[.[] | select((.name == "R2_LIFECYCLE_ACCESS_KEY_ID" or .name == "R2_LIFECYCLE_SECRET_ACCESS_KEY") and (.status == "Deployed" or .status == "Staged")) | .name] | sort == ["R2_LIFECYCLE_ACCESS_KEY_ID", "R2_LIFECYCLE_SECRET_ACCESS_KEY"]' \\
+            >/dev/null\n`,
+      "",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must gate every storage-proxy Fly mutation on exact usable lifecycle-secret metadata without exposing secret metadata",
+    );
+  });
+
+  it("rejects printing raw storage-proxy secret metadata after the gate", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/deploy-production.yml",
+      '            >/dev/null\n          args=(',
+      '            >/dev/null\n          fly secrets list --app leaderbot-storage-proxy --json\n          args=(',
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must gate every storage-proxy Fly mutation on exact usable lifecycle-secret metadata without exposing secret metadata",
+    );
+  });
+
+  it("rejects lifecycle inspection wired to the object R2 client", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      "apps/image-gen/storage-proxy/index.ts",
+      "const s3 = createLifecycleS3Client(config);",
+      "const s3 = createObjectS3Client(config);",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must wire the exact separate lifecycle and object R2 credentials to their own clients",
+    );
+  });
+
+  it("keeps R2_ENDPOINT as an alternative to R2_ACCOUNT_ID", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      "apps/image-gen/storage-proxy/index.ts",
+      `const r2Endpoint =
+    configuredEndpoint || buildR2Endpoint(getEnv("R2_ACCOUNT_ID"));`,
+      'const r2Endpoint = buildR2Endpoint(getEnv("R2_ACCOUNT_ID"));',
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must keep R2_ENDPOINT as the exact alternative to R2_ACCOUNT_ID",
     );
   });
 

@@ -55,11 +55,36 @@ Delete response:
 Required:
 
 - `FORGE_API_KEY`
-- `R2_ACCOUNT_ID`
+- `R2_ACCOUNT_ID` unless the reviewed deployment supplies `R2_ENDPOINT`
 - `R2_ACCESS_KEY_ID`
 - `R2_SECRET_ACCESS_KEY`
+- `R2_LIFECYCLE_ACCESS_KEY_ID`
+- `R2_LIFECYCLE_SECRET_ACCESS_KEY`
 - `R2_BUCKET`
 - `PUBLIC_BASE_URL`
+
+Keep the credentials separate. `R2_ACCESS_KEY_ID` must remain an Object Read &
+Write token scoped to the production bucket. The lifecycle pair must use a
+different Cloudflare R2 **Admin Read only** token. At the provider this is an
+account-wide grant for bucket listing/configuration, object read/list, and
+read-only R2 Data Catalog table/metadata access, not a bucket-scoped
+lifecycle-only grant. The proxy never uses Data Catalog. Never give the proxy
+an Admin Read & Write token.
+
+The proxy consumes the lifecycle pair only for one
+`GetBucketLifecycleConfiguration` request per process startup, before it starts
+listening. Request handling and object upload, download, and deletion continue
+to use the bucket-scoped object credential. The runtime can require that the two
+access-key IDs differ and can prove that the lifecycle read succeeded; the S3
+credential contract does not expose enough metadata to prove that Cloudflare
+issued it with the intended permission level. That grant must therefore be
+reviewed in Cloudflare.
+
+Metadata-only operator evidence from 2026-08-27 records that the current
+Cloudflare UI showed the dedicated credential as **Admin Read only** and the
+account contained exactly one bucket, uniquely named `leaderbot-images`. No
+access-key or secret value was captured. This evidence does not by itself prove
+which credential is installed in Fly or that a proxy startup succeeded.
 
 Optional:
 
@@ -187,3 +212,17 @@ that would intentionally reject the old clients.
 - The main app should only talk to the proxy, not directly to R2.
 - This removes Fly machine affinity from Messenger attachment delivery because the returned URL no longer depends on local machine memory or disk.
 - Retained source-image features depend on the delete endpoint for user-initiated deletion and emergency cleanup.
+
+### Current rollout evidence (2026-08-27)
+
+The protected deployment of the reviewed storage-proxy candidate
+`sha256:d2a2be7a61d7668ec1665ab459eee2b0717020c0542a78a7faccd494a68c47cc`
+failed. Its rollback completed and the restored production baseline is healthy.
+The candidate is therefore not deployed-runtime evidence and must not be marked
+`runtime_deployed`.
+
+A next attempt still requires a new runtime image built and attested from
+reviewed source, that new immutable digest and source recorded through a
+reviewed manifest change, and a fresh protected deployment with both health and
+readiness checks. Do not promote or merely relabel the failed `d2a2...`
+candidate.

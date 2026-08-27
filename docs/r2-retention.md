@@ -38,8 +38,28 @@ The production storage proxy also verifies these three exact enabled 30-day
 rules through R2's S3-compatible lifecycle API before it starts listening. A
 missing, disabled, broadened, or longer-lived rule therefore fails the storage
 proxy rollout closed instead of silently removing the orphan-cleanup backstop.
-Its R2 calls use one attempt and a hard 60-second deadline; Messenger privacy
-fences retain ambiguous upload inventory for a longer cooldown.
+That read uses a separate Cloudflare R2 Admin Read only credential. Cloudflare
+defines this as account-wide bucket listing/configuration, object read/list, and
+read-only R2 Data Catalog table/metadata access; it is not a bucket-scoped
+lifecycle-only grant. Upload, download, and deletion continue to use the
+bucket-scoped Object Read & Write credential, and Admin Read & Write is never
+permitted. The proxy consumes the broader read-only credential only for one
+`GetBucketLifecycleConfiguration` request per process startup, before it starts
+listening, and never uses Data Catalog. Its R2 calls use one attempt and a hard
+60-second deadline; Messenger privacy fences retain ambiguous upload inventory
+for a longer cooldown.
+
+The runtime can enforce only that the lifecycle and object access-key IDs differ
+and that the lifecycle response contains the required rules. The S3 credential
+contract cannot reveal or technically attest the Cloudflare permission level.
+Review that grant in Cloudflare rather than treating startup success as proof of
+least privilege.
+
+A metadata-only Cloudflare UI check on 2026-08-27 verified **Admin Read only**
+for the dedicated credential and found exactly one bucket in the current
+account, uniquely named `leaderbot-images`. No access-key or secret value was
+recorded. This provider evidence does not prove which credential is installed
+in Fly or replace a successful startup/readiness check.
 
 The policy intentionally uses prefix-scoped delete rules rather than an empty
 prefix. Do not add a bucket-wide expiration rule unless the bucket is dedicated
