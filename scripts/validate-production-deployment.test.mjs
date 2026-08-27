@@ -4490,9 +4490,9 @@ describe("production deployment contract", () => {
     );
     const reviewedImage = manifest.apps["storage-proxy"].reviewedImage;
 
-    expect(() =>
+    expect(
       validateReviewedImage("storage-proxy", reviewedImage, repoRoot),
-    ).toThrow("legacy bootstrap image has no trusted build attestation");
+    ).toBe(reviewedImage);
 
     const root = createRepositoryFixture();
     const manifestPath = path.join(root, "deploy/production/apps.json");
@@ -4550,16 +4550,17 @@ describe("production deployment contract", () => {
     );
   });
 
-  it("blocks unreviewed targets and enables only the reviewed image-gen runtime", () => {
+  it("blocks the gateway and enables only the reviewed stateless runtimes", () => {
     expect(() => validateDeploymentEnabled("gateway", repoRoot)).toThrow(
       "gateway production deployment is blocked",
     );
     expect(
       validateDeploymentEnabled("image-gen", repoRoot).reviewedArtifactKind,
     ).toBe("runtime");
-    expect(() => validateDeploymentEnabled("storage-proxy", repoRoot)).toThrow(
-      "storage-proxy production deployment is blocked",
-    );
+    expect(
+      validateDeploymentEnabled("storage-proxy", repoRoot)
+        .reviewedArtifactKind,
+    ).toBe("runtime");
   });
 
   it("refuses to enable the stateful gateway even without a rollback digest", () => {
