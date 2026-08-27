@@ -300,10 +300,12 @@ locally.
    requires public `/readyz` and the shared Redis limiter. Keep the exact legacy
    rollback until a later attested runtime can replace it.
 
-The currently recorded storage-proxy `reviewedImage` is also its current live
-rollback image. Replace `reviewedImage` with the newly built digest only after
-the reviewed merge has produced that immutable artifact; do not replace it with
-a mutable tag.
+While the transition is `runtime_reviewed`, `reviewedImage` is the new attested
+deployment candidate; it is not yet evidence of the live image. The exact
+`artifactTransition.legacyImage` remains the live baseline and sole reviewed
+rollback until the runtime deploy succeeds. Record only an immutable digest in
+`reviewedImage`, then move to `runtime_deployed` in the reviewed follow-up after
+the live checks pass.
 
 ### Image-gen database migration gate
 
