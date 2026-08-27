@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { classifyCiChanges } from "./classify-ci-changes.mjs";
+import {
+  changedPathsFromGit,
+  classifyCiChanges,
+} from "./classify-ci-changes.mjs";
 
 describe("CI change classification", () => {
   it("skips image and migration suites for OpenClaw-only changes", () => {
@@ -30,6 +33,39 @@ describe("CI change classification", () => {
 
   it("fails safe when the classifier itself changes", () => {
     expect(classifyCiChanges(["scripts/classify-ci-changes.mjs"])).toEqual({
+      imageGen: true,
+      migration: true,
+    });
+  });
+
+  it("disables rename detection so removals keep their original source path", () => {
+    const calls = [];
+    const base = "a".repeat(40);
+    const head = "b".repeat(40);
+    const changedPaths = changedPathsFromGit({
+      base,
+      head,
+      run(command, args, options) {
+        calls.push({ command, args, options });
+        return {
+          status: 0,
+          stderr: Buffer.alloc(0),
+          stdout: Buffer.from(
+            "apps/image-gen/server/removed.ts\0src/removed.ts\0",
+          ),
+        };
+      },
+    });
+
+    expect(calls[0]).toMatchObject({
+      command: "git",
+      args: ["diff", "--no-renames", "--name-only", "-z", base, head],
+    });
+    expect(changedPaths).toEqual([
+      "apps/image-gen/server/removed.ts",
+      "src/removed.ts",
+    ]);
+    expect(classifyCiChanges(changedPaths)).toEqual({
       imageGen: true,
       migration: true,
     });

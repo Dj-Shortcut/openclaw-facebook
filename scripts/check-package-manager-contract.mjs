@@ -261,6 +261,40 @@ export function validatePackageManagerContract(repoRoot = process.cwd()) {
         break;
       }
     }
+    if (
+      !source.includes("  push:\n    branches: [main]\n    paths:\n") ||
+      !source.includes('    tags:\n      - "v*"') ||
+      !source.includes(
+        "if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')",
+      )
+    ) {
+      failures.push(
+        `${clawhubWorkflowPath}: must validate plugin changes after path-scoped main pushes without publishing them`,
+      );
+    }
+  }
+
+  const legacyGatewayWorkflowPath = ".github/workflows/legacy-gateway-ci.yml";
+  const legacyGatewayWorkflow = path.join(repoRoot, legacyGatewayWorkflowPath);
+  if (!fs.existsSync(legacyGatewayWorkflow)) {
+    failures.push(`${legacyGatewayWorkflowPath}: required file is missing`);
+  } else {
+    const source = fs.readFileSync(legacyGatewayWorkflow, "utf8");
+    const missingSharedInput = [
+      "package.json",
+      "package-lock.json",
+      "scripts/run-vitest.mjs",
+      "vitest.config.mjs",
+      "vitest.node-polyfill.mjs",
+    ].some(
+      (input) =>
+        source.split(`      - "${input}"`).length - 1 !== 2,
+    );
+    if (missingSharedInput) {
+      failures.push(
+        `${legacyGatewayWorkflowPath}: pull requests and main pushes must include every shared root test input`,
+      );
+    }
   }
 
   const tauriConfigPath = "apps/customer-app/src-tauri/tauri.conf.json";

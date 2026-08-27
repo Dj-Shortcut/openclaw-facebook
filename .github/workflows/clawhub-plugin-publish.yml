@@ -34,6 +34,31 @@ on:
         required: true
         default: false
   push:
+    branches: [main]
+    paths:
+      - ".github/workflows/clawhub-plugin-publish.yml"
+      - "package.json"
+      - "package-lock.json"
+      - "openclaw.plugin.json"
+      - "README.md"
+      - "docs/clawhub-listing.md"
+      - "docs/clawhub.md"
+      - "docs/facebook-complete-tutorial.md"
+      - "docs/openclaw-update.md"
+      - "docs/operator-prompt-routing.md"
+      - "docs/setup.md"
+      - "examples/**"
+      - "scripts/openclaw-login-command.mjs"
+      - "scripts/openclaw-login-command.test.mjs"
+      - "scripts/openclaw-login.mjs"
+      - "scripts/run-vitest.mjs"
+      - "scripts/update-openclaw.mjs"
+      - "scripts/update-openclaw.test.mjs"
+      - "scripts/validate-openclaw-runtime.mjs"
+      - "scripts/validate-release-versions.mjs"
+      - "src/**"
+      - "*.ts"
+      - "tsconfig.json"
     tags:
       - "v*"
 
@@ -144,7 +169,7 @@ jobs:
       dry_run: false
 
   clawhub-publish-token:
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs: package-artifact
     permissions:
       contents: read

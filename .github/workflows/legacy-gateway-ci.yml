@@ -7,6 +7,9 @@ on:
       - ".github/workflows/gateway-state-rebaseline.yml"
       - "deploy/fly-gateway/**"
       - "fly.toml"
+      - "package.json"
+      - "package-lock.json"
+      - "scripts/run-vitest.mjs"
       - "scripts/gateway-state-rebaseline-workflow.test.mjs"
       - "scripts/select-fresh-fly-snapshot.mjs"
       - "scripts/select-fresh-fly-snapshot.test.mjs"
@@ -14,6 +17,8 @@ on:
       - "scripts/validate-gateway-deployment-safety.test.mjs"
       - "scripts/verify-gateway-state-rebaseline.mjs"
       - "scripts/verify-gateway-state-rebaseline.test.mjs"
+      - "vitest.config.mjs"
+      - "vitest.node-polyfill.mjs"
   push:
     branches: [main]
     paths:
@@ -21,6 +26,9 @@ on:
       - ".github/workflows/gateway-state-rebaseline.yml"
       - "deploy/fly-gateway/**"
       - "fly.toml"
+      - "package.json"
+      - "package-lock.json"
+      - "scripts/run-vitest.mjs"
       - "scripts/gateway-state-rebaseline-workflow.test.mjs"
       - "scripts/select-fresh-fly-snapshot.mjs"
       - "scripts/select-fresh-fly-snapshot.test.mjs"
@@ -28,6 +36,8 @@ on:
       - "scripts/validate-gateway-deployment-safety.test.mjs"
       - "scripts/verify-gateway-state-rebaseline.mjs"
       - "scripts/verify-gateway-state-rebaseline.test.mjs"
+      - "vitest.config.mjs"
+      - "vitest.node-polyfill.mjs"
 
 permissions:
   contents: read

@@ -32,16 +32,22 @@ export function classifyCiChanges(changedPaths) {
   return { imageGen, migration };
 }
 
-function changedPathsFromGit() {
-  const head = process.env.GITHUB_SHA?.trim() ?? "";
-  const base = process.env.CI_BASE_SHA?.trim() ?? "";
+export function changedPathsFromGit({
+  head = process.env.GITHUB_SHA?.trim() ?? "",
+  base = process.env.CI_BASE_SHA?.trim() ?? "",
+  run = spawnSync,
+} = {}) {
   if (!SHA_PATTERN.test(head) || !SHA_PATTERN.test(base) || base === "0".repeat(40)) {
     return undefined;
   }
-  const result = spawnSync("git", ["diff", "--name-only", "-z", base, head], {
-    encoding: "buffer",
-    maxBuffer: 10 * 1024 * 1024,
-  });
+  const result = run(
+    "git",
+    ["diff", "--no-renames", "--name-only", "-z", base, head],
+    {
+      encoding: "buffer",
+      maxBuffer: 10 * 1024 * 1024,
+    },
+  );
   if (result.status !== 0) {
     throw new Error(
       `Could not classify CI changes between ${base} and ${head}: ${result.stderr.toString("utf8").trim()}`,

@@ -22,6 +22,7 @@ const requiredFiles = [
   ".github/workflows/image-gen-ci.yml",
   ".github/workflows/image-gen-fallow.yml",
   ".github/workflows/clawhub-plugin-publish.yml",
+  ".github/workflows/legacy-gateway-ci.yml",
   ".github/workflows/main.yml",
   ".github/workflows/update-openclaw.yml",
   "README.md",
@@ -180,6 +181,38 @@ describe("package-manager contract", () => {
 
     expect(validatePackageManagerContract(fixture)).toContain(
       ".github/workflows/clawhub-plugin-publish.yml: ClawHub CI must not run for unrelated product paths",
+    );
+  });
+
+  it("requires plugin validation after path-scoped main pushes", () => {
+    const fixture = makeFixture();
+    const workflowPath = path.join(
+      fixture,
+      ".github/workflows/clawhub-plugin-publish.yml",
+    );
+    const workflow = fs
+      .readFileSync(workflowPath, "utf8")
+      .replace("    branches: [main]\n", "");
+    fs.writeFileSync(workflowPath, workflow);
+
+    expect(validatePackageManagerContract(fixture)).toContain(
+      ".github/workflows/clawhub-plugin-publish.yml: must validate plugin changes after path-scoped main pushes without publishing them",
+    );
+  });
+
+  it("requires gateway CI for shared root test inputs", () => {
+    const fixture = makeFixture();
+    const workflowPath = path.join(
+      fixture,
+      ".github/workflows/legacy-gateway-ci.yml",
+    );
+    const workflow = fs
+      .readFileSync(workflowPath, "utf8")
+      .replaceAll('      - "scripts/run-vitest.mjs"\n', "");
+    fs.writeFileSync(workflowPath, workflow);
+
+    expect(validatePackageManagerContract(fixture)).toContain(
+      ".github/workflows/legacy-gateway-ci.yml: pull requests and main pushes must include every shared root test input",
     );
   });
 
