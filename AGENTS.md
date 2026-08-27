@@ -55,6 +55,11 @@ The only source of truth for open work is `docs/operations/todo.md`.
 - Scope state by owner/workspace, channel connection, Page binding, privacy
   epoch, and pseudonymous user key.
 - Never use a global credit wallet or raw PSID as a durable storage key.
+- Never allow cross-user reads in API handlers, jobs, logs, caches, analytics,
+  memory, retrieval indexes, or search artifacts.
+- Shared caches and storage may contain user content only when their keys and
+  authorization enforce the full owner, Page, privacy-epoch, and pseudonymous
+  user boundary.
 - Deletion, reconnects, retries, and late jobs must not transfer credits,
   messages, media, or generated outputs between users.
 - Retain the internal owner/workspace boundary even while the product exposes
@@ -65,6 +70,11 @@ The only source of truth for open work is `docs/operations/todo.md`.
 - Never log raw PSIDs, access tokens, payment credentials, prompts, customer
   messages, uploaded photos, generated images, or provider payloads.
 - Use pseudonymous identifiers and metadata-only operational signals.
+- Infrastructure ownership never implies access to end-user content. Support
+  access must be explicit, narrowly scoped, user-approved where required, and
+  auditable.
+- Break-glass content access must be exceptional, time-limited, least-privilege,
+  and logged without copying the accessed content into support or debug systems.
 - Keep source media and generated assets on documented retention schedules.
 - Preserve `delete-my-data`, export where legally required, and late-output
   suppression after erasure.
@@ -75,6 +85,8 @@ The only source of truth for open work is `docs/operations/todo.md`.
 
 - Preserve webhook verification, raw-body request signature validation, replay
   protection, deduplication, and Page binding validation.
+- Preserve the existing GDPR consent flow and consent gating. No generation,
+  retention, or commercial path may bypass the required consent state.
 - Send upgrade calls to action only in a user-initiated eligible conversation
   window or another explicitly approved Meta policy path.
 - Use a Messenger URL action to open a clear web checkout. Do not collect card
