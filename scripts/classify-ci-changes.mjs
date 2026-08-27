@@ -10,8 +10,8 @@ function normalizedPath(value) {
   return String(value).replaceAll("\\", "/").replace(/^\.\//, "");
 }
 
-function isDocumentationPath(file) {
-  return /\.(?:md|mdx)$/i.test(file);
+function isImageGenDocumentationPath(file) {
+  return file === "apps/image-gen/README.md";
 }
 
 export function classifyCiChanges(changedPaths) {
@@ -22,7 +22,7 @@ export function classifyCiChanges(changedPaths) {
     paths.some(
       (file) =>
         (file.startsWith("apps/image-gen/") &&
-          !isDocumentationPath(file)) ||
+          !isImageGenDocumentationPath(file)) ||
         file === ".github/workflows/image-gen-ci.yml",
     );
   const migration =
@@ -30,7 +30,7 @@ export function classifyCiChanges(changedPaths) {
     paths.some(
       (file) =>
         (file.startsWith("apps/image-gen/") &&
-          !isDocumentationPath(file) &&
+          !isImageGenDocumentationPath(file) &&
           !file.startsWith("apps/image-gen/storage-proxy/")) ||
         file === ".github/workflows/image-gen-migration-smoke.yml" ||
         file === "scripts/image-gen-migration-smoke-workflow.test.mjs",
