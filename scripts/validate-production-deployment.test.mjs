@@ -995,7 +995,7 @@ function storageProxyLegacyBootstrapFlyState(image, mutate = () => {}) {
         ...storageProxyRollbackMachineConfig(image),
         metadata: {
           fly_builder_id: "a".repeat(14),
-          fly_flyctl_version: "0.4.38",
+          fly_flyctl_version: "2026.8.27-dev.1787839287",
           fly_platform_version: "v2",
           fly_process_group: "app",
           fly_release_id: "legacy-release",
@@ -1731,7 +1731,12 @@ describe("production deployment contract", () => {
     ).toBe(false);
   });
 
-  it.each([null, 438, ["0.4.38"]])(
+  it.each([
+    null,
+    438,
+    ["2026.8.27-dev.1787839287"],
+    "2026.8.27-dev.latest",
+  ])(
     "rejects malformed storage legacy flyctl metadata %j",
     (legacyFlyctlVersion) => {
       const root = createRepositoryFixture();
@@ -8379,9 +8384,19 @@ describe("settled production identity", () => {
       "reviewed legacy or pinned flyctl version",
     ],
     [
+      "a different legacy development build",
+      ({ machines }) => {
+        machines[0].config.metadata.fly_flyctl_version =
+          "2026.8.27-dev.1787839286";
+      },
+      "reviewed legacy or pinned flyctl version",
+    ],
+    [
       "a non-string flyctl version",
       ({ machines }) => {
-        machines[0].config.metadata.fly_flyctl_version = ["0.4.38"];
+        machines[0].config.metadata.fly_flyctl_version = [
+          "2026.8.27-dev.1787839287",
+        ];
       },
       "reviewed legacy or pinned flyctl version",
     ],

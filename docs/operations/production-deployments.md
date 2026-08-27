@@ -338,6 +338,16 @@ manifest records that exact pair and retains the healthy legacy rollback. A
 fresh protected deploy must still pass `/healthz` and `/readyz` before the
 transition advances to `runtime_deployed`.
 
+Protected run `33080233054` stopped before production mutation because the
+current Machine metadata no longer matched the recorded predecessor. The live
+comparison after two releases during the 2026-08-27 credential rotation showed
+the exact legacy image, reviewed configuration, region, scale and process group,
+with Fly tool metadata `2026.8.27-dev.1787839287`. The temporary
+`runtime_reviewed` predecessor records that exact value so the next protected
+rollout can replace it with the pinned deployment tool. This does not allow
+another development build and the exception no longer applies after
+`runtime_deployed`.
+
 ### Image-gen database migration gate
 
 Production moves only from `0015_base` to the backwards-compatible
