@@ -221,8 +221,12 @@ failed. Its rollback completed and the restored production baseline is healthy.
 The candidate is therefore not deployed-runtime evidence and must not be marked
 `runtime_deployed`.
 
-A next attempt still requires a new runtime image built and attested from
-reviewed source, that new immutable digest and source recorded through a
-reviewed manifest change, and a fresh protected deployment with both health and
-readiness checks. Do not promote or merely relabel the failed `d2a2...`
-candidate.
+Build run `33069256896` subsequently built and attested the replacement runtime
+candidate
+`sha256:3f2861c2ddc373ae777122f9b6cbac0f333c7ce65c094cc5fd2dbccfdf6df1e9`
+from reviewed `main` source
+`16b18195646fe2db8adc70a80e60616c50b6bc7c`; the manifest binds that exact
+source and digest while retaining the healthy legacy rollback. A fresh
+protected deployment must still pass both health and readiness checks before
+the transition can become `runtime_deployed`. Do not promote or merely relabel
+the failed `d2a2...` candidate.

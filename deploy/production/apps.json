@@ -186,9 +186,9 @@
       "sourceDeployEnabled": false,
       "sourceDeployBlockReason": "Production deploys require an immutable storage-proxy image built from reviewed source and recorded in this manifest before rollout.",
       "trustedBuilderWorkflow": ".github/workflows/build-production-artifacts.yml",
-      "reviewedImage": "registry.fly.io/leaderbot-storage-proxy@sha256:d2a2be7a61d7668ec1665ab459eee2b0717020c0542a78a7faccd494a68c47cc",
+      "reviewedImage": "registry.fly.io/leaderbot-storage-proxy@sha256:3f2861c2ddc373ae777122f9b6cbac0f333c7ce65c094cc5fd2dbccfdf6df1e9",
       "reviewedArtifactKind": "runtime",
-      "reviewedSourceCommit": "4570173da0c79fbeb4ac72669d969c650c9b3392",
+      "reviewedSourceCommit": "16b18195646fe2db8adc70a80e60616c50b6bc7c",
       "artifactTransition": {
         "state": "runtime_reviewed",
         "legacyImage": "registry.fly.io/leaderbot-storage-proxy@sha256:334f78b92816a92e302a66c4d08742c28361a718b190227d3dbf7b933350cc28",

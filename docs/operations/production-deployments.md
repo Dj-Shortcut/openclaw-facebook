@@ -330,9 +330,13 @@ The protected deployment of the reviewed candidate
 `sha256:d2a2be7a61d7668ec1665ab459eee2b0717020c0542a78a7faccd494a68c47cc`
 failed. Its rollback completed and the restored baseline is healthy, so this
 digest is not deployed-runtime evidence and the manifest must not advance to
-`runtime_deployed`. A next attempt requires a new image built and attested from
-reviewed source, its immutable digest and source recorded in a reviewed manifest
-change, and a fresh protected deploy that passes `/healthz` and `/readyz`.
+`runtime_deployed`. Build run `33069256896` subsequently produced and attested
+replacement candidate
+`sha256:3f2861c2ddc373ae777122f9b6cbac0f333c7ce65c094cc5fd2dbccfdf6df1e9`
+from reviewed source `16b18195646fe2db8adc70a80e60616c50b6bc7c`; the
+manifest records that exact pair and retains the healthy legacy rollback. A
+fresh protected deploy must still pass `/healthz` and `/readyz` before the
+transition advances to `runtime_deployed`.
 
 ### Image-gen database migration gate
 
