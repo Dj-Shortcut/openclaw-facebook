@@ -348,6 +348,15 @@ rollout can replace it with the pinned deployment tool. This does not allow
 another development build and the exception no longer applies after
 `runtime_deployed`.
 
+Build run `33092823815` produced replacement candidate
+`sha256:99ea65710abb9a2294dcaf02cf76f57b240cb153a69e6020b68a470278103a8d`
+from reviewed startup-ordering fix
+`6a7d0431e1e02076a2db7fcf12c8358d7fbf33cd`. GitHub provenance attestation
+`43467733` binds that digest to the exact source and protected builder. The
+manifest records it only as `runtime_reviewed`; the healthy legacy digest
+remains the sole rollback until the protected rollout proves `/healthz`,
+shared-Redis `/readyz`, and rollback.
+
 ### Image-gen database migration gate
 
 Production moves only from `0015_base` to the backwards-compatible
