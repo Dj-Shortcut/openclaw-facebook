@@ -118,15 +118,6 @@ function getSafePortalBaseUrl(): URL | undefined {
   }
 }
 
-function getSafePortalUpgradeUrl(): string | undefined {
-  const base = getSafePortalBaseUrl();
-  if (!base) return undefined;
-  const target = new URL("/", base);
-  target.searchParams.set("upgrade", "startpilot");
-  target.hash = "pricing";
-  return target.toString();
-}
-
 function getSafePortalAccessUrl(): string | undefined {
   const base = getSafePortalBaseUrl();
   if (!base) return undefined;
@@ -154,13 +145,12 @@ export function buildPortalEnrollmentResponse(
   };
 }
 
-/** Channel-neutral upgrade response; channels decide how to render its URL. */
+/** Legacy Startpilot exhaustion stays informational until its replacement exists. */
 export function buildStartpilotQuotaReachedResponse(
   lang: Lang,
   reason: "total_exhausted" | "daily_exhausted" = "total_exhausted"
 ): ConversationResponse {
-  return buildStartpilotPortalResponse(
-    lang,
+  return buildQuotaReachedResponse(
     t(
       lang,
       reason === "daily_exhausted"
@@ -170,7 +160,7 @@ export function buildStartpilotQuotaReachedResponse(
   );
 }
 
-/** Free users get the same safe portal handoff when today's allowance ends. */
+/** Free users get no purchase action until the scoped credit checkout exists. */
 export function buildFreeQuotaReachedResponse(
   lang: Lang,
   quotaStatus?: ImageQuotaBalance
@@ -184,7 +174,7 @@ export function buildFreeQuotaReachedResponse(
   const text = quotaStatus
     ? `${exhaustedText}\n${formatImageQuotaBalance(lang, quotaStatus)}`
     : exhaustedText;
-  return buildStartpilotPortalResponse(lang, text);
+  return buildQuotaReachedResponse(text);
 }
 
 export function formatImageQuotaBalance(
@@ -205,22 +195,10 @@ export function buildImageQuotaBalanceResponse(
   return { text: formatImageQuotaBalance(lang, status), actions: [] };
 }
 
-function buildStartpilotPortalResponse(
-  lang: Lang,
-  text: string
-): ConversationResponse {
-  const url = getSafePortalUpgradeUrl();
+function buildQuotaReachedResponse(text: string): ConversationResponse {
   return {
     text,
-    actions: url
-      ? [
-          {
-            id: "open_startpilot_upgrade",
-            label: t(lang, "openLeaderbot"),
-            url,
-          },
-        ]
-      : [],
+    actions: [],
   };
 }
 

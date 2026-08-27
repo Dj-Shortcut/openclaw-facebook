@@ -94,6 +94,39 @@ describe("webhook handler context logging", () => {
     expect(serialized).not.toContain("token=abc");
   });
 
+  it("sends an actionless response as plain text with the same delivery fence", async () => {
+    process.env.PRIVACY_PEPPER = "handler-context-actionless-test-pepper";
+    vi.resetModules();
+    const messengerApi = await import("./_core/messengerApi");
+    const sendTextSpy = vi
+      .spyOn(messengerApi, "sendText")
+      .mockResolvedValue({ sent: true });
+    const sendQuickRepliesSpy = vi
+      .spyOn(messengerApi, "sendQuickReplies")
+      .mockResolvedValue({ sent: true });
+    const sendButtonTemplateSpy = vi
+      .spyOn(messengerApi, "sendButtonTemplate")
+      .mockResolvedValue({ sent: true });
+    const { createHandlerContext } =
+      await import("./_core/webhookHandlerContext");
+    const ctx = createHandlerContext({
+      defaultLang: "en",
+      runImageGeneration: vi.fn(async () => ({ sent: true })),
+    });
+
+    await expect(
+      ctx.sendLoggedActions("recipient", "quota exhausted", [], "request", {
+        providerAttemptKey: "quota-notice-v1",
+      })
+    ).resolves.toEqual({ sent: true });
+
+    expect(sendTextSpy).toHaveBeenCalledWith("recipient", "quota exhausted", {
+      providerAttemptKey: "quota-notice-v1",
+    });
+    expect(sendQuickRepliesSpy).not.toHaveBeenCalled();
+    expect(sendButtonTemplateSpy).not.toHaveBeenCalled();
+  });
+
   it("keeps flow state isolated for the same sender across Facebook Pages", async () => {
     process.env.PRIVACY_PEPPER = "handler-context-flow-scope-test-pepper";
     delete process.env.REDIS_URL;
