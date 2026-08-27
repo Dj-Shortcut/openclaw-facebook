@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import test from "node:test";
 import { S3Client } from "@aws-sdk/client-s3";
+import express from "express";
 import { MemoryStore } from "express-rate-limit";
 import { Redis } from "ioredis";
 import { RedisStore, type RedisReply } from "rate-limit-redis";
@@ -9,11 +10,17 @@ import { RedisStore, type RedisReply } from "rate-limit-redis";
 import {
   assertR2LifecycleCredentialIsolation,
   assertRequiredR2LifecycleRules,
+  bindStorageProxyServer,
   buildStorageRequestSignature,
   createSharedStorageRateLimitBackend,
   parseStorageObjectKey,
+  runStorageProxyStartupStage,
   runStorageOperationWithDeadline,
+  storageErrorLogFields,
+  startStorageProxy,
   StorageOperationTimeoutError,
+  StorageProxyStartupError,
+  type StorageProxyStartupDependencies,
   verifyRequiredR2LifecycleConfig,
   verifyStorageRequestAuthorization,
 } from "./index.ts";
@@ -113,6 +120,209 @@ const requiredLifecycleConfigurationXml = `<?xml version="1.0" encoding="UTF-8"?
   <Rule><ID>expire-generated-images-after-30-days</ID><Status>Enabled</Status><Filter><Prefix>generated/images/</Prefix></Filter><Expiration><Days>30</Days></Expiration></Rule>
   <Rule><ID>expire-generated-videos-after-30-days</ID><Status>Enabled</Status><Filter><Prefix>generated/videos/</Prefix></Filter><Expiration><Days>30</Days></Expiration></Rule>
 </LifecycleConfiguration>`;
+
+test("startup observability records only a safe phase and error class", async () => {
+  const sensitiveMessage =
+    "redis://user:secret@example.invalid customer-prompt-value";
+  const originalIdentity = process.env.LEADERBOT_DEPLOYMENT_IDENTITY;
+  process.env.LEADERBOT_DEPLOYMENT_IDENTITY = sensitiveMessage;
+  try {
+    const failure = await runStorageProxyStartupStage(
+      "redis_readiness",
+      async () => {
+        throw new TypeError(sensitiveMessage);
+      }
+    ).catch(error => error);
+
+    assert.ok(failure instanceof StorageProxyStartupError);
+    assert.equal(failure.stage, "redis_readiness");
+    assert.equal(failure.startupCause instanceof TypeError, true);
+
+    const fields = storageErrorLogFields(failure);
+    assert.equal(fields.startupStage, "redis_readiness");
+    assert.equal(fields.deploymentIdentity, "unrecognized");
+    assert.equal(typeof fields.durationMs, "number");
+    assert.equal(fields.errorName, "TypeError");
+    assert.equal(fields.statusCode, undefined);
+    assert.equal(JSON.stringify(fields).includes(sensitiveMessage), false);
+  } finally {
+    if (originalIdentity === undefined) {
+      delete process.env.LEADERBOT_DEPLOYMENT_IDENTITY;
+    } else {
+      process.env.LEADERBOT_DEPLOYMENT_IDENTITY = originalIdentity;
+    }
+  }
+});
+
+test("startup observability logs bounded stage completion metadata", async () => {
+  const originalInfo = console.info;
+  const events: string[] = [];
+  console.info = value => events.push(String(value));
+  try {
+    const result = await runStorageProxyStartupStage("config", () => "ready");
+    assert.equal(result, "ready");
+  } finally {
+    console.info = originalInfo;
+  }
+
+  const parsedEvents = events.map(event => JSON.parse(event));
+  assert.deepEqual(parsedEvents[0], {
+    level: "info",
+    msg: "storage_proxy_startup_stage_started",
+    startupStage: "config",
+    deploymentIdentity: "none",
+  });
+  assert.deepEqual(
+    { ...parsedEvents[1], durationMs: undefined },
+    {
+      level: "info",
+      msg: "storage_proxy_startup_stage_completed",
+      startupStage: "config",
+      deploymentIdentity: "none",
+      durationMs: undefined,
+    }
+  );
+  assert.equal(typeof parsedEvents[1]?.durationMs, "number");
+});
+
+test("startup orchestration labels every failure and closes acquired resources", async t => {
+  const phases = [
+    "config",
+    "redis_connect",
+    "app_construction",
+    "redis_readiness",
+    "r2_lifecycle_preflight",
+    "server_bind",
+  ] as const;
+
+  for (const failingPhase of phases) {
+    await t.test(failingPhase, async () => {
+      const sensitiveMessage = `sensitive-${failingPhase}-credential-value`;
+      const calls: string[] = [];
+      let closeCount = 0;
+      const failAt = (phase: (typeof phases)[number]) => {
+        calls.push(phase);
+        if (phase === failingPhase) throw new Error(sensitiveMessage);
+      };
+      const backend = {
+        edgeStore: new MemoryStore(),
+        scopeStore: new MemoryStore(),
+        assertReady: async () => failAt("redis_readiness"),
+        close: async () => {
+          closeCount += 1;
+        },
+      };
+      const dependencies: StorageProxyStartupDependencies = {
+        loadConfig: () => {
+          failAt("config");
+          return {
+            appConfig: buildTestConfig(),
+            lifecycleConfig: buildLifecycleTestConfig(
+              "https://r2-sensitive-account.invalid"
+            ),
+          };
+        },
+        createRateLimitBackend: async () => {
+          failAt("redis_connect");
+          return backend;
+        },
+        createApp: () => {
+          failAt("app_construction");
+          return {} as import("express").Express;
+        },
+        verifyLifecycle: async () => failAt("r2_lifecycle_preflight"),
+        bindServer: async () => failAt("server_bind"),
+      };
+
+      const failure = await startStorageProxy(dependencies).catch(
+        error => error
+      );
+      assert.ok(failure instanceof StorageProxyStartupError);
+      assert.equal(failure.stage, failingPhase);
+      assert.equal(
+        closeCount,
+        phases.indexOf(failingPhase) >= phases.indexOf("app_construction")
+          ? 1
+          : 0
+      );
+      assert.equal(calls.at(-1), failingPhase);
+      assert.equal(
+        JSON.stringify(storageErrorLogFields(failure)).includes(
+          sensitiveMessage
+        ),
+        false
+      );
+    });
+  }
+});
+
+test("successful startup logs no raw endpoint, bucket, or public URL", async () => {
+  const infoEvents: string[] = [];
+  const originalInfo = console.info;
+  console.info = value => infoEvents.push(String(value));
+  let closeCount = 0;
+  const backend = {
+    edgeStore: new MemoryStore(),
+    scopeStore: new MemoryStore(),
+    assertReady: async () => undefined,
+    close: async () => {
+      closeCount += 1;
+    },
+  };
+  const sensitiveConfig = {
+    appConfig: {
+      ...buildTestConfig(),
+      publicBaseUrl: "https://public-sensitive.example",
+      r2Bucket: "private-bucket-name",
+      r2Endpoint: "https://account-identifier.r2.example",
+    },
+    lifecycleConfig: buildLifecycleTestConfig(
+      "https://account-identifier.r2.example"
+    ),
+  };
+  try {
+    await startStorageProxy({
+      loadConfig: () => sensitiveConfig,
+      createRateLimitBackend: async () => backend,
+      createApp: () => ({}) as import("express").Express,
+      verifyLifecycle: async () => undefined,
+      bindServer: async () => undefined,
+    });
+  } finally {
+    console.info = originalInfo;
+  }
+
+  assert.equal(closeCount, 0);
+  const serialized = infoEvents.join("\n");
+  for (const forbidden of [
+    sensitiveConfig.appConfig.publicBaseUrl,
+    sensitiveConfig.appConfig.r2Bucket,
+    sensitiveConfig.appConfig.r2Endpoint,
+  ]) {
+    assert.equal(serialized.includes(forbidden), false);
+  }
+  const started = infoEvents
+    .map(event => JSON.parse(event))
+    .find(event => event.msg === "storage_proxy_started");
+  assert.equal(started.rateLimiter, "shared_redis");
+  assert.equal(started.listenInterface, "all_ipv4");
+});
+
+test("server bind failures reject instead of escaping startup handling", async () => {
+  const occupied = createServer();
+  await new Promise<void>(resolve => occupied.listen(0, "127.0.0.1", resolve));
+  const address = occupied.address();
+  assert.ok(address && typeof address !== "string");
+  const app = express();
+  try {
+    await assert.rejects(
+      bindStorageProxyServer(app, address.port, "127.0.0.1"),
+      (error: NodeJS.ErrnoException) => error.code === "EADDRINUSE"
+    );
+  } finally {
+    await closeServer(occupied);
+  }
+});
 
 test("a storage operation cannot outlive its configured deadline", async () => {
   let operationSignal: AbortSignal | undefined;

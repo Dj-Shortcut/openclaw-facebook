@@ -336,7 +336,7 @@ replacement candidate
 from reviewed source `16b18195646fe2db8adc70a80e60616c50b6bc7c`; the
 manifest previously recorded that exact pair and retained the healthy legacy
 rollback. It never became deployed-runtime evidence and is superseded by the
-startup-safe candidate below; do not dispatch the old digest.
+startup-ordering candidate below; do not dispatch the old digest.
 
 Protected run `33080233054` stopped before production mutation because the
 current Machine metadata no longer matched the recorded predecessor. The live
@@ -352,10 +352,20 @@ Build run `33092823815` produced replacement candidate
 `sha256:99ea65710abb9a2294dcaf02cf76f57b240cb153a69e6020b68a470278103a8d`
 from reviewed startup-ordering fix
 `6a7d0431e1e02076a2db7fcf12c8358d7fbf33cd`. GitHub provenance attestation
-`43467733` binds that digest to the exact source and protected builder. The
-manifest records it only as `runtime_reviewed`; the healthy legacy digest
-remains the sole rollback until the protected rollout proves `/healthz`,
-shared-Redis `/readyz`, and rollback.
+`43467733` binds that digest to the exact source and protected builder.
+Protected deploy run `33101076132` proved the artifact and source but the
+runtime refused startup before binding its port. The workflow restored reviewed
+legacy digest
+`sha256:334f78b92816a92e302a66c4d08742c28361a718b190227d3dbf7b933350cc28`,
+verified its captured configuration, and public `/healthz` returned `200`.
+Digest `99ea...` is not deployed-runtime evidence and must not be dispatched
+again. The manifest is frozen at `awaiting_attested_runtime`, production deploy
+is disabled, and the healthy legacy digest is both the reviewed baseline and
+sole rollback. The next candidate must be a newly built and attested
+startup-stage diagnostics artifact; deploy it only after its exact digest and
+source replace the legacy reviewed baseline through review and restore
+`runtime_reviewed`. It must prove `/healthz`, shared-Redis `/readyz`, and
+rollback before the transition can advance.
 
 ### Image-gen database migration gate
 

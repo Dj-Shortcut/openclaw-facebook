@@ -5,6 +5,7 @@ import { Redis } from "ioredis";
 import { RedisStore, type RedisReply } from "rate-limit-redis";
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
+import type { Server } from "node:http";
 import { isIP } from "node:net";
 import {
   DeleteObjectCommand,
@@ -14,7 +15,7 @@ import {
   S3Client,
 } from "@aws-sdk/client-s3";
 
-type StorageProxyAppConfig = {
+export type StorageProxyAppConfig = {
   forgeApiKey: string;
   publicBaseUrl: string;
   r2Bucket: string;
@@ -31,7 +32,7 @@ type StorageProxyAppConfig = {
   trustFlyClientIp: boolean;
 };
 
-type R2LifecyclePreflightConfig = {
+export type R2LifecyclePreflightConfig = {
   r2Bucket: string;
   r2Endpoint: string;
   r2ObjectAccessKeyId: string;
@@ -40,9 +41,34 @@ type R2LifecyclePreflightConfig = {
   storageOperationTimeoutMs: number;
 };
 
-type StorageProxyStartupConfig = Readonly<{
+export type StorageProxyStartupConfig = Readonly<{
   appConfig: StorageProxyAppConfig;
   lifecycleConfig: R2LifecyclePreflightConfig;
+}>;
+
+export type StorageProxyStartupStage =
+  | "config"
+  | "redis_connect"
+  | "app_construction"
+  | "redis_readiness"
+  | "r2_lifecycle_preflight"
+  | "server_bind";
+
+export type StorageProxyStartupDependencies = Readonly<{
+  loadConfig: () => StorageProxyStartupConfig;
+  createRateLimitBackend: (
+    redisUrl: string
+  ) => Promise<StorageRateLimitBackend>;
+  createApp: (
+    config: StorageProxyAppConfig,
+    options: { backend: StorageRateLimitBackend }
+  ) => express.Express;
+  verifyLifecycle: (config: R2LifecyclePreflightConfig) => Promise<void>;
+  bindServer: (
+    app: express.Express,
+    port: number,
+    host: string
+  ) => Promise<void>;
 }>;
 
 const DEFAULT_MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
@@ -99,6 +125,41 @@ export class StorageOperationTimeoutError extends Error {
   }
 }
 
+export class StorageProxyStartupError extends Error {
+  constructor(
+    readonly stage: StorageProxyStartupStage,
+    readonly startupCause: unknown,
+    readonly durationMs: number
+  ) {
+    super(`storage_proxy_startup_failed:${stage}`);
+    this.name = "StorageProxyStartupError";
+  }
+}
+
+export async function runStorageProxyStartupStage<T>(
+  stage: StorageProxyStartupStage,
+  operation: () => T | Promise<T>
+): Promise<T> {
+  const startedAt = Date.now();
+  logJson("info", {
+    msg: "storage_proxy_startup_stage_started",
+    startupStage: stage,
+    deploymentIdentity: readDeploymentIdentityForLog(),
+  });
+  try {
+    const result = await operation();
+    logJson("info", {
+      msg: "storage_proxy_startup_stage_completed",
+      startupStage: stage,
+      deploymentIdentity: readDeploymentIdentityForLog(),
+      durationMs: Date.now() - startedAt,
+    });
+    return result;
+  } catch (error) {
+    throw new StorageProxyStartupError(stage, error, Date.now() - startedAt);
+  }
+}
+
 function loadDotEnvFromDisk(): void {
   const envPath = ".env";
   if (!existsSync(envPath)) {
@@ -136,9 +197,10 @@ function loadDotEnvFromDisk(): void {
 
 loadDotEnvFromDisk();
 
-const REQUIRED_ENV_KEYS = [
+const OBSERVED_ENV_KEYS = [
   "FORGE_API_KEY",
   "PUBLIC_BASE_URL",
+  "R2_ENDPOINT",
   "R2_ACCOUNT_ID",
   "R2_ACCESS_KEY_ID",
   "R2_SECRET_ACCESS_KEY",
@@ -155,19 +217,28 @@ function hasEnv(name: string): boolean {
   return readEnv(name).trim().length > 0;
 }
 
+function readDeploymentIdentityForLog(): string {
+  const identity = readEnv("LEADERBOT_DEPLOYMENT_IDENTITY").trim();
+  if (!identity) return "none";
+  return /^deploy-[0-9]+-[0-9]+$/u.test(identity) ? identity : "unrecognized";
+}
+
+function r2EndpointSourceForLog(): "endpoint" | "account_id" | "missing" {
+  return hasEnv("R2_ENDPOINT")
+    ? "endpoint"
+    : hasEnv("R2_ACCOUNT_ID")
+      ? "account_id"
+      : "missing";
+}
+
 function logEnvPresence(): void {
-  console.log(
-    "ENV DEBUG:",
-    JSON.stringify({
-      R2_BUCKET: readEnv("R2_BUCKET"),
-    })
-  );
-  console.log(
-    "ENV KEYS PRESENT:",
-    JSON.stringify(
-      Object.fromEntries(REQUIRED_ENV_KEYS.map(key => [key, hasEnv(key)]))
-    )
-  );
+  logJson("info", {
+    msg: "storage_proxy_config_presence",
+    r2EndpointSource: r2EndpointSourceForLog(),
+    envKeysPresent: Object.fromEntries(
+      OBSERVED_ENV_KEYS.map(key => [key, hasEnv(key)])
+    ),
+  });
 }
 
 function getEnv(name: string): string {
@@ -899,10 +970,22 @@ function fileNameLogFields(fileName: string): Record<string, unknown> {
   };
 }
 
-function storageErrorLogFields(error: unknown): Record<string, unknown> {
+export function storageErrorLogFields(error: unknown): Record<string, unknown> {
+  const startupStage =
+    error instanceof StorageProxyStartupError ? error.stage : undefined;
+  const reportedError =
+    error instanceof StorageProxyStartupError ? error.startupCause : error;
   return {
-    errorName: error instanceof Error ? error.name : typeof error,
-    statusCode: getStorageErrorStatusCode(error),
+    startupStage,
+    deploymentIdentity:
+      startupStage === undefined ? undefined : readDeploymentIdentityForLog(),
+    durationMs:
+      error instanceof StorageProxyStartupError ? error.durationMs : undefined,
+    errorName:
+      reportedError instanceof Error
+        ? reportedError.name
+        : typeof reportedError,
+    statusCode: getStorageErrorStatusCode(reportedError),
   };
 }
 
@@ -1238,20 +1321,75 @@ export function createStorageProxyApp(
   return app;
 }
 
-export async function startStorageProxy(): Promise<void> {
-  const { appConfig, lifecycleConfig } = loadConfig();
-  const rateLimitBackend = await createSharedStorageRateLimitBackend(
-    appConfig.rateLimitRedisUrl
+export async function bindStorageProxyServer(
+  app: express.Express,
+  port: number,
+  host: string
+): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    let server: Server;
+    try {
+      server = app.listen(port, host);
+    } catch (error) {
+      reject(error);
+      return;
+    }
+    const removeListeners = () => {
+      server.off("listening", handleListening);
+      server.off("error", handleError);
+    };
+    const handleListening = () => {
+      removeListeners();
+      resolve();
+    };
+    const handleError = (error: Error) => {
+      removeListeners();
+      if (server.listening) {
+        server.close(() => reject(error));
+        return;
+      }
+      reject(error);
+    };
+    server.once("listening", handleListening);
+    server.once("error", handleError);
+  });
+}
+
+const DEFAULT_STORAGE_PROXY_STARTUP_DEPENDENCIES: StorageProxyStartupDependencies =
+  {
+    loadConfig,
+    createRateLimitBackend: createSharedStorageRateLimitBackend,
+    createApp: (config, options) => createStorageProxyApp(config, options),
+    verifyLifecycle: verifyRequiredR2LifecycleConfig,
+    bindServer: bindStorageProxyServer,
+  };
+
+export async function startStorageProxy(
+  dependencies: StorageProxyStartupDependencies = DEFAULT_STORAGE_PROXY_STARTUP_DEPENDENCIES
+): Promise<void> {
+  const { appConfig, lifecycleConfig } = await runStorageProxyStartupStage(
+    "config",
+    dependencies.loadConfig
+  );
+  const rateLimitBackend = await runStorageProxyStartupStage(
+    "redis_connect",
+    () => dependencies.createRateLimitBackend(appConfig.rateLimitRedisUrl)
   );
   try {
     // express-rate-limit initializes each RedisStore while constructing the
     // middleware. Readiness must run after that initialization, otherwise
     // rate-limit-redis has no windowMs and throws before issuing a Redis call.
-    const app = createStorageProxyApp(appConfig, {
-      backend: rateLimitBackend,
-    });
-    await rateLimitBackend.assertReady();
-    await verifyRequiredR2LifecycleConfig(lifecycleConfig);
+    const app = await runStorageProxyStartupStage("app_construction", () =>
+      dependencies.createApp(appConfig, {
+        backend: rateLimitBackend,
+      })
+    );
+    await runStorageProxyStartupStage("redis_readiness", () =>
+      rateLimitBackend.assertReady()
+    );
+    await runStorageProxyStartupStage("r2_lifecycle_preflight", () =>
+      dependencies.verifyLifecycle(lifecycleConfig)
+    );
     if (appConfig.allowLegacyBearerAuth || appConfig.allowLegacyObjectKeys) {
       logJson("warn", {
         msg: "storage_proxy_legacy_bridge_enabled",
@@ -1260,21 +1398,19 @@ export async function startStorageProxy(): Promise<void> {
       });
     }
     const host = "0.0.0.0";
-
-    app.listen(appConfig.port, host, () => {
-      logJson("info", {
-        msg: "storage_proxy_started",
-        host,
-        port: appConfig.port,
-        bind: `${host}:${appConfig.port}`,
-        publicBaseUrl: appConfig.publicBaseUrl,
-        r2Bucket: appConfig.r2Bucket,
-        r2Endpoint: appConfig.r2Endpoint,
-        storageOperationTimeoutMs: appConfig.storageOperationTimeoutMs,
-        rateLimiter: "shared_redis",
-        allowLegacyBearerAuth: appConfig.allowLegacyBearerAuth,
-        allowLegacyObjectKeys: appConfig.allowLegacyObjectKeys,
-      });
+    await runStorageProxyStartupStage("server_bind", () =>
+      dependencies.bindServer(app, appConfig.port, host)
+    );
+    logJson("info", {
+      msg: "storage_proxy_started",
+      deploymentIdentity: readDeploymentIdentityForLog(),
+      listenInterface: "all_ipv4",
+      port: appConfig.port,
+      r2EndpointSource: r2EndpointSourceForLog(),
+      storageOperationTimeoutMs: appConfig.storageOperationTimeoutMs,
+      rateLimiter: "shared_redis",
+      allowLegacyBearerAuth: appConfig.allowLegacyBearerAuth,
+      allowLegacyObjectKeys: appConfig.allowLegacyObjectKeys,
     });
   } catch (error) {
     await rateLimitBackend.close().catch(() => undefined);

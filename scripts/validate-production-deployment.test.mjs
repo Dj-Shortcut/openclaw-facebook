@@ -4699,7 +4699,7 @@ describe("production deployment contract", () => {
     ).rejects.toThrow("has no successful main push run");
   });
 
-  it("accepts only the exact reviewed storage-proxy deploy image", () => {
+  it("blocks the legacy storage baseline and accepts only a newly reviewed runtime", () => {
     const manifest = JSON.parse(
       fs.readFileSync(
         path.join(repoRoot, "deploy/production/apps.json"),
@@ -4708,9 +4708,11 @@ describe("production deployment contract", () => {
     );
     const reviewedImage = manifest.apps["storage-proxy"].reviewedImage;
 
-    expect(
+    expect(() =>
       validateReviewedImage("storage-proxy", reviewedImage, repoRoot),
-    ).toBe(reviewedImage);
+    ).toThrow(
+      "legacy bootstrap image has no trusted build attestation and cannot be deployed",
+    );
 
     const root = createRepositoryFixture();
     const manifestPath = path.join(root, "deploy/production/apps.json");
@@ -4768,17 +4770,16 @@ describe("production deployment contract", () => {
     );
   });
 
-  it("blocks the gateway and enables only the reviewed stateless runtimes", () => {
+  it("blocks the gateway and failed storage candidate while keeping image-gen enabled", () => {
     expect(() => validateDeploymentEnabled("gateway", repoRoot)).toThrow(
       "gateway production deployment is blocked",
     );
     expect(
       validateDeploymentEnabled("image-gen", repoRoot).reviewedArtifactKind,
     ).toBe("runtime");
-    expect(
-      validateDeploymentEnabled("storage-proxy", repoRoot)
-        .reviewedArtifactKind,
-    ).toBe("runtime");
+    expect(() => validateDeploymentEnabled("storage-proxy", repoRoot)).toThrow(
+      "storage-proxy production deployment is blocked",
+    );
   });
 
   it("refuses to enable the stateful gateway even without a rollback digest", () => {
@@ -5463,6 +5464,44 @@ describe("production deployment contract", () => {
 
     expect(() => validateProductionRepository(root)).toThrow(
       "must keep R2_ENDPOINT as the exact alternative to R2_ACCOUNT_ID",
+    );
+  });
+
+  it.each([
+    ["config", 'runStorageProxyStartupStage(\n    "config"'],
+    ["redis_connect", 'runStorageProxyStartupStage(\n    "redis_connect"'],
+    ["app_construction", 'runStorageProxyStartupStage("app_construction"'],
+    ["redis_readiness", 'runStorageProxyStartupStage("redis_readiness"'],
+    [
+      "r2_lifecycle_preflight",
+      'runStorageProxyStartupStage("r2_lifecycle_preflight"',
+    ],
+    ["server_bind", 'runStorageProxyStartupStage("server_bind"'],
+  ])("requires the %s storage-proxy startup phase", (_phase, wiring) => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      "apps/image-gen/storage-proxy/index.ts",
+      wiring,
+      wiring.replace("runStorageProxyStartupStage", "runUntrackedStartupStage"),
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must label every startup phase and close acquired resources on failure",
+    );
+  });
+
+  it("requires storage-proxy failure cleanup after backend acquisition", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      "apps/image-gen/storage-proxy/index.ts",
+      "await rateLimitBackend.close().catch(() => undefined)",
+      "await Promise.resolve()",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must label every startup phase and close acquired resources on failure",
     );
   });
 
