@@ -1926,6 +1926,34 @@ describe("production deployment contract", () => {
     );
   });
 
+  it("requires a bounded liveness wait before rollback identity verification", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/deploy-production.yml",
+      "for attempt in {1..30}",
+      "for attempt in {1..300}",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must prove storage-proxy liveness and shared-limiter readiness after deploy and rollback",
+    );
+  });
+
+  it("requires invoking the rollback liveness wait before identity verification", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/deploy-production.yml",
+      "          wait_for_storage_proxy_health final\n",
+      "",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must prove storage-proxy liveness and shared-limiter readiness after deploy and rollback",
+    );
+  });
+
   it("requires successor and restore recovery to prove storage-proxy readiness", () => {
     const root = createRepositoryFixture();
     const workflowPath = path.join(
@@ -1953,6 +1981,34 @@ describe("production deployment contract", () => {
       ".github/workflows/reconcile-production-deployment.yml",
       'if [[ "$rollback_kind" != "legacy-bootstrap" ]]; then',
       'if [[ "$rollback_kind" != "unreviewed-legacy" ]]; then',
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must prove restored storage-proxy liveness and shared-limiter readiness",
+    );
+  });
+
+  it("requires bounded recovery waits before restored identity verification", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/reconcile-production-deployment.yml",
+      "for attempt in {1..30}",
+      "for attempt in {1..300}",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must prove restored storage-proxy liveness and shared-limiter readiness",
+    );
+  });
+
+  it("does not require storage-proxy health before recovery mutations", () => {
+    const root = createRepositoryFixture();
+    replaceLastFixtureText(
+      root,
+      ".github/workflows/reconcile-production-deployment.yml",
+      '          if test "$superseded" = false; then\n',
+      '          wait_for_storage_proxy_health prior\n          if test "$superseded" = false; then\n',
     );
 
     expect(() => validateProductionRepository(root)).toThrow(

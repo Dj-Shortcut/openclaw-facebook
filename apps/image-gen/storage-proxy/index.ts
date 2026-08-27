@@ -1244,11 +1244,14 @@ export async function startStorageProxy(): Promise<void> {
     appConfig.rateLimitRedisUrl
   );
   try {
-    await rateLimitBackend.assertReady();
-    await verifyRequiredR2LifecycleConfig(lifecycleConfig);
+    // express-rate-limit initializes each RedisStore while constructing the
+    // middleware. Readiness must run after that initialization, otherwise
+    // rate-limit-redis has no windowMs and throws before issuing a Redis call.
     const app = createStorageProxyApp(appConfig, {
       backend: rateLimitBackend,
     });
+    await rateLimitBackend.assertReady();
+    await verifyRequiredR2LifecycleConfig(lifecycleConfig);
     if (appConfig.allowLegacyBearerAuth || appConfig.allowLegacyObjectKeys) {
       logJson("warn", {
         msg: "storage_proxy_legacy_bridge_enabled",

@@ -1148,22 +1148,35 @@ jobs:
 
       - name: Verify restored storage-proxy release
         if: failure() && steps.deploy.outcome != 'skipped'
-        timeout-minutes: 5
+        timeout-minutes: 10
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_STORAGE_PROXY_DEPLOY_TOKEN }}
         run: |
+          set -euo pipefail
+          wait_for_storage_proxy_health() {
+            local phase="${1:?storage-proxy health phase is required}"
+            local body status
+            body="$(mktemp)"
+            for attempt in {1..30}; do
+              if status="$(curl --ipv4 --silent --show-error --location --connect-timeout 2 --max-time 5 --output "$body" --write-out '%{http_code}' https://leaderbot-storage-proxy.fly.dev/healthz)" &&
+                 test "$status" = "200" &&
+                 grep -Fx "ok" "$body" >/dev/null; then
+                return 0
+              fi
+              sleep 3
+            done
+            echo "storage-proxy did not become healthy during $phase wake" >&2
+            return 1
+          }
           rollback_image="$(cat "$RUNNER_TEMP/leaderbot-release/rollback-image.txt")"
           rollback_config="$RUNNER_TEMP/leaderbot-release/before.fly.toml"
           prior_identity="$(cat "$RUNNER_TEMP/leaderbot-release/rollback-identity.txt")"
           rollback_kind="$(node scripts/validate-production-deployment.mjs \
             --reviewed-artifact-kind storage-proxy "$rollback_image")"
+          wait_for_storage_proxy_health final
           node scripts/validate-production-deployment.mjs \
             --verify-restored-release storage-proxy "$rollback_image" "$rollback_config" \
             --expected-deployment-identity "$prior_identity"
-          body="$(mktemp)"
-          status="$(curl --ipv4 --silent --show-error --location --max-time 20 --retry 2 --retry-delay 5 --retry-all-errors --output "$body" --write-out '%{http_code}' https://leaderbot-storage-proxy.fly.dev/healthz)"
-          test "$status" = "200"
-          grep -Fx "ok" "$body"
           if [[ "$rollback_kind" != "legacy-bootstrap" ]]; then
             ready_body="$(mktemp)"
             ready_status="$(curl --ipv4 --silent --show-error --location --max-time 20 --retry 2 --retry-delay 5 --retry-all-errors --output "$ready_body" --write-out '%{http_code}' https://leaderbot-storage-proxy.fly.dev/readyz)"
