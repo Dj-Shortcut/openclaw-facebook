@@ -221,15 +221,18 @@ failed. Its rollback completed and the restored production baseline is healthy.
 The candidate is therefore not deployed-runtime evidence and must not be marked
 `runtime_deployed`.
 
-Build run `33069256896` subsequently built and attested the replacement runtime
-candidate
+Build run `33069256896` subsequently built and attested candidate
 `sha256:3f2861c2ddc373ae777122f9b6cbac0f333c7ce65c094cc5fd2dbccfdf6df1e9`
-from reviewed `main` source
-`16b18195646fe2db8adc70a80e60616c50b6bc7c`; the manifest binds that exact
-source and digest while retaining the healthy legacy rollback. A fresh
-protected deployment must still pass both health and readiness checks before
-the transition can become `runtime_deployed`. Do not promote or merely relabel
-the failed `d2a2...` candidate.
+from reviewed source `16b18195646fe2db8adc70a80e60616c50b6bc7c`. It never
+became deployed-runtime evidence and is superseded; do not dispatch it or the
+failed `d2a2...` candidate.
+
+Build run `33092823815` produced the current startup-safe candidate
+`sha256:99ea65710abb9a2294dcaf02cf76f57b240cb153a69e6020b68a470278103a8d`
+from reviewed source `6a7d0431e1e02076a2db7fcf12c8358d7fbf33cd` and bound it
+to GitHub provenance attestation `43467733`. The manifest retains the healthy
+legacy rollback. The transition remains `runtime_reviewed` until a fresh
+protected deployment passes both health and shared-Redis readiness checks.
 
 Protected run `33080233054` stopped before production mutation. The live
 comparison after two releases during the 2026-08-27 credential rotation showed

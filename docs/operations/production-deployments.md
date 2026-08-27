@@ -334,9 +334,9 @@ digest is not deployed-runtime evidence and the manifest must not advance to
 replacement candidate
 `sha256:3f2861c2ddc373ae777122f9b6cbac0f333c7ce65c094cc5fd2dbccfdf6df1e9`
 from reviewed source `16b18195646fe2db8adc70a80e60616c50b6bc7c`; the
-manifest records that exact pair and retains the healthy legacy rollback. A
-fresh protected deploy must still pass `/healthz` and `/readyz` before the
-transition advances to `runtime_deployed`.
+manifest previously recorded that exact pair and retained the healthy legacy
+rollback. It never became deployed-runtime evidence and is superseded by the
+startup-safe candidate below; do not dispatch the old digest.
 
 Protected run `33080233054` stopped before production mutation because the
 current Machine metadata no longer matched the recorded predecessor. The live
@@ -347,6 +347,15 @@ with Fly tool metadata `2026.8.27-dev.1787839287`. The temporary
 rollout can replace it with the pinned deployment tool. This does not allow
 another development build and the exception no longer applies after
 `runtime_deployed`.
+
+Build run `33092823815` produced replacement candidate
+`sha256:99ea65710abb9a2294dcaf02cf76f57b240cb153a69e6020b68a470278103a8d`
+from reviewed startup-ordering fix
+`6a7d0431e1e02076a2db7fcf12c8358d7fbf33cd`. GitHub provenance attestation
+`43467733` binds that digest to the exact source and protected builder. The
+manifest records it only as `runtime_reviewed`; the healthy legacy digest
+remains the sole rollback until the protected rollout proves `/healthz`,
+shared-Redis `/readyz`, and rollback.
 
 ### Image-gen database migration gate
 
