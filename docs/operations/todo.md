@@ -106,7 +106,7 @@ ClawHub, install, release, and rollback routes are proven.
   rules were absent.
 - The deploy restored and verified reviewed legacy digest `334f...`; public
   `/healthz` returned `200`, recovery run `33106363152` passed, and completed-run
-  reconciliation `33106369992` also passed. The manifest is returned to
+  reconciliation `33106369992` also passed. The manifest was returned to
   `awaiting_attested_runtime`, so neither failed runtime candidate is
   dispatchable.
 - The owner explicitly approved the retention boundary. Cloudflare stored the
