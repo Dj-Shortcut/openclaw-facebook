@@ -1,5 +1,11 @@
 # WhatsApp Setup
 
+> Optional transitional channel. Messenger is the only channel in the initial
+> one-time premium-credit launch. Do not extend WhatsApp provisioning, tenant
+> management, or paid-credit behavior until the Messenger journey is proven and
+> the owner explicitly decides to retain WhatsApp. Existing production bindings
+> must still be handled safely while this code remains deployed.
+
 Last verified: 2026-08-24
 
 Public Leaderbot WhatsApp number:

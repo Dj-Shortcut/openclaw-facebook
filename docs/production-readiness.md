@@ -1,84 +1,79 @@
-# Production Readiness
+# Production readiness
 
-Status: **NO-GO for broad Leaderbot customer launch** until the direct customer
-journey in `apps/image-gen` has production evidence. Personal OpenClaw health is
-tracked separately and is not a customer launch gate.
+Status: **migration in progress; live one-time checkout is disabled**.
 
-Canonical priorities and remaining work live in
+The active outcome and order live in
 [`operations/todo.md`](operations/todo.md). This document defines the final
-deploy and smoke evidence, not a second backlog.
+production smoke and evidence required for the owner-operated Messenger bot.
 
-## Runtime split
-
-### Leaderbot customers
+## Runtime contract
 
 ```text
-Customer Page -> Meta webhook -> apps/image-gen -> tenant runtime -> Messenger
+Owner Page -> Meta webhook -> apps/image-gen -> conversation -> Messenger
 ```
 
-`apps/image-gen` owns webhook verification, workspace resolution, conversation
-state, image generation, storage, consent, quota, billing, deletion, portal and
-customer delivery. No customer request traverses OpenClaw or its legacy bridge.
+OpenClaw is not an active runtime dependency. The old gateway and root plugin
+remain only until callback, traffic, state, rollback, and deletion obligations
+are safely retired.
 
-### Personal OpenClaw
+## Free journey smoke
 
-```text
-Owner Page -> Meta webhook -> OpenClaw Facebook plugin -> personal OpenClaw
-```
+Using an approved test Page and non-customer test user:
 
-The checked-in gateway stays pairing-only, has the Leaderbot bridge disabled,
-and exposes only `/facebook/webhook` and `/healthz`. It does not proxy portal or
-legal routes and does not participate in customer quota or billing. Its owner
-Page uses a different Meta app and credentials from the Leaderbot customer app.
+1. Meta verifies the canonical callback.
+2. A signed user-initiated text message receives a normal reply.
+3. Consent grant, refusal, typed fallback, and stale reply behave correctly.
+4. Prompt-first text-to-image succeeds.
+5. Source-photo edit and multi-photo composition succeed.
+6. Free balance updates once for a usable delivered result.
+7. Duplicate event, provider failure, and delivery failure do not double-count.
+8. Exhaustion blocks before provider work and shows the next reset.
+9. `delete-my-data` removes eligible state, cancels queued work, and suppresses
+   late output.
+10. Logs and smoke evidence contain metadata only.
 
-## Leaderbot release evidence
+## Paid journey smoke
 
-Before a customer release:
+Required in Mollie Test Mode before any live payment:
 
-- deploy only an approved immutable `apps/image-gen` and storage-proxy digest;
-- record the exact rollback digests;
-- verify the approved database schema and a recent restore rehearsal;
-- verify direct Meta callback configuration points to `apps/image-gen`;
-- verify each receiving Page resolves to exactly one active workspace;
-- verify tenant queue, storage, usage and deletion readiness;
-- verify portal, legal, health, readiness and required webhook routes;
-- confirm no internal/admin/debug or personal OpenClaw surface is exposed;
-- confirm logs and monitoring contain metadata only.
+1. Exhaustion response presents the exact one-time offer and a decline path.
+2. Checkout handoff is signed, short-lived, single-use, and user/Page bound.
+3. Checkout shows price, credits, quality, validity, no subscription, and legal
+   confirmations.
+4. Successful payment creates one grant after trusted status verification.
+5. Redirect-before-webhook and webhook-before-redirect both converge.
+6. Duplicate or reordered webhooks have no second effect.
+7. Failed, canceled, expired, mismatched, and unknown payments grant nothing.
+8. Premium generation reserves and commits one credit; failures release it.
+9. Concurrent requests cannot overspend the wallet.
+10. Refund, partial use, chargeback, deletion, and Page rebinding follow the
+    approved ledger policy.
+11. Reconciliation detects drift without moving money unexpectedly.
+12. Rollback preserves already-created payment and wallet recovery.
 
-Production smoke with an approved test workspace/Page:
+## Release evidence
 
-1. portal login, workspace load and Messenger connect/disconnect;
-2. ordinary text response from the Leaderbot conversation runtime;
-3. consent button, typed grant, refusal and repeated-prompt protection;
-4. prompt-first image generation;
-5. source-photo edit;
-6. multi-photo composition for one-message and sequential uploads;
-7. daily/monthly quota exhaustion before a provider call;
-8. provider/delivery failure and dead-letter visibility;
-9. `delete-my-data`, queued-work cancellation and late-output suppression;
-10. rollback to the recorded image without tenant or schema drift.
+Before rollout:
 
-Store only commit/digest, random request id, workspace-safe outcome codes,
-bounded counts, durations and rollback metadata. Never store customer content,
-raw PSIDs, prompts, tokens, media URLs or generated images as smoke evidence.
+- approved immutable image and source commit;
+- exact rollback image and compatible schema phase;
+- recent encrypted backup/restore proof where MySQL changes are involved;
+- health, readiness, queue, worker, replay, storage, and dead-letter checks;
+- direct Meta callback and expected Page binding;
+- live and recurring billing flags in their reviewed state;
+- provider hard limit and application spend caps;
+- legal, privacy, receipt, support, and refund copy version;
+- metadata-only monitoring and incident owner.
 
-## Personal gateway evidence
-
-Personal OpenClaw releases use their own low-priority checklist:
-
-- pairing or explicit owner allowlist remains active;
-- the Leaderbot bridge remains disabled;
-- no customer portal/image-gen origin is configured;
-- `/healthz` and the owner Messenger text turn work;
-- gateway UI/API remain shielded;
-- rollback is recorded.
-
-Failure here blocks only that personal release unless a shared security or
-data-loss regression also affects Leaderbot.
-
-## Commands
-
-Use only the approval-protected GitHub workflows documented in
+Use only the protected workflows in
 [`operations/production-deployments.md`](operations/production-deployments.md).
-Do not run local `fly deploy`, ad-hoc migrations or manual rollback commands for
-normal production releases.
+
+## Evidence boundary
+
+Allowed evidence includes commit/digest, deployment identity, random request
+id, opaque subject hash, bounded outcome code, counts, timings, schema phase,
+provider status class, and rollback result.
+
+Never retain raw PSIDs, access tokens, checkout tokens, messages, prompts,
+photos, generated images, media URLs, Mollie payloads, or payment credentials as
+smoke evidence.

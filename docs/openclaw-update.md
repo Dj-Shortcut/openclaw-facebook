@@ -1,243 +1,27 @@
-# OpenClaw Update, Release, and Rollback Workflow
+# OpenClaw retirement guard
 
-This is the single supported workflow for updating OpenClaw in this repository.
-It applies only to the repository owner's personal Messenger/OpenClaw gateway,
-is low priority, and never blocks Leaderbot customer, portal, image, quota or
-billing releases. Customer Meta webhooks terminate directly in
-`apps/image-gen`.
-Do not update OpenClaw by editing files under `node_modules`, patching installed
-packages, shelling into running machines, or using dashboard actions that mutate
-runtime package directories.
+OpenClaw is no longer part of the target product. Do not update, publish, or
+redeploy it for feature work.
 
-## Runtime Contract
+This file remains temporarily because the legacy automated update workflow and
+gateway documentation still link to it. Any generated OpenClaw update PR must
+be closed unless an urgent security or data-loss containment issue requires a
+separately approved retirement-safe patch.
 
-The repository supports one OpenClaw runtime contract:
+Allowed work:
 
-| Requirement | Contract |
-| --- | --- |
-| Node.js | `>=24.15.0` |
-| Package manager | npm `>=11.12.1` is authoritative for the root plugin; pnpm `10.28.1` is pinned for the three isolated subapps. The root `pnpm-lock.yaml` remains a compatibility mirror. |
-| OpenClaw package | `openclaw` version recorded in `package.json` at `openclaw.build.openclawVersion` |
-| Plugin SDK version | same version as `openclaw.build.openclawVersion` |
-| Fly gateway OpenClaw version | same version in `deploy/fly-gateway/Dockerfile` `ARG OPENCLAW_VERSION` |
-| Gateway companion runtime | `@openclaw/codex` at the same version as OpenClaw |
-| Facebook plugin install | built from this repo and installed as `@dj-shortcut/facebook` |
-| Runtime templates | `HEARTBEAT.md` must be present at `src/agents/templates`; workspace bootstrap templates must be present at `src/agents/templates` or `docs/reference/templates`, matching OpenClaw's packaged template search path |
-| Installed package mutation | unsupported |
+- verify the owner Page has moved to the direct `apps/image-gen` callback;
+- confirm the gateway receives no intended Messenger traffic;
+- identify and handle retained gateway state under an explicit privacy policy;
+- preserve a rollback only during the approved observation window;
+- disable and remove the gateway, plugin, secrets, workflows, and docs together.
 
-Automated validation:
+Not allowed:
 
-```bash
-npm run openclaw:validate
-```
+- routine dependency upgrades;
+- ClawHub or npm publication;
+- new channel, bridge, memory, agent, or customer functionality;
+- reusing the gateway as checkout, billing, portal, or Messenger ingress;
+- copying gateway memory or transcripts into the active bot.
 
-The Fly/Docker gateway image runs the stricter gateway validation during build:
-
-```bash
-EXPECTED_OPENCLAW_VERSION=<version> node scripts/validate-openclaw-runtime.mjs /app --gateway
-```
-
-## Update Workflow
-
-Use this workflow for local machines, CI, servers, and hosted environments.
-
-1. Pick the target OpenClaw version.
-
-   ```bash
-   npm view openclaw version
-   npm view @openclaw/codex version
-   ```
-
-   The versions must match before updating the gateway image.
-
-   For an explicitly approved prerelease, verify the exact target instead of
-   relying on the default `latest` tags:
-
-   ```bash
-   npm view openclaw@<version> version
-   npm view @openclaw/codex@<version> version
-   ```
-
-2. Update every version reference through the repository script.
-
-   ```bash
-   npm run openclaw:update -- <version>
-   npm install --package-lock-only --ignore-scripts --prefer-online
-   npx --yes pnpm@10.28.1 install --lockfile-only --ignore-scripts
-   npm ci
-   ```
-
-   Regenerate the pnpm compatibility lock with pnpm `10.28.1`, matching the
-   automated update workflow.
-
-   This updates:
-
-   - root package version
-   - root OpenClaw dev dependency
-   - OpenClaw build metadata
-   - manifest test expectations
-   - Fly gateway `OPENCLAW_VERSION`
-   - ClawHub tested/plugin/release version references
-   - npm and pnpm lockfiles
-
-3. Validate the repository and runtime contract.
-
-   ```bash
-   npm run gateway:deployment-safety
-   npm run openclaw:release-check
-   ```
-
-4. Build the gateway image before merging when the update touches hosted runtime
-   behavior.
-
-   ```bash
-   fly deploy -a leaderbot-openclaw-gateway --build-only
-   ```
-
-5. Open a PR. The PR must include:
-
-   - target OpenClaw version
-   - validation command output
-   - gateway build result or reason it was not required
-   - expected public route impact
-   - rollback target or rollback capture plan
-   - npm and ClawHub release decision
-
-6. Merge only after CI passes and review confirms there is no installed-package
-   patching or undocumented runtime workaround.
-
-7. From the merged `main` commit, manually dispatch the `Deploy production`
-   GitHub Actions workflow with target `gateway` and approve the protected
-   `production` environment. Do not bypass it with a local deployment.
-
-   The workflow captures the currently running image before invoking the
-   canonical `npm run deploy:gateway` command.
-
-8. Verify production.
-
-   ```bash
-   fly status -a leaderbot-openclaw-gateway
-   fly releases --image -a leaderbot-openclaw-gateway
-   curl -fsS https://leaderbot-openclaw-gateway.fly.dev/healthz
-   ```
-
-   Also verify:
-
-   - only reviewed public routes are exposed;
-   - admin/dashboard access still requires the configured admin controls;
-   - Facebook webhook verification still succeeds;
-   - logs contain metadata, not raw customer messages or secrets.
-
-## Automated Update PR
-
-The scheduled/manual GitHub workflow `.github/workflows/update-openclaw.yml`
-uses the same supported update script:
-
-```bash
-npm run openclaw:update -- <version>
-```
-
-It creates new update PRs as drafts with production approval still pending. It
-does not deploy, request deploy identity, or read Fly secrets. The static
-`npm run gateway:deployment-safety` gate enforces this boundary and the reviewed
-Fly model/memory/public-route settings. If the update workflow needs new version
-editing behavior, add it to `scripts/update-openclaw.mjs` and document it here.
-
-## Rollback Workflow
-
-This is the single supported rollback workflow.
-
-1. Capture the previous good image before deploy.
-
-   ```bash
-   fly releases --image -a leaderbot-openclaw-gateway
-   ```
-
-2. If the new release fails verification, re-run `Deploy production` for target
-   `gateway`, enter the captured exact image reference in `rollback_image`, and
-   approve the protected environment.
-
-   The workflow applies the canonical `fly.toml`, then repeats drift, Meta, and
-   public health verification.
-
-3. Verify rollback.
-
-   ```bash
-   fly status -a leaderbot-openclaw-gateway
-   curl -fsS https://leaderbot-openclaw-gateway.fly.dev/healthz
-   ```
-
-4. Record metadata-only rollback notes in the incident or PR:
-
-   - incident id or reason
-   - failed version/image
-   - restored image
-   - operator
-   - verification outcome
-
-Never roll back by editing `/app/node_modules`, package manifests, generated
-bundles, or runtime files inside a running machine.
-
-## Release Workflow
-
-The update workflow and release workflow use the same validation gate.
-
-1. Run:
-
-   ```bash
-   npm run openclaw:release-check
-   npm pack
-   ```
-
-2. Validate the tarball in an isolated OpenClaw profile:
-
-   ```bash
-   openclaw --profile facebook-plugin-release plugins install ./dj-shortcut-facebook-*.tgz --force
-   openclaw --profile facebook-plugin-release plugins inspect facebook
-   openclaw --profile facebook-plugin-release channels list --all
-   ```
-
-3. Decide the publication target.
-
-   - ClawHub is the canonical public install path:
-
-     ```bash
-     clawhub package publish @dj-shortcut/facebook --dry-run
-     clawhub package publish @dj-shortcut/facebook
-     ```
-
-     Prefer the **Publish Plugin to ClawHub** GitHub Actions workflow with
-     `publish` checked for real releases so ClawHub can use GitHub OIDC
-     provenance. Tag-triggered publishes remain available as the
-     `CLAWHUB_TOKEN` fallback path.
-
-   - npm publication is a separate release decision. This package remains
-     `private: true`; remove that only in a dedicated release PR that documents
-     scope, ownership, package name, and compatibility impact.
-
-4. After publishing, smoke test from a fresh profile:
-
-   ```bash
-   openclaw --profile facebook-clawhub-smoke plugins install clawhub:@dj-shortcut/facebook
-   openclaw --profile facebook-clawhub-smoke plugins inspect facebook
-   openclaw --profile facebook-clawhub-smoke channels list --all
-   ```
-
-Expected result: `Facebook` appears as installed and `Messenger` does not appear
-as a separate channel.
-
-## Unsupported Recovery Paths
-
-These are explicitly unsupported:
-
-- editing installed files under `node_modules/openclaw`;
-- copying missing runtime files into installed packages;
-- patching OpenClaw bundles during Docker build;
-- running `npm install` inside a running Fly machine to repair production;
-- relying on package-internal paths other than the documented runtime contract;
-- using dashboard update actions that report `not-git-install` as a prompt for
-  manual in-container recovery.
-
-If an update requires a new OpenClaw runtime file, export, template, or behavior,
-fix and publish it upstream, then update this repository to that published
-version through the workflow above.
+The removal outcome is P5 in [`operations/todo.md`](operations/todo.md).

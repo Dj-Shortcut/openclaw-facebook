@@ -1,102 +1,143 @@
 # AGENTS.md
 
-# Mission
+## Mission
 
-This repository powers:
+This repository powers one owner-operated commercial Messenger image bot.
 
-* OpenClaw Facebook Messenger integration
-* Leaderbot tenant-owned conversational assistants
-* Leaderbot image-generation platform
+The product has one business owner and many Messenger end users. Users receive
+a bounded free daily image allowance. When that allowance is exhausted, the bot
+may offer a clearly priced, one-time purchase of premium image credits. There
+are no subscriptions, automatic renewals, mandates, tenant reselling, or
+customer-owned bot workspaces in the target product.
 
-Primary goal:
-
-Run Leaderbot's tenant-owned customer assistants directly in `apps/image-gen`,
-with Facebook Messenger as a first-class channel, while keeping the system
-maintainable, channel-neutral, and production-safe.
-
-OpenClaw is a separate personal tool for the repository owner. Its Facebook
-plugin and Messenger deployment remain supported for that private use, but they
-are low priority and must never sit on the Leaderbot customer, portal, image,
-quota, or billing critical path.
-
-The long-term direction is:
-
-Inbound Message
--> Conversation Layer
--> Conversation Response
--> Channel Renderer
-
-The conversation layer should not know Messenger-specific details.
-
-The two runtime paths are deliberately separate:
+Target flow:
 
 ```text
-Customer Page -> Meta webhook -> apps/image-gen -> tenant conversation -> Messenger renderer
-Owner Page    -> Meta webhook -> OpenClaw Facebook plugin -> personal OpenClaw
+Owner Page
+-> Meta webhook
+-> apps/image-gen
+-> conversation layer
+-> free allowance or paid credit wallet
+-> image provider
+-> Messenger renderer
 ```
 
-Do not route customer conversations through OpenClaw, its gateway, or the
-legacy Leaderbot bridge. Compatibility code may remain temporarily, default-off,
-until its production migration and removal are separately proven safe.
-The customer and personal paths use separate Meta apps/Pages and credentials;
-a Page webhook subscription callback is app-scoped and must not be shared
-between the two runtimes.
+OpenClaw, the root Facebook plugin, the personal Fly gateway, the multi-tenant
+customer portal, and recurring Mollie billing are retirement paths. They may
+remain temporarily only to support a tested migration or safe decommission.
+They must not gain new features or become prerequisites for the active bot.
 
----
+The only source of truth for open work is `docs/operations/todo.md`.
 
-# Hard Production Rules
+## Product model
 
-### Tenant Isolation
+- One commercial owner controls the Page, offer catalog, provider credentials,
+  budgets, legal copy, and operations.
+- Many end users interact through Messenger and have separate pseudonymous
+  conversation, quota, privacy, purchase, and credit state.
+- Free credits reset on the configured calendar boundary.
+- Purchased credits are a separate durable balance and never disappear during
+  the free daily reset.
+- A paid offer is a one-time credit bundle with an explicit price, number of
+  images, quality level, validity policy, and refund policy.
+- Premium quality must map to a server-owned provider policy. Browser input or
+  Messenger payloads may select an offer code only; they never set price,
+  credits, model, quality, or cost controls.
+- Failed, rejected, canceled, or undelivered generations do not consume a user
+  credit unless the documented product policy explicitly states otherwise and
+  the reservation/finalization flow proves it atomically.
 
-- Customer data must remain tenant-scoped and workspace-bound at all times.
-- No cross-tenant reads are allowed in API handlers, jobs, logs, caches, or analytics.
-- No shared memory layers or global caches may store tenant content unless explicitly justified and documented per workspace boundary.
-- No shared retrieval indexes, vectors, or search artifacts may span customer workspaces unless an explicit customer-approved sharing feature exists.
-- All new storage systems must document their tenant boundary model before production use.
+## Hard production rules
+
+### User isolation
+
+- Treat every Messenger user as a separate privacy and billing subject.
+- Scope state by owner/workspace, channel connection, Page binding, privacy
+  epoch, and pseudonymous user key.
+- Never use a global credit wallet or raw PSID as a durable storage key.
+- Deletion, reconnects, retries, and late jobs must not transfer credits,
+  messages, media, or generated outputs between users.
+- Retain the internal owner/workspace boundary even while the product exposes
+  only one owner. It is a safety partition, not a SaaS feature.
 
 ### Privacy
 
-- Never log raw PSIDs, access tokens, tenant secrets, customer messages, or uploaded knowledge.
-- Never persist customer content in debug paths, shared tracing streams, support notes, or ad-hoc diagnostics.
-- Prefer redacted logs, hashed identifiers, and metadata-only observability signals.
+- Never log raw PSIDs, access tokens, payment credentials, prompts, customer
+  messages, uploaded photos, generated images, or provider payloads.
+- Use pseudonymous identifiers and metadata-only operational signals.
+- Keep source media and generated assets on documented retention schedules.
+- Preserve `delete-my-data`, export where legally required, and late-output
+  suppression after erasure.
+- Payment records may outlive conversation content only where accounting or
+  legal retention requires it; keep that boundary documented and minimal.
 
-### Messenger Compliance
+### Messenger compliance
 
-- Preserve webhook verification and request signature handling.
-- Preserve GDPR consent flow and deletion requirements (`delete-my-data`).
-- Avoid changes that risk violating Facebook/Messenger platform policies or sender expectations.
-- Keep operational behavior compatible with approved policy envelopes during staged rollouts.
+- Preserve webhook verification, raw-body request signature validation,
+  replay protection, deduplication, and Page binding validation.
+- Send upgrade calls to action only in a user-initiated eligible conversation
+  window or another explicitly approved Meta policy path.
+- Use a Messenger URL action to open a clear web checkout. Do not collect card
+  or banking data in chat.
+- Do not add Facebook Login, `user_posts`, `user_friends`, profile scraping, or
+  social graph features without explicit product and policy approval.
+- Update `docs/operations/meta-app-review.md` when visible Messenger behavior or
+  requested permissions change.
 
-### Cost Protection
+### Payments and credits
 
-- Image generation is billable and must remain bounded by customer policy.
-- Preserve quota enforcement, budget enforcement, exhaustion handling, and abuse protection.
-- Never bypass quota checks in fallback paths, queue workers, or inline generation modes.
-- Billing controls must remain observable with auditable signals before and after refactors.
+- The target product accepts one-time Mollie payments only.
+- Do not create subscriptions, recurring payments, mandates, silent renewals,
+  automatic top-ups, or usage overages.
+- Create checkout from a short-lived, single-use, signed handoff bound to the
+  exact pseudonymous user, Page binding, privacy epoch, offer, and nonce.
+- Never put a raw PSID, message, prompt, photo URL, or secret in a checkout URL
+  or Mollie metadata.
+- Treat the browser redirect as presentation only. Grant credits only after the
+  server verifies the provider payment status through the trusted Mollie flow.
+- Payment processing, credit grants, reservations, commits, releases, refunds,
+  and adjustments must be idempotent and auditable.
+- A Mollie payment ID may fund exactly one immutable credit grant.
+- A generation reserves before provider work and commits only on the documented
+  success boundary. Provider retries must not double-charge the wallet.
+- Preserve global and per-user spend caps even for paid users.
+- Live billing stays disabled until legal copy, accounting, webhook handling,
+  reconciliation, refund behavior, quota enforcement, and rollback are proven.
 
-# Meta Review Requirements
+### Cost protection
 
-New or changed Messenger capabilities should:
+- Image generation is billable. Every path must pass free-quota or paid-credit
+  admission plus global provider budget controls.
+- Never bypass cost checks in fallbacks, workers, retries, admin actions, or
+  inline development modes.
+- Keep provider retry counts bounded; a transport retry must not silently start
+  another billable generation.
+- Model and quality changes require updated unit economics and a rollback.
 
-- Consider Meta App Review impact before implementation.
-- Preserve reviewability and keep behavior easy to demonstrate in a reproducible way.
-- Avoid unnecessary permissions and never expand permission scope without explicit product and policy approval.
-- Update review documentation, demo instructions, and required-permission notes whenever review scope changes.
-
----
-
-# Product Principles
-
-## Conversation First
+## Architecture rules
 
 The conversation layer owns:
 
-* intent resolution
-* assistant responses
-* follow-up actions
-* conversation state
+- intent resolution;
+- consent and user-facing responses;
+- free-versus-paid admission decisions;
+- channel-neutral actions;
+- conversation state transitions.
 
-Conversation state, memory, and assistant context must be scoped to the owning customer/workspace. Do not introduce shared or global memory paths that can leak customer data across tenants or channels.
+Channel adapters own:
+
+- webhook payload parsing;
+- transport and platform APIs;
+- rendering text, images, and actions;
+- platform delivery failures.
+
+Billing and wallet services own:
+
+- server-side offer catalog;
+- checkout intents and payment status;
+- immutable grants and adjustments;
+- credit reservation, commit, and release;
+- metadata-only reconciliation.
 
 Preferred response shape:
 
@@ -108,337 +149,133 @@ Preferred response shape:
 }
 ```
 
-Channel implementations are responsible only for rendering.
+Do not place Messenger quick-reply payloads, Mollie checkout details, or raw
+provider responses inside conversation-domain logic.
 
-Examples:
+## Product experience
 
-* Messenger -> Quick Replies
-* WhatsApp -> Buttons/List Messages
-* Web UI -> Chips/Pills
-* Future channels -> Native controls
+The primary journey is prompt-first:
 
-Never hardcode channel-specific UI decisions inside conversation logic.
-
----
-
-## Prompt-First Image Generation
-
-The primary image experience is:
-
-User prompt
--> Image generation
--> Result
-
-Legacy style-picker menu flows are deprecated.
-
-Do not reintroduce style-picker systems unless explicitly requested.
-
-Prefer:
-
-* natural language prompts
-* prompt enhancement
-* assistant-guided image creation
-
-Over:
-
-* rigid style catalogs
-* large style menus
-* preset proliferation
-
----
-
-## Leaderbot Customer Portal
-
-`leaderbot.live` is intended to become a real tenant/customer portal where customers manage their own AI.
-
-The portal direction is:
-
-* customer account and workspace
-* owned AI identity and instructions
-* knowledge management
-  * Knowledge management must be tenant-scoped: uploaded files, extracted text, embeddings, retrieval indexes, and assistant memory must not be shared or searchable across customer workspaces unless an explicit customer-controlled sharing feature exists.
-* channel connection status
-* usage, quota, billing, and privacy controls
-
-Do not treat `leaderbot.live` as:
-
-* a marketing-only brochure site
-* the public OpenClaw gateway UI
-* a place to revive old DJ/personality campaign assets
-
-The customer portal and customer Meta webhooks terminate in `apps/image-gen`.
-They must not be proxied through the OpenClaw gateway. The personal
-OpenClaw/Messenger gateway stays shielded and exposes only its own required
-webhook and health surfaces, never customer portal, billing, or tenant APIs.
-
----
-
-## Tenant Privacy & Data Ownership
-
-Infrastructure ownership does not imply customer data access.
-
-Rules:
-
-1. Each customer gets their own assistant workspace.
-2. Customer data includes conversations, assistant memory, uploaded knowledge, personal data, generated prompts/outputs, channel identifiers, and metadata.
-3. Infrastructure operators may manage deployment, uptime, billing, quotas, security, and reliability, but must not have default access to customer conversation content, memory, knowledge base content, or personal data.
-4. Default system behavior must be tenant isolation by design, least-privilege access, metadata-first observability, redacted logs by default, explicit customer-approved support access when content inspection is required, auditable break-glass access for exceptional incidents, and deletion/export paths for tenant-owned data.
-5. Never introduce admin tooling, logs, analytics, debug endpoints, or background jobs that expose customer content across tenants by default.
-6. Infrastructure ownership never implies customer-content access by default.
-7. Customer content is private by default.
-8. Support access must be explicit, customer-approved, and auditable.
-9. Break-glass access must be exceptional, narrowly scoped, time-limited, and logged.
-
----
-
-# Architectural Direction
-
-## Runtime Ownership
-
-Leaderbot customer runtime (`apps/image-gen`):
-
-* customer Meta webhook verification and ingress
-* tenant/workspace resolution
-* conversation state and assistant behavior
-* image generation and storage
-* customer quota, billing, consent, export, and deletion
-* customer portal and legal surfaces
-
-Personal OpenClaw runtime (root plugin and `deploy/fly-gateway`):
-
-* repository owner's private Messenger-to-OpenClaw channel
-* pairing or explicit allowlisting by default
-* no customer free-tier routing
-* no customer portal proxy
-* no customer quota or billing enforcement
-
-OpenClaw maintenance is non-blocking for Leaderbot releases unless a shared
-repository change would break the existing private channel or a security issue
-requires immediate containment.
-
-## Desired Ownership
-
-Conversation Layer:
-
-* text
-* images
-* actions
-* state transitions
-* tenant-scoped memory/context boundaries
-
-Channel Layer:
-
-* rendering
-* transport
-* platform APIs
-
-Avoid:
-
-* Messenger payloads in domain code
-* Messenger quick replies in conversation logic
-* Channel-specific branching inside assistant behavior
-* Customer routing or billing dependencies in the OpenClaw gateway
-
----
-
-## Conversation Actions
-
-When users are offered choices, represent them as:
-
-```ts
-ConversationAction
+```text
+prompt -> image -> result -> next action
 ```
 
-not:
+Source-photo editing may be offered through natural-language instructions.
+Do not restore style catalogs or large preset menus.
 
-```ts
-MessengerQuickReply
-```
+When free credits are exhausted, the response must remain useful and honest:
 
-The assistant should be able to dynamically suggest actions regardless of topic.
+- state when free access returns;
+- state the exact one-time price and premium credit quantity;
+- state that there is no subscription or automatic renewal;
+- offer a checkout action and a no-purchase alternative;
+- do not create a payment until the user explicitly confirms on the checkout
+  page.
 
-Examples:
+## Transitional code
 
-* Generate image
-* Retry
-* Explain more
-* Change style
-* Continue
-* Ask another question
+The following are legacy until removed with proof:
 
-Actions are a conversation primitive, not a Messenger primitive.
+- root `src/` OpenClaw Facebook plugin;
+- `deploy/fly-gateway` and root `fly.toml`;
+- Leaderbot bridge and OpenClaw release tooling;
+- `apps/customer-app` multi-tenant portal;
+- workspace provisioning for external bot owners;
+- Mollie subscriptions, mandates, renewal workers, and recurring UI;
+- Startpilot workspace entitlements.
 
-# Current Refactor Priorities
+Do not delete a live path merely because it is legacy. Removal requires:
 
-Priority order:
+1. replacement behavior exists;
+2. targeted tests pass;
+3. production traffic is proven absent or migrated;
+4. rollback and required data retention are understood;
+5. documentation and workflows are updated in the same change.
 
-1. Close one direct customer journey in `apps/image-gen` end to end.
-2. Prove tenant identity, queue, consent, quota, deletion, and delivery on it.
-3. Deploy and smoke the customer portal and bounded Mollie pilot.
-4. Move interaction logic into the channel-neutral conversation layer.
-5. Remove obsolete OpenClaw customer-bridge code after migration proof.
+Do not add new abstraction layers to make legacy code more comfortable. Prefer
+small extraction, migration, and deletion steps.
 
-Do not create OpenClaw gateway, bridge, Memory Core, or personal-runtime work as
-a prerequisite for a Leaderbot customer release.
+## Current priorities
 
-Not priorities:
+1. Establish the direct owner-operated Messenger runtime and retire OpenClaw
+   ingress safely.
+2. Add a user-scoped purchased-credit ledger beside the free daily quota.
+3. Add the quota-exhaustion call to action and signed one-time Mollie checkout.
+4. Prove premium quality, atomic consumption, refunds, deletion, budgets, and
+   delivery end to end in test mode.
+5. Run a bounded live pilot, then remove subscriptions, tenant portal code, and
+   remaining OpenClaw artifacts.
 
-* Large rewrites.
-* Framework migrations.
-* Style catalog expansion.
-* Experimental routing systems.
+Do not start a later priority while an earlier one is blocked on an executable
+test, configuration decision, or production proof.
 
-# Out of Scope
+## High-risk areas
 
-- Do not add Facebook Login without explicit approval.
-- Do not request `user_posts`.
-- Do not request `user_friends`.
-- Do not add social graph features.
-- Do not add invasive profile collection.
-- Favor minimal Meta permission requests by default.
-
-# Dead Code Policy
-
-Identity-game experiments are deprecated.
-
-Unless a task explicitly references them:
-
-* remove unused identity-game code
-* remove unused routes
-* remove unused tests
-* remove unused docs
-
-Prefer deletion over preservation.
-
-Dead code increases maintenance cost.
-
-# Refactor Rules
-
-Keep changes:
-
-* small
-* incremental
-* test-backed
-
-Avoid:
-
-* drive-by refactors
-* unrelated cleanup
-* architecture rewrites in feature PRs
-
-If touching a large file:
-
-* extract one responsibility
-* preserve behavior
-* add tests first when possible
-
-# Compatibility Rules
-
-Do not remove existing production behavior unless:
-
-1. replacement exists
-2. tests exist
-3. migration path exists
-
-Privacy and tenant-isolation fixes may intentionally restrict operator/admin access to customer data, provided there is a safe migration path for support workflows, auditability is preserved, and production customer functionality remains available.
-
-Legacy Messenger style payloads should not be reintroduced. Preserve production behavior through channel-neutral `ConversationAction` inputs and explicit natural-language/image-edit requests.
-
-# Production Safety
-
-Favor:
-
-* stability
-* privacy-preserving observability
-* rollback safety
-
-Over:
-
-* clever abstractions
-* speculative architecture
-* premature optimization
-
-Observability should prefer metadata, health signals, aggregate metrics, and redacted diagnostics. Do not log or expose customer conversation content, memory, uploaded knowledge, personal data, or generated prompts/outputs unless there is an explicit customer-approved support flow or audited break-glass incident path.
-
-Never break:
-
-* Messenger webhook verification
-* GDPR consent flow
-* Delete-my-data flow
-* Image generation pipeline
-* OpenClaw channel compatibility
-
-# High-Risk Areas
-
-### Messenger Runtime
+Messenger ingress and delivery:
 
 - `messengerWebhook.ts`
 - `webhookHandlers.ts`
-- `generationFlow.ts`
 - `webhookGenerationJobs.ts`
+- `messengerGenerationQueue.ts`
 
-Preserve webhook verification, consent gating, conversation state transitions, and image delivery paths in these files.
+Privacy and identity:
 
-### Privacy Systems
-
+- `conversationSubject.ts`
+- `messengerPrivacySubject.ts`
 - `consentService.ts`
+- `dataDeletionService.ts`
 - `faceMemory.ts`
-- `delete-my-data` handlers
 
-Avoid data-retention or observability regressions; ensure redaction and tenant boundaries remain enforced.
+Quota, payments, and cost:
 
-### Billing / Quotas
+- `messengerImageQuotaStore.ts`
+- `generationGuard.ts`
+- `costLedger.ts`
+- `server/_core/billing/*`
+- Mollie webhook and reconciliation paths
 
-- `messengerQuota.ts`
-- billing-related services
-- Mollie billing integrations
+Changes here require targeted tests and explicit failure-path verification.
 
-Quota and budget enforcement must remain intact and test-covered for fallback and failure paths.
+## Documentation rules
 
-# Documentation Rules
+- `README.md` explains the product and repository.
+- `docs/architecture.md` defines current and target boundaries.
+- `docs/operations/todo.md` is the only active backlog.
+- Runbooks describe executable operations, not product aspirations.
+- Delete stale plans instead of labeling them historical.
+- A document that describes removed behavior must be removed in the same change,
+  unless it is a temporary decommission runbook with an explicit removal gate.
+- Never claim a target feature is live before its code and production evidence
+  exist.
 
-Source of truth:
+## Change discipline
 
-docs/operations/todo.md
+Before making a change, answer:
 
-Keep docs aligned with code.
+1. Which current production outcome does it close?
+2. Is the state scoped to the exact Messenger user and Page binding?
+3. Can it grant credits, start provider work, or send a commercial message?
+4. What happens on retries, duplicate webhooks, deletion, refund, and timeout?
+5. What is the smallest rollback-safe implementation?
 
-Delete stale documents rather than maintaining outdated plans.
+Avoid drive-by refactors. Preserve unrelated user changes in the worktree.
 
-Historical documents should not appear actionable.
+## Testing
 
-# Agent Decision Framework
-
-Before making changes ask:
-
-1. Which single P1-P5 production outcome does this close or make executable,
-   or is it explicitly approved non-blocking maintenance/personal OpenClaw work?
-2. Does it keep every Leaderbot customer path inside `apps/image-gen`?
-3. Does this move logic toward the conversation layer or remove dead code?
-4. Does this reduce channel coupling while preserving production behavior?
-5. Is this the smallest safe change with a concrete smoke and rollback?
-
-If question 1 or 2 has no clear answer, or multiple other answers are "no":
-
-Stop and reconsider.
-
-# Testing
-
-Minimum expectation:
-
-TypeScript:
+Minimum TypeScript check:
 
 ```bash
-./node_modules/.bin/tsc --noEmit
+pnpm --dir apps/image-gen check
 ```
 
-Targeted tests for modified areas.
+Run targeted tests for every modified area. Run the broader image-gen suite
+when changing conversation flow, webhook processing, identity, quota, wallet,
+payments, image generation, or delivery:
 
-Run broader suites when changing:
+```bash
+pnpm --dir apps/image-gen test
+```
 
-* shared runtime behavior
-* conversation flow
-* image generation
-* webhook processing
-
-Production correctness is more important than coverage numbers.
+For production-affecting changes, also validate the immutable build, current
+schema contract, readiness checks, smoke journey, and rollback path documented
+in `docs/operations/production-deployments.md`.

@@ -1,5 +1,11 @@
 # Facebook connect-state sealing rollout
 
+> Legacy portal migration guard. The target product has one owner-controlled
+> Page and no customer Page-provisioning portal. Do not start or advance this
+> rollout for new product work. Keep the contract only while the deployed
+> compatibility reader/writer and rollback still require it, then remove the
+> portal flow, code, test, variables, and this document together.
+
 Facebook authorization codes and Page access tokens live in Redis for at most
 10 minutes while a customer completes Page connection. Their storage format is
 a rolling-deploy protocol controlled by `FACEBOOK_CONNECT_STORAGE_MODE`.

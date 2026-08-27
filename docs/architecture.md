@@ -1,389 +1,243 @@
-# Architecture and Runtime Model
+# Architecture
 
-## 1) Runtime topology
+## Product boundary
 
-Leaderbot runs as one Node.js process (Express + HTTP server):
+Leaderbot is a single-owner commercial Messenger bot serving many end users.
+The owner operates the Page, infrastructure, offer catalog, provider accounts,
+budgets, and support. End users receive isolated conversation, privacy, quota,
+purchase, and credit state.
 
-- Accepts Messenger webhook traffic.
-- Accepts WhatsApp webhook traffic on the same Meta callback route.
-- Supports outbound WhatsApp Cloud API sends.
-- Shares normalized text/domain handling across Messenger and WhatsApp.
-- Executes conversation flow + image-generation orchestration.
-- Serves static assets (`/generated`, web build output).
-- Exposes health/version/debug endpoints.
-- Exposes an admin face-memory kill switch when `ADMIN_TOKEN` is configured.
-- Exposes Prometheus-style metrics and request tracing hooks.
-- Optionally mounts OAuth and additional chat routes.
+This is not a multi-tenant bot platform. An internal workspace boundary remains
+as a safety and migration partition, but external customers do not provision
+their own Pages, instructions, billing accounts, or workspaces.
 
-Primary bootstrap is in `server/_core/index.ts`.
-
-The bot runtime now has an explicit boundary in `server/_core/bot/index.ts`, with future feature hooks centralized in `server/_core/bot/features.ts`.
-
-The active product direction is generic prompt-first image generation. Source-photo edits remain supported through natural-language prompts; legacy style-picker menus and payloads are no longer the default interaction model.
-
-## Architecture diagrams
-
-ASCII version:
+## Target request flow
 
 ```text
-                         +----------------------+
-                         |   Meta Messenger     |
-                         |  Webhook + Send API  |
-                         +----------+-----------+
-                                    |
-                                    v
-                    +----------------------------------+
-                    |  Leaderbot Server (Node/Express) |
-                    |----------------------------------|
-                    | Routes:                          |
-                    | - /webhook/facebook              |
-                    | - /api/trpc                      |
-                    | - /healthz, /__version          |
-                    | - /metrics, /generated/*        |
-                    | - /admin/disable-face-memory    |
-                    +----+---------------+-------------+
-                         |               |
-          inbound events |               | outbound API / auth / storage
-                         v               v
-        +--------------------------+   +----------------------+
-        | Webhook Handlers         |   | Supporting Services  |
-        | - signature verification |   | - static file serve  |
-        | - dedupe + i18n          |   | - health/debug       |
-        | - state transitions      |   +----------------------+
-        | - quota checks           |
-        +------------+-------------+
-                     |
-                     v
-        +--------------------------+
-        | Image Service            |
-        | - OpenAI image generator |
-        +------------+-------------+
-                     |
-          +----------+----------+-------------------------+
-          |                     |                         |
-          v                     v                         v
-        +-------------------+   +----------------------+  +---------------------------+
-        | Redis / State     |   | Responses Image Tool |  | Storage Proxy (Fly app)   |
-        | - state store     |   | - generation backend |  | - Forge-style upload API  |
-        | - rate limit base |   +----------------------+  | - returns durable URLs     |
-        +-------------------+                             +-------------+-------------+
-                                                                      |
-                                                                      v
-                                                        +-----------------------------+
-                                                        | Cloudflare R2 + Public URL  |
-                                                        | - object storage            |
-                                                        | - public asset delivery     |
-                                                        +-----------------------------+
+Messenger user
+    |
+    v
+Meta Page webhook
+    |
+    v
+signature + replay + Page-binding checks
+    |
+    v
+pseudonymous conversation subject
+    |
+    v
+conversation layer
+    |-------------------------------|
+    v                               v
+free allowance                 paid credit wallet
+    |                               |
+    |-------------------------------|
+                    |
+                    v
+          generation reservation
+                    |
+                    v
+             image provider
+                    |
+                    v
+       durable output + Messenger send
+                    |
+                    v
+       quota/credit finalization
 ```
 
-Mermaid version:
+The webhook process should acknowledge safely without holding the Meta request
+open for image generation. Redis-backed queue workers own expensive provider
+work and durable completion.
 
-```mermaid
-flowchart TD
-    mm["Meta Messenger<br/>Webhook + Send API"]
-    ua["Browser / Monitoring"]
+## Identity model
 
-    subgraph lb["Leaderbot Server"]
-        wh["/webhook/facebook"]
-        trpc["/api/trpc"]
-        ops["/healthz, /__version, /metrics, /generated/*"]
-        handlers["Webhook handlers<br/>signature check, dedupe, i18n,<br/>state transitions, quota checks"]
-        img["Image service"]
-    end
+The stable domain identity is a `ConversationSubjectV2`, derived from:
 
-    redis["Redis / state store"]
-    openai["OpenAI Responses image_generation tool"]
-    proxy["Storage proxy<br/>Fly app"]
-    r2["Cloudflare R2<br/>Public asset URL"]
+- internal owner/workspace id;
+- channel connection id;
+- Messenger Page binding;
+- channel;
+- raw sender id;
+- versioned HMAC key.
 
-    mm --> wh
-    wh --> handlers
-    handlers --> img
-    handlers --> redis
-    redis --> handlers
-    img --> openai
-    img --> proxy
-    proxy --> r2
-    img --> mm
+Only the resulting opaque keys may appear in state, queue, quota, wallet, and
+operational metadata. Raw PSIDs remain at the transport boundary and must not be
+logged or copied into payment metadata.
 
-    ua --> trpc
-    ua --> ops
+Privacy epochs fence deleted identities from old jobs and late provider output.
+A reconnect or Page rebinding must not move balance or media to a new subject
+without an explicit migration.
+
+## Conversation boundary
+
+Conversation logic returns channel-neutral responses:
+
+```ts
+type ConversationResponse = {
+  text?: string;
+  images?: ImageOutput[];
+  actions?: ConversationAction[];
+};
 ```
 
-## 2) Request flow (Meta messaging)
-
-1. Meta sends webhook event to `POST /webhook/facebook`.
-2. Signature middleware validates payload when `FB_APP_SECRET` is present.
-3. Channel adapter parses provider payloads:
-   - Messenger payloads fan in to `processFacebookWebhookPayload`
-   - WhatsApp payloads are normalized from `entry[].changes[].value.messages[]`
-4. Text messages are converted into a shared normalized inbound message shape.
-5. WhatsApp image messages are downloaded via the WhatsApp Cloud API media endpoint and persisted to a reusable source-image URL.
-6. Shared text/domain logic runs in `server/_core/sharedTextHandler.ts`.
-7. Shared logic returns channel-agnostic outbound intents (`BotResponse`).
-8. Channel adapters translate those intents into Messenger or WhatsApp sends.
-9. Image flow state is still updated directly in channel orchestration (`setFlowState`, `setPendingImage`, `setLastGenerationContext`, ...). Messenger now treats free image prompts as text-to-image by default; source-image generation only uses a stored/uploaded photo when the user explicitly asks to edit/restyle that photo.
-10. If Messenger face memory is enabled, the first source-photo upload asks for explicit reuse consent for the configured retention window before asking for a natural-language edit prompt.
-11. If generation is triggered:
-
-- state -> `PROCESSING`,
-- OpenAI image generator configuration,
-- result sent via Messenger Send API or WhatsApp Cloud API,
-- state -> `RESULT_READY` (or `FAILURE` on error).
-
-Face memory is Messenger-only and disabled by default. See [`face-memory.md`](face-memory.md) for the legal/ops checklist.
-
-### Source image provenance and trust
-
-Source-image handling now distinguishes between externally supplied image URLs and internally persisted source images.
-
-- `lastPhotoSource` in conversation state records whether the active source image is `external` or `stored`
-- WhatsApp media that is downloaded and re-persisted through `storeInboundSourceImage(...)` is marked as `stored`
-- Messenger attachment URLs and other direct inbound URLs remain `external`
-
-Security motivation:
+It owns intent, consent, state transitions, balance messaging, and the decision
+to offer checkout. It does not create Messenger template payloads or Mollie
+payments.
 
-- prevent external image injection from bypassing `SOURCE_IMAGE_ALLOWED_HOSTS`
-- ensure only app-owned persisted source images can use the trusted-source fast path
-
-Enforcement model:
-
-- image generation validates source URLs before fetching them
-- the allowlist bypass is only allowed when the source is both marked trusted and proven to come from stored inbound media
-- rejected trusted-source URLs are cleared from conversation state before the flow returns to `AWAITING_PHOTO`, so users do not get stuck retrying the same invalid URL
+The Messenger adapter parses inbound events and renders text, images, and
+actions. A checkout action becomes a Messenger URL button pointing to a
+short-lived signed web handoff.
 
-This provenance model is part of the image-generation security boundary and is especially important for the WhatsApp flow, where inbound media is first downloaded, then persisted to an application-owned public URL for later reuse.
+## Free quota
 
-Core files:
+Free quota is an abuse- and cost-control allowance, not a monetary wallet.
 
-- `server/_core/messengerWebhook.ts`
-- `server/_core/webhookHandlers.ts`
-- `server/_core/normalizedInboundMessage.ts`
-- `server/_core/sharedTextHandler.ts`
-- `server/_core/botResponse.ts`
-- `server/_core/botResponseAdapters.ts`
-- `server/_core/imageService.ts`
-- `server/_core/messengerApi.ts`
+- It is scoped to the exact conversation subject.
+- It resets using the configured product calendar.
+- A reservation is created before provider work.
+- It commits only at the documented successful output boundary.
+- Duplicate requests and retries cannot consume twice.
+- Exhaustion returns a channel-neutral response containing the next reset and,
+  when commercially enabled, the one-time premium offer.
 
-## 3) State model details
+## Purchased credits
 
-`MessengerUserState` is canonical runtime state. It stores:
+Purchased credits are a durable, append-only accounting domain separate from
+free quota.
 
-- stage/status (`IDLE` .. `FAILURE`)
-- latest photo URL fields
-- latest photo provenance (`external` vs `stored`)
-- legacy style fields are ignored during state normalization
-- preferred language
-- pending/generated image references
-- optional face-memory consent and retained source-image URL fields
-- quota counters (`dayKey`, `count`)
-- update timestamp
+Recommended records:
 
-Persistence abstraction (`stateStore`) supports:
+- `credit_wallets`: current projection per privacy subject and currency-free
+  unit type;
+- `credit_ledger`: immutable grants, commits, releases, refunds, expirations,
+  and operator adjustments;
+- `credit_reservations`: short-lived idempotent holds for generation requests;
+- `checkout_intents`: signed handoff identity, offer snapshot, nonce, expiry,
+  provider payment id, and state.
 
-- **In-memory map** (default, easy local dev).
-- **Redis** (if `REDIS_URL` configured), with TTL semantics.
+The ledger is authoritative; wallet balance is a transactionally maintained
+projection. Never implement purchased balance as an increment on the free daily
+counter.
 
-Design intent:
+Payment flow:
 
-- Keep state minimal and directly tied to Messenger flow.
-- Normalize legacy/alias fields during reads.
-- Avoid storing raw PSID in logs; derive `userKey` for correlation.
-- Keep `senderId` channel-specific and `userId` as the internal stabilized identity used by shared logic.
+```text
+quota exhausted
+-> user selects checkout action
+-> signed handoff opens product summary
+-> user explicitly selects order-and-pay
+-> server creates one Mollie one-off payment
+-> Mollie checkout
+-> Mollie webhook/status verification
+-> idempotent credit grant
+-> return page displays verified status
+```
 
-Face-memory state is intentionally limited to consent metadata plus the retained source-image URL. If object-storage deletion fails, state may keep a non-active retry URL so cleanup can be retried later. It must not store face embeddings, biometric templates, facial vectors, or identity matching records.
+The redirect URL never grants credits. The webhook/status path re-fetches or
+verifies the provider state and atomically links one payment to one grant.
 
-## 4) Quota model details
+## Premium quality
 
-There are two quota strategies represented in code:
+Quality is selected from a server-owned offer snapshot. A paid bundle may map
+to a higher-quality provider mode than the free path, but the mapping must be
+versioned so existing purchases retain their promised value.
 
-### A. Messenger customer image quota
+Provider cost varies by model, size, quality, edits, and input images. Global
+and per-user spending caps remain active even when the wallet contains credits.
+Changing quality or model requires updated unit economics and failure-path
+tests.
 
-- Implemented in `server/_core/messengerImageQuotaStore.ts`.
-- Production uses atomic Redis operations scoped by workspace, channel
-  connection, binding epoch, privacy epoch, and pseudonymous user key.
-- Free-tier image generation allows `5` usable generated photos per Brussels
-  calendar day and `20` per Brussels calendar month.
-- Only a usable, durably recorded generation result consumes one photo.
-  Validation/provider failures consume zero, and request receipts make replayed
-  jobs count once.
-- The exact remaining day/month balance is sent after each successful image.
-- Customer image admission does not use a shared image counter or an estimated
-  dollar-price gate. The external OpenAI account hard limit remains the final
-  provider-side cost stop.
+## Data stores
 
-### B. Legacy channel/feature in-state quota
+### Redis
 
-- Implemented in `server/_core/messengerQuota.ts`.
-- Daily key derived in UTC (`YYYY-MM-DD`).
-- Free-tier audio transcription default: `5` provider attempts per sender/user identity per UTC day.
-- Free-tier video generation default: `1` provider attempt per sender/user identity per UTC day.
-- Bot text rate-limit default: `30` messages per sender per `60` seconds.
-- WhatsApp image generation plus Messenger audio/video still count provider
-  attempts when the paid call is about to run. Preflight failures remain
-  retryable without burning those feature credits.
-- Optional global UTC-day caps remain available for audio transcription
-  (`MESSENGER_GLOBAL_DAILY_AUDIO_CAP`) and video generation
-  (`MESSENGER_GLOBAL_DAILY_VIDEO_CAP`).
-- OpenAI image, audio transcription, and video provider attempts also write metadata-only UTC-day cost ledger entries with pseudonymous `userKey`, provider/model, estimate metadata, and status. Ledger records must not include prompts, transcripts, raw PSIDs, source media URLs, generated outputs, or customer message text.
-- Cost ledger summaries aggregate attempts, unique pseudonymous users, estimated/final-cost fields, incomplete estimates, and operation/provider breakdowns for owner monitoring without exposing user content.
-- Used with state store abstraction.
+- webhook replay protection;
+- queue and leases;
+- conversation state where configured;
+- free quota and short-lived reservations;
+- rate limits.
 
-### C. DB-backed quota
+Production paths fail closed when atomic Redis behavior is required and Redis
+is unavailable.
 
-- Implemented via `dailyQuota` table + helpers in `server/db.ts`.
-- Unique index on `(userId, date)`.
-- Includes atomic reservation/release helpers for concurrent workers.
+### MySQL
 
-This duality supports both direct Messenger state-based throttling and account/user-centric quota tracking in DB-backed flows.
+- privacy and Page-binding records;
+- durable payment intents and payment ledger;
+- target paid-credit ledger and wallet projection;
+- accounting/reconciliation metadata;
+- legally required retention boundaries.
 
-## 5) Configuration model
+### Object storage
 
-Configuration is environment-variable driven.
+- source images and generated outputs;
+- tenant/user-scoped object keys;
+- documented retention and deletion;
+- no public listing or broad operator content access.
 
-- Critical startup checks: privacy, generator, and WhatsApp API config.
-- Route behavior toggled by env presence (e.g. OAuth routes).
-- Debug/observability endpoints guarded via `ADMIN_TOKEN`.
-- `ENABLE_FACE_MEMORY` defaults to off and should only be enabled after consent/privacy/deletion copy is approved.
-- Meta webhook verification accepts `META_VERIFY_TOKEN` when set and falls back to `FB_VERIFY_TOKEN` for existing Messenger deployments.
+## HTTP surfaces
 
-See README env section for operationally relevant variables.
+Active or target public surfaces:
 
-## 5b) Multi-channel bot boundary
+- `/facebook/webhook` for Messenger verification and events;
+- `/healthz`, `/readyz`, and version/metrics endpoints;
+- legal and data-deletion pages;
+- a minimal checkout, return, and receipt surface;
+- generated asset delivery through the reviewed storage boundary.
 
-The current bot boundary is intentionally incremental:
+The target product does not expose a customer workspace portal, OpenClaw
+gateway, pairing UI, admin content browser, or subscription management page.
 
-- Inbound normalization happens at the channel edge.
-- Shared text handling lives in the middle and does not consume raw provider payloads.
-- Outbound behavior is represented first as a small `BotResponse` intent layer (`text`, `ack`, `typing`), then translated by channel adapters.
+## Transitional architecture
 
-This keeps Messenger and WhatsApp aligned for text without forcing media/image abstractions before the contracts are ready.
+The repository still contains:
 
-## 5c) Legacy and experimental paths
+- a root OpenClaw Facebook plugin and gateway;
+- a multi-tenant portal and customer desktop app;
+- workspace subscription and Startpilot billing code;
+- recurring Mollie workers and subscription tables;
+- optional WhatsApp and video paths.
 
-The active image product is prompt-first. The old style-catalog UI, preview assets, state quick replies, referral-style entry, and Messenger/WhatsApp style-picker menu paths have been removed from the default runtime.
+These are current implementation facts, not target product commitments.
+Migration must first preserve production behavior, then prove traffic/state is
+drained, then remove code, docs, workflows, secrets, and infrastructure.
 
-Important repository rule:
-
-- generic prompt-first image generation is the active roadmap
-- legacy Messenger style payloads (`CHOOSE_STYLE`, `STYLE_*`, `RETRY_STYLE*`) are treated as stale/unknown payloads, not active product choices
-- stale internal `style_restyle` jobs are normalized to prompt-first `source_image_edit` jobs
-- new product behavior should originate in conversation responses/actions and be rendered at the channel edge
-- remaining cleanup should happen in small PRs after tests prove the replacement behavior
+WhatsApp and video are non-blocking capabilities. Do not extend their commercial
+credit behavior until the Messenger one-time purchase journey is proven.
 
-## 6) Deployment model
-
-Leaderbot ships as a standard Node.js service and can run on multiple targets.
-The canonical runtime contract across all platforms is:
-
-- Build artifact is produced with `pnpm build` (Vite client + bundled server).
-- Runtime starts `node dist/index.js`.
-- Health endpoint is `/healthz`.
-- `APP_BASE_URL` must be publicly reachable so Messenger can fetch `/generated/<id>.png` assets.
+## Failure model
 
-### Edge and asset delivery
+Every commercial path must define behavior for:
 
-Cloudflare is part of the production asset-delivery path, not the main app runtime path.
-
-- The main Leaderbot app runs on Fly.io.
-- The storage proxy also runs on Fly.io and exposes the Forge-style upload/download contract expected by the app.
-- The storage proxy writes generated assets to Cloudflare R2.
-- The storage proxy returns durable public URLs built from `PUBLIC_BASE_URL`.
-- `PUBLIC_BASE_URL` can be an R2 public URL such as `*.r2.dev` or a Cloudflare-backed custom domain.
-- Active Messenger objects keep the lifecycle prefix, followed by immutable
-  workspace, channel-connection, binding-epoch, privacy-epoch, and HMAC-user
-  segments. The exact key is inventoried before the first PUT, so deletion can
-  still find an object after a worker crash or an ambiguous remote timeout.
-- Every proxy request is short-lived HMAC-authenticated over method, exact key,
-  and scope. The proxy independently parses the key and rejects traversal,
-  unknown prefixes, scope mismatch, and expired signatures.
-
-This means Cloudflare currently sits behind the storage proxy for durable asset storage and delivery, rather than acting as the primary reverse proxy in front of the main Leaderbot app.
-
-### A. Docker
-
-- Repository includes a production `Dockerfile`; `.dockerignore` excludes local/dev artifacts (`node_modules`, `.env*`, `.git`, etc.) to keep image builds clean and deterministic.
-- Typical flow:
-  1. Build image: `docker build -t leaderbot:latest .`
-  2. Run container with required env vars (`REDIS_URL`, Messenger secrets, WhatsApp secrets, generator settings).
-  3. Expose `PORT` (default runtime expectation is `8080` in production deployments).
-
-### B. Fly.io
-
-- `fly.toml` defines app runtime, HTTP service, and `/healthz` checks.
-- Deploy using `fly deploy` after setting secrets (`fly secrets set ...`).
-- Keep `REDIS_URL`, `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, and other credentials in Fly secrets (not in image or Git).
-- The main app should talk to the storage proxy via `BUILT_IN_FORGE_API_URL`, not directly to Cloudflare R2.
-- The storage proxy is a separate Fly app that bridges Leaderbot and Cloudflare R2/public asset URLs.
-
-### C. Kubernetes
-
-- Use the same container image produced by the `Dockerfile`.
-- Recommended resource split:
-  - `Deployment` for the app pods,
-  - `Service` for internal routing,
-  - `Ingress` (or Gateway) for public HTTPS endpoint required by Messenger webhooks.
-- Wire health probes to `/healthz`:
-  - `livenessProbe` and `readinessProbe` as HTTP GET checks.
-- Store sensitive configuration (`REDIS_URL`, `DATABASE_URL`, API keys) in `Secret` objects and inject via environment variables.
-
-## 7) Production configuration for `REDIS_URL` and `DATABASE_URL`
-
-`REDIS_URL` and `DATABASE_URL` should be treated as deployment-time secrets.
-
-### `REDIS_URL`
-
-- Purpose:
-  - durable flow state storage,
-  - webhook replay/dedupe protection,
-  - shared rate-limit state in multi-instance deployments.
-- Production guidance:
-  - Use a managed Redis endpoint with TLS/auth where supported.
-  - Inject via platform secret store (Fly secrets, Kubernetes Secret, Docker runtime env).
-  - Do **not** bake into images, commit into `.env` files, or expose in logs.
-  - Validate connectivity during deployment rollout and alert on reconnect/error metrics.
-
-### `DATABASE_URL`
-
-- Purpose:
-  - DB-backed quota and user/account-centric data flows.
-- Production guidance:
-  - Use provider connection strings with least-privileged credentials.
-  - Prefer pooled/proxy URLs when running many app replicas.
-  - Rotate credentials through platform secret management and restart/reload workloads.
-  - Keep migrations in release workflow so schema stays in lockstep with runtime.
-
-### Secret management patterns by platform
-
-- Docker / Compose:
-  - Pass at runtime (`docker run -e REDIS_URL=... -e DATABASE_URL=...`).
-  - For Compose, use environment references from an external secret source instead of committed `.env` values.
-- Fly.io:
-  - `fly secrets set REDIS_URL=... DATABASE_URL=... -a <app>`
-  - Verify with `fly secrets list -a <app>` and redeploy.
-- Kubernetes:
-  - Create/update `Secret` objects (`kubectl create secret generic ...`).
-  - Reference with `envFrom`/`valueFrom.secretKeyRef` in the `Deployment`.
-  - Rotate by updating Secret + restarting rollout (`kubectl rollout restart deployment/<name>`).
-
-## 8) Failure handling and resilience
-
-- Webhook acknowledgement is immediate; heavy work is deferred.
-- Inbound dedupe reduces duplicate event processing.
-- Generation failures produce user-facing retry options.
-- Image-generation success/failure follow-ups, contextual help choices, and Messenger consent/delete choices originate as channel-neutral conversation actions and are rendered as Messenger quick replies at the channel edge.
-- New Messenger photo-upload state is prompt-first (`AWAITING_EDIT_PROMPT`); legacy `AWAITING_STYLE` persisted state is normalized for compatibility only.
-- Health endpoints + version endpoint support simple monitoring.
-- Face-memory deletion is available through user command, scheduled expiry, and admin kill switch.
-
-## 9) Core module boundaries
-
-To keep `server/_core` from growing into a single flat namespace, domain entrypoints are now grouped by responsibility:
-
-- `server/_core/auth/index.ts` for auth-related bootstrap imports (OAuth route registration and auth env assertions).
-- `server/_core/messenger/index.ts` for webhook ingress concerns (raw-body capture, signature verification, webhook route registration).
-- `server/_core/image-generation/index.ts` for image-generator startup wiring.
-- `server/_core/bot/index.ts` for the bot-product boundary used by server bootstrap.
-- `server/_core/bot/features.ts` as the canonical extension point for future bot features, with registration centralized through `registerBotFeature(...)` and built-in cross-cutting features such as rate limiting and remix commands.
-
-These entrypoints let server bootstrap code import by domain while remaining backward compatible with existing module files.
+- duplicate Meta events;
+- duplicate checkout clicks;
+- payment webhook replay or reordering;
+- browser return before webhook delivery;
+- provider timeout or ambiguous result;
+- Messenger delivery failure;
+- process crash after reservation or provider success;
+- refund after partial credit use;
+- `delete-my-data` during checkout or generation;
+- Page disconnect or privacy epoch change;
+- Redis, MySQL, Mollie, storage, or provider outage.
+
+The safe default is to stop new paid work, preserve auditable metadata, avoid a
+double grant or double charge, and present a recoverable user state.
+
+## Observability
+
+Logs and metrics contain only opaque request ids, bounded counters, durations,
+provider outcome classes, wallet operation types, and deployment metadata.
+They never contain prompts, messages, images, raw user ids, checkout tokens,
+payment credentials, or secrets.
+
+## Deployment
+
+The current production system uses immutable reviewed artifacts, schema
+contracts, readiness checks, rollback images, and protected workflows. Keep
+that mechanism during simplification. A smaller product is not permission to
+weaken webhook, privacy, payment, migration, or rollback controls.
+
+Operational details live in
+[`operations/production-deployments.md`](operations/production-deployments.md).

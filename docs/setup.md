@@ -1,521 +1,147 @@
-# Facebook Page Messenger Setup
+# Direct Facebook Messenger setup
 
-This repository contains the OpenClaw `facebook` channel plugin. V1 connects
-OpenClaw to Facebook Page Messenger direct messages through Meta webhooks:
+This guide connects the owner-operated Facebook Page directly to
+`apps/image-gen`. Do not point the Page at the legacy OpenClaw gateway.
 
-- a Meta app owns the Messenger/webhook configuration;
-- a Facebook Page is the public inbox people message;
-- a Page access token lets OpenClaw send replies as that Page;
-- this plugin receives Meta webhook events and sends text replies through the
-  Graph API.
-
-It does not yet implement Instagram DMs, Page comment handling, Meta Private
-Replies/comment-to-DM flows, general OpenClaw attachment handling, or general
-Meta automation. Messenger media payloads are accepted only for supported DM
-ingestion paths, with optional Leaderbot image-generation handling disabled by
-default. The plugin is named `facebook` because the setup is a Facebook/Meta
-integration, even though the first supported surface is Facebook Page Messenger
-DMs.
-
-This is the short setup path. For a complete guide to the Meta app, Facebook
-Page identity, permissions, review, Messenger rules, production checks, and
-troubleshooting, see [facebook-complete-tutorial.md](facebook-complete-tutorial.md).
-
-Official Meta references:
-
-- Messenger Platform overview:
-  <https://developers.facebook.com/docs/messenger-platform/overview>
-- Messenger webhooks:
-  <https://developers.facebook.com/docs/messenger-platform/webhooks>
-- Messaging policies:
-  <https://developers.facebook.com/docs/messenger-platform/policy>
-
-## What You Are Building
-
-When someone sends a message to your Facebook Page, Meta sends an HTTPS webhook
-request to OpenClaw:
+## Runtime flow
 
 ```text
-Facebook user -> Facebook Page inbox -> Meta webhook -> OpenClaw facebook channel
+Facebook Page -> Meta Messenger webhook -> apps/image-gen -> Messenger Send API
 ```
 
-When OpenClaw replies, the plugin calls:
+Canonical callback path:
 
 ```text
-POST https://graph.facebook.com/<version>/<PAGE_ID>/messages
+https://<public-runtime-origin>/facebook/webhook
 ```
 
-with the Page access token from your config. Meta then delivers the reply in the
-same Messenger conversation.
-
-For this to work, all of these must match:
-
-- the Page connected in Meta;
-- the Page ID in OpenClaw;
-- the Page access token for that same Page;
-- the app secret from the same Meta app;
-- the verify token used in both Meta and OpenClaw;
-- the public HTTPS callback URL that reaches your OpenClaw gateway.
+Use the exact deployed origin recorded in the reviewed production manifest.
 
 ## Prerequisites
 
-You need:
+- one Meta app controlled by the owner;
+- one Facebook Page controlled by the owner;
+- Messenger configured for that Meta app and Page;
+- public HTTPS runtime;
+- Page access token;
+- app secret;
+- random webhook verify token;
+- `pages_messaging` or the current equivalent capability approved for the
+  intended audience;
+- privacy, terms, and data-deletion URLs.
 
-- a Facebook account with admin access to the Facebook Page;
-- a Meta developer account at <https://developers.facebook.com/>;
-- a Meta app with the Messenger product enabled;
-- a public HTTPS URL for the OpenClaw gateway;
-- the OpenClaw Facebook plugin installed.
+Do not request Facebook Login, `user_posts`, `user_friends`, social graph, or
+profile-scraping permissions for this flow.
 
-Meta requires a Facebook Page for Messenger Platform messaging. A personal
-profile is not enough.
+## Required runtime configuration
 
-For local development, use a tunnel or deployment URL that Meta can reach over
-HTTPS. Meta will not verify a private localhost callback URL.
-
-## Step 1: Create Or Open The Meta App
-
-1. Open <https://developers.facebook.com/apps/>.
-2. Create a new app or open the app you want to use for this Page.
-3. Add the Messenger product if it is not already present.
-4. Open the app dashboard and keep it available while configuring OpenClaw.
-
-This app is the owner of the webhook subscription. The `appSecret` in OpenClaw
-must come from this exact app.
-
-## Step 2: Connect The Facebook Page
-
-In the Meta app dashboard, go to the Messenger product settings and connect the
-Facebook Page that should host the assistant.
-
-You need a Page access token for that Page. Copy it immediately and store it as
-a secret. This token is what lets the plugin send messages as the Page.
-
-Useful token checklist:
-
-- the token belongs to the same Page as `pageId`;
-- the token includes Messenger/Page permissions such as `pages_messaging`;
-- the token is not expired;
-- the person or system user that generated it still has access to the Page.
-
-For production, consider generating a long-lived or non-expiring Page token
-through a Meta Business setup/system user flow. Short-lived test tokens are fine
-for a smoke test but will eventually break sends.
-
-## Step 3: Collect The Values OpenClaw Needs
-
-OpenClaw needs four Meta-side values:
-
-| OpenClaw field    | Meta source                                  | Meaning                                        |
-| ----------------- | -------------------------------------------- | ---------------------------------------------- |
-| `pageId`          | Facebook Page details or Messenger settings  | The Page that receives DMs                     |
-| `pageAccessToken` | Messenger settings access token for the Page | Allows Graph API replies                       |
-| `appSecret`       | App dashboard, Settings > Basic              | Validates Meta webhook signatures              |
-| `verifyToken`     | You choose this string                       | Shared secret for initial webhook verification |
-
-The verify token is not generated by Meta. Create a random string yourself, put
-the same value in OpenClaw and in the Meta webhook setup, and keep it secret.
-
-Example:
+At minimum, configure:
 
 ```text
-FACEBOOK_VERIFY_TOKEN=use-a-long-random-string-here
+FB_VERIFY_TOKEN
+FB_PAGE_ACCESS_TOKEN
+FB_APP_SECRET
+APP_BASE_URL
+REDIS_URL
+PRIVACY_PEPPER
+CONVERSATION_SCOPE_HMAC_KEY_ID
+CONVERSATION_SCOPE_HMAC_SECRET
+OPENAI_API_KEY
+SOURCE_IMAGE_ALLOWED_HOSTS
 ```
 
-## Step 4: Configure OpenClaw
+Production also requires the reviewed queue, storage, budget, database, and
+readiness configuration documented in
+[`operations/ENV_SHORTLIST.md`](operations/ENV_SHORTLIST.md).
 
-Use `channels.facebook` for new installs:
+Never paste secrets into documentation, issues, logs, or screenshots.
 
-```json5
-{
-  channels: {
-    facebook: {
-      enabled: true,
-      name: "My Assistant",
-      pageId: "<FACEBOOK_PAGE_ID>",
-      pageAccessToken: "<FACEBOOK_PAGE_ACCESS_TOKEN>",
-      appSecret: "<FACEBOOK_APP_SECRET>",
-      verifyToken: "<FACEBOOK_VERIFY_TOKEN>",
-      dmPolicy: "pairing",
-      defaultLang: "nl",
-      sharedStateStore: "memory",
-    },
-  },
-}
-```
+## Meta configuration
 
-Keep `dmPolicy: "pairing"` for private testing. Use `allowlist` when you know
-which Page-scoped sender IDs may use the assistant. Use `open` for a public Page
-only after publishing privacy and data-retention terms.
-Set `defaultLang` to `"nl"` or `"en"`; named accounts may override the global
-value. Omitting it preserves the existing Dutch response language.
-`sharedStateStore` is global for the Facebook channel and cannot be overridden
-per named account. Keep the default `"memory"` only with one gateway replica.
-For shared deduplication and the optional atomic daily audio-transcription cap
-across replicas, use:
+1. Add Messenger to the Meta app.
+2. Connect the exact owner Page.
+3. Configure the callback URL ending in `/facebook/webhook`.
+4. Enter the same random verify token as `FB_VERIFY_TOKEN`.
+5. Subscribe only to webhook fields used by the runtime, currently including
+   messages, postbacks, deliveries, and reads as reviewed.
+6. Generate the Page access token and install it as a runtime secret.
+7. Complete required business verification and App Review before public access.
+8. Set privacy policy, terms, and data-deletion instructions to the active
+   Leaderbot web routes.
 
-```json5
-sharedStateStore: "redis"
-```
+Meta's verification GET proves callback ownership. Real POST events additionally
+require the request signature derived from `FB_APP_SECRET`; never disable POST
+signature validation to make setup pass.
 
-and set:
+## Local verification
 
-```text
-MESSENGER_SHARED_STATE_REDIS_URL=redis://<host>:6379
-MESSENGER_SHARED_STATE_HMAC_SECRET=<64-lowercase-hex-characters>
-MESSENGER_SHARED_STATE_HMAC_KEY_ID=k1
-```
-
-Generate a dedicated secret with `openssl rand -hex 32`; do not reuse a Meta,
-Redis, or application secret. Redis keys contain only versioned HMAC digests,
-not raw account, Page, sender, or message identifiers. The gateway fails startup
-when Redis is selected but unavailable and fails closed during runtime; an
-explicit `delete-my-data` request remains routable. Do not rotate the HMAC key
-during live traffic: a new namespace resets dedupe and current-day audio-cap
-continuity. Pause ingress, rotate at a UTC-day boundary, and retain the old
-namespace until its TTLs expire.
-
-This store does not persist webhook work after Meta receives the HTTP
-acknowledgement. Keep a single gateway replica until a durable tenant-scoped
-ingress queue/outbox closes that availability gap.
-
-The legacy optional Leaderbot image-generation bridge is off by default. If you enable
-`leaderbotBridgeEnabled: true`, selected Messenger events, Page-scoped sender
-IDs, image prompts, and Messenger media URLs can be forwarded to the separate
-Leaderbot image-generation service. Do not enable that bridge unless the Page is
-intended to use external Leaderbot image generation and the behavior is
-disclosed to users.
-
-New Leaderbot customer Pages do not use this bridge. Their Meta webhook points
-directly to `apps/image-gen`; the checked-in personal OpenClaw gateway remains
-pairing-only with the bridge disabled.
-
-You can also provide the same values through the default environment variables:
-
-```text
-FACEBOOK_PAGE_ID=
-FACEBOOK_PAGE_ACCESS_TOKEN=
-FACEBOOK_APP_SECRET=
-FACEBOOK_VERIFY_TOKEN=
-```
-
-Legacy `MESSENGER_*` variables still work as temporary fallbacks for existing
-installs, but new config should use `FACEBOOK_*`.
-
-Do not configure a second active `messenger` channel next to this plugin. The
-public plugin id, channel id, config key, and webhook path are all `facebook`.
-
-## Step 5: Expose The Webhook URL
-
-The default callback URL is:
-
-```text
-https://<gateway-host>/facebook/webhook
-```
-
-Replace `<gateway-host>` with the public host that serves your OpenClaw gateway.
-Examples:
-
-```text
-https://example.com/facebook/webhook
-https://openclaw-gateway.example.com/facebook/webhook
-https://your-tunnel.ngrok-free.app/facebook/webhook
-```
-
-The old `/messenger/webhook` path is legacy only. Use it only when an existing
-deployment explicitly sets:
-
-```json5
-webhookPath: "/messenger/webhook"
-```
-
-New installs should use `/facebook/webhook`.
-
-## Step 6: Configure The Meta Webhook
-
-In the Meta app dashboard, open Messenger settings or Webhooks settings for the
-Page/Messenger product.
-
-Add the callback URL:
-
-```text
-https://<gateway-host>/facebook/webhook
-```
-
-Set the verify token to the exact same value as `FACEBOOK_VERIFY_TOKEN` or
-`channels.facebook.verifyToken`.
-
-Subscribe the Page to these webhook fields:
-
-- `messages`
-- `messaging_postbacks`
-- `message_reads`
-
-V1 processes inbound text messages. Unsupported events are accepted by the
-webhook but ignored by the plugin.
-
-During webhook verification, Meta sends a GET request with `hub.challenge`.
-OpenClaw returns the challenge only when the `hub.verify_token` value matches
-your configured verify token. If verification fails, check the URL, HTTPS
-reachability, and verify token first.
-
-For POST events, Meta sends `X-Hub-Signature-256`. The plugin validates that
-signature with `appSecret`, so an app secret from a different Meta app will make
-real webhook events fail even if the callback URL verified successfully.
-
-## Step 7: Development Mode, Live Mode, And Review
-
-Meta's default app access is limited. In development or standard access, you can
-usually test with people who have a role on the app, the business, or the Page.
-For broader public use, Meta may require app review, advanced access, and
-business verification depending on who will use the app and which permissions
-you request.
-
-For a private bot on your own Page, start with development/testing and invited
-testers. For a public Page assistant, plan the Meta review path before launch.
-
-This plugin does not bypass Meta platform policy. Messenger conversations must
-be user-initiated, and normal Messenger response-window rules still apply.
-
-## Step 8: Choose Access Mode In OpenClaw
-
-`dmPolicy` controls who OpenClaw will answer after Meta delivers a message.
-
-### Pairing Mode
-
-Use this while testing or when only approved people should use the assistant:
-
-```json5
-dmPolicy: "pairing"
-```
-
-Unknown senders receive a pairing code. Approve them with:
+Start the active application:
 
 ```bash
-openclaw pairing list facebook
-openclaw pairing approve facebook <CODE>
+pnpm --dir apps/image-gen dev
 ```
 
-### Public Page Bot Mode
+A local server is not a production callback. Use an approved temporary HTTPS
+development tunnel only with test credentials and non-customer data.
 
-Use this when anyone who messages the Page may start a basic chat:
+Check:
 
-```json5
-{
-  channels: {
-    facebook: {
-      enabled: true,
-      pageId: "<FACEBOOK_PAGE_ID>",
-      pageAccessToken: "<FACEBOOK_PAGE_ACCESS_TOKEN>",
-      appSecret: "<FACEBOOK_APP_SECRET>",
-      verifyToken: "<FACEBOOK_VERIFY_TOKEN>",
-      dmPolicy: "open",
-      allowFrom: ["*"],
-    },
-  },
-}
-```
+- `/healthz` returns healthy;
+- `/readyz` reports required dependencies ready;
+- the verification GET accepts only the correct token and challenge;
+- an unsigned or invalid POST is rejected;
+- a valid test event reaches the intended Page binding;
+- logs contain no raw sender id or message content.
 
-This opens only the message entry point. Keep powerful tools, private memory,
-workspace files, git/deploy access, config changes, and admin actions restricted
-through OpenClaw permissions for trusted users only.
+## Pre-public smoke
 
-Public users may send personal, financial, authentication, or business-sensitive
-information into Messenger. In open mode, those messages can be forwarded into
-your OpenClaw host, model provider, logs, memory, and any enabled tools according
-to your runtime configuration. Before enabling this for a public Page, publish a
-privacy policy, disclose automated/AI handling where required, and decide what
-data is retained, deleted, or shared with third-party providers.
+Before enabling broad Page access:
 
-If this Page is public or paid, treat Facebook as a metered entry point rather
-than full assistant access. Keep budget gates, tool policy, credit balances, and
-provider cost ledgers in the OpenClaw host runtime where model/tool calls
-execute. See [cost-control-plan.md](cost-control-plan.md).
+1. Send a user-initiated text message.
+2. Complete consent grant and refusal.
+3. Generate one image and one source-photo edit.
+4. Replay the same event and prove no duplicate generation.
+5. Exhaust free quota and prove the provider is not called again.
+6. Run `delete-my-data` and prove queued/late work is fenced.
+7. Confirm all visible copy matches the approved language.
+8. Confirm no checkout is visible while live billing is disabled.
 
-### Allowlist Mode
+When the one-time premium flow is later enabled, add the Test Mode checkout and
+wallet smoke from [`production-readiness.md`](production-readiness.md).
 
-Use this when you already know the Page-scoped sender IDs that may talk to the
-assistant:
+## Cutover from OpenClaw
 
-```json5
-dmPolicy: "allowlist",
-allowFrom: ["<PAGE_SCOPED_SENDER_ID>"]
-```
+Because Meta Page webhook subscription is app-scoped, plan the cutover around
+the exact Meta app and Page. Do not run two production runtimes that both assume
+they own the same callback.
 
-Meta creates Page-scoped sender IDs per Page. The same person can have a
-different ID on another Page.
+Required cutover proof:
 
-## Multi-Page Setup
-
-One plugin install can hold multiple Page accounts:
-
-```json5
-{
-  channels: {
-    facebook: {
-      defaultAccount: "leaderbot",
-      accounts: {
-        leaderbot: {
-          name: "Leaderbot",
-          pageId: "<LEADERBOT_PAGE_ID>",
-          pageAccessToken: "<LEADERBOT_PAGE_ACCESS_TOKEN>",
-          appSecret: "<META_APP_SECRET>",
-          verifyToken: "<LEADERBOT_VERIFY_TOKEN>",
-          webhookPath: "/facebook/leaderbot",
-          dmPolicy: "pairing",
-        },
-        support: {
-          name: "Support",
-          pageId: "<SUPPORT_PAGE_ID>",
-          pageAccessToken: "<SUPPORT_PAGE_ACCESS_TOKEN>",
-          appSecret: "<META_APP_SECRET>",
-          verifyToken: "<SUPPORT_VERIFY_TOKEN>",
-          webhookPath: "/facebook/support",
-          dmPolicy: "pairing",
-        },
-      },
-    },
-  },
-}
-```
-
-Each account can use its own `webhookPath`, Page token, and verify token. In
-Meta, configure each Page subscription to point to the matching public callback
-URL.
-
-## Smoke Test
-
-After configuring Meta and OpenClaw:
-
-1. Start or deploy the OpenClaw gateway.
-2. Verify the Meta callback URL in the app dashboard.
-3. Send a normal Messenger DM to the Facebook Page.
-4. If `dmPolicy` is `pairing`, approve the pairing code.
-5. Send another message and confirm OpenClaw replies.
-
-Expected behavior:
-
-- Meta webhook verification returns success;
-- inbound text messages reach OpenClaw;
-- unsupported events do not crash the channel;
-- OpenClaw sends replies with the Page token;
-- no separate `Messenger` channel appears for new installs.
+- direct callback is healthy and signed events succeed;
+- OpenClaw callback receives no intended traffic;
+- rollback callback and credentials are recorded;
+- legacy gateway data receives an explicit retain/export/delete decision;
+- gateway removal happens only after the observation window in the active
+  migration outcome.
 
 ## Troubleshooting
 
-### Meta says the callback URL cannot be verified
+### Verification fails
 
-Check:
+- compare callback URL and verify token;
+- confirm HTTPS and public reachability;
+- confirm the request reaches `apps/image-gen`, not the old gateway.
 
-- the URL is public HTTPS, not localhost;
-- the path is `/facebook/webhook` unless you configured another `webhookPath`;
-- the OpenClaw gateway is running;
-- the verify token in Meta exactly matches OpenClaw config;
-- no proxy strips the query parameters from Meta's GET verification request.
+### Events arrive but no reply
 
-### Webhook verifies, but messages do not arrive
+- verify app secret and request signature;
+- verify Page access token and Page binding;
+- check Redis queue/readiness and worker health;
+- inspect redacted outcome codes, never raw payloads.
 
-Check:
+### Image generation fails
 
-- the Page is subscribed to the webhook fields;
-- you subscribed the Page, not only the app object;
-- the message is sent to the connected Facebook Page;
-- the sender is allowed by Meta's app mode/access level;
-- the sender is allowed by OpenClaw `dmPolicy`.
-
-### Users see a Europe messaging rules warning
-
-Some users in Europe may see a Facebook/Messenger popup such as:
-
-```text
-Something went wrong
-We are currently updating this feature in response to new rules for messaging
-services in Europe.
-```
-
-This is a Meta/Facebook UI limitation, not an OpenClaw webhook error. It can
-appear when a user clicks a Messenger link, Page message button, or Facebook UI
-entry point while Meta is changing messaging behavior for European rules.
-
-If this happens:
-
-- try opening the conversation in the Messenger mobile app;
-- try the Page inbox in Meta Business Suite;
-- test from another account that has access to message the Page;
-- confirm with OpenClaw logs whether any webhook event reached the gateway.
-
-If no webhook arrives, the user never reached the Page conversation. If the
-webhook arrives but OpenClaw does not answer, continue with the normal webhook,
-token, and `dmPolicy` checks below.
-
-### Messages arrive, but replies fail
-
-Check:
-
-- `pageAccessToken` belongs to the same `pageId`;
-- the token is valid and not expired;
-- the app has the needed Page/Messenger permissions;
-- the conversation is inside Meta's allowed response window;
-- the Page/user is not blocked or unavailable.
-
-The plugin formats common Graph API failures for invalid tokens, rate limits,
-permission/app-review issues, recipient availability, and the 24-hour response
-window.
-
-### Real webhook events fail with signature errors
-
-Check:
-
-- `appSecret` is copied from the same Meta app that owns the webhook;
-- the request body is not modified by middleware before the plugin validates it;
-- the `X-Hub-Signature-256` header reaches OpenClaw.
-
-### Pairing code appears, but the bot does not answer yet
-
-That is expected in pairing mode. Approve the code:
-
-```bash
-openclaw pairing list facebook
-openclaw pairing approve facebook <CODE>
-```
-
-Then send a new message to the Page.
-
-## V1 Limits
-
-Included:
-
-- Facebook Page Messenger direct messages;
-- Meta app webhook verification;
-- webhook signature validation;
-- Page access token based text replies;
-- inbound Messenger media attachment ingestion for DM events;
-- pairing, allowlist, open, and disabled DM policies;
-- multi-page account config.
-
-Not included:
-
-- Instagram DMs;
-- Facebook Page comment handling;
-- Meta Private Replies/comment-to-DM flows;
-- generic attachments, templates, quick replies, or media messages;
-- automatic Page subscription setup;
-- generic Meta platform routing.
-
-## Legacy Compatibility
-
-Temporary compatibility remains for existing deployments:
-
-- `channels.messenger`;
-- `MESSENGER_PAGE_ID`;
-- `MESSENGER_PAGE_ACCESS_TOKEN`;
-- `MESSENGER_APP_SECRET`;
-- `MESSENGER_VERIFY_TOKEN`;
-- target prefixes `messenger:<PSID>` and `fbm:<PSID>`.
-
-Precedence:
-
-- `channels.facebook` wins over `channels.messenger`;
-- `FACEBOOK_*` wins over `MESSENGER_*`.
-
-For new installs, use `facebook` everywhere.
+- verify consent and free/paid admission result;
+- verify `OPENAI_API_KEY`, provider budget, and retry policy;
+- verify source-image host allowlist and storage readiness;
+- distinguish provider success from Messenger delivery failure.

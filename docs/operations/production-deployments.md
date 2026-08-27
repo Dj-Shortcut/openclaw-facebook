@@ -1,5 +1,12 @@
 # Production deployments
 
+> Transitional runbook: this file documents the production controls that still
+> exist in the current manifest. Gateway, tenant-portal, Startpilot, subscription,
+> and recurring-billing sections are not target product direction and must not
+> be used to reactivate those features. Preserve them only while they are needed
+> for safe rollback, drain, accounting, or decommission; remove them with the
+> corresponding code and infrastructure during P5.
+
 Production has one owner: the reviewed Git repository through the manually
 dispatched `Deploy production` GitHub Actions workflow. `fly deploy` may replace
 or update Machines. Operators never use `fly machine run` as a deployment or
