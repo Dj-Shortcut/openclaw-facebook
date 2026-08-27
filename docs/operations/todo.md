@@ -671,7 +671,8 @@ Historical branch review note:
 - [ ] Replace the exact legacy storage-proxy bootstrap image with a trusted,
       attested runtime. Until that reviewed rollout, the scheduled monitor may
       prove only `/healthz`; the manifest-bound gate must require public
-      `/readyz` with `rateLimiter: "shared_redis"` immediately afterwards.
+      `/readyz` with `rateLimiter: "shared_redis"` once a successful deploy is
+      recorded as `runtime_deployed`.
 - [ ] Deferred: evaluate stronger queue/outbox semantics if exactly-once Messenger image sends become mandatory
 
 ### Startpilot billing (Mollie Test Mode foundation; live NO-GO)

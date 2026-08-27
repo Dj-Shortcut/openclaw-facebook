@@ -2045,7 +2045,9 @@ export function validateLegacyTransitionRollback(
         app.databaseSchemaPhase === "0015_base" &&
         app.reviewedArtifactKind === "migration-bridge" &&
         image === app.databaseSchemaTransition.legacyBaseImage
-      : app.artifactTransition?.state === "runtime_reviewed" &&
+      : ["runtime_reviewed", "runtime_deployed"].includes(
+            app.artifactTransition?.state,
+          ) &&
         app.reviewedArtifactKind === "runtime" &&
         image === app.artifactTransition.legacyImage;
   if (
@@ -5336,9 +5338,12 @@ function validateStorageProxyArtifactTransition(app) {
   const transition = app.artifactTransition;
   if (
     !transition ||
-    !["awaiting_attested_runtime", "runtime_reviewed", "complete"].includes(
-      transition.state,
-    ) ||
+    ![
+      "awaiting_attested_runtime",
+      "runtime_reviewed",
+      "runtime_deployed",
+      "complete",
+    ].includes(transition.state) ||
     !isImmutableAppImage(app, transition.legacyImage)
   ) {
     fail("storage-proxy must declare its exact trusted artifact transition");
@@ -5363,7 +5368,10 @@ function validateStorageProxyArtifactTransition(app) {
   ) {
     fail("storage-proxy trusted rollout requires an attested runtime");
   }
-  if (transition.state === "runtime_reviewed") {
+  if (
+    transition.state === "runtime_reviewed" ||
+    transition.state === "runtime_deployed"
+  ) {
     if (
       !sameStringSet(app.reviewedRollbackImages, [transition.legacyImage]) ||
       app.reviewedRollbackArtifactKinds[transition.legacyImage] !==
@@ -6262,16 +6270,31 @@ export function validateProductionRepository(rootDir = process.cwd()) {
         fail(`${app.readinessMonitor} must monitor ${app.readinessCheckPath}`);
       }
       if (target === "storage-proxy") {
+        const readinessJob = namedWorkflowJobBody(monitor, "readiness");
+        if (!readinessJob) {
+          fail(`${app.readinessMonitor} must define its readiness job`);
+        }
         const checkoutSteps = namedWorkflowStepBodies(
-          monitor,
+          readinessJob,
           "Check out production readiness contract",
         );
         const readinessSteps = namedWorkflowStepBodies(
-          monitor,
+          readinessJob,
           "Check storage proxy readiness",
         );
+        const checkoutStepIndex =
+          checkoutSteps.length === 1
+            ? readinessJob.indexOf(checkoutSteps[0])
+            : -1;
+        const readinessStepIndex =
+          readinessSteps.length === 1
+            ? readinessJob.indexOf(readinessSteps[0])
+            : -1;
         if (
           checkoutSteps.length !== 1 ||
+          checkoutStepIndex < 0 ||
+          readinessStepIndex < 0 ||
+          checkoutStepIndex >= readinessStepIndex ||
           !checkoutSteps[0].includes(
             "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6",
           ) ||
@@ -6306,13 +6329,16 @@ export function validateProductionRepository(rootDir = process.cwd()) {
           !readinessSteps[0].includes(
             '"$artifact_kind" == "legacy-bootstrap" && "$transition_state" == "awaiting_attested_runtime"',
           ) ||
+          !readinessSteps[0].includes(
+            '"$artifact_kind" == "runtime" && "$transition_state" == "runtime_reviewed"',
+          ) ||
           !referencesExactHttpUrl(
             readinessSteps[0],
             `https://${app.app}.fly.dev${app.serviceCheckPath}`,
           ) ||
           !readinessSteps[0].includes('grep -Fx "ok" "$body"') ||
           !readinessSteps[0].includes(
-            '"$artifact_kind" != "runtime" || ( "$transition_state" != "runtime_reviewed" && "$transition_state" != "complete" )',
+            '"$artifact_kind" != "runtime" || ( "$transition_state" != "runtime_deployed" && "$transition_state" != "complete" )',
           )
         ) {
           fail(

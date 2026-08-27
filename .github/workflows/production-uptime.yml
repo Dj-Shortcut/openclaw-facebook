@@ -95,7 +95,8 @@ jobs:
           artifact_kind="$(jq -er '.apps["storage-proxy"].reviewedArtifactKind' deploy/production/apps.json)"
           transition_state="$(jq -er '.apps["storage-proxy"].artifactTransition.state' deploy/production/apps.json)"
 
-          if [[ "$artifact_kind" == "legacy-bootstrap" && "$transition_state" == "awaiting_attested_runtime" ]]; then
+          if [[ ( "$artifact_kind" == "legacy-bootstrap" && "$transition_state" == "awaiting_attested_runtime" ) ||
+                ( "$artifact_kind" == "runtime" && "$transition_state" == "runtime_reviewed" ) ]]; then
             body="$(mktemp)"
             status="$(
               curl --ipv4 --silent --show-error --location \
@@ -113,7 +114,7 @@ jobs:
             exit 0
           fi
 
-          if [[ "$artifact_kind" != "runtime" || ( "$transition_state" != "runtime_reviewed" && "$transition_state" != "complete" ) ]]; then
+          if [[ "$artifact_kind" != "runtime" || ( "$transition_state" != "runtime_deployed" && "$transition_state" != "complete" ) ]]; then
             echo "Unsupported storage-proxy readiness transition" >&2
             exit 1
           fi
