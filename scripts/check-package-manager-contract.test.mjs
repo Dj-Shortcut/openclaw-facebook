@@ -93,6 +93,20 @@ describe("package-manager contract", () => {
     );
   });
 
+  it("keeps Leaderbot product docs out of the OpenClaw package", () => {
+    const fixture = makeFixture();
+    const packagePath = path.join(fixture, "package.json");
+    const rootPackage = JSON.parse(fs.readFileSync(packagePath, "utf8"));
+    rootPackage.files = rootPackage.files
+      .filter((file) => !file.startsWith("docs/"))
+      .concat("docs");
+    fs.writeFileSync(packagePath, `${JSON.stringify(rootPackage, null, 2)}\n`);
+
+    expect(validatePackageManagerContract(fixture)).toContain(
+      "package.json: OpenClaw package must include only the scoped plugin documentation",
+    );
+  });
+
   it("rejects a non-canonical app-specific deploy command", () => {
     const fixture = makeFixture();
     const packagePath = path.join(fixture, "package.json");

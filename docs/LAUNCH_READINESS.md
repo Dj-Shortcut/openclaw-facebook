@@ -1,72 +1,46 @@
-# Leaderbot Startpilot Launch Decision
+# One-time premium credits launch decision
 
-Current decision: **NO-GO for live billing**.
+Current decision: **NO-GO for live payments**.
 
-This file is the final decision record, not a second engineering backlog. Open
-work is tracked once in [`operations/todo.md`](operations/todo.md); Mollie case
-evidence is recorded in [`MOLLIE_TEST_RESULTS.md`](MOLLIE_TEST_RESULTS.md).
+This document defines launch gates, not a second backlog. Implementation order
+lives only in [`operations/todo.md`](operations/todo.md).
 
-## Product boundary
+## Gates
 
-Startpilot belongs entirely to `apps/image-gen`:
-
-```text
-Customer Messenger/portal
-  -> apps/image-gen tenant runtime
-  -> quota, image provider and Mollie
-```
-
-The repository owner's personal OpenClaw gateway is not used by customers and
-is not a billing, entitlement, notification or release dependency. The old
-gateway AI-answer quota preflight has been removed. Customer answer admission,
-when included in the offer, uses the tenant-bound `apps/image-gen` quota
-preflight and durable finalization drain.
-
-## Bounded offer
-
-- EUR 19 once;
-- 30 days;
-- one workspace and one connected Facebook Page;
-- 20 GPT Image 2 generations;
-- at most 5 successful images per Europe/Brussels day;
-- no renewal, top-up or overage.
-
-Any customer text-answer allowance must be enforced directly in
-`apps/image-gen` and stated consistently in the catalog, checkout copy, terms
-and portal before launch. OpenClaw answers are not part of the offer.
-
-## GO gates
-
-All six gates must have dated evidence linked below before a `live_` key or live
-billing flag is installed.
-
-| Gate | Required evidence | Status |
+| Gate | Required result | Status |
 | --- | --- | --- |
-| Direct tenant path | One Meta Page resolves to one workspace; text/image/edit requests reach real tenant quota/provider gates without gateway or free-tier fallback | OPEN |
-| Billing integrity | Full Mollie Test matrix plus real-MySQL concurrency, duplicate webhook, ledger, outbox and idempotency evidence | OPEN |
-| Customer protection | Approved Belgian B2C terms, VAT/invoice, refund/withdrawal, privacy and financial-retention treatment | OPEN |
-| Usage protection | 5/day and 20/period counters, provider hard limit, pre-call admission and durable finalization proven end to end | OPEN |
-| Operations | Tenant scheduler, customer/operator notifications, complete accounting export and read-only settlement reconciliation proven | OPEN |
-| Release proof | Approved immutable image, schema/restore proof, direct Messenger + portal smoke, monitoring and rollback drill | OPEN |
+| Direct Messenger runtime | Owner Page uses `apps/image-gen`; no OpenClaw traffic or fallback | OPEN |
+| User credit identity | Wallet and checkout are bound to exact Page, privacy epoch, and pseudonymous user | OPEN |
+| Ledger integrity | One payment grants once; reservations commit/release atomically under retries and crashes | OPEN |
+| Checkout clarity | Exact price, credits, quality, validity, no subscription, and order-and-pay confirmation | OPEN |
+| Mollie Test Mode | Complete success/failure/replay/refund/reconciliation matrix passes | OPEN |
+| Unit economics | Payment fees, tax treatment, image/edit cost, retries, storage, support, and refund reserve fit the offer | OPEN |
+| Consumer protection | Belgian legal/accounting review approves checkout, withdrawal, receipt, refund, privacy, and retention | OPEN |
+| Meta compliance | CTA and confirmation behavior fit approved permissions and messaging window | OPEN |
+| Cost protection | Free and paid admission plus global/per-user provider caps fail closed | OPEN |
+| Operations | Monitoring, incident handling, reconciliation, support, deletion, and metadata-only evidence work | OPEN |
+| Release safety | Immutable artifact, schema/restore proof, smoke, rollback, and outstanding-payment recovery pass | OPEN |
 
 ## Activation order
 
-1. Keep `MOLLIE_MODE=test`, `MOLLIE_BILLING_ENABLED=false`,
-   `MOLLIE_LIVE_BILLING_ENABLED=false` and customer entitlement flags off in
-   production.
-2. Complete the six gates using approved non-customer test data.
-3. Record written product, legal, accounting, privacy, security and operator
+1. Keep live checkout and every recurring path disabled.
+2. Complete the direct Messenger and user-wallet migrations.
+3. Pass the full Mollie Test Mode and failure-path suite.
+4. Approve one immutable offer and provider-quality policy.
+5. Obtain written product, legal, accounting, privacy, security, and operator
    approval.
-4. Deploy the approved immutable `apps/image-gen` artifact and verify the exact
-   database schema and rollback target.
-5. Enable customer entitlement/quota enforcement in `apps/image-gen` and repeat
-   the direct Messenger/portal smoke in Test Mode.
-6. Only then install the `live_` key and deliberately enable live billing.
+6. Deploy the reviewed artifact with paid admission active but live checkout
+   still hidden.
+7. Run a production-equivalent no-money smoke and rollback drill.
+8. Enable one bounded live offer for a limited audience.
+9. Review conversion, cost, refunds, failures, and support before expansion.
 
 ## Decision rule
 
-- **GO:** every gate is closed with production-relevant evidence.
-- **CONDITIONAL GO:** only explicit, time-bounded, non-financial follow-ups
-  remain and each has an owner and rollback.
-- **NO-GO:** any tenant, payment, entitlement, quota, legal, accounting,
-  notification, migration, smoke or rollback control is unproven.
+- **GO:** every gate is closed with dated production-relevant evidence.
+- **CONDITIONAL GO:** only explicit, time-bounded non-financial follow-ups remain
+  and none can affect charging, credit balance, privacy, delivery, or rollback.
+- **NO-GO:** any payment, credit, legal, Meta, cost, deletion, reconciliation,
+  migration, or rollback control remains unproven.
+
+Never install or expose a live key merely to test whether the flow works.

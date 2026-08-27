@@ -21,7 +21,12 @@
     "dist",
     "openclaw.plugin.json",
     "README.md",
-    "docs",
+    "docs/clawhub-listing.md",
+    "docs/clawhub.md",
+    "docs/facebook-complete-tutorial.md",
+    "docs/openclaw-update.md",
+    "docs/operator-prompt-routing.md",
+    "docs/setup.md",
     "examples"
   ],
   "exports": {

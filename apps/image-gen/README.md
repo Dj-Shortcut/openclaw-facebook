@@ -1,588 +1,151 @@
-# Leaderbot AI Image Generator
+# Leaderbot Runtime
 
-[![Fallow Maintainability](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Dj-Shortcut/openclaw-facebook/main/apps/image-gen/public/badges/fallow-maintainability.json)](https://github.com/Dj-Shortcut/openclaw-facebook/actions/workflows/fallow.yml)
+`apps/image-gen` is the active Leaderbot application. It receives Meta webhook
+events, resolves the exact Page and pseudonymous user, runs conversation and
+image-generation flows, and renders results back to Messenger.
 
-A Meta messaging bot with a shared bot-core for Messenger and WhatsApp.
+The product has one commercial owner and many end users. It is being simplified
+from a tenant SaaS into a direct public bot with free daily usage and optional
+one-time premium credit bundles.
 
-The active product scope is generic AI image generation and related bot infrastructure. Free text-to-image requests are the primary user experience; source-photo edits use natural-language prompts rather than legacy style-picker menus.
+## Status
 
-## Product Scope
+Already present:
 
-Current repository focus:
+- direct Messenger webhook verification and signed event ingestion;
+- prompt-first text-to-image and source-photo editing;
+- queue, replay protection, state, consent, deletion, storage, and delivery;
+- per-user free image quota and global cost guards;
+- Mollie payment primitives, payment ledger, and reconciliation foundations;
+- channel-neutral conversation actions.
 
-- free text-to-image generation from natural Messenger prompts
-- explicit source-photo edit/restyle flows when the user asks to edit a photo
-- shared text handling across both Meta channels
-- channel-specific media ingress and outbound message rendering
-- operational tooling around state, quota, storage, security, and deployment
+Still to be implemented or migrated:
 
-## Architecture
+- a durable purchased-credit wallet per Messenger privacy subject;
+- a quota-exhaustion checkout action;
+- a short-lived signed checkout handoff for the exact user and offer;
+- atomic paid-credit reservation, commit, release, refund, and adjustment;
+- premium provider quality bound to server-owned offer policy;
+- removal of workspace subscriptions, recurring workers, tenant provisioning,
+  and the customer portal.
 
-The runtime is a single Node/Express process that handles Meta webhook traffic, channel-specific outbound messaging API calls, shared bot/conversation logic, AI image generation orchestration, static asset serving, and operational endpoints.
+Do not describe target items as live before their tests and production evidence
+exist.
 
-ASCII version:
+## Runtime shape
 
 ```text
-                         +----------------------+
-                         |   Meta Messenger     |
-                         |  Webhook + Send API  |
-                         +----------+-----------+
-                                    |
-                                    v
-                    +----------------------------------+
-                    |  Leaderbot Server (Node/Express) |
-                    |----------------------------------|
-                    | Routes:                          |
-                    | - /webhook/facebook              |
-                    | - /api/trpc                      |
-                    | - /healthz, /readyz, /__version, /metrics|
-                    | - /generated/*         |
-                    +----+---------------+-------------+
-                         |               |
-          inbound events |               | outbound API / auth / storage
-                         v               v
-        +--------------------------+   +----------------------+
-        | Webhook Handlers         |   | Supporting Services  |
-        | - signature verification |   | - static file serve  |
-        | - dedupe + i18n          |   | - health/debug       |
-        | - state transitions      |   +----------------------+
-        | - quota checks           |
-        +------------+-------------+
-                     |
-                     v
-        +--------------------------+
-        | Image Service            |
-        | - OpenAI image generator |
-        +------------+-------------+
-                     |
-          +----------+----------+
-          |                     |
-          v                     v
-        +-------------------+   +----------------------+
-        | Redis / State     |   | Responses Image Tool |
-        | - state store     |   | - generation backend |
-        | - rate limit base |   +----------------------+
-        +-------------------+
+Meta Messenger
+    |
+    v
+/facebook/webhook
+    |
+    v
+verified Page + pseudonymous conversation subject
+    |
+    v
+conversation layer
+    |----------------------|
+    v                      v
+free daily allowance   purchased credit wallet (target)
+    |----------------------|
+               |
+               v
+       generation queue/worker
+               |
+               v
+          image provider
+               |
+               v
+       storage and Messenger delivery
 ```
 
-Mermaid version:
+The HTTP process also serves health, readiness, legal, checkout/return, and
+operational routes. Tenant portal and recurring billing routes are legacy
+migration debt, not the target product boundary.
 
-```mermaid
-flowchart TD
-    mm["Meta Messenger<br/>Webhook + Send API"]
-    ua["Browser / Monitoring"]
+## Important modules
 
-    subgraph lb["Leaderbot Server (Node/Express)"]
-        wh["/webhook/facebook"]
-        trpc["/api/trpc"]
-        ops["/healthz, /readyz, /__version, /metrics, /generated/*"]
-        handlers["Webhook handlers<br/>signature check, dedupe, i18n,<br/>state transitions, quota checks"]
-        img["Image service<br/>OpenAI"]
-    end
+- `server/_core/runtime/webhookRuntime.ts`: webhook route composition.
+- `server/_core/messengerWebhook.ts`: Messenger verification and ingress.
+- `server/_core/conversationSubject.ts`: scoped pseudonymous identity.
+- `server/_core/sharedTextHandler.ts`: channel-neutral text behavior.
+- `server/_core/webhookGenerationJobs.ts`: generation admission and completion.
+- `server/_core/messengerImageQuotaStore.ts`: free per-user image quota.
+- `server/_core/generationGuard.ts`: provider concurrency and budget guard.
+- `server/_core/dataDeletionService.ts`: user erasure orchestration.
+- `server/_core/billing`: Mollie and legacy billing implementation.
+- `server/_core/botResponse.ts`: channel-neutral response contract.
 
-    redis[("Redis / state store")]
-    openai["OpenAI Responses image_generation tool"]
-    mm --> wh
-    wh --> handlers
-    handlers --> img
-    handlers <--> redis
-    img --> openai
-    img --> mm
+## Credit invariants
 
-    ua --> trpc
-    ua --> ops
-```
+Free allowance and purchased credits are different balances:
 
-Key server entrypoint: `server/_core/index.ts`.
-Webhook route registration: `server/_core/messengerWebhook.ts`.
-Messenger webhook orchestration: `server/_core/webhookHandlers.ts`.
-Normalized inbound message contract: `server/_core/normalizedInboundMessage.ts`.
-Shared text/domain handler: `server/_core/sharedTextHandler.ts`.
-Outbound response intent types and adapter mapping: `server/_core/botResponse.ts` and `server/_core/botResponseAdapters.ts`.
-Bot core boundary and feature entrypoint: `server/_core/bot/index.ts` and `server/_core/bot/features.ts`.
+- free allowance resets on the configured product calendar;
+- purchased credits must not reset with the free balance;
+- a purchase belongs to one exact Page-bound pseudonymous user;
+- a payment creates at most one immutable grant;
+- a generation reserves before provider work and commits on the documented
+  success boundary;
+- rejection, provider failure, duplicate events, timeout, and cancellation
+  release or safely reconcile the reservation;
+- deletion removes eligible product data without corrupting legally retained
+  payment records;
+- refunds use explicit ledger adjustments, never history rewrites.
 
-For a deeper explanation, see [`docs/architecture.md`](docs/architecture.md).
-Operational and audit notes live under [`docs/`](docs/).
-Optional face-memory retention is documented in [`docs/face-memory.md`](docs/face-memory.md).
+The offer catalog is server owned. Clients may submit only an offer code and
+cannot override price, quantity, currency, model, or quality.
 
-## State model
+## State and privacy
 
-Conversation state is modeled per Messenger user (`psid`) with a normalized shape in `MessengerUserState`.
+Production state uses Redis and MySQL where required. Keys and rows remain
+scoped to owner/workspace, channel connection, Page binding, privacy epoch, and
+pseudonymous user key.
 
-Primary stages:
+Never log raw PSIDs, messages, prompts, media URLs, generated images, access
+tokens, Mollie credentials, or checkout tokens. Use bounded metadata and opaque
+request identifiers.
 
-- `IDLE`
-- `AWAITING_PHOTO`
-- `AWAITING_EDIT_PROMPT`
-- `PROCESSING`
-- `RESULT_READY`
-- `FAILURE`
+Optional face memory remains disabled until its consent, retention, deletion,
+and legal requirements are approved. See
+[`../../docs/face-memory.md`](../../docs/face-memory.md).
 
-State persistence model:
-
-- Default: in-memory `Map` state store (fast local/dev fallback).
-- Optional: Redis-backed state store when `REDIS_URL` is configured.
-- A pseudonymous `userKey` is derived from `psid` (`HMAC-SHA256`) for privacy-safe correlation.
-
-Relevant files:
-
-- `server/_core/bot/features.ts` (future bot feature hooks)
-- `server/_core/messengerState.ts`
-- `server/_core/stateStore.ts`
-- `server/_core/privacy.ts`
-- `drizzle/schema.ts` (DB table definitions, including `messengerState`)
-
-## Bot-core extension model
-
-The repository is now organized around an explicit bot-core boundary:
-
-- `server/_core/bot/index.ts` exposes the Messenger bot runtime entrypoints used by server bootstrap.
-- `server/_core/bot/features.ts` is the dedicated extension point for future bot features.
-
-The built-in registry now starts with foundational bot middleware-style features such as rate limiting, prompt-first image/edit commands, conversational editing, and admin stats. Future bot features should prefer registering text/payload/image handlers there via `registerBotFeature(...)` instead of expanding unrelated web or admin codepaths.
-
-Repository changes should prioritize generic prompt-first image generation and the supporting multi-channel bot/runtime foundation. Do not treat older style-catalog or experiment scaffolding as the roadmap by default.
-
-## Multi-channel text flow
-
-Text handling is now split into three layers:
-
-- Channel adapters at the edge parse Messenger and WhatsApp webhook payloads into a normalized inbound shape.
-- Shared domain logic in `server/_core/sharedTextHandler.ts` operates on that normalized shape and returns channel-agnostic bot intents.
-- Channel adapters map outbound `BotResponse` intents into Messenger or WhatsApp send calls.
-
-Current shared scope is intentionally limited to text messages. Image generation now accepts prompt-first requests, while media/source-image handling is still channel-specific and should only move once the shared contracts are ready.
-
-Further boundary work should continue to reduce coupling between channel adapters and shared bot logic without expanding obsolete experiment paths.
-
-## WhatsApp image flow
-
-WhatsApp supports the prompt-first image journey and source-photo edits:
-
-- inbound image webhooks are accepted on the shared Meta callback route
-- WhatsApp media is downloaded through the Cloud API using the inbound media id
-- the source image is persisted to a reusable public URL for follow-up edits
-- users can describe the next image or edit in natural language
-- generated images are returned through the WhatsApp Cloud API image send endpoint
-
-Because the persisted source image is fetched again during generation, `SOURCE_IMAGE_ALLOWED_HOSTS` must include the hostname used for those stored source images. In local/dev setups this is usually the `APP_BASE_URL` host. In production it should include the public asset host returned by the storage layer.
-
-## Messenger face memory
-
-Messenger face memory is an optional source-photo reuse feature. It is disabled by default with `ENABLE_FACE_MEMORY=false` and must remain disabled until the consent copy, privacy policy, and deletion language are approved. Retention defaults to 30 days and can be shortened with `FACE_MEMORY_RETENTION_DAYS`; uploaded source and face-memory images have a hard 30-day object-storage maximum.
-
-When enabled, the first photo upload asks the user whether Leaderbot may keep the uploaded photo for the configured retention window. A positive answer stores consent metadata and the retained source-image URL. A negative answer keeps the normal one-photo flow without reusable face memory. Users can delete retained face-memory data by sending `verwijder mijn data` or `delete my data`. Stored source-image URLs are refreshed through the storage proxy before generation when the proxy is configured.
-
-For the full legal/ops checklist, rollout guidance, and kill-switch procedure, see [`docs/face-memory.md`](docs/face-memory.md).
-
-## Quota and rate-limit model
-
-There are multiple quota and rate-limit layers in the codebase:
-
-Free Leaderbot users should be generous enough to complete a real creative loop while still bounded by abuse and budget controls:
-
-- Messenger image generation: `5` usable generated photos per customer-bound
-  user per Brussels calendar day and `20` per Brussels calendar month. Failed
-  provider attempts do not count. After every success the user sees the exact
-  day and month balance.
-- Bot text messages: `30` messages per sender per `60` seconds.
-- Audio transcription: `5` provider attempts per sender/user identity per UTC day.
-- Video generation: `1` provider attempt per sender/user identity per UTC day.
-- There is no shared global image counter or internal estimated-price gate that
-  can let one customer block another. Video and audio keep their separate
-  operator safeguards.
-
-1. **Messenger customer image quota** (`server/_core/messengerImageQuotaStore.ts`)
-   - Redis-backed in production and atomically scoped to workspace, channel
-     connection, privacy epoch, and pseudonymous user key. Reconnecting the
-     same Page does not reset usage; active reservations still require the
-     current binding epoch.
-   - A reservation is committed only after a usable generated image has been
-     durably recorded. Validation errors, provider errors, and failed attempts
-     release or expire without consuming a photo.
-   - Request receipts make retries count once. Calendar resets use
-     `Europe/Brussels`, including daylight-saving changes.
-
-2. **Legacy channel/feature quota in state** (`server/_core/messengerQuota.ts`)
-   - Stored with `quota.dayKey` + `quota.count` in the user conversation state.
-   - Resets by UTC day key.
-   - WhatsApp image-generation, Messenger audio transcription, and generated
-     video still use provider-attempt semantics. Preflight failures such as
-     missing/invalid source images, missing API keys, oversized audio, or
-     unsupported media can be retried without burning credits.
-
-3. **Database-backed quota** (`dailyQuota` table, used by DB helpers)
-   - Tracks per-user daily usage (`YYYY-MM-DD`, UTC).
-   - Includes atomic reserve/release helpers for safer concurrent updates.
-
-4. **Provider and bot rate limits**
-   - Image concurrency locks bound simultaneous provider work without acting as
-     a customer usage counter. Audio/video retain their configured global caps.
-   - Bot text rate limiting is feature-scoped and configurable so new bot features can use the same env-driven balancing pattern instead of hardcoded limits.
-   - New feature-specific limiters should use `server/_core/featureRateLimit.ts` and the `FEATURE_RATE_LIMIT_<FEATURE>_MAX` / `FEATURE_RATE_LIMIT_<FEATURE>_WINDOW_SECONDS` env convention, with explicit aliases only when needed for backwards compatibility.
-
-Related files:
-
-- `server/_core/messengerImageQuotaStore.ts`
-- `server/_core/messengerQuota.ts`
-- `server/_core/quotaPolicy.ts`
-- `server/db.ts`
-- `drizzle/schema.ts`
-- `drizzle/0001_big_the_phantom.sql`
-- `drizzle/0002_fix_daily_quota_unique.sql`
-
-## Env vars
-
-### Required
-
-Operational env shortlist: [`docs/operations/ENV_SHORTLIST.md`](docs/operations/ENV_SHORTLIST.md)
-
-- `JWT_SECRET` (required at startup; must be at least 32 chars)
-- `PRIVACY_PEPPER` (required at startup, used for user-key hashing)
-- `CONVERSATION_SCOPE_HMAC_KEY_ID` (required at startup; immutable v2 identity key id such as `k1`)
-- `CONVERSATION_SCOPE_HMAC_SECRET` (required at startup; exactly 64 lowercase hex characters from dedicated 256-bit random material)
-- `FB_VERIFY_TOKEN` (Webhook verification)
-- `META_VERIFY_TOKEN` (preferred generic Meta webhook verification token; falls back to `FB_VERIFY_TOKEN` when unset)
-- `FB_PAGE_ACCESS_TOKEN` (Messenger send API)
-- `FB_APP_SECRET` (Webhook signature validation)
-- `WHATSAPP_ACCESS_TOKEN` (WhatsApp Cloud API send API)
-- `WHATSAPP_PHONE_NUMBER_ID` (WhatsApp Cloud API sender identity)
-- `SOURCE_IMAGE_ALLOWED_HOSTS` (required for inbound source-image fetching; if unset, source-image fetches are blocked; review regularly and keep only trusted domains)
-- `REDIS_URL` (required in production for webhook replay protection)
-- `APP_BASE_URL` (required for public generated image URLs; must be `https://` in production)
-- `OPENAI_API_KEY` (required for image generation)
-
-### Common optional
-
-- `WEBHOOK_REPLAY_TTL_SECONDS` (override webhook replay-protection TTL, default `300`)
-- `WHATSAPP_WEBHOOK_REPLAY_TTL_SECONDS` (durable hashed WhatsApp replay/fallback phase, default `86400`; must cover the complete webhook-ingress content horizon and cannot exceed 24 hours)
-- `WHATSAPP_WEBHOOK_REPLAY_LEASE_SECONDS` (short renewable WhatsApp replay owner lease, default `300`; must not exceed `WEBHOOK_INGRESS_DELIVERY_LEASE_SECONDS`)
-- `HTTP_RATE_LIMIT_WINDOW_MS` (global HTTP rate-limit window, default `60000`; Redis-backed when `REDIS_URL` is set)
-- `HTTP_RATE_LIMIT_MAX_REQUESTS` (max requests per IP per window, default `120`)
-- `OPENAI_IMAGE_TIMEOUT_MS`, `FB_IMAGE_FETCH_TIMEOUT_MS` (OpenAI defaults to `180000ms` and is hard-capped at `300000ms`; a source-photo fetch, including its one retry, shares one total deadline that defaults to `10000ms` and is hard-capped at `30000ms`)
-- `OPENAI_IMAGE_MAX_OUTPUT_BYTES` (max decoded bytes accepted from the image provider before buffering the generated image, default `26214400`)
-- `OPENAI_IMAGE_MAX_RETRIES`, `OPENAI_IMAGE_RETRY_BASE_MS` (production requires `OPENAI_IMAGE_MAX_RETRIES=0`, so one provider invocation cannot automatically start a second billable image request; retries are an explicit non-production-only diagnostic option)
-- `OPENAI_IMAGE_SIZE`, `OPENAI_IMAGE_QUALITY`, `OPENAI_IMAGE_OUTPUT_FORMAT`, `OPENAI_IMAGE_OUTPUT_COMPRESSION`, `OPENAI_IMAGE_BACKGROUND`, `OPENAI_IMAGE_ACTION`, `OPENAI_IMAGE_INPUT_FIDELITY` (optional Responses image-generation tool knobs; use `jpeg`/`webp` plus `medium` or `low` quality for faster Messenger tests, and keep `png`/higher quality for final quality-sensitive runs)
-- `IMAGE_PROVIDER` (image provider boundary; currently only `openai-images`, which uses the existing OpenAI Responses image_generation tool flow)
-- `OPENAI_EDIT_INTERPRETER_MODEL`, `OPENAI_EDIT_INTERPRETER_TIMEOUT_MS`, `OPENAI_EDIT_INTERPRETER_MAX_RETRIES` (optional classifier for conversational edit commands after a generated result)
-- `DEFAULT_MESSENGER_LANG` (`nl`/`en` fallback behavior)
-- `PRIVACY_POLICY_URL` (link sent in privacy quick reply)
-- `MESSENGER_MAX_IMAGE_JOBS` (global cap for concurrent image generations, default `3`; Redis-backed across instances when `REDIS_URL` is set)
-- `MESSENGER_GLOBAL_IMAGE_LOCK_TTL_MS` (Redis-backed global generation slot TTL, default `900000`; renewed while work is active)
-- `MESSENGER_PSID_COOLDOWN_MS` (optional per-PSID cooldown between generations, default `0`)
-- `MESSENGER_PSID_LOCK_TTL_MS` (per-PSID image in-flight lock TTL, default `900000`; renewed while work is active)
-- `MESSENGER_VIDEO_PSID_LOCK_TTL_MS` (per-PSID video in-flight lock TTL, default `900000`)
-- `MESSENGER_FREE_DAILY_LIMIT` (Messenger usable-image limit per local day; production/default `5`)
-- `MESSENGER_FREE_MONTHLY_LIMIT` (Messenger usable-image limit per local month; production/default `20`)
-- `MESSENGER_IMAGE_QUOTA_TIME_ZONE` (calendar used for Messenger day/month resets; production/default `Europe/Brussels`)
-- `MESSENGER_AUDIO_TRANSCRIPTION_DAILY_LIMIT` (per-user daily audio transcription cap, default `5`)
-- `MESSENGER_VIDEO_GENERATION_DAILY_LIMIT` (per-user daily video-generation cap, default `1`)
-- `MESSENGER_GLOBAL_DAILY_AUDIO_CAP` (optional global daily audio transcription provider-attempt cap)
-- `MESSENGER_GLOBAL_DAILY_VIDEO_CAP` (optional global daily video provider-attempt cap)
-- `BOT_TEXT_RATE_LIMIT_MAX` (shared bot text-message limit per sender/window, default `30`; set `0` to disable this text limiter)
-- `BOT_TEXT_RATE_LIMIT_WINDOW_SECONDS` (shared bot text rate-limit window, default `60`)
-- `FEATURE_RATE_LIMIT_<FEATURE>_MAX`, `FEATURE_RATE_LIMIT_<FEATURE>_WINDOW_SECONDS` (generic convention for new feature-scoped rate limits; feature names are uppercased with non-alphanumeric separators converted to `_`)
-- `GRAPH_API_MAX_RETRIES`, `GRAPH_API_RETRY_BASE_MS` (retry policy for Meta Graph API `429`/`5xx` responses)
-- `GRAPH_API_REQUEST_TIMEOUT_MS` (hard deadline for one complete Messenger Graph request, including its response body; default `30000`, capped at `120000`)
-- `STORAGE_REQUEST_TIMEOUT_MS` (hard deadline for one complete storage-proxy upload, download-URL lookup, or delete; default `30000`, capped at `120000`)
-- `PUBLIC_BASE_URL` (required trusted HTTPS R2/custom-domain origin in
-  production; URL-to-key conversion rejects all other origins/base paths)
-- `STORAGE_PUBLIC_BASE_URLS` (optional comma-separated trusted aliases during a
-  controlled storage-domain migration)
-- `STORAGE_ALLOW_LEGACY_KEYS` (temporary staged-rollout bridge only; default
-  `false`, and must be removed after old keys age out)
-- `ADMIN_TOKEN` (protects `/debug/build`)
-- `NODE_ENV` (set to `production` to enforce production-only checks such as required `REDIS_URL`)
-- `OAUTH_SERVER_URL` (enables OAuth token exchange and callback initialization)
-- `OAUTH_PORTAL_URL` (optional public browser authorization origin; falls back
-  to `OAUTH_SERVER_URL` when both services share an origin)
-- `LOG_LEVEL`, `DEBUG_STATE_DUMP`, `DEBUG_IMAGE_PROOF` (diagnostics)
-- `MESSENGER_QUOTA_BYPASS_IDS` (comma-separated PSIDs or hashed user keys that skip the Messenger customer photo quota; intended for internal testing/admin)
-- `ENABLE_FACE_MEMORY` (`false` by default; enables explicit-consent Messenger source-photo reuse after legal approval)
-- `FACE_MEMORY_RETENTION_DAYS` (optional positive whole number; defaults to `30`, is capped at `30`, and controls retained source-photo expiry plus Redis state TTL buffer)
-- `PORT` (default `8080`)
-- `BUILT_IN_FORGE_API_URL`, `BUILT_IN_FORGE_API_KEY` (used by the storage proxy contract; in production image generation these should point to the R2-backed proxy so generated Messenger attachment URLs are durable across Fly machines)
-- `VITE_APP_ID`, `DATABASE_URL`, `OWNER_OPEN_ID`, `BUILT_IN_FORGE_API_URL`, `BUILT_IN_FORGE_API_KEY` (app/data integrations exposed via `server/_core/env.ts`)
-
-`VITE_APP_ID` is the Manus WebDev OAuth project id used by
-`WebDevAuthPublicService`; it is not the Meta/Facebook `FB_APP_ID`. It and the
-OAuth portal URL are public identifiers, not secrets. The running server exposes
-only those validated values through exact GET route
-`/api/public/config`, with `Cache-Control: no-store`. This keeps Facebook Login
-working on Fly even though runtime secrets are not available during the Docker
-`vite build`. JWT secrets, provider keys, tokens, and database URLs are never
-included in that response.
-
-Legacy/app-specific environment variables also exist for SDK and data API integrations in `server/_core/env.ts`.
-
-### Free-text behavior
-
-Free-text Messenger and WhatsApp messages use deterministic flow responses for non-image chat. Messenger image-generation prompts are routed to the image-generation service as text-to-image unless they explicitly ask to edit/restyle a source photo. The only current OpenAI image provider is `openai-images`, which uses the Responses API image_generation tool flow.
-
-### Secret hygiene
-
-- Never commit real `.env` files; only keep `.env.example` in git.
-- If a secret appears in GitHub code search (for example by searching for `.env` in this repo), rotate all exposed credentials immediately.
-
-## API documentation
-
-The API is served through `tRPC` at `/api/trpc`, with types inferred directly from server routers.
-
-For a human-readable reference of current procedures, auth requirements, and input/output shapes, see [`docs/trpc-api.md`](docs/trpc-api.md).
-
-## Local dev
+## Development
 
 ```bash
-pnpm install
+pnpm install --frozen-lockfile
+pnpm check
+pnpm test
+pnpm build
+```
+
+Run from this directory, or use `pnpm --dir apps/image-gen <command>` from the
+repository root.
+
+Start the development server:
+
+```bash
 pnpm dev
 ```
 
-Server defaults to `http://localhost:8080`.
+The full environment inventory is in `.env.example`; the operational minimum
+is in
+[`../../docs/operations/ENV_SHORTLIST.md`](../../docs/operations/ENV_SHORTLIST.md).
 
-Useful checks while developing:
+## Verification expectations
 
-```bash
-curl http://localhost:8080/healthz
-curl http://localhost:8080/readyz
-curl http://localhost:8080/__version
-curl http://localhost:8080/metrics
-```
+Always run targeted tests for changed modules. Run the complete suite when
+changing webhook routing, conversation behavior, identity, quota, payments,
+wallets, generation, storage, deletion, or delivery.
 
-Production build locally:
+Production work additionally requires:
 
-```bash
-pnpm build
-pnpm start
-```
+- immutable artifact build and attestation;
+- schema compatibility and restore evidence;
+- direct Messenger smoke;
+- payment and wallet idempotency proof in Mollie Test Mode;
+- rollback evidence;
+- metadata-only observability verification.
 
-## Testing
-
-Core test/lint/typecheck commands:
-
-```bash
-pnpm test
-pnpm check
-pnpm lint
-pnpm lint:server
-```
-
-Database migration helpers:
-
-```bash
-pnpm db:migrate:test-bootstrap  # empty local/CI test database only
-```
-
-Do not run a production migration from a laptop. The protected schema workflow
-owns the reviewed backup, restore-test and 0016 expand. Migration 0017 remains
-blocked and has no production command.
-
-The repository includes focused unit tests for webhook handling, state transitions, signature verification, and image generation behavior under OpenAI configuration.
-
-Multi-channel text routing now also has a small adapter-level test in `server/botResponseAdapters.test.ts` to verify `BotResponse` mapping independently from webhook payload parsing.
-
-## Documentation standards
-
-- Prefer JSDoc/TSDoc comments for exported functions, classes, interfaces, and non-trivial internal helpers.
-- Write comments so they are parsable by tooling (for example, typed params/returns and clear behavior notes), making API-document generation easier.
-- Keep documentation comments synchronized with implementation changes; when behavior, inputs, or outputs change, update the docblock in the same PR.
-- Remove stale comments rather than leaving outdated guidance in place.
-
-## Image prompts
-
-New product behavior should prefer generic prompt-first image generation and natural-language source-photo edits. Do not rebuild legacy style-picker catalogs or preview menus.
-
-For Facebook/Messenger share assets, use [`docs/invite-image-export-checklist.md`](docs/invite-image-export-checklist.md) as the required export, naming, and cache-busting workflow.
-
-## Security: webhook signature verification
-
-Incoming `POST /webhook/facebook` requests are authenticated using Meta's `X-Hub-Signature-256` header.
-
-- Signature format must be `sha256=<hex-digest>`.
-- The server captures the **raw request body** (`express.json({ verify })`) and computes `HMAC-SHA256(rawBody, FB_APP_SECRET)`.
-- Signatures are compared with `timingSafeEqual` to avoid timing side channels.
-- Missing/invalid signatures return `403`.
-
-The signature middleware is only applied on the Messenger webhook POST route.
-
-## Security: request body limits
-
-The server uses a `10mb` limit for both `express.json` and `express.urlencoded` parsers.
-Oversized payloads return `413` with a friendly JSON response:
-
-```json
-{
-  "error": "Payload too large",
-  "message": "Request body exceeds the 10mb limit."
-}
-```
-
-## Deployment notes
-
-This app is configured for Fly.io using `Dockerfile` + `fly.toml`.
-
-### Durable image storage
-
-Production Messenger image delivery and inbound source-image persistence use the R2-backed storage proxy described in [`docs/storage-proxy-r2.md`](../../docs/storage-proxy-r2.md). Without this proxy config, production image storage fails fast instead of creating gateway-local `/generated/*` URLs that would break across restarts or multiple Fly machines.
-
-Main app settings:
-
-- `BUILT_IN_FORGE_API_URL=https://leaderbot-storage-proxy.fly.dev`
-- `BUILT_IN_FORGE_API_KEY=<same bearer token configured as FORGE_API_KEY on the proxy>`
-
-Proxy app notes:
-
-- The deployed Fly app is `leaderbot-storage-proxy`
-- The separate empty Fly app `storage-proxy` is not used
-- Read-only inspection commands are:
-
-```bash
-fly status -a leaderbot-storage-proxy
-fly logs -a leaderbot-storage-proxy --no-tail
-fly secrets list -a leaderbot-storage-proxy
-```
-
-Production changes use only the manually dispatched `Deploy production`
-workflow with target `storage-proxy` and the exact immutable digest recorded in
-`deploy/production/apps.json`. Do not run a source deploy locally.
-
-Customer portal database rollout:
-
-The `leaderbot.live` customer portal is DB-backed. Production needs a
-MySQL-compatible `DATABASE_URL` before the portal can be considered ready.
-Without it, `/readyz` must fail the `portal_database_config` check so the app
-does not look healthy while workspace, privacy, knowledge, and upgrade-request
-data cannot persist.
-
-Use this order for `leaderbot-fb-image-gen`:
-
-1. Provision or select the production MySQL-compatible database for the customer
-   portal. Treat the connection string as a secret.
-2. Set the Fly secret:
-
-   ```bash
-   fly secrets set DATABASE_URL='mysql://<user>:<password>@<host>:<port>/<database>' \
-     -a leaderbot-fb-image-gen
-   ```
-
-   The customer portal uses the existing server-side Facebook app credentials
-   for same-origin Facebook Login. Keep the app secret server-only and register
-   the exact callback
-   `https://app.leaderbot.live/api/oauth/callback` in Meta:
-
-   Set `FB_APP_ID` and `FB_APP_SECRET` through the encrypted Fly secret store;
-   never place their values in source files or shell history. Then configure
-   the public callback origin:
-
-   ```bash
-   fly secrets set APP_BASE_URL='https://app.leaderbot.live' \
-     -a leaderbot-fb-image-gen
-   ```
-
-   The browser receives only the same-origin login path; it never receives
-   `FB_APP_SECRET` or a Facebook access token. The legacy WebDev OAuth settings
-   (`OAUTH_PORTAL_URL`, `OAUTH_SERVER_URL`, `VITE_APP_ID`) remain an optional
-   fallback when direct Facebook Login is not configured.
-
-3. Follow the staged migration runbook in
-   `../../docs/operations/production-deployments.md`. In short: build and attest
-   the compatibility bridge from reviewed `main`, record its exact digest in a
-   reviewed manifest change, deploy it, freeze normal deploys, and dispatch the
-   protected schema workflow. That workflow makes a fresh encrypted snapshot,
-   proves a separate restore opens cleanly, and applies only migration 0016.
-   Then build, attest and deploy the runtime whose immutable marker refuses the
-   old schema. Migration 0017 stays blocked. Never paste `DATABASE_URL` into a
-   shell or CI log.
-
-4. Manually dispatch the repository's `Deploy production` GitHub Actions
-   workflow with target `image-gen`. Set
-   `rollback_image` to the exact immutable
-   `registry.fly.io/leaderbot-fb-image-gen@sha256:...` digest recorded as
-   `reviewedImage` in `deploy/production/apps.json`. The selected image and every
-   rollback must explicitly support the current schema phase. Approve the
-   protected `production` environment only after exact-source CI and review are
-   green; never bypass the canonical workflows or `fly.toml`.
-
-5. Verify readiness and the public portal:
-
-   ```bash
-   pnpm run deploy:verify-portal
-   curl -fsS https://leaderbot-fb-image-gen.fly.dev/readyz
-   curl -fsSI https://app.leaderbot.live/
-   curl -fsS https://app.leaderbot.live/healthz
-   ```
-
-   `pnpm run deploy:verify-portal` checks for the `DATABASE_URL` Fly secret by
-   name only, verifies that `/readyz` reports `portal_database_config` as ready,
-   and checks the public portal root plus `/healthz` without printing secret
-   values.
-
-6. Smoke the authenticated portal with Facebook Login: session loads, one
-   workspace loads, AI identity/instructions load and save, Messenger status
-   loads, knowledge sources load, usage and upgrade request history load, privacy
-   controls load, and export/delete-data request history loads.
-
-Operational notes:
-
-- `NODE_ENV=production` and `PORT=8080` are expected in runtime.
-- `REDIS_URL` must be set in Fly secrets before deploy; production startup now fails without it.
-- `DATABASE_URL` must be set in Fly secrets before treating the customer portal
-  as production-ready; `/readyz` reports `portal_database_config` when it is
-  missing or not MySQL-compatible.
-- `WHATSAPP_ACCESS_TOKEN` and `WHATSAPP_PHONE_NUMBER_ID` must be set in Fly secrets before deploy; startup now fails when either is missing.
-- Liveness endpoint is `/healthz`; dependency readiness is exposed at `/readyz`.
-- `/metrics` exposes Prometheus-style request counters and latency histograms.
-- `/admin/disable-face-memory` is protected by `ADMIN_TOKEN` and clears retained face-memory state for emergency rollback.
-- Each request carries an `X-Request-Id` header for simple request tracing across logs and downstream calls.
-- The server accepts and returns `traceparent` so it can plug into OpenTelemetry-compatible tracing later without changing route behavior.
-- `APP_BASE_URL` must be publicly reachable for local/dev image fallback. Production image delivery and persisted inbound source images require the storage proxy instead of gateway-local `/generated/<id>.png` URLs.
-- Keep `FB_APP_SECRET` configured to enforce webhook signature verification middleware.
-- Outbound WhatsApp sends use `server/_core/whatsappApi.ts` and the WhatsApp Cloud API `phone_number_id` configured through env, not hardcoded values.
-- Set `SOURCE_IMAGE_ALLOWED_HOSTS` in production. Source-image fetches fail closed when it is unset. Use exact hostnames only, such as `scontent.xx.fbcdn.net,lookaside.fbsbx.com`; suffix allowlists like `fbsbx.com` are intentionally not expanded.
-- For WhatsApp source-image reuse, also include the host that serves persisted inbound source images, such as your app host in local/dev or your storage public domain in production.
-- Redis-backed webhook ingress preserves fast Meta ACKs while draining deliveries sequentially in-process, so a burst does not fan out every queued webhook handler at once.
-
-### Messenger image worker rollout
-
-`fly.toml` defines two process groups:
-
-- `app`: the HTTP gateway that receives Meta webhooks.
-- `worker`: the Messenger image generation worker. It starts with `MESSENGER_GENERATION_QUEUE_ENABLED=1` and `MESSENGER_GENERATION_WORKER_ONLY=1`, so it drains Redis jobs and does not bind the HTTP server.
-
-Recommended migration sequence:
-
-1. Set one stable `MESSENGER_GENERATION_PARTITION_SECRET` on every gateway and worker process. A dedicated random secret is preferred; `FB_APP_SECRET` is the compatibility fallback.
-2. In the Phase-A manifest PR, record the bridge digest as `reviewedImage`, add it to `generationQueueV2ReaderImages`, retain only proven v1 rollback images, and keep both the manifest and `fly.toml` write versions on `v1`. Deploy the bridge release. Bridge gateways and workers read both partitioned `v1` and isolated `v2` queues, but every producer still writes `v1`. Wait until every Machine runs this bridge image before continuing.
-3. Verify combined v1+v2 queue stats, processing leases, dead letters, privacy erasure, and normal image delivery. The bridge reader may drain old v1 work; token-checked heartbeats keep an active partition lease alive while bounded provider, storage, and Graph calls finish.
-4. In a separate Phase-B config-only release, change both the manifest write version and `MESSENGER_GENERATION_QUEUE_WRITE_VERSION` to `v2`. Remove every v1-only digest from `reviewedRollbackImages`; every remaining reviewed deploy or rollback digest must be listed in `generationQueueV2ReaderImages`. No application-code change belongs in this step. Every already-deployed bridge worker can read v2, while cross-version accepted markers prevent the same request from being queued once in each namespace during the rolling config change.
-5. After v2 writes begin, the bridge image is the permanent rollback floor. Never roll back to an older v1-only reader: it cannot discover v2 jobs. Rolling the bridge image back to `WRITE_VERSION=v1` is safe because it still reads and erases both namespaces.
-6. Keep dual reads and dual erasure until v1 queued, processing, and dead-letter counts are zero and the accepted-request retention window has passed. Do not delete or copy raw queue content through logs or support notes.
-
-Keep the effective partition secret stable across ordinary deploys. Rotating it creates a new opaque partition namespace and breaks dedupe continuity with jobs accepted under the previous secret. Rotate only as an explicit migration: stop producers, drain queued and processing counts to zero, review dead letters, and then wait at least the configured accepted-request TTL after the last enqueue before switching every gateway and worker together. The default accepted TTL is seven days and is never shorter than `lease_seconds * max_attempts`; indexed old partitions remain discoverable for dead-letter review and legacy draining.
-
-Worker-related env:
-
-- `MESSENGER_GENERATION_QUEUE_ENABLED=1`: enqueue Messenger image generation jobs in Redis.
-- `MESSENGER_GENERATION_QUEUE_WRITE_VERSION=v1|v2`: required explicitly in production. Use `v1` for the bridge release and switch to `v2` only in the later config-only activation release.
-- `MESSENGER_GENERATION_PARTITION_SECRET=<random>`: HMAC key for opaque Page-derived queue partitions, shared unchanged by gateway and workers; falls back to `FB_APP_SECRET` for compatibility.
-- `MESSENGER_GENERATION_ACCEPTED_TTL_SECONDS=604800`: dedupe retention for accepted request ids; defaults to seven days and is clamped to at least the lease duration multiplied by the maximum attempt count.
-- `MESSENGER_GENERATION_INLINE_FALLBACK=0`: gateway does not drain queued jobs itself.
-- `MESSENGER_GENERATION_WORKER_ONLY=1`: run only the worker loop, no HTTP listener.
-- `MESSENGER_GENERATION_JOB_LEASE_SECONDS=900`: reserved-job lease before reclaim. The runtime derives a minimum from every configured OpenAI timeout/retry attempt, exponential retry waits, and a 60-second delivery buffer and clamps smaller explicit values to that minimum. Configure a larger value when the complete source-fetch, provider, storage, and Messenger-delivery path can exceed it.
-- `MESSENGER_GENERATION_LEASE_HEARTBEAT_MS`: optional renewal cadence for an owned partition lease. It is always clamped to at most one third of the lease and defaults to at most 30 seconds.
-- `MESSENGER_GENERATION_MAX_ATTEMPTS=3`: failed generation jobs are retried up to this many processor attempts, then moved to the Redis dead-letter list.
-- `MESSENGER_GENERATION_DRAIN_BATCH_SIZE=10`: max jobs a worker or inline fallback drain processes per drain pass before yielding to the next poll/enqueue.
-- `MESSENGER_GENERATION_WORKER_POLL_MS=1000`: worker poll interval.
-- `WEBHOOK_INGRESS_ENQUEUE_TIMEOUT_MS=450`: max time the gateway waits for Redis ingress enqueue before returning 503 so Meta can retry instead of losing the delivery.
-
-When a worker exits while a generation is reserved, the next worker poll reclaims the expired lease, increments the job attempt count, and either requeues it or moves it to the dead-letter list once `MESSENGER_GENERATION_MAX_ATTEMPTS` is reached.
-
-Production verification checklist:
-
-- Confirm `/readyz` returns `ok: true` on gateway instances after deploy; failures report dependency names and redacted error classes only.
-- Confirm `GENERATOR_STARTUP_CONFIG.messengerGenerationGlobalLimit.redisBacked=true` and `GENERATOR_STARTUP_CONFIG.messengerGenerationRuntime` has the expected gateway/worker/inline-fallback values before horizontal scaling.
-- Confirm `/metrics` shows `messenger_generation_queue_enabled 1`, `messenger_generation_inline_fallback_enabled 0` on gateway instances after worker rollout, stable `messenger_generation_queue_jobs{state="queued"}`, and `messenger_generation_global_slots{state="active"}` below `state="max"` during normal load.
-- Confirm `webhook_ack_sent` p95/p99 stays under 500ms after enabling Redis ingress queue and before increasing gateway instance count.
-- Confirm event-loop diagnostics stay below `eventLoopDelayP99Ms=500` during normal Messenger image generation load.
-- Confirm generated image URLs and persisted inbound source-image URLs come from the storage proxy host, not gateway-local `/generated/*` URLs.
-- Confirm `messenger_generation_queue_jobs{state="failed"}` remains at 0 during rollout, or investigate matching `messenger_generation_job_dead_lettered` logs before continuing.
-- After a worker restart test, confirm stale `processing` jobs are reclaimed and completed rather than remaining in `messenger-generation-jobs:processing`.
+The active order of work is
+[`../../docs/operations/todo.md`](../../docs/operations/todo.md).
