@@ -330,7 +330,7 @@ data is retained, deleted, or shared with third-party providers.
 If this Page is public or paid, treat Facebook as a metered entry point rather
 than full assistant access. Keep budget gates, tool policy, credit balances, and
 provider cost ledgers in the OpenClaw host runtime where model/tool calls
-execute. See [cost-control-plan.md](cost-control-plan.md).
+execute. This transport plugin does not implement billing or provider budgets.
 
 ### Allowlist Mode
 

@@ -1,184 +1,134 @@
-# Mollie Billing Runbook
+# One-time credit billing runbook
 
-## Safety boundary
+## Scope
 
-Leaderbot sells the bounded one-time Startpilot offer. It is not a marketplace
-and does not use Mollie Connect. Recurring subscriptions, renewals, top-ups and
-overage are outside the launch offer. The language model, personal OpenClaw
-runtime and customer-facing clients have no access to Mollie keys, payouts,
-settlement movement or refund mutations.
+Leaderbot's target commercial model is a one-time purchase of premium image
+credits by an end user who reached or approached the free daily limit.
 
-All customer billing and entitlement execution runs in `apps/image-gen`; the
-personal OpenClaw gateway is not a preflight, quota or delivery dependency.
+There is no subscription, automatic renewal, mandate, automatic top-up, or
+post-paid overage. Legacy recurring code remains disabled until it is removed.
 
-Only the backend may change entitlements. Amount, EUR currency, interval,
-description and quota come from the server catalog. Billing operators may use
-provider IDs for reconciliation, but must not copy customer data or secrets into
-logs, prompts, tickets, or shared diagnostics.
+Live checkout is currently a **NO-GO** until the gates in
+[`LAUNCH_READINESS.md`](LAUNCH_READINESS.md) are closed.
 
-## Configuration and test-to-live switch
+## Offer contract
 
-Required variables are documented in `apps/image-gen/.env.example`.
+Every offer is defined server-side and versioned. It contains:
 
-Test configuration must use:
+- immutable offer code and version;
+- public name and description;
+- EUR price in minor units;
+- exact number of premium image credits;
+- quality/model policy reference;
+- validity or explicit no-expiry policy;
+- refund and partial-use policy;
+- active/public flags.
+
+The browser and Messenger action may select only the offer code. Never accept
+price, currency, quantity, model, quality, or expiry from client input.
+
+## Checkout flow
+
+1. Free quota exhaustion returns a channel-neutral checkout action.
+2. The server creates a short-lived, single-use signed handoff bound to the
+   exact conversation subject, Page binding, privacy epoch, offer snapshot,
+   nonce, and expiry.
+3. The checkout page shows the seller, total price, credits, quality, validity,
+   no-subscription disclosure, refund/withdrawal terms, and an explicit
+   order-and-pay button.
+4. After explicit confirmation, the server creates one Mollie one-off payment
+   with a trusted redirect and webhook URL.
+5. Mollie hosts payment method selection and payment credential collection.
+6. The return page displays pending, paid, failed, canceled, or expired state,
+   but never grants credits.
+7. The webhook/status worker fetches or verifies the latest Mollie object.
+8. A valid paid amount, currency, mode, profile, offer, and local intent create
+   exactly one immutable credit grant.
+9. The user can spend the balance on premium generations.
+
+Do not place raw PSIDs, prompts, messages, image URLs, or secrets in the handoff
+URL, redirect URL, Mollie description, or metadata.
+
+## Credit consumption
+
+Paid generation uses an atomic lifecycle:
 
 ```text
-MOLLIE_MODE=test
-MOLLIE_API_KEY=test_...
-MOLLIE_LIVE_BILLING_ENABLED=false
+available -> reserved -> committed
+                      \-> released
 ```
 
-The service rejects a key whose prefix conflicts with the mode. Production and
-all live configurations require HTTPS for `APP_BASE_URL` and
-`MOLLIE_PAYMENT_WEBHOOK_URL`. The effective portal origin from
-`PORTAL_BASE_URL` (falling back to `APP_BASE_URL`) must also be an HTTPS origin
-in production/live mode, without a path, query, or fragment. The webhook URL
-must end exactly in `/api/webhooks/mollie/payments` without a query or
-fragment. Billing readiness rejects these misconfigurations before checkout.
+- Reserve before a billable provider call.
+- Use a stable request receipt/idempotency key.
+- Commit once at the documented usable-output/delivery boundary.
+- Release on preflight rejection, provider failure, cancellation, or an
+  unambiguous failed result.
+- Reconcile ambiguous provider success before retrying.
+- Never fall back from paid admission to an unbounded provider call.
 
-The in-process worker is deliberately tenant-bound. Set
-`MOLLIE_BILLING_WORKER_WORKSPACE_ID` to exactly one workspace in an isolated
-test worker. When billing is enabled, startup and readiness fail if this value
-is absent; checkout for any other workspace fails closed. When billing is
-disabled, readiness does not require Mollie secrets. A durable
-tenant-partitioned multi-workspace dispatcher is still required before live
-SaaS rollout; do not replace this with a cross-tenant database scan.
+Free daily quota remains a separate counter. Its reset must not alter purchased
+balance.
 
-Switch to live only after `LAUNCH_READINESS.md` is signed off. Install the live
-secret out of band, set `MOLLIE_MODE=live`, verify URLs and methods, and only
-then set `MOLLIE_LIVE_BILLING_ENABLED=true`. Roll back by disabling the live
-flag; do not delete financial records.
+## Webhooks and reconciliation
 
-## Payment-method launch check
-
-The protected `portal.billing.launchCheck` procedure calls Mollie's Methods API
-for the one-time Startpilot payment. It must report:
-
-- `bancontact: true`
-- `salesCountry: BE`
-- `currency: EUR`
-- `b2bCheckoutEnabled: false`
-
-SEPA Direct Debit and mandate collection remain dormant compatibility code and
-are not launch gates for the one-time offer.
-
-## Checkout and webhook verification
-
-1. Confirm the actor is workspace `owner` or `admin` and the Origin matches
-   `APP_BASE_URL`.
-2. Confirm the requested plan code is active in the server catalog.
-3. Confirm a local intent and idempotency key exist before any Payment call.
-4. Confirm the first Payment has `sequenceType=first`, `method=bancontact`, the
-   full first-period EUR amount, customer ID, exact webhook URL, redirect URL,
-   and only the opaque billing intent in metadata.
-5. Send the browser to `_links.checkout.href` with GET. A redirect is never
-   evidence of payment.
-6. The classic webhook reads only `id`, re-fetches the Payment with the API key,
-   validates mode, workspace/customer, metadata, amount and currency, and
-   commits ledger/delivery/outbox state atomically.
-7. Unknown or invalid IDs receive the same generic HTTP 200. Do not add an IP
-   allowlist or classic-webhook signature secret. Transient Mollie/database
-   failures return a redacted HTTP 503 so Mollie can retry. The exact route uses
-   its own high-capacity rate limit instead of the shared application limit.
-
-## Duplicate-payment investigation
-
-1. Freeze new checkout attempts with the live kill switch if customers could be
-   charged twice.
-2. Search locally by the hashed operational reference, then use the authorized
-   billing database/provider console to compare intent, idempotency key,
-   customer, Payment and Subscription IDs. Do not paste these into logs.
-3. Check `billing_intents`, `payment_ledger`, `webhook_deliveries`,
-   `billing_subscriptions`, and `billing_outbox` unique constraints/statuses.
-4. List the Mollie Customer's Payments and Subscriptions. Match the opaque
-   `billingIntentId` metadata and subscription source intent.
-5. Do not automatically refund. An authorized human follows the refund policy
-   and records the decision in the financial system.
-6. Run reconciliation after the cause is contained; it may synchronize state
-   but never move money.
-
-## Reconciliation
-
-`runDailyBillingReconciliation(workspaceId)` claims one MySQL lease per
-workspace, mode and UTC date. It reads only that workspace, fetches that
-customer's recent Mollie Payments, re-fetches full snapshots including
-refunds/chargebacks, checks the exact remote Subscription, expires stale
-entitlements, and records metadata-only anomalies. The next daily timestamp is
-advanced atomically with successful run completion; failed runs are retried.
-
-The task is idempotent through daily lease, payment ledger uniqueness and
-`(workspace_id, mode, mollie_resource_id, snapshot_hash)` delivery uniqueness.
-It does not create refunds, payment retries, payouts, or balance transfers.
-Mollie owns recurring-payment retries. A local stopped/review state paired with
-a remote active Subscription is recorded as an incident anomaly.
-
-Mollie Balances and Settlements must be reconciled by the authorized accounting
-workflow in live read-only mode. Those APIs are not a Test Mode substitute.
-
-## Cancellation and new payment method
-
-“Cancel at period end” transactionally marks the local subscription canceled
-and commits an exact-target cancellation job. This closes the provisioning race:
-if a remote Subscription appears after the request, the ensure worker records
-and cancels that orphan. Local access remains only through `paid_through`.
-
-Changing payment method first creates a new full-period `first` Payment. An
-abandoned or failed checkout leaves the old Subscription untouched. Only after
-the new Payment is confirmed paid does the transaction queue exact cancellation
-of the old Subscription. Creation of the replacement Subscription is blocked on
-successful completion of that cancellation job. If an already-paid period
-remains, the newly purchased period starts after it. The change is allowed only
-for an active Subscription, more than seven days before Mollie's freshly fetched
-next payment date, and when no old-Subscription collection is open, pending,
-authorized, or newly initiated. Past-due recovery remains a billing-support
-flow so a Mollie retry cannot overlap a new full Bancontact payment.
-
-An immediate new subscription after cancellation is blocked until the existing
-`paid_through` period ends. As a second line of defense, every valid new first
-Payment starts after any still-paid local period.
-
-Failed exact cancellation jobs can be re-armed by an explicit cancellation,
-the waiting replacement job, or daily reconciliation. Reconciliation lists the
-tenant Customer's remote Subscriptions and queues exact cancellation for every
-active/pending Subscription that is neither the current contractually matching
-Subscription nor the unique current provisioning intent. Before a containment
-DELETE, the worker locks and revalidates current local state so stale work cannot
-cancel a Subscription that has since become the legitimate current one.
+- Accept webhook retries idempotently.
+- Fetch provider state rather than trusting mutable browser input.
+- Return a generic success for unknown public webhook identifiers when safe,
+  without revealing whether a payment exists.
+- Quarantine amount, currency, offer, mode, profile, or ownership mismatches for
+  human review; do not grant.
+- Reconciliation is read-only until it invokes a specific reviewed local
+  transition.
+- Keep provider payment, local intent, grant, ledger entries, and accounting
+  record linked through opaque identifiers.
 
 ## Refunds and chargebacks
 
-- Refund creation is a manual, authorized administrator action in Mollie.
-- Full refund: withdraw entitlement per policy and cancel future collection.
-- Partial refund: put the workspace in manual review.
-- Chargeback: block access, cancel future collection, preserve evidence, and
-  escalate to billing/security review.
-- Never expose refund, payout or key access to OpenClaw or a model.
-- A refund or chargeback for an older period does not erase a later
-  independently paid period; later proven access is preserved while future
-  collection can still be stopped and the case escalated.
+Refunds are human-approved until a separate automated policy is proven.
 
-## Accounting export
+- Unused bundle: normally reverse the remaining liability through an explicit
+  refund/adjustment operation.
+- Partially used bundle: follow the approved policy; never create a negative
+  wallet or rewrite consumed history.
+- Chargeback or fraud hold: block new paid spending only through an audited
+  status transition.
+- Provider refund and local wallet adjustment must reconcile but remain
+  separately recorded events.
 
-Workspace owners/admins can download
-`/api/portal/billing/export.csv?workspaceId=...`. It separates gross sales,
-Mollie fees, refunds, chargebacks and net settlement and includes Payment ID,
-booking date, workspace and proof/invoice number. Spreadsheet formula prefixes
-are escaped. The export states “Bijzondere vrijstellingsregeling kleine
-ondernemingen”.
+See [`CANCELLATION_REFUND_POLICY.md`](CANCELLATION_REFUND_POLICY.md).
 
-Book gross revenue, Mollie fees, refunds and chargebacks separately. Never book
-the net Mollie payout as revenue and do not deduct input VAT under the stated
-small-enterprise exemption without accounting advice. The current ledger does
-not yet import Mollie Balance/Settlement fee lines or settlement IDs, so those
-CSV columns remain empty and the export is not live-accounting complete.
+## Operational flags
 
-B2B checkout remains disabled until a real Peppol invoicing provider and
-approved invoice flow exist. A Mollie payment proof is not a Peppol invoice.
+Until the new wallet path replaces legacy workspace entitlement billing, keep
+all live and recurring behavior off. Existing `MOLLIE_*` flags are transitional
+implementation details; do not infer product approval from a flag name.
 
-## References
+Enabling live checkout requires one reviewed configuration change that proves:
 
-- [Mollie classic webhooks](https://docs.mollie.com/reference/webhooks)
-- [Mollie recurring payments](https://docs.mollie.com/docs/recurring-payments)
-- [Mollie API idempotency](https://docs.mollie.com/reference/api-idempotency)
-- [Mollie Subscriptions API](https://docs.mollie.com/reference/subscriptions-api)
-- [Mollie testing](https://docs.mollie.com/reference/testing)
+- one-time offer only;
+- recurring workers and mandate/subscription creation disabled;
+- webhook and reconciliation paths remain available;
+- paid-credit enforcement active before checkout exposure;
+- provider budgets and rollback configured.
+
+## Required Test Mode cases
+
+- successful, failed, canceled, expired, and pending payment;
+- webhook before return and return before webhook;
+- duplicate and reordered webhooks;
+- duplicate checkout click and expired handoff;
+- amount, currency, mode, offer, and user-binding mismatch;
+- payment succeeds during deployment or temporary checkout disable;
+- exactly one credit grant per payment;
+- concurrent reservations and insufficient balance;
+- provider failure, ambiguous result, delivery failure, and process crash;
+- full and partial refund plus chargeback;
+- deletion and Page rebinding during checkout/generation;
+- no content or secrets in logs, receipts, or reconciliation output;
+- rollback with an already-created payment and an existing wallet.
+
+## Incident response
+
+Follow [`BILLING_INCIDENT_PROCEDURE.md`](BILLING_INCIDENT_PROCEDURE.md). Do not
+repair payment state through ad-hoc SQL or provider dashboard changes without a
+matching audited local transition.

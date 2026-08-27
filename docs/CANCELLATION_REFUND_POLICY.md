@@ -1,56 +1,77 @@
-# Leaderbot cancellation and refund policy
+# One-time premium credit cancellation and refund policy
 
-Status: draft pending Belgian legal and accounting review.
+Status: product draft pending Belgian legal and accounting approval. Mandatory
+consumer rights override this document.
 
-## One-time Startpilot purchase
+## Purchase
 
-The public launch offer is a single EUR 19.00 payment for 30 days of Startpilot
-access. It does not renew automatically and does not create a subscription,
-direct-debit mandate, top-up or overage charge. At the end of the 30-day period,
-access expires unless the product owner later publishes a separately reviewed
-offer.
+A premium bundle is one explicit payment for a stated number of image credits.
+It does not create a subscription, mandate, automatic renewal, automatic
+top-up, or post-paid charge.
 
-The checkout must show the exact one-time amount, access period and included
-limits before payment. A browser redirect is never proof of payment; access is
-activated only after the backend verifies the Payment with Mollie.
+Before payment, checkout must show:
 
-## Cancellation and withdrawal
+- seller identity and support contact;
+- total price including applicable taxes;
+- number and type of credits;
+- promised image quality;
+- expiry or no-expiry policy;
+- when credits become available;
+- refund and withdrawal treatment;
+- an explicit acknowledgement that the order creates a payment obligation.
 
-Because the public offer has no future collection, there is no recurring
-subscription to cancel. A customer may contact the support address shown in the
-portal about withdrawal or cancellation rights. An authorized human applies
-the legally approved policy; the assistant and OpenClaw cannot move money.
+Credits activate only after Leaderbot verifies the payment with Mollie. A
+browser return or Messenger message is not proof of payment.
 
-The final withdrawal window, treatment of immediately started digital service,
-and required consent wording remain subject to Belgian legal approval.
-Mandatory consumer rights override this draft.
+## Cancellation
 
-## Refunds and disputes
+There is no future collection to cancel. A pending checkout can be abandoned or
+canceled without a credit grant. An expired, failed, or canceled payment creates
+no paid balance.
 
-Refunds are reviewed and issued manually by an authorized administrator. A full
-refund normally withdraws the related entitlement. A partial refund requires
-manual entitlement review. A chargeback can block access while the case is
-reviewed. Every exception must create a human-visible, metadata-only operator
-incident; do not put customer content or secrets in the incident record.
+## Immediate digital performance
 
-For billing help, use the support address shown in the portal. Do not send API
-keys, bank details, full provider payloads, conversations, prompts or uploaded
-knowledge.
+Premium credits are intended for immediate use. The final checkout wording and
+confirmation record must follow approved Belgian/EU rules for immediate digital
+content or service performance, including any required express request,
+acknowledgement, durable confirmation, and withdrawal information.
 
-## Proof and invoicing
+Do not rely on a pre-ticked checkbox or acceptance of general terms alone.
 
-Leaderbot v1 is B2C-only in Belgium. Business/Peppol buyer checkout is disabled.
-The seller's own Peppol registration is separate from buyer eligibility and
-does not turn a consumer purchase into B2B.
+## Refunds
 
-Payment proofs use the approved small-enterprise VAT-exemption wording only
-after accounting/legal sign-off. A Mollie payment proof is not automatically a
-Peppol invoice. Proof/invoice numbering, retention and bookkeeping treatment
-remain launch gates.
+Until a reviewed automated policy exists, refunds are handled by an authorized
+human.
 
-## Unpublished subscription foundation
+- Unused credits: eligible requests are normally handled as a full bundle
+  review.
+- Partially used credits: refundability and amount follow the approved consumer
+  policy and actual service delivered.
+- Failed generation: release the reservation; it is not a refund when no credit
+  was consumed.
+- Duplicate charge or grant: investigate and correct both provider payment and
+  wallet state through linked audited operations.
+- Chargeback or fraud: paid spending may be paused while the case is reviewed.
 
-The codebase retains defensive subscription, mandate and exact-cancellation
-logic for regression testing. It is not part of the public offer and must not be
-advertised or enabled without a separate product, legal, accounting, provider
-and migration review.
+A refund never rewrites ledger history. It creates explicit provider and wallet
+adjustment records.
+
+## Deletion and accounting
+
+A `delete-my-data` request removes eligible conversation, media, and product
+state and fences late work. Financial records may be retained where legally
+required, separated from deleted conversation content and reduced to necessary
+payment/accounting data.
+
+The final policy must define treatment of an unused paid balance after deletion
+before live checkout is enabled.
+
+## Support and proof
+
+The checkout and receipt surfaces must show the approved support address. Users
+must never send card details, bank credentials, API keys, prompts, photos, or
+conversation exports by email.
+
+Receipts and invoices must follow the seller's approved Belgian VAT and
+accounting treatment. Mollie payment confirmation alone is not a substitute for
+required seller documentation.

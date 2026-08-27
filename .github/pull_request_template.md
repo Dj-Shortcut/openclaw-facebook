@@ -2,13 +2,13 @@
 
 Choose exactly one:
 
-- [ ] P1 direct tenant flow
-- [ ] P2 customer portal
-- [ ] P3 Messenger customer journey
-- [ ] P4 Startpilot Test Mode
-- [ ] P5 release and rollback
+- [ ] P1 direct owner bot and OpenClaw retirement
+- [ ] P2 user-scoped purchased-credit ledger
+- [ ] P3 quota-exhaustion CTA and one-time checkout
+- [ ] P4 premium quality and Mollie Test Mode journey
+- [ ] P5 bounded live pilot and legacy removal
 - [ ] Non-blocking maintenance
-- [ ] Personal OpenClaw (low priority)
+- [ ] Standalone OpenClaw Facebook channel
 
 ## What becomes demonstrably closer to done?
 
@@ -24,12 +24,14 @@ Describe the runnable user/production outcome. “Foundation”, “hardening”
 
 ## Scope control
 
-- [ ] This does not route Leaderbot customers through OpenClaw.
+- [ ] This does not route the Leaderbot owner bot through OpenClaw.
 - [ ] This does not create a duplicate backlog item or second source of truth.
 - [ ] Any discovered subproblem was added to the selected P outcome instead of
       becoming another recurring PR theme.
-- [ ] Customer data remains tenant/workspace-scoped and logs remain
-      metadata-only.
+- [ ] Messenger state remains scoped to the exact owner/workspace, Page binding,
+      privacy epoch, and pseudonymous user; logs remain metadata-only.
+- [ ] This does not add or enable subscriptions, mandates, renewals, automatic
+      top-ups, or usage overages.
 - [ ] Provider quota and spend checks still happen before billable calls.
 
 ## Rollback

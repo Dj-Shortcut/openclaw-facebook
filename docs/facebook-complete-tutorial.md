@@ -329,7 +329,8 @@ to your runtime configuration. Before enabling this for a public Page, publish a
 privacy policy, disclose automated/AI handling where required, and decide what
 data is retained, deleted, or shared with third-party providers.
 
-For public or paid bots, read [cost-control-plan.md](cost-control-plan.md).
+For public or paid bots, enforce credits and provider budgets in the OpenClaw
+host runtime. This transport plugin does not implement billing.
 
 ## 11. Cost And Tool Safety
 

@@ -98,6 +98,23 @@ export function validatePackageManagerContract(repoRoot = process.cwd()) {
         "package.json: combined root deploy orchestration is not allowed",
       );
     }
+    const packagedFiles = rootPackage.files ?? [];
+    const requiredPluginDocs = [
+      "docs/clawhub-listing.md",
+      "docs/clawhub.md",
+      "docs/facebook-complete-tutorial.md",
+      "docs/openclaw-update.md",
+      "docs/operator-prompt-routing.md",
+      "docs/setup.md",
+    ];
+    if (
+      packagedFiles.includes("docs") ||
+      requiredPluginDocs.some((file) => !packagedFiles.includes(file))
+    ) {
+      failures.push(
+        "package.json: OpenClaw package must include only the scoped plugin documentation",
+      );
+    }
     for (const [scriptName, expectedCommand] of Object.entries({
       "deploy:gateway":
         'test -n "$FLY_GATEWAY_REVIEWED_IMAGE" && node scripts/validate-production-deployment.mjs --validate-target-enabled gateway && node scripts/validate-production-deployment.mjs --validate-rollback-image gateway "$FLY_GATEWAY_REVIEWED_IMAGE" && fly deploy --config fly.toml --strategy rolling --image "$FLY_GATEWAY_REVIEWED_IMAGE"',

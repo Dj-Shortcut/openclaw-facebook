@@ -1,74 +1,77 @@
-# Leaderbot Monorepo
+# Repository boundaries
 
-This repo is the operational home for two separate runtimes: the tenant-owned
-Leaderbot customer platform and the repository owner's personal
-Messenger/OpenClaw gateway. The personal gateway is not customer infrastructure.
+The repository is in a controlled product simplification. `apps/image-gen` is
+the only active Leaderbot product runtime. Other applications remain
+temporarily because traffic, state, release, or rollback obligations must be
+retired safely.
 
-## Apps
+## Active
 
-- Root package: `@dj-shortcut/facebook`, the reusable OpenClaw Facebook channel
-  plugin and the owner's private Fly gateway source.
-- `apps/image-gen`: the complete Leaderbot customer runtime: direct Meta
-  webhook ingress, conversation behavior, images, storage, quota, billing,
-  deletion, legal pages and the `leaderbot.live` portal.
+### `apps/image-gen`
 
-## Deploy
+Owns direct Messenger ingress, conversation behavior, image generation, free
+quota, the target paid wallet, consent, privacy, deletion, storage, delivery,
+one-time Mollie foundations, and minimal legal/checkout/operational routes.
 
-Use the manually dispatched `Deploy production` GitHub Actions workflow from a
-reviewed `main` commit. The protected `production` environment supplies approval
-and app-scoped credentials. The workflow invokes exactly one of:
+### `apps/image-gen/storage-proxy`
 
-```bash
-npm run deploy:image-gen
-npm run deploy:gateway
-```
+Owns the bounded R2 storage API and public asset boundary. It stays separate
+until direct storage access can replace it without privacy or rollback
+regressions.
 
-These are CI implementation details and emergency operator entry points, not a
-reason to bypass production approval. Never use `fly machine run` for either
-production app. The full contract is in
-[`operations/production-deployments.md`](operations/production-deployments.md).
+### `deploy/production`
+
+Owns reviewed deployment identity, immutable image selection, schema phase, and
+rollback metadata.
+
+## Transitional and frozen
+
+### Root package and `src/`
+
+The root package is the generic OpenClaw Facebook channel, not a Leaderbot
+runtime dependency. It receives no new Leaderbot product features. Extract it
+to a standalone project while preserving package `@dj-shortcut/facebook`,
+channel id `facebook`, install validation, and the ClawHub entry. Remove the
+root copy only after the standalone build, release, rollback, and channel-index
+route are proven.
+
+### `deploy/fly-gateway`
+
+The personal OpenClaw Fly gateway is retirement-only. Preserve only the
+metadata needed to identify, disable, retain or delete data, and remove its
+Machines, volume, secrets, and Meta callback safely.
+
+### `apps/customer-app`
+
+The customer portal belongs to the abandoned multi-tenant SaaS model. Do not
+add features. Remove it after the active runtime no longer depends on its
+contracts or workflows.
+
+## Dependency direction
+
+- Active runtime code must not import the root OpenClaw plugin.
+- The root plugin must not become an ingress or billing dependency for
+  `apps/image-gen`.
+- New shared code is extracted only when at least two active consumers need it.
+- Do not create a generic platform package merely to preserve legacy code.
 
 ## Package managers
 
-- Use npm `>=11.12.1` for the root plugin, root scripts, installs, releases, and
-  deploy orchestration. `package-lock.json` is authoritative there.
-- Use pnpm `10.28.1` only within `apps/image-gen`, `apps/customer-app`, and
-  `apps/image-gen/storage-proxy`. Each app owns its `packageManager` pin and
-  `pnpm-lock.yaml`.
-- The root `pnpm-lock.yaml` is retained only as an OpenClaw compatibility mirror;
-  it does not turn the repository into a pnpm workspace.
-- Run `npm run check:package-managers` after changing package metadata,
-  lockfiles, or package-manager CI setup.
+- `apps/image-gen`, storage proxy, and customer app use their checked-in pnpm
+  lockfiles while they exist.
+- The root npm package and compatibility lockfiles remain until plugin
+  extraction is complete.
+- Do not regenerate a lockfile owned by another package boundary casually.
 
-## Validate
+## Removal rule
 
-Gateway/plugin:
+A legacy subtree is removed when:
 
-```bash
-npm run check
-```
+1. production traffic is absent or migrated;
+2. required data is deleted, retained, or exported under an explicit policy;
+3. rollback no longer needs the subtree;
+4. CI, workflows, manifests, secrets, and docs are updated together;
+5. the active `apps/image-gen` build and tests pass without it.
 
-Image generation:
-
-```bash
-npm run image-gen:install
-npm run image-gen:check
-npm run image-gen:test
-npm run image-gen:build
-```
-
-## Boundaries
-
-- Do not commit `.env`, Fly secrets, generated images, logs, `node_modules`, or
-  build output.
-- Keep both Fly apps separate: `leaderbot-openclaw-gateway` and
-  `leaderbot-fb-image-gen`.
-- Point customer Meta webhooks and all customer-facing work directly at
-  `apps/image-gen`. Never proxy them through the OpenClaw gateway.
-- Keep the personal OpenClaw gateway shielded, pairing-only by default and
-  independent of customer quota, billing, portal and launch readiness.
-- Use separate Meta apps, Pages and credentials for Leaderbot customers and the
-  personal gateway; never point one app-level callback at both runtimes.
-- Shared product docs live under root `docs/`.
-- App-specific docs live under the root `docs/` directory and can stay there until they are
-  intentionally consolidated.
+Git history is the archive. Do not keep dead code or stale docs solely for
+historical reference.

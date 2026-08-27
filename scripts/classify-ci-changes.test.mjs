@@ -16,6 +16,15 @@ describe("CI change classification", () => {
     ).toEqual({ imageGen: false, migration: false });
   });
 
+  it("skips expensive suites for image-gen documentation-only changes", () => {
+    expect(
+      classifyCiChanges([
+        "apps/image-gen/README.md",
+        "apps/image-gen/docs/operator-guide.mdx",
+      ]),
+    ).toEqual({ imageGen: false, migration: false });
+  });
+
   it("runs image checks but not database migration smoke for storage-only changes", () => {
     expect(
       classifyCiChanges([
