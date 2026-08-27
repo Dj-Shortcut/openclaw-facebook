@@ -1,16 +1,16 @@
 # Leaderbot Monorepo
 
-This repo is the operational home for the Messenger/OpenClaw gateway and the
-Leaderbot image-generation service.
+This repo is the operational home for two separate runtimes: the tenant-owned
+Leaderbot customer platform and the repository owner's personal
+Messenger/OpenClaw gateway. The personal gateway is not customer infrastructure.
 
 ## Apps
 
-- Root package: `@dj-shortcut/facebook`, the OpenClaw Facebook channel plugin
-  and Fly gateway deployment source.
-- `apps/image-gen`: the Leaderbot image-generation app.
-- Planned `leaderbot.live` portal: a tenant/customer app for managing each
-  customer's own AI. This must stay separate from the private OpenClaw gateway
-  UI/API.
+- Root package: `@dj-shortcut/facebook`, the reusable OpenClaw Facebook channel
+  plugin and the owner's private Fly gateway source.
+- `apps/image-gen`: the complete Leaderbot customer runtime: direct Meta
+  webhook ingress, conversation behavior, images, storage, quota, billing,
+  deletion, legal pages and the `leaderbot.live` portal.
 
 ## Deploy
 
@@ -63,8 +63,12 @@ npm run image-gen:build
   build output.
 - Keep both Fly apps separate: `leaderbot-openclaw-gateway` and
   `leaderbot-fb-image-gen`.
-- Keep the OpenClaw gateway shielded. Customer-facing work belongs in the
-  portal app/API, not by exposing the gateway UI publicly.
+- Point customer Meta webhooks and all customer-facing work directly at
+  `apps/image-gen`. Never proxy them through the OpenClaw gateway.
+- Keep the personal OpenClaw gateway shielded, pairing-only by default and
+  independent of customer quota, billing, portal and launch readiness.
+- Use separate Meta apps, Pages and credentials for Leaderbot customers and the
+  personal gateway; never point one app-level callback at both runtimes.
 - Shared product docs live under root `docs/`.
 - App-specific docs live under the root `docs/` directory and can stay there until they are
   intentionally consolidated.

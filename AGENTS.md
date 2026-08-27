@@ -10,7 +10,14 @@ This repository powers:
 
 Primary goal:
 
-Turn Facebook Messenger into a first-class OpenClaw channel while keeping the system maintainable, channel-neutral, and production-safe.
+Run Leaderbot's tenant-owned customer assistants directly in `apps/image-gen`,
+with Facebook Messenger as a first-class channel, while keeping the system
+maintainable, channel-neutral, and production-safe.
+
+OpenClaw is a separate personal tool for the repository owner. Its Facebook
+plugin and Messenger deployment remain supported for that private use, but they
+are low priority and must never sit on the Leaderbot customer, portal, image,
+quota, or billing critical path.
 
 The long-term direction is:
 
@@ -20,6 +27,20 @@ Inbound Message
 -> Channel Renderer
 
 The conversation layer should not know Messenger-specific details.
+
+The two runtime paths are deliberately separate:
+
+```text
+Customer Page -> Meta webhook -> apps/image-gen -> tenant conversation -> Messenger renderer
+Owner Page    -> Meta webhook -> OpenClaw Facebook plugin -> personal OpenClaw
+```
+
+Do not route customer conversations through OpenClaw, its gateway, or the
+legacy Leaderbot bridge. Compatibility code may remain temporarily, default-off,
+until its production migration and removal are separately proven safe.
+The customer and personal paths use separate Meta apps/Pages and credentials;
+a Page webhook subscription callback is app-scoped and must not be shared
+between the two runtimes.
 
 ---
 
@@ -145,7 +166,10 @@ Do not treat `leaderbot.live` as:
 * the public OpenClaw gateway UI
 * a place to revive old DJ/personality campaign assets
 
-The OpenClaw/Messenger gateway must stay shielded. Public traffic may reach only required webhook/health/legal/customer-app surfaces, not internal gateway admin/API surfaces.
+The customer portal and customer Meta webhooks terminate in `apps/image-gen`.
+They must not be proxied through the OpenClaw gateway. The personal
+OpenClaw/Messenger gateway stays shielded and exposes only its own required
+webhook and health surfaces, never customer portal, billing, or tenant APIs.
 
 ---
 
@@ -169,6 +193,29 @@ Rules:
 
 # Architectural Direction
 
+## Runtime Ownership
+
+Leaderbot customer runtime (`apps/image-gen`):
+
+* customer Meta webhook verification and ingress
+* tenant/workspace resolution
+* conversation state and assistant behavior
+* image generation and storage
+* customer quota, billing, consent, export, and deletion
+* customer portal and legal surfaces
+
+Personal OpenClaw runtime (root plugin and `deploy/fly-gateway`):
+
+* repository owner's private Messenger-to-OpenClaw channel
+* pairing or explicit allowlisting by default
+* no customer free-tier routing
+* no customer portal proxy
+* no customer quota or billing enforcement
+
+OpenClaw maintenance is non-blocking for Leaderbot releases unless a shared
+repository change would break the existing private channel or a security issue
+requires immediate containment.
+
 ## Desired Ownership
 
 Conversation Layer:
@@ -190,6 +237,7 @@ Avoid:
 * Messenger payloads in domain code
 * Messenger quick replies in conversation logic
 * Channel-specific branching inside assistant behavior
+* Customer routing or billing dependencies in the OpenClaw gateway
 
 ---
 
@@ -224,11 +272,14 @@ Actions are a conversation primitive, not a Messenger primitive.
 
 Priority order:
 
-1. Move interaction logic into conversation layer.
-2. Reduce Messenger-specific branching.
-3. Extract reusable conversation primitives.
-4. Simplify webhook orchestration.
-5. Remove dead code.
+1. Close one direct customer journey in `apps/image-gen` end to end.
+2. Prove tenant identity, queue, consent, quota, deletion, and delivery on it.
+3. Deploy and smoke the customer portal and bounded Mollie pilot.
+4. Move interaction logic into the channel-neutral conversation layer.
+5. Remove obsolete OpenClaw customer-bridge code after migration proof.
+
+Do not create OpenClaw gateway, bridge, Memory Core, or personal-runtime work as
+a prerequisite for a Leaderbot customer release.
 
 Not priorities:
 
@@ -360,13 +411,14 @@ Historical documents should not appear actionable.
 
 Before making changes ask:
 
-1. Does this move logic toward the conversation layer?
-2. Does this reduce channel coupling?
-3. Does this remove dead code?
-4. Does this preserve production behavior?
-5. Is this the smallest safe change?
+1. Which single P1-P5 production outcome does this close or make executable,
+   or is it explicitly approved non-blocking maintenance/personal OpenClaw work?
+2. Does it keep every Leaderbot customer path inside `apps/image-gen`?
+3. Does this move logic toward the conversation layer or remove dead code?
+4. Does this reduce channel coupling while preserving production behavior?
+5. Is this the smallest safe change with a concrete smoke and rollback?
 
-If the answer to multiple questions is "no":
+If question 1 or 2 has no clear answer, or multiple other answers are "no":
 
 Stop and reconsider.
 

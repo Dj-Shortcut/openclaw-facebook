@@ -2,19 +2,19 @@
 
 ## Safety boundary
 
-Leaderbot sells its own subscriptions. It is not a marketplace and does not use
-Mollie Connect. The language model, OpenClaw, and customer-facing clients have no
-access to Mollie keys, payouts, settlement movement, or refund mutations.
+Leaderbot sells the bounded one-time Startpilot offer. It is not a marketplace
+and does not use Mollie Connect. Recurring subscriptions, renewals, top-ups and
+overage are outside the launch offer. The language model, personal OpenClaw
+runtime and customer-facing clients have no access to Mollie keys, payouts,
+settlement movement or refund mutations.
+
+All customer billing and entitlement execution runs in `apps/image-gen`; the
+personal OpenClaw gateway is not a preflight, quota or delivery dependency.
 
 Only the backend may change entitlements. Amount, EUR currency, interval,
 description and quota come from the server catalog. Billing operators may use
 provider IDs for reconciliation, but must not copy customer data or secrets into
 logs, prompts, tickets, or shared diagnostics.
-
-Startpilot runs on the direct multi-tenant image-gen customer path, not on the
-personal-only OpenClaw transcript path. Operators may rely on that separation
-only after the protected production callback/routing cutover is recorded; a
-green image-gen `/readyz` alone does not prove the route boundary.
 
 ## Configuration and test-to-live switch
 
@@ -28,14 +28,6 @@ MOLLIE_API_KEY=test_...
 MOLLIE_LIVE_BILLING_ENABLED=false
 ```
 
-Before any provider call, run the provider-silent readiness phase with
-`MOLLIE_BILLING_PREFLIGHT_ENABLED=true` and
-`MOLLIE_BILLING_ENABLED=false`. `MOLLIE_BILLING_DRAIN_ENABLED` and every
-entitlement, notification, accounting and provider execution flag stay off in
-that phase. A valid response is a
-green `/readyz` with `phase: "offline"`; it validates configuration and
-schema without reading the Mollie credential or calling Mollie.
-
 The service rejects a key whose prefix conflicts with the mode. Production and
 all live configurations require HTTPS for `APP_BASE_URL` and
 `MOLLIE_PAYMENT_WEBHOOK_URL`. The effective portal origin from
@@ -44,69 +36,39 @@ in production/live mode, without a path, query, or fragment. The webhook URL
 must end exactly in `/api/webhooks/mollie/payments` without a query or
 fragment. Billing readiness rejects these misconfigurations before checkout.
 
-The durable scheduler is tenant-partitioned. Set
-`MOLLIE_BILLING_SCHEDULER_MODE=pilot_pin` together with exactly one positive
-`MOLLIE_BILLING_WORKER_WORKSPACE_ID` for the isolated sandbox pilot, or use
-`multi_tenant` with that workspace variable unset after the broader rollout is
-approved. Readiness verifies execution controls, matching lane epochs,
-heartbeats, backlog and dead letters. Do not introduce a cross-tenant scan.
-
-Set `MOLLIE_BILLING_DRAIN_ENABLED=true` before the first checkout and keep it
-true for the retained financial-record lifetime. Commercial disable blocks new
-plans, provider creates and checkout URL exposure; it must not disable the
-provider/safety drain for an already exposed Payment.
-Classic webhooks, reconciliation, exact cancellation, receipt/export and
-manual-review delivery stay available until every exposed or ambiguous
-operation is terminal. Readiness must be red if exposed work exists without its
-drain.
+The in-process worker is deliberately tenant-bound. Set
+`MOLLIE_BILLING_WORKER_WORKSPACE_ID` to exactly one workspace in an isolated
+test worker. When billing is enabled, startup and readiness fail if this value
+is absent; checkout for any other workspace fails closed. When billing is
+disabled, readiness does not require Mollie secrets. A durable
+tenant-partitioned multi-workspace dispatcher is still required before live
+SaaS rollout; do not replace this with a cross-tenant database scan.
 
 Switch to live only after `LAUNCH_READINESS.md` is signed off. Install the live
 secret out of band, set `MOLLIE_MODE=live`, verify URLs and methods, and only
-then deliberately enable the commercial and live gates. Emergency commercial
-disable stops new exposure but preserves financial evidence and safety drain;
-never delete financial records.
-
-## Protected schema and runtime rollout
-
-Production completed the protected move from `0015_base` to the
-backwards-compatible `0016_expand` phase. Migration 0017 is blocked for a later
-reviewed rollout.
-Use the exact protected sequence in
-`docs/operations/production-deployments.md`: attested bridge, reviewed digest,
-bridge deploy, encrypted snapshot and isolated restore proof, protected 0016
-expand, attested runtime, reviewed digest, runtime deploy. Never type migration
-commands into a production shell.
+then set `MOLLIE_LIVE_BILLING_ENABLED=true`. Roll back by disabling the live
+flag; do not delete financial records.
 
 ## Payment-method launch check
 
-The protected `portal.billing.launchCheck` procedure performs no provider call
-in its offline phase. In the explicitly approved provider phase, the one-time
-Startpilot launch requires:
+The protected `portal.billing.launchCheck` procedure calls Mollie's Methods API
+for the one-time Startpilot payment. It must report:
 
 - `bancontact: true`
-- `providerChecked: true`
-- `phase: provider`
-- `mode: test`
-- `sandboxReady: true`
 - `salesCountry: BE`
 - `currency: EUR`
 - `b2bCheckoutEnabled: false`
 
-In Mollie Test Mode, `ok` remains `false` because that field means live-ready;
-use `sandboxReady: true` as the explicit Test Mode GO signal.
-
-SEPA Direct Debit and mandates belong only to the unpublished subscription
-foundation and are not a requirement for the one-time Startpilot offer.
+SEPA Direct Debit and mandate collection remain dormant compatibility code and
+are not launch gates for the one-time offer.
 
 ## Checkout and webhook verification
 
-1. Confirm the actor is workspace `owner` or `admin`, the Origin matches
-   `APP_BASE_URL`, and the workspace has an audited, unexpired Belgian-consumer
-   billing profile. The seller's Peppol registration is unrelated to buyer
-   eligibility; business/Peppol buyer profiles remain blocked.
+1. Confirm the actor is workspace `owner` or `admin` and the Origin matches
+   `APP_BASE_URL`.
 2. Confirm the requested plan code is active in the server catalog.
 3. Confirm a local intent and idempotency key exist before any Payment call.
-4. Confirm the one-time Payment has `sequenceType=oneoff`, `method=bancontact`, the
+4. Confirm the first Payment has `sequenceType=first`, `method=bancontact`, the
    full first-period EUR amount, customer ID, exact webhook URL, redirect URL,
    and only the opaque billing intent in metadata.
 5. Send the browser to `_links.checkout.href` with GET. A redirect is never
@@ -153,13 +115,9 @@ a remote active Subscription is recorded as an incident anomaly.
 Mollie Balances and Settlements must be reconciled by the authorized accounting
 workflow in live read-only mode. Those APIs are not a Test Mode substitute.
 
-## Dormant subscription cancellation and payment-method code
+## Cancellation and new payment method
 
-The public Startpilot offer is one-time and has no renewal or Subscription. The
-following behavior is retained only as regression protection for unpublished
-subscription foundation code; do not expose it as a launch product.
-
-“Cancel at period end” transactionally marks a local subscription canceled
+“Cancel at period end” transactionally marks the local subscription canceled
 and commits an exact-target cancellation job. This closes the provisioning race:
 if a remote Subscription appears after the request, the ensure worker records
 and cancels that orphan. Local access remains only through `paid_through`.
@@ -187,15 +145,6 @@ Subscription nor the unique current provisioning intent. Before a containment
 DELETE, the worker locks and revalidates current local state so stale work cannot
 cancel a Subscription that has since become the legitimate current one.
 
-## Operator incidents
-
-Platform admins review materialized `manual_review` notifications in the
-tenant-scoped portal incident card. It exposes only event code, reason code and
-timestamps; acknowledgement is bound to the exact workspace, operator audience
-and unread row and writes a metadata-only audit record. A notification receiver
-dead letter is not acknowledged through this card: it keeps `/readyz` red and
-requires the documented on-call recovery drill.
-
 ## Refunds and chargebacks
 
 - Refund creation is a manual, authorized administrator action in Mollie.
@@ -208,7 +157,7 @@ requires the documented on-call recovery drill.
   independently paid period; later proven access is preserved while future
   collection can still be stopped and the case escalated.
 
-## Accounting export and import
+## Accounting export
 
 Workspace owners/admins can download
 `/api/portal/billing/export.csv?workspaceId=...`. It separates gross sales,
@@ -219,17 +168,9 @@ ondernemingen”.
 
 Book gross revenue, Mollie fees, refunds and chargebacks separately. Never book
 the net Mollie payout as revenue and do not deduct input VAT under the stated
-small-enterprise exemption without accounting advice.
-
-The GET-only account-level importer is provider-account/mode scoped, bounded,
-crash-resumable and quarantines unknown or ambiguous events, but its durable
-cursor is not yet bound to one exact Mollie Balance. Keep
-`MOLLIE_ACCOUNTING_IMPORT_ENABLED=false` for the pilot. Accountable is the
-intended external bookkeeping workflow; reconcile gross revenue, Mollie fees,
-refunds, chargebacks, Balances and Settlements there and obtain human sign-off
-before live. If the built-in importer is selected later, first add durable
-Balance-ID scope to runs, cursors, events and readiness, then use a dedicated
-read-only accounting credential rather than the payment API key.
+small-enterprise exemption without accounting advice. The current ledger does
+not yet import Mollie Balance/Settlement fee lines or settlement IDs, so those
+CSV columns remain empty and the export is not live-accounting complete.
 
 B2B checkout remains disabled until a real Peppol invoicing provider and
 approved invoice flow exist. A Mollie payment proof is not a Peppol invoice.

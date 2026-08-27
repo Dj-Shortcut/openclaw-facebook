@@ -30,14 +30,15 @@ remains a separate release decision.
 
 Before publishing, verify the listing and README disclose the optional
 Leaderbot image-generation bridge. ClawHub installs must keep
-`leaderbotBridgeEnabled` disabled by default so host-level
+the legacy `leaderbotBridgeEnabled` option disabled by default so host-level
 `LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN` or `INTERNAL_IMAGE_REQUEST_TOKEN` values do
 not unexpectedly forward Messenger events, Page-scoped sender IDs, prompts, or
 media URLs to the separate Leaderbot service.
 
-Public Pages should use `pairing` or `allowlist` for controlled setup. Use
-`open` mode or `unknownSenderMode: "leaderbot_free_tier"` only when the Page has
-clear privacy and data-retention terms for public Messenger users.
+Public OpenClaw Pages should use `pairing` or `allowlist` for controlled setup.
+The old `leaderbot_free_tier` mode is compatibility-only and is not the
+Leaderbot customer architecture. New Leaderbot Pages point directly to
+`apps/image-gen`.
 
 ## Preflight
 

@@ -33,7 +33,6 @@ export const messengerGatewayAdapter: NonNullable<
       }
     }
     const monitorRuntime = await loadMessengerMonitorRuntime();
-    await monitorRuntime.assertMessengerPaidAnswerQuotaReadiness();
     ctx.log?.info(
       `[${account.accountId}] starting Messenger provider (${account.pageId})`,
     );

@@ -136,12 +136,6 @@ export function validateFlyGatewayConfig(text) {
   requireTomlTableMatch(
     text,
     "env",
-    /^LEADERBOT_AI_ANSWER_ENFORCEMENT_ENABLED\s*=\s*"false"$/m,
-    "fly.toml must keep AI answer enforcement disabled before gateway rollout approval",
-  );
-  requireTomlTableMatch(
-    text,
-    "env",
     /^NODE_OPTIONS\s*=\s*"--max-old-space-size=1536"$/m,
     "fly.toml must keep the reviewed 1536 MiB V8 heap limit",
   );
@@ -169,10 +163,17 @@ export function validateFlyGatewayConfig(text) {
     /^OPENCLAW_PUBLIC_GATEWAY_PATHS\s*=\s*"\/healthz"$/m,
     "fly.toml must expose only the public health route",
   );
-  if (/^\s*LEADERBOT_IMAGE_GEN_URL\s*=/m.test(text)) {
-    throw new Error(
-      "fly.toml must not configure the retired Leaderbot bridge URL",
-    );
+  for (const setting of [
+    "LEADERBOT_IMAGE_GEN_URL",
+    "LEADERBOT_PORTAL_ORIGIN",
+    "OPENCLAW_PUBLIC_PORTAL_ORIGIN",
+    "LEADERBOT_AI_ANSWER_ENFORCEMENT_ENABLED",
+  ]) {
+    if (new RegExp(`^\\s*${setting}\\s*=`, "m").test(text)) {
+      throw new Error(
+        `fly.toml personal gateway must not configure customer setting ${setting}`,
+      );
+    }
   }
   requireTomlTableMatch(
     text,

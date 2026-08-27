@@ -132,8 +132,8 @@ multi-tenant image-gen release:
 1. Keep `deploy/production/apps.json` at
    `apps.gateway.stateRebaseline.state=awaiting_rehearsal` and
    `deploymentEnabled=false` while the three configuration fingerprints remain
-   unresolved. Keep `LEADERBOT_AI_ANSWER_ENFORCEMENT_ENABLED=false`; do not
-   enable it yet.
+   unresolved. Customer AI-answer enforcement does not belong on this
+   personal gateway and must not be configured.
 2. Compute and review all three configuration fingerprints and the exact
    artifact provenance, then move only to `rehearsal_approved`. This is the only
    state from which the protected rehearsal may start; it still claims no

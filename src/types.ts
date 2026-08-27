@@ -21,7 +21,6 @@ interface MessengerAccountBaseConfig {
   unknownSenderMode?: MessengerUnknownSenderMode;
   leaderbotBridgeEnabled?: boolean;
   defaultLang?: MessengerLanguage;
-  customerPortalUrl?: string;
   responsePrefix?: string;
   webhookPath?: string;
   defaultTo?: string;

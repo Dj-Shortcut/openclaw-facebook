@@ -112,7 +112,6 @@ describe("resolveMessengerAccount", () => {
       channels: {
         facebook: {
           defaultLang: "en",
-          customerPortalUrl: "https://portal.example.test/account",
           sharedStateStore: "redis",
           accounts: {
             inherited: {
@@ -130,10 +129,6 @@ describe("resolveMessengerAccount", () => {
     expect(
       resolveMessengerAccount({ cfg, accountId: "inherited" }).config.defaultLang,
     ).toBe("en");
-    expect(
-      resolveMessengerAccount({ cfg, accountId: "inherited" }).config
-        .customerPortalUrl,
-    ).toBe("https://portal.example.test/account");
     expect(
       resolveMessengerAccount({ cfg, accountId: "inherited" }).config
         .sharedStateStore,

@@ -96,10 +96,13 @@ passes against production URLs, and a manual portal smoke confirms:
 
 ## Ownership Boundary
 
-- `leaderbot.live`: customer-facing portal and public legal pages.
-- OpenClaw gateway: private runtime surface for Messenger transport and assistant execution.
-- Messenger webhook routes: public only where required by Meta.
-- Image generation service: separate backend capability, not the portal frontend.
+- `apps/image-gen`: the complete customer runtime, including `leaderbot.live`,
+  public legal pages, direct Meta webhook ingress, tenant conversations, image
+  generation, quota, billing, storage and deletion.
+- Customer Messenger webhook routes: public only where required by Meta and
+  served directly by `apps/image-gen`.
+- OpenClaw gateway: private personal runtime for the repository owner. It is not
+  a customer transport, assistant-execution, portal-proxy or billing surface.
 
 ## Non-Goals
 
@@ -114,6 +117,8 @@ passes against production URLs, and a manual portal smoke confirms:
 
 ## Security Notes
 
-The public gateway guard should stay enabled. Customer portal code must use tenant-scoped backend APIs rather than direct gateway access.
+Customer portal and Messenger code must use tenant-scoped `apps/image-gen`
+APIs. No customer request may depend on or traverse the personal OpenClaw
+gateway. Its route guard remains enabled solely to protect that private runtime.
 
 Launch readiness work is tracked in the canonical backlog: [docs/operations/todo.md](operations/todo.md).

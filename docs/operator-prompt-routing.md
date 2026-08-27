@@ -1,111 +1,85 @@
-# Operator Prompt Routing
+# Operator Messenger Routing
 
-This note documents the production Messenger routing behavior for operators. It
-is intentionally separate from customer-facing bot instructions: customers need
-simple prompt guidance, while operators need to know which runtime owns a turn
-and which fallback path is expected.
+This document defines the only supported production ownership model. Customer
+traffic and the repository owner's personal OpenClaw traffic are separate Meta
+app, Page, credential and runtime paths. Do not subscribe customer and personal
+Pages through the same Meta app callback configuration.
 
-## Runtime Ownership
+## Customer path
 
-- The root OpenClaw Facebook plugin owns Meta webhook verification, request
-  signature validation, sender access checks, fast acknowledgement, and ordinary
-  Messenger conversation turns.
-- The Leaderbot image-generation runtime owns prompt-first image generation,
-  source-photo edits, customer day/month photo quotas, provider concurrency,
-  generated asset
-  storage, and GDPR deletion for generated assets it stores.
-- The bridge between the two runtimes is opt-in per account through
-  `channels.facebook.leaderbotBridgeEnabled`. Host-level Leaderbot tokens alone
-  must not cause private or ClawHub installs to forward Messenger content.
+```text
+Customer Messenger Page
+  -> Meta signed webhook
+  -> apps/image-gen
+  -> workspace resolution
+  -> tenant conversation/image/quota/billing runtime
+  -> Messenger renderer and Graph API
+```
 
-## Routing Order
+`apps/image-gen` owns the full customer turn before any customer state is read:
 
-For each accepted Messenger event, the gateway resolves the configured account
-and sender policy first.
+- webhook verification and authenticated Page identity;
+- exact workspace and channel-connection resolution;
+- consent, conversation state and channel-neutral actions;
+- image generation/editing, storage and delivery;
+- customer quota, entitlement and billing enforcement;
+- export, deletion and privacy-safe observability.
 
-1. If the sender is blocked or still in pairing mode, the event stops unless
-   the account is explicitly configured for the Leaderbot free-tier unknown
-   sender flow.
-2. If the message is a `delete my data` request and the Leaderbot bridge is
-   enabled, the raw Messenger event is forwarded to the Leaderbot webhook-event
-   endpoint so the image-generation runtime can process its deletion flow. If
-   that forward fails, the user receives a privacy contact fallback.
-3. Unknown senders in `unknownSenderMode: "leaderbot_free_tier"` are forwarded
-   only for image-generation intents, attachments, interactive payloads, or
-   delete-data requests. Ordinary non-image conversation is kept on the OpenClaw
-   turn instead of being converted into image-generation help copy.
-4. Interactive payloads that are not OpenClaw action payloads are forwarded to
-   Leaderbot only when the bridge is enabled.
-5. Source-photo edits, image-only uploads, media with image prompts, remembered
-   assistant prompt references, and text-only image-generation intents are routed
-   to Leaderbot when the bridge is enabled. Customer-scoped photo quota is
-   enforced by Leaderbot image-gen, not by a shared gateway image counter.
-6. Greetings, help, status, ordinary text, image analysis, prompt-writing
-   requests, unsupported media, and audio after transcription continue through
-   OpenClaw.
+A customer event must never be forwarded to OpenClaw, the personal gateway or
+the legacy internal Leaderbot bridge. Missing, duplicate, inactive or changed
+workspace ownership fails closed.
 
-## Budget And Fallback Behavior
+## Personal OpenClaw path
 
-The gateway retains one host-level cap for audio transcription before it starts
-that expensive work: `MESSENGER_GATEWAY_DAILY_AUDIO_TRANSCRIPTION_CAP`. When the
-audio cap is exceeded, the gateway sends a short Messenger fallback reply and
-does not transcribe the attachment.
+```text
+Owner Messenger Page
+  -> Meta signed webhook
+  -> OpenClaw Facebook plugin
+  -> paired/allowlisted personal OpenClaw turn
+```
 
-Generic Leaderbot, photo, and interactive-action forwards deliberately have no
-shared Page-global gateway cap. The image-generation runtime applies
-customer-scoped quota, queue, and provider controls. A usable Messenger result
-consumes one photo; a failed provider attempt consumes none.
+The checked-in Fly gateway is private and low priority. It stays on pairing (or
+an explicit owner allowlist), keeps the Leaderbot bridge disabled, and exposes
+only its own webhook and health routes. It does not proxy the customer portal,
+reserve customer quota, run customer billing preflights or gate a Leaderbot
+release.
 
-If the Leaderbot bridge is disabled, image-generation-looking events are logged
-as skipped with `reason=disabled_by_config` and then fall back to the normal
-OpenClaw turn where appropriate. If the bridge is enabled but the Leaderbot
-request fails, the user receives a temporary image-generator-unavailable reply
-instead of silently losing the request.
+The root plugin retains default-off bridge compatibility for older external
+installs. That compatibility is not an approved Leaderbot customer route and
+must not be enabled in the checked-in production gateway.
 
-## OpenClaw Turn Safety
+## Customer routing order
 
-Untrusted Facebook-originated turns are passed into OpenClaw with a default-deny
-tool policy unless the sender is command-authorized. The deny list includes
-high-cost generation tools, browser/canvas/runtime/file-system tool groups, and
-editing or process execution tools. This keeps ordinary Messenger conversation
-useful without exposing expensive or operational tools to untrusted senders.
+For each authenticated customer Meta delivery, `apps/image-gen` must:
 
-Messenger attachments are downloaded only from allowed Meta media hosts, with
-bounded redirects, size limits, and content-type checks. Audio attachments may
-be transcribed before the OpenClaw turn; if an audio-only message cannot be
-transcribed, the user is asked to type the message instead.
+1. verify the exact raw-body signature for the selected Meta channel;
+2. resolve the receiving Page/phone binding to exactly one active workspace;
+3. persist work only in that tenant/binding partition;
+4. apply consent, deletion, quota and entitlement gates before provider work;
+5. produce a channel-neutral conversation response;
+6. render and deliver it at the Messenger edge;
+7. finalize usage durably and retain metadata-only evidence.
 
-## Metadata-Only Observability
+No free-tier, entitlement or operator identity may substitute for workspace
+resolution.
 
-Routing diagnostics use `messenger_trace` stages with a request id, hashed PSID,
-account id, route/reason metadata, durations, and selected cap counters. Operators
-should use these stages to debug routing without logging raw PSIDs, user messages,
-access tokens, prompts, generated outputs, or uploaded media.
+## Smoke evidence
 
-Useful stages include:
+Leaderbot release evidence covers the direct customer path only:
 
-- `intent_classified`
-- `messenger_event_forward_started`
-- `messenger_event_forward_skipped`
-- `image_gen_request_started`
-- `image_gen_request_skipped`
-- `audio_transcription_skipped`
-- `openclaw_call_started`
-- `openclaw_call_completed`
-- `request_completed`
+- canonical Meta verification and signed delivery on `apps/image-gen`;
+- portal login and connection to the same workspace/Page;
+- ordinary text, prompt-first image, source-photo edit and multi-photo flow;
+- quota/exhaustion before provider work;
+- consent grant, refusal and typed fallback;
+- `delete-my-data`, queued-work cancellation and late-output suppression;
+- delivery failure, retry/dead-letter visibility and rollback.
 
-## Smoke-Test Expectations
+Personal OpenClaw smoke is independent: verify pairing/allowlist, one ordinary
+owner message, `/healthz`, gateway shielding and rollback. Its failure does not
+block a Leaderbot release unless a shared change caused a security or data-loss
+regression.
 
-After a deploy, operator smoke evidence should distinguish these paths:
-
-- canonical Meta webhook verification on `/facebook/webhook`
-- signed POST delivery and fast acknowledgement
-- ordinary text reply through OpenClaw
-- text-to-image forward through Leaderbot
-- source-photo edit forward through Leaderbot
-- customer photo-quota or audio gateway-cap exhaustion fallback
-- Leaderbot forward failure fallback
-- `delete my data` forwarding or privacy fallback
-
-Record only metadata-only evidence: commit/release id, route outcome, trace
-stage names, cap status, and rollback target.
+Record only commit/digest, route outcome, random request identifiers, bounded
+counts, durations and rollback metadata. Never record raw PSIDs, messages,
+prompts, tokens, media URLs or generated/customer content.
