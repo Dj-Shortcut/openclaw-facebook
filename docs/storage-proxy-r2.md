@@ -248,10 +248,16 @@ failure occurred in Redis, app construction, or the R2 lifecycle preflight.
 workflow restored reviewed legacy digest
 `sha256:334f78b92816a92e302a66c4d08742c28361a718b190227d3dbf7b933350cc28`,
 verified its captured configuration, and public `/healthz` returned `200`.
-The transition is frozen back at `awaiting_attested_runtime`, deployment is
-disabled, and the reviewed legacy baseline is selected; this candidate cannot
-be dispatched again and is not deployed runtime evidence. Build and review the
-startup-stage observability change before another protected diagnostic rollout.
+The failed candidate cannot be dispatched again and is not deployed-runtime
+evidence. PR #451 added bounded metadata-only startup-stage diagnostics at
+reviewed main source `1da8da74f301fb368563cd094912e159d3bf6998`. Trusted build
+run `33104393266`, attempt 2, produced runtime digest
+`sha256:a6bb22fcdbdfa6cc211afabfae86cc2423f501e589113f2f0a7e32db0f22083d`
+and GitHub provenance attestation `43482590`; attempt 1 stopped before building
+while exact-source main CI was still running. The manifest now records the new
+diagnostics runtime as `runtime_reviewed` and retains the healthy legacy digest
+as the sole rollback. Only this exact digest may enter the next protected
+diagnostic rollout.
 
 Protected run `33080233054` stopped before production mutation. The live
 comparison after two releases during the 2026-08-27 credential rotation showed
