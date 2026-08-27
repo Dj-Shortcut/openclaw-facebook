@@ -6419,6 +6419,110 @@ describe("production deployment contract", () => {
     );
   });
 
+  it("accepts semantically equal explicit Fly HTTP check durations", () => {
+    const manifest = JSON.parse(
+      fs.readFileSync(
+        path.join(repoRoot, "deploy/production/apps.json"),
+        "utf8",
+      ),
+    );
+    const reviewedImage = manifest.apps["storage-proxy"].reviewedImage;
+    const canonical = storageProxyFlyState(reviewedImage);
+    const inspect = (gracePeriod) =>
+      checkLiveFlyDrift("storage-proxy", {
+        rootDir: repoRoot,
+        runFly(args) {
+          if (args.slice(0, 2).join(" ") !== "config show") {
+            return canonical(args);
+          }
+          const live = JSON.parse(canonical(args));
+          live.http_service.checks[0].interval = "15000ms";
+          live.http_service.checks[0].timeout = "0m5s";
+          live.http_service.checks[0].grace_period = gracePeriod;
+          return JSON.stringify(live);
+        },
+      });
+
+    expect(inspect("1m0s").reconcilableDrift).toEqual([]);
+  });
+
+  it.each([
+    [
+      "a different duration",
+      (check) => {
+        check.grace_period = "59s";
+      },
+    ],
+    [
+      "a missing duration",
+      (check) => {
+        delete check.grace_period;
+      },
+    ],
+    [
+      "a null duration",
+      (check) => {
+        check.grace_period = null;
+      },
+    ],
+    [
+      "a numeric duration",
+      (check) => {
+        check.grace_period = 60;
+      },
+    ],
+    [
+      "a unitless duration",
+      (check) => {
+        check.grace_period = "60";
+      },
+    ],
+    [
+      "a negative duration",
+      (check) => {
+        check.grace_period = "-60s";
+      },
+    ],
+    [
+      "a malformed duration",
+      (check) => {
+        check.grace_period = "sixty";
+      },
+    ],
+    [
+      "an unknown-unit duration",
+      (check) => {
+        check.grace_period = "1d";
+      },
+    ],
+  ])("rejects %s in a Fly HTTP check", (_label, mutate) => {
+    const manifest = JSON.parse(
+      fs.readFileSync(
+        path.join(repoRoot, "deploy/production/apps.json"),
+        "utf8",
+      ),
+    );
+    const reviewedImage = manifest.apps["storage-proxy"].reviewedImage;
+    const canonical = storageProxyFlyState(reviewedImage);
+    const result = checkLiveFlyDrift("storage-proxy", {
+      rootDir: repoRoot,
+      runFly(args) {
+        if (args.slice(0, 2).join(" ") !== "config show") {
+          return canonical(args);
+        }
+        const live = JSON.parse(canonical(args));
+        mutate(live.http_service.checks[0]);
+        return JSON.stringify(live);
+      },
+    });
+
+    expect(result.reconcilableDrift).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("http_service.checks[0].grace_period"),
+      ]),
+    );
+  });
+
   it("accepts only canonical Fly-managed builder metadata", () => {
     const manifest = JSON.parse(
       fs.readFileSync(
