@@ -19,6 +19,18 @@ const storeMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./checkoutStore", () => storeMocks);
+vi.mock("./catalog", async importOriginal => {
+  const actual = await importOriginal<typeof import("./catalog")>();
+  return {
+    ...actual,
+    requireActiveBillingPlan: (planCode: string) => {
+      const plan = actual.requireActiveBillingPlan(planCode);
+      return plan.code === actual.STARTPILOT_PLAN_CODE
+        ? { ...plan, publiclyAvailable: true }
+        : plan;
+    },
+  };
+});
 vi.mock("./billingProfileStore", () => ({
   assertWorkspaceBillingProfileEligible: vi.fn(async () => ({
     eligibilityVersion: 1,
@@ -40,7 +52,7 @@ import { startMollieCheckout } from "./checkoutService";
 const originalEnv = { ...process.env };
 const intentId = "550e8400-e29b-41d4-a716-446655440000";
 
-describe("Mollie checkout provider failure boundary", () => {
+describe("dormant Mollie checkout provider failure boundary", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     process.env = {
@@ -175,7 +187,7 @@ describe("Mollie checkout provider failure boundary", () => {
     expect(storeMocks.markIntentApiUnknown).not.toHaveBeenCalled();
   });
 
-  it("uses a one-off payment and never the first-payment subscription path for Startpilot", async () => {
+  it("keeps the legacy one-off transport separate from the subscription path", async () => {
     const createOneTimePayment = vi.fn().mockResolvedValue({
       resource: "payment",
       id: "tr_payment123",

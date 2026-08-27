@@ -75,7 +75,7 @@ describe("Mollie checkout launch gate", () => {
           workspaceId: 1,
           planCode: "premium_monthly_v1",
           countryCode: "BE",
-          kind: "subscription_start",
+          kind: "payment_method_change",
           businessCheckout: false,
         },
         { listMethods } as unknown as MollieClient
@@ -96,8 +96,8 @@ describe("Mollie checkout launch gate", () => {
       startMollieCheckout(
         {
           workspaceId: 1,
-          planCode: "startpilot_once_v1",
-          kind: "startpilot_purchase",
+          planCode: "premium_monthly_v1",
+          kind: "payment_method_change",
         },
         { listMethods } as unknown as MollieClient
       )
@@ -174,7 +174,7 @@ describe("Mollie checkout launch gate", () => {
     expect(listMethods).toHaveBeenCalledTimes(2);
   });
 
-  it("checks only one-off Bancontact for the Startpilot", async () => {
+  it("rejects legacy Startpilot before database or provider work", async () => {
     process.env = billingTestEnv();
     const listMethods = vi.fn().mockResolvedValue([]);
 
@@ -189,9 +189,10 @@ describe("Mollie checkout launch gate", () => {
         },
         { listMethods } as unknown as MollieClient
       )
-    ).rejects.toThrow("Bancontact must be enabled");
-    expect(listMethods).toHaveBeenCalledTimes(1);
-    expect(listMethods).toHaveBeenCalledWith("oneoff");
+    ).rejects.toThrow("billing plan is unavailable");
+    expect(schedulerEnabledMock).not.toHaveBeenCalled();
+    expect(profileEligibilityMock).not.toHaveBeenCalled();
+    expect(listMethods).not.toHaveBeenCalled();
   });
 
   it("does not report sandbox ready from provider methods alone", async () => {
