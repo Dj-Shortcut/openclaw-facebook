@@ -48,8 +48,15 @@ The storage-proxy Fly app separately requires the runtime secret names
 endpoint must be private and shared by every proxy Machine; the key secret must
 contain at least 32 random bytes. Never put either value in repository or CI
 logs. Startup and `/readyz` prove the shared limiter, while `/healthz` remains a
-liveness-only signal. The deploy, rollback/recovery, and scheduled uptime gates
-check `/readyz` separately. Storage operations fail closed when the limiter
+liveness-only signal. Deploy and rollback/recovery gates for an attested runtime
+check `/readyz` separately. During the exact `legacy-bootstrap` /
+`awaiting_attested_runtime` transition, the scheduled uptime gate checks only
+`/healthz` because that legacy image has no public readiness route. The same
+liveness-only check remains during `runtime_reviewed`, when the attested image
+is approved but may not yet be live. After a successful deploy proves
+`/readyz`, a follow-up reviewed manifest change records `runtime_deployed`; the
+repository validator then requires `/readyz` with
+`rateLimiter: "shared_redis"`. Storage operations fail closed when the limiter
 cannot be reached.
 
 ## Required GitHub configuration
@@ -286,7 +293,12 @@ locally.
    with `storage-proxy` and the exact reviewed digest.
 4. The workflow verifies the artifact's source and attestation, captures the
    previous image and Fly config, checks live drift, deploys the digest, and
-   tests `/healthz`. On failure it restores and verifies the captured release.
+   tests `/healthz` and `/readyz`. On failure it restores and verifies the
+   captured release.
+5. Only after that successful deploy, record transition state
+   `runtime_deployed` in a reviewed follow-up PR. The scheduled monitor then
+   requires public `/readyz` and the shared Redis limiter. Keep the exact legacy
+   rollback until a later attested runtime can replace it.
 
 The currently recorded storage-proxy `reviewedImage` is also its current live
 rollback image. Replace `reviewedImage` with the newly built digest only after

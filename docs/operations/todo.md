@@ -668,6 +668,11 @@ Historical branch review note:
 - [x] Use durable storage proxy for generated images and retained source images
 - [x] Continue verifying storage-proxy delivery under Messenger crawler constraints. Operator-verified on 2026-06-30 with tester photo forwards through Messenger.
 - [x] Run dedicated Messenger image-generation worker in production with Redis-backed queue enabled
+- [ ] Replace the exact legacy storage-proxy bootstrap image with a trusted,
+      attested runtime. Until that reviewed rollout, the scheduled monitor may
+      prove only `/healthz`; the manifest-bound gate must require public
+      `/readyz` with `rateLimiter: "shared_redis"` once a successful deploy is
+      recorded as `runtime_deployed`.
 - [ ] Deferred: evaluate stronger queue/outbox semantics if exactly-once Messenger image sends become mandatory
 
 ### Startpilot billing (Mollie Test Mode foundation; live NO-GO)
