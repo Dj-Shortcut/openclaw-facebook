@@ -55,10 +55,12 @@ Eigen pagina -> Meta webhook -> OpenClaw Facebook-plugin -> persoonlijke OpenCla
       back-up/restore, monitoring, queue/dead-letterhealth en rollback. Herhaal
       daarna P3 zonder privacy-, quota-, tenant- of deliveryregressie. De
       storage-proxydeploy van `sha256:d2a2...` is op 2026-08-27 mislukt; de
-      rollback is gezond, maar dat is geen geslaagde runtimepromotie. Voor de
-      volgende poging zijn nog een nieuwe attested image, een gereviewde
-      manifestwijziging en een nieuwe beschermde deploy met health- en
-      readinessbewijs vereist.
+      rollback is gezond, maar dat is geen geslaagde runtimepromotie. Buildrun
+      `33069256896` heeft daarna uit groene `main`-commit `16b1819...` het
+      nieuwe geattesteerde kandidaatimage `sha256:3f2861c2...` opgeleverd en
+      het manifest bindt exact die bron en digest. Resterend is een nieuwe
+      beschermde deploy met health- en readinessbewijs; tot dan blijft de
+      gezonde legacyrollback de live baseline.
 
 ## Definition of done
 
