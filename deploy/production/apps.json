@@ -191,7 +191,8 @@
       "reviewedSourceCommit": "4570173da0c79fbeb4ac72669d969c650c9b3392",
       "artifactTransition": {
         "state": "runtime_reviewed",
-        "legacyImage": "registry.fly.io/leaderbot-storage-proxy@sha256:334f78b92816a92e302a66c4d08742c28361a718b190227d3dbf7b933350cc28"
+        "legacyImage": "registry.fly.io/leaderbot-storage-proxy@sha256:334f78b92816a92e302a66c4d08742c28361a718b190227d3dbf7b933350cc28",
+        "legacyFlyctlVersion": "0.4.38"
       },
       "reviewedRollbackImages": [
         "registry.fly.io/leaderbot-storage-proxy@sha256:334f78b92816a92e302a66c4d08742c28361a718b190227d3dbf7b933350cc28"
@@ -199,7 +200,7 @@
       "reviewedRollbackConfigs": {
         "registry.fly.io/leaderbot-storage-proxy@sha256:334f78b92816a92e302a66c4d08742c28361a718b190227d3dbf7b933350cc28": {
           "path": "deploy/production/rollback-configs/storage-proxy-334f78b92816.toml",
-          "sha256": "078177ad857389ed979adc908f11c21dd75b7cb7d3d14037da3e3b26f4cc6420"
+          "sha256": "8384c0ae5e7490f5c0a9e634c258b58f04ccbccb1bc4ea08a7fcf0249e6d591f"
         }
       },
       "reviewedRollbackArtifactKinds": {

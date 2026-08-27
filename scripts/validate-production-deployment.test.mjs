@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { checkMetaCallbacks } from "./check-meta-callbacks.mjs";
 import {
+  allowsStorageProxyFirstTrustedBootstrapRestore,
   checkLiveFlyDrift,
   checkSettledLiveFlyDrift,
   classifyRecoveryReleaseCommandMachines,
@@ -872,7 +873,6 @@ function storageProxyFlyState(image) {
       return JSON.stringify({
         app: "leaderbot-storage-proxy",
         primary_region: "ams",
-        deploy: { strategy: "rolling" },
         env: {
           STORAGE_OPERATION_TIMEOUT_MS: "60000",
           STORAGE_ALLOW_LEGACY_BEARER_AUTH: "true",
@@ -906,7 +906,13 @@ function storageProxyFlyState(image) {
           state: "started",
           region: "ams",
           image_ref: immutableImageRef(image),
-          config: storageProxyMachineConfig(image),
+          config: {
+            ...storageProxyMachineConfig(image),
+            metadata: {
+              ...storageProxyMachineConfig(image).metadata,
+              fly_flyctl_version: "0.4.85",
+            },
+          },
         },
       ]);
     }
@@ -915,6 +921,50 @@ function storageProxyFlyState(image) {
         { Process: "app", Count: 1, CPUKind: "shared", CPUs: 1, Memory: 256 },
       ]);
     }
+    throw new Error(`Unexpected fly command: ${args.join(" ")}`);
+  };
+}
+
+function storageProxyLegacyBootstrapFlyState(image, mutate = () => {}) {
+  const live = {
+    app: "leaderbot-storage-proxy",
+    primary_region: "ams",
+    http_service: {
+      internal_port: 8787,
+      force_https: true,
+      auto_stop_machines: true,
+      auto_start_machines: true,
+      min_machines_running: 1,
+    },
+  };
+  const machines = [
+    {
+      id: "storage-proxy-legacy-machine",
+      state: "started",
+      region: "ams",
+      image_ref: immutableImageRef(image),
+      config: {
+        ...storageProxyRollbackMachineConfig(image),
+        metadata: {
+          fly_builder_id: "a".repeat(14),
+          fly_flyctl_version: "0.4.38",
+          fly_platform_version: "v2",
+          fly_process_group: "app",
+          fly_release_id: "legacy-release",
+          fly_release_version: "23",
+        },
+      },
+    },
+  ];
+  const scale = [
+    { Process: "app", Count: 1, CPUKind: "shared", CPUs: 1, Memory: 256 },
+  ];
+  mutate({ live, machines, scale });
+  return (args) => {
+    const command = args.slice(0, 2).join(" ");
+    if (command === "config show") return JSON.stringify(live);
+    if (command === "machine list") return JSON.stringify(machines);
+    if (command === "scale show") return JSON.stringify(scale);
     throw new Error(`Unexpected fly command: ${args.join(" ")}`);
   };
 }
@@ -1588,6 +1638,66 @@ describe("production deployment contract", () => {
       callbacks: 2,
     });
   });
+
+  it("derives the storage restore allowance only for the exact legacy tuple", () => {
+    const root = createRepositoryFixture();
+    const manifestPath = path.join(root, "deploy/production/apps.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    const { app, legacyImage } = stageStorageProxyRuntime(manifest);
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    expect(
+      allowsStorageProxyFirstTrustedBootstrapRestore(
+        "storage-proxy",
+        legacyImage,
+        "none",
+        root,
+      ),
+    ).toBe(true);
+    expect(
+      allowsStorageProxyFirstTrustedBootstrapRestore(
+        "storage-proxy",
+        legacyImage,
+        "deploy-1-1",
+        root,
+      ),
+    ).toBe(false);
+    expect(
+      allowsStorageProxyFirstTrustedBootstrapRestore(
+        "storage-proxy",
+        app.reviewedImage,
+        "none",
+        root,
+      ),
+    ).toBe(false);
+
+    app.artifactTransition.state = "runtime_deployed";
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    expect(
+      allowsStorageProxyFirstTrustedBootstrapRestore(
+        "storage-proxy",
+        legacyImage,
+        "none",
+        root,
+      ),
+    ).toBe(false);
+  });
+
+  it.each([null, 438, ["0.4.38"]])(
+    "rejects malformed storage legacy flyctl metadata %j",
+    (legacyFlyctlVersion) => {
+      const root = createRepositoryFixture();
+      const manifestPath = path.join(root, "deploy/production/apps.json");
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+      manifest.apps["storage-proxy"].artifactTransition.legacyFlyctlVersion =
+        legacyFlyctlVersion;
+      fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+      expect(() => validateProductionRepository(root)).toThrow(
+        "storage-proxy must declare its exact trusted artifact transition",
+      );
+    },
+  );
 
   it("does not treat a deployed storage runtime as an unlabelled bootstrap", async () => {
     const root = createRepositoryFixture();
@@ -6012,8 +6122,10 @@ describe("production deployment contract", () => {
         }
         const live = JSON.parse(canonical(args));
         live.primary_region = "iad";
-        live.deploy.strategy = "immediate";
-        live.deploy.release_command = "node unreviewed-release-command.cjs";
+        live.deploy = {
+          strategy: "immediate",
+          release_command: "node unreviewed-release-command.cjs",
+        };
         live.http_service.internal_port = 9999;
         live.http_service.checks[0].timeout = "30s";
         return JSON.stringify(live);
@@ -7904,6 +8016,206 @@ describe("settled production identity", () => {
       );
     },
   );
+
+  it("accepts only the exact storage-proxy legacy predecessor for its first trusted rollout", async () => {
+    const root = createRepositoryFixture();
+    const manifestPath = path.join(root, "deploy/production/apps.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    const { legacyImage } = stageStorageProxyRuntime(manifest);
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    const result = await checkSettledLiveFlyDrift("storage-proxy", {
+      rootDir: root,
+      runFly: storageProxyLegacyBootstrapFlyState(legacyImage),
+    });
+
+    expect(result).toMatchObject({
+      identity: "none",
+      expectedImage: legacyImage,
+      blockingErrors: [],
+      reconcilableDrift: [],
+    });
+    expect(result.acceptedBootstrapDrift).toHaveLength(4);
+    expect(result.acceptedBootstrapDrift).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("transient rolling deploy strategy"),
+        expect.stringContaining("sole app HTTP service process group"),
+        expect.stringContaining("auto-stop stop as boolean true"),
+        expect.stringContaining("exact reviewed legacy flyctl version"),
+      ]),
+    );
+  });
+
+  it.each([
+    ["null", null],
+    ["an empty object", {}],
+    ["the explicit rolling strategy", { strategy: "rolling" }],
+  ])("accepts %s as a canonical storage deploy representation", async (_label, deploy) => {
+    const root = createRepositoryFixture();
+    const manifestPath = path.join(root, "deploy/production/apps.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    const { legacyImage } = stageStorageProxyRuntime(manifest);
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    const result = await checkSettledLiveFlyDrift("storage-proxy", {
+      rootDir: root,
+      runFly: storageProxyLegacyBootstrapFlyState(legacyImage, ({ live }) => {
+        live.deploy = deploy;
+      }),
+    });
+    expect(result.blockingErrors).toEqual([]);
+    expect(result.reconcilableDrift).toEqual([]);
+  });
+
+  it.each([
+    [
+      "a different legacy flyctl version",
+      ({ machines }) => {
+        machines[0].config.metadata.fly_flyctl_version = "0.4.37";
+      },
+      "reviewed legacy or pinned flyctl version",
+    ],
+    [
+      "a non-string flyctl version",
+      ({ machines }) => {
+        machines[0].config.metadata.fly_flyctl_version = ["0.4.38"];
+      },
+      "reviewed legacy or pinned flyctl version",
+    ],
+    [
+      "missing app process proof",
+      ({ machines }) => {
+        delete machines[0].config.metadata.fly_process_group;
+      },
+      "one exact started app Machine",
+    ],
+    [
+      "a non-rolling deploy strategy",
+      ({ live }) => {
+        live.deploy = { strategy: "immediate" };
+      },
+      "deploy.strategy",
+    ],
+    ...[
+      ["an array deploy value", []],
+      ["a numeric deploy value", 0],
+      ["a string deploy value", ""],
+      ["a boolean deploy value", false],
+    ].map(([label, value]) => [
+      label,
+      ({ live }) => {
+        live.deploy = value;
+      },
+      "deploy.strategy",
+    ]),
+    [
+      "a different auto-stop policy",
+      ({ live }) => {
+        live.http_service.auto_stop_machines = "suspend";
+      },
+      "http_service.auto_stop_machines",
+    ],
+    [
+      "an extra environment value",
+      ({ live }) => {
+        live.env = { STORAGE_UNREVIEWED: "true" };
+      },
+      "env.STORAGE_UNREVIEWED",
+    ],
+    [
+      "an extra Machine",
+      ({ machines }) => {
+        machines.push(structuredClone(machines[0]));
+        machines[1].id = "storage-proxy-extra-machine";
+      },
+      "one exact started app Machine",
+    ],
+    [
+      "an unexpected mount",
+      ({ machines }) => {
+        machines[0].config.mounts = [
+          { source: "unexpected", destination: "/data" },
+        ];
+      },
+      "mounts differ",
+    ],
+    [
+      "a different service port",
+      ({ live }) => {
+        live.http_service.internal_port = 9999;
+      },
+      "http_service.internal_port",
+    ],
+  ])(
+    "rejects storage-proxy first-bootstrap drift with %s",
+    async (_label, mutate, message) => {
+      const root = createRepositoryFixture();
+      const manifestPath = path.join(root, "deploy/production/apps.json");
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+      const { legacyImage } = stageStorageProxyRuntime(manifest);
+      fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+      const result = await checkSettledLiveFlyDrift("storage-proxy", {
+        rootDir: root,
+        runFly: storageProxyLegacyBootstrapFlyState(legacyImage, mutate),
+      });
+      expect([
+        ...result.blockingErrors,
+        ...result.reconcilableDrift,
+      ]).toEqual(expect.arrayContaining([expect.stringContaining(message)]));
+    },
+  );
+
+  it("removes the storage-proxy legacy allowance after runtime deployment", async () => {
+    const root = createRepositoryFixture();
+    const manifestPath = path.join(root, "deploy/production/apps.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    const { legacyImage } = stageStorageProxyRuntime(manifest);
+    manifest.apps["storage-proxy"].artifactTransition.state =
+      "runtime_deployed";
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    const result = await checkSettledLiveFlyDrift("storage-proxy", {
+      rootDir: root,
+      runFly: storageProxyLegacyBootstrapFlyState(legacyImage),
+    });
+
+    expect(result.acceptedBootstrapDrift).toEqual([]);
+    expect(result.blockingErrors).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("was not reconciled by pinned flyctl"),
+      ]),
+    );
+  });
+
+  it("rejects a modified storage-proxy rollback profile for bootstrap drift", () => {
+    const root = createRepositoryFixture();
+    const manifestPath = path.join(root, "deploy/production/apps.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    const { legacyImage } = stageStorageProxyRuntime(manifest);
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    const reviewedConfig = getReviewedRollbackConfig(
+      "storage-proxy",
+      legacyImage,
+      root,
+    );
+    const copiedConfig = path.join(root, "storage-before.fly.toml");
+    fs.copyFileSync(path.join(root, reviewedConfig), copiedConfig);
+    fs.appendFileSync(copiedConfig, "\n");
+
+    expect(() =>
+      checkLiveFlyDrift("storage-proxy", {
+        rootDir: root,
+        runFly: storageProxyLegacyBootstrapFlyState(legacyImage),
+        expectedImage: legacyImage,
+        configPath: copiedConfig,
+        expectedDeploymentIdentity: "none",
+        allowStorageProxyFirstTrustedBootstrapDrift: true,
+      }),
+    ).toThrow(
+      "storage-proxy first trusted bootstrap drift requires the exact reviewed legacy predecessor",
+    );
+  });
 
   it("validates the exact reviewed live rollback image and config during upgrade preflight", async () => {
     const root = createRepositoryFixture();

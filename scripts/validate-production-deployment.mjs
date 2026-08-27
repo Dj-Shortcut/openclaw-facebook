@@ -1214,6 +1214,21 @@ function allowsFirstTrustedBootstrap(target, app, expectedImage) {
   return false;
 }
 
+export function allowsStorageProxyFirstTrustedBootstrapRestore(
+  target,
+  image,
+  identity,
+  rootDir = process.cwd(),
+) {
+  const app = loadProductionManifest(rootDir).apps[target];
+  return (
+    target === "storage-proxy" &&
+    identity === "none" &&
+    app != null &&
+    allowsFirstTrustedBootstrap(target, app, image)
+  );
+}
+
 function githubActionsHeaders(token) {
   return {
     Accept: "application/vnd.github+json",
@@ -5344,7 +5359,9 @@ function validateStorageProxyArtifactTransition(app) {
       "runtime_deployed",
       "complete",
     ].includes(transition.state) ||
-    !isImmutableAppImage(app, transition.legacyImage)
+    !isImmutableAppImage(app, transition.legacyImage) ||
+    typeof transition.legacyFlyctlVersion !== "string" ||
+    !/^(?:v)?[0-9]+\.[0-9]+\.[0-9]+$/.test(transition.legacyFlyctlVersion)
   ) {
     fail("storage-proxy must declare its exact trusted artifact transition");
   }
@@ -7143,6 +7160,14 @@ export function checkLiveFlyDrift(target, options = {}) {
     options.allowInterruptedScaleCountDrift === true;
   const allowFirstTrustedBootstrapDrift =
     options.allowFirstTrustedBootstrapDrift === true;
+  const allowStorageProxyFirstTrustedBootstrapDrift =
+    options.allowStorageProxyFirstTrustedBootstrapDrift === true;
+  if (
+    allowFirstTrustedBootstrapDrift &&
+    allowStorageProxyFirstTrustedBootstrapDrift
+  ) {
+    fail("first trusted bootstrap drift allowances are mutually exclusive");
+  }
   const capturedPriorImage = options.capturedPriorImage;
   if (
     allowInterruptedScaleCountDrift &&
@@ -7283,7 +7308,46 @@ export function checkLiveFlyDrift(target, options = {}) {
       "first trusted bootstrap drift requires the exact reviewed image-gen legacy predecessor",
     );
   }
+  if (allowStorageProxyFirstTrustedBootstrapDrift) {
+    const transition = app.artifactTransition;
+    if (
+      target !== "storage-proxy" ||
+      expectedDeploymentIdentity !== "none" ||
+      transition?.state !== "runtime_reviewed" ||
+      app.reviewedArtifactKind !== "runtime" ||
+      options.expectedImage !== transition.legacyImage ||
+      !allowsFirstTrustedBootstrap(target, app, options.expectedImage)
+    ) {
+      fail(
+        "storage-proxy first trusted bootstrap drift requires the exact reviewed legacy predecessor",
+      );
+    }
+    assertReviewedRestoreConfigCopy(
+      target,
+      options.expectedImage,
+      expectedDeploymentIdentity,
+      selectedConfigPath,
+      rootDir,
+      "storage-proxy first trusted bootstrap drift requires the exact reviewed legacy predecessor",
+    );
+  }
   const acceptedBootstrapDrift = [];
+  if (allowStorageProxyFirstTrustedBootstrapDrift) {
+    const legacyMachine = machines[0];
+    const exactSingleAppMachine =
+      machines.length === 1 &&
+      legacyMachine?.state === "started" &&
+      legacyMachine?.region === selectedProfile.root.primary_region &&
+      legacyMachine?.config?.metadata?.fly_process_group === "app" &&
+      JSON.stringify(Object.keys(app.desiredScale).sort()) ===
+        JSON.stringify(["app"]) &&
+      app.desiredScale.app?.count === 1;
+    if (!exactSingleAppMachine) {
+      blockingErrors.push(
+        "storage-proxy first trusted bootstrap requires one exact started app Machine",
+      );
+    }
+  }
   const liveEnv = { ...(live.env ?? {}) };
   const actualDeploymentIdentity =
     liveEnv.LEADERBOT_DEPLOYMENT_IDENTITY ?? "none";
@@ -7314,13 +7378,36 @@ export function checkLiveFlyDrift(target, options = {}) {
     }
   }
   compareExactObject(live.build, expectedBuild, "build", blockingErrors);
-  const canonicalDeploy = {
-    strategy: expectedDeploy.strategy ?? app.strategy,
-    ...expectedDeploy,
-  };
-  compareExactObject(live.deploy, canonicalDeploy, "deploy", blockingErrors, [
-    "release_command_timeout",
-  ]);
+  const liveDeployIsObject =
+    live.deploy != null &&
+    typeof live.deploy === "object" &&
+    !Array.isArray(live.deploy);
+  const storageProxyDeployRepresentationIsCanonical =
+    target === "storage-proxy" &&
+    Object.keys(expectedDeploy).length === 0 &&
+    (live.deploy == null ||
+      (liveDeployIsObject && Object.keys(live.deploy).length === 0) ||
+      (liveDeployIsObject &&
+        Object.keys(live.deploy).length === 1 &&
+        live.deploy.strategy === app.strategy));
+  if (storageProxyDeployRepresentationIsCanonical) {
+    if (
+      allowStorageProxyFirstTrustedBootstrapDrift &&
+      live.deploy == null
+    ) {
+      acceptedBootstrapDrift.push(
+        "legacy Fly config omits the transient rolling deploy strategy",
+      );
+    }
+  } else {
+    const canonicalDeploy = {
+      strategy: expectedDeploy.strategy ?? app.strategy,
+      ...expectedDeploy,
+    };
+    compareExactObject(live.deploy, canonicalDeploy, "deploy", blockingErrors, [
+      "release_command_timeout",
+    ]);
+  }
   compareObject(liveEnv, canonicalEnv, "env", blockingErrors);
   for (const liveKey of Object.keys(liveEnv)) {
     if (!(liveKey in canonicalEnv)) {
@@ -7352,7 +7439,20 @@ export function checkLiveFlyDrift(target, options = {}) {
   }
   const expectedServiceGroups = selectedProfile.serviceGroups;
   const liveServiceGroups = [...(live.http_service?.processes ?? [])].sort();
-  if (
+  const storageProxySingleProcessOmissionIsCanonical =
+    target === "storage-proxy" &&
+    !Object.hasOwn(live.http_service ?? {}, "processes") &&
+    JSON.stringify(liveServiceGroups) === "[]" &&
+    JSON.stringify(expectedServiceGroups) === JSON.stringify(["app"]) &&
+    JSON.stringify(Object.keys(app.desiredScale).sort()) ===
+      JSON.stringify(["app"]);
+  if (storageProxySingleProcessOmissionIsCanonical) {
+    if (allowStorageProxyFirstTrustedBootstrapDrift) {
+      acceptedBootstrapDrift.push(
+        "legacy Fly config omits the sole app HTTP service process group",
+      );
+    }
+  } else if (
     JSON.stringify(liveServiceGroups) !== JSON.stringify(expectedServiceGroups)
   ) {
     reconcilableDrift.push(
@@ -7366,13 +7466,15 @@ export function checkLiveFlyDrift(target, options = {}) {
     "auto_start_machines",
     "min_machines_running",
   ]) {
+    const actualHttpServiceValue = live.http_service?.[key];
+    const expectedHttpServiceValue = expectedHttpService[key];
     const normalizedAutoStopMatch =
       key === "auto_stop_machines" &&
-      new Set([false, "off"]).has(live.http_service?.[key]) &&
-      new Set([false, "off"]).has(expectedHttpService[key]);
+      normalizedAutostop(actualHttpServiceValue) ===
+        normalizedAutostop(expectedHttpServiceValue);
     if (
       key in expectedHttpService &&
-      live.http_service?.[key] !== expectedHttpService[key] &&
+      actualHttpServiceValue !== expectedHttpServiceValue &&
       !normalizedAutoStopMatch
     ) {
       const drift = `http_service.${key}: expected ${JSON.stringify(expectedHttpService[key])}, got ${JSON.stringify(live.http_service?.[key])}`;
@@ -7380,6 +7482,15 @@ export function checkLiveFlyDrift(target, options = {}) {
         ? blockingErrors
         : reconcilableDrift
       ).push(drift);
+    } else if (
+      key === "auto_stop_machines" &&
+      allowStorageProxyFirstTrustedBootstrapDrift &&
+      actualHttpServiceValue === true &&
+      expectedHttpServiceValue === "stop"
+    ) {
+      acceptedBootstrapDrift.push(
+        "legacy Fly config reports auto-stop stop as boolean true",
+      );
     }
   }
   const liveCheckPaths = (live.http_service?.checks ?? [])
@@ -7589,12 +7700,31 @@ export function checkLiveFlyDrift(target, options = {}) {
     ) {
       blockingErrors.push(`Machine ${machine.id} has invalid release metadata`);
     }
+    const exactStorageProxyLegacyFlyctlVersion =
+      allowStorageProxyFirstTrustedBootstrapDrift &&
+      metadata.fly_flyctl_version === app.artifactTransition.legacyFlyctlVersion;
+    const usesPinnedFlyctlVersion =
+      typeof metadata.fly_flyctl_version === "string" &&
+      /^(?:v)?0\.4\.85$/.test(metadata.fly_flyctl_version);
     if (
+      allowStorageProxyFirstTrustedBootstrapDrift &&
+      !exactStorageProxyLegacyFlyctlVersion &&
+      !usesPinnedFlyctlVersion
+    ) {
+      blockingErrors.push(
+        `Machine ${machine.id} does not match the reviewed legacy or pinned flyctl version`,
+      );
+    } else if (
       metadata.fly_flyctl_version != null &&
-      !/^(?:v)?0\.4\.85$/.test(String(metadata.fly_flyctl_version))
+      !usesPinnedFlyctlVersion &&
+      !exactStorageProxyLegacyFlyctlVersion
     ) {
       blockingErrors.push(
         `Machine ${machine.id} was not reconciled by pinned flyctl`,
+      );
+    } else if (exactStorageProxyLegacyFlyctlVersion) {
+      acceptedBootstrapDrift.push(
+        `Machine ${machine.id} uses the exact reviewed legacy flyctl version`,
       );
     }
     if (
@@ -8104,7 +8234,6 @@ export async function checkSettledLiveFlyDrift(target, options = {}) {
     return cachedOutputs.get(key);
   };
   const reviewedLegacyConfig =
-    target === "image-gen" &&
     identity === "none" &&
     allowsFirstTrustedBootstrap(target, app, expectedImage)
       ? getReviewedRollbackConfig(target, expectedImage, rootDir)
@@ -8117,6 +8246,12 @@ export async function checkSettledLiveFlyDrift(target, options = {}) {
       configPath,
       expectedDeploymentIdentity: identity,
       allowFirstTrustedBootstrapDrift:
+        target === "image-gen" &&
+        reviewedLegacyConfig != null &&
+        path.resolve(rootDir, configPath) ===
+          path.resolve(rootDir, reviewedLegacyConfig),
+      allowStorageProxyFirstTrustedBootstrapDrift:
+        target === "storage-proxy" &&
         reviewedLegacyConfig != null &&
         path.resolve(rootDir, configPath) ===
           path.resolve(rootDir, reviewedLegacyConfig),
@@ -8455,6 +8590,13 @@ if (isMain) {
     validateReviewedRollbackImage(target, image, cliRootDir);
     if (!configPath)
       fail("Restored release verification requires the captured config");
+    const allowStorageProxyFirstTrustedBootstrapDrift =
+      allowsStorageProxyFirstTrustedBootstrapRestore(
+        target,
+        image,
+        expectedDeploymentIdentity,
+        cliRootDir,
+      );
     const result = checkLiveFlyDrift(target, {
       rootDir: cliRootDir,
       expectedImage: image,
@@ -8463,6 +8605,7 @@ if (isMain) {
       allowReviewedMachineImages,
       allowScaleCountDrift,
       allowFirstTrustedBootstrapDrift,
+      allowStorageProxyFirstTrustedBootstrapDrift,
       capturedPriorIdentity,
       interruptedDeploymentIdentity,
       capturedPriorImage,

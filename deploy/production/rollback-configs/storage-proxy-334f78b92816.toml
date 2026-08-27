@@ -1,4 +1,4 @@
-# Reviewed rollback configuration captured from the live storage-proxy release.
+# Reviewed canonical restore profile for the live storage-proxy release.
 # This file contains no Fly secrets and is bound to its image digest in apps.json.
 
 app = 'leaderbot-storage-proxy'
@@ -10,3 +10,4 @@ primary_region = 'ams'
   auto_stop_machines = 'stop'
   auto_start_machines = true
   min_machines_running = 1
+  processes = ['app']
