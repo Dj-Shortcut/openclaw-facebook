@@ -73,7 +73,7 @@ jobs:
         run: |
           corepack pnpm --dir apps/image-gen install --frozen-lockfile
 
-      - name: Rehearse and apply the production migration contract
+      - name: Rehearse and apply the production schema expand
         working-directory: apps/image-gen
         env:
           DATABASE_URL: mysql://root:root@127.0.0.1:3306/test_image_gen
@@ -90,7 +90,7 @@ jobs:
         working-directory: apps/image-gen
         env:
           DATABASE_URL: mysql://root:root@127.0.0.1:3306/test_image_gen
-          LEADERBOT_PRODUCTION_MIGRATION_MODE: verify-contract
+          LEADERBOT_PRODUCTION_MIGRATION_MODE: verify-expand
         run: node scripts/run-production-migrations.mjs
 
       - name: Apply and verify from the exact production container
@@ -110,7 +110,7 @@ jobs:
             "$image" node dist/migrate-production.cjs
           docker run --rm --network host \
             --env DATABASE_URL=mysql://root:root@127.0.0.1:3306/test_image_gen_container \
-            --env LEADERBOT_PRODUCTION_MIGRATION_MODE=verify-contract \
+            --env LEADERBOT_PRODUCTION_MIGRATION_MODE=verify-expand \
             "$image" node dist/migrate-production.cjs
 
       - name: Verify dailyQuota composite index exists

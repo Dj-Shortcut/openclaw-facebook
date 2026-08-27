@@ -11,8 +11,6 @@ import {
   sql,
 } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
-import type { RowDataPacket } from "mysql2";
-import mysql from "mysql2/promise";
 import {
   aiIdentities,
   auditLog,
@@ -70,11 +68,6 @@ import {
 import { parseStartpilotQuota } from "./_core/billing/startpilotQuota";
 
 let _db: ReturnType<typeof drizzle> | null = null;
-
-type NamedLockRow = RowDataPacket & {
-  acquired?: number | string | null;
-  released?: number | string | null;
-};
 
 function logDatabaseUnavailable(operation: string): void {
   safeLog("database_unavailable", {
@@ -1841,10 +1834,9 @@ export async function eraseBillingHandoffIdentity(
   }
   return db.transaction(async tx => {
     // Migration 0016 introduced the immutable connection/privacy columns as
-    // nullable so the 0017 backfill can populate them. During that bounded
-    // bridge, exact workspace + Page + user identity is still authoritative
-    // for rows where both new scope columns are NULL. Never treat a partially
-    // populated or mismatched non-NULL tuple as legacy.
+    // nullable. Exact workspace + Page + user identity remains authoritative
+    // for legacy rows where both scope columns are NULL. Never treat a
+    // partially populated or mismatched non-NULL tuple as legacy.
     const exactIntentScope = exactScope
       ? or(
           and(
@@ -2120,77 +2112,7 @@ export async function advanceBillingHandoffDeliveryFence(
     return getAffectedRows(result) === 1;
   };
 
-  if (state !== "transport_started") {
-    return await updateFence(db);
-  }
-
-  // Migration 0017 rewrites privacy-bearing handoff payloads. The named lock
-  // is held only while a writer makes transport irrevocable; the production
-  // migrator holds the same lock across its final preflight and data repair.
-  // A writer that encounters the migration fails closed and is retried without
-  // starting the external Messenger transport.
-  const databaseUrl = process.env.DATABASE_URL?.trim();
-  if (!databaseUrl) {
-    throw new Error("Database unavailable: billing delivery fence failed");
-  }
-  const lockConnection = await mysql.createConnection(databaseUrl);
-  let lockHeld = false;
-  let result = false;
-  let operationError: unknown;
-  try {
-    const [[acquired]] = await lockConnection.query<NamedLockRow[]>(
-      "SELECT GET_LOCK(CONCAT('leaderbot:handoff:', LEFT(SHA2(DATABASE(), 256), 40)), 0) AS acquired"
-    );
-    if (Number(acquired?.acquired) === 1) {
-      lockHeld = true;
-      // Drizzle's update resolves only after the autocommit is durable, so the
-      // migration cannot acquire the lock between the state write and commit.
-      result = await updateFence(db);
-    }
-  } catch (error) {
-    operationError = error;
-  }
-
-  let cleanupError: unknown;
-  if (lockHeld) {
-    try {
-      const [[released]] = await lockConnection.query<NamedLockRow[]>(
-        "SELECT RELEASE_LOCK(CONCAT('leaderbot:handoff:', LEFT(SHA2(DATABASE(), 256), 40))) AS released"
-      );
-      if (Number(released?.released) !== 1) {
-        cleanupError = new Error(
-          "Billing handoff migration fence release failed"
-        );
-      }
-    } catch (error) {
-      cleanupError = error;
-    }
-  }
-  try {
-    await lockConnection.end();
-  } catch (error) {
-    cleanupError ??= error;
-  }
-  if (operationError && cleanupError) {
-    throw new AggregateError(
-      [operationError, cleanupError],
-      "Billing handoff delivery failed and migration fence cleanup failed",
-      { cause: operationError }
-    );
-  }
-  if (operationError) {
-    throw operationError instanceof Error
-      ? operationError
-      : new Error("Billing handoff delivery failed", { cause: operationError });
-  }
-  if (cleanupError) {
-    throw cleanupError instanceof Error
-      ? cleanupError
-      : new Error("Billing handoff migration fence cleanup failed", {
-          cause: cleanupError,
-        });
-  }
-  return result;
+  return await updateFence(db);
 }
 
 export class ChannelConnectionClaimConflictError extends Error {

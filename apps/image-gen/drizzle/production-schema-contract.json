@@ -1,10 +1,10 @@
 {
-  "version": 4,
+  "version": 5,
   "generatedBy": {
     "mysqlVersion": "8.4.11"
   },
   "normalization": "show-create-and-trigger-v1",
-  "migrationSetSha256": "0e18bf46a47b607854dd939349c94ea65a4233e64f76b8e5896f18f7279f1b26",
+  "migrationSetSha256": "d934e626b517636b8e41365fbab87310e9b1267cb3d97cac7e9bfb21216d463a",
   "legacy0007": {
     "tables": {
       "aiIdentities": "7a68b0d6db4bd3f360d191823306ff01865661dcaa2ee4cd627a3c8a5a5b03ce",
@@ -501,97 +501,6 @@
       "billing_scheduler_execution_epoch_before_update": "2f7c138f7960b039d25c692dfc735aaf21dab1b9a6f5fd44ecc7183ae470dbbd"
     }
   },
-  "history0016": {
-    "showCreateSha256": "23743b0e2ff071ebc88ce62c6c901a90804efe215b7eab541c573be379f00d50",
-    "nextId": 18,
-    "rows": [
-      {
-        "id": 1,
-        "hash": "814a08e40d7fc2bcfd458759d18319198ca8ae394f2fa15617a78678e9c9c93b",
-        "createdAt": 1771791967247
-      },
-      {
-        "id": 2,
-        "hash": "8b885c25fe24b624578799cfe4918446efebab67a604c4335993d2d132ab6949",
-        "createdAt": 1771792056712
-      },
-      {
-        "id": 3,
-        "hash": "163cef88121a7240dfbe779f04edde4fe66ada9f4d7271e597f272e9a0d772f1",
-        "createdAt": 1771798491450
-      },
-      {
-        "id": 4,
-        "hash": "b4e0497804e46e0a0b0b8c31975b062152d551bac49c3c2e80932567b4085dcd",
-        "createdAt": 1771902695410
-      },
-      {
-        "id": 5,
-        "hash": "1970c969c014c9586d5b1896b8f8df68c9b524da18191cb967278c2ef257ea0d",
-        "createdAt": 1780300800000
-      },
-      {
-        "id": 6,
-        "hash": "c8feed6b868ca795fdeb676adfbc3c6de49e27c8d397d82326c3a6ebfa7f9291",
-        "createdAt": 1780636800000
-      },
-      {
-        "id": 7,
-        "hash": "6a6e01839212c2a93950c88863326e820d94296d09013051da7b17151c19fe87",
-        "createdAt": 1780982400000
-      },
-      {
-        "id": 8,
-        "hash": "417e039b947194a6b632d677f851f211ac2e1ff94e004f0cfa1a55d31e66d517",
-        "createdAt": 1782316800000
-      },
-      {
-        "id": 9,
-        "hash": "325c5b78bfcb84c62435d8a72c39822f94da78a46a55103c25a57b97abe5abdf",
-        "createdAt": 1782844800000
-      },
-      {
-        "id": 10,
-        "hash": "2f6a88a575dd517893e74ae6766ec7b1a9bfc77d37369ed46f561296091e5d4e",
-        "createdAt": 1785542400000
-      },
-      {
-        "id": 11,
-        "hash": "6d59264fe3a4f487d2878d85ce2f5dfc604fe77c9f2e011d2f41b8396bd67e20",
-        "createdAt": 1785605493363
-      },
-      {
-        "id": 12,
-        "hash": "8d516deb6eb4c6082a7b0fad57289e4c0448f3c0c766f02f833945095cf4f200",
-        "createdAt": 1785657889551
-      },
-      {
-        "id": 13,
-        "hash": "bff914684451fea9babcac341f6a041d400ec0d752d5d9e71e67c8040e19a98d",
-        "createdAt": 1785658583877
-      },
-      {
-        "id": 14,
-        "hash": "b6cd406d611d7c0083980054a51c6bfc26b84c1708d239d9e990cfe105fa2e66",
-        "createdAt": 1786979880049
-      },
-      {
-        "id": 15,
-        "hash": "9b3f738c1195688202580e80a755e264471a942cfa6740a69044ae01df1f501a",
-        "createdAt": 1787040000000
-      },
-      {
-        "id": 16,
-        "hash": "75b3299156526d862fee25d37ca09647b4e8113f38757618b097b71d1b2fe508",
-        "createdAt": 1787056321209
-      },
-      {
-        "id": 17,
-        "hash": "015e06e5c5831a71f7a7b1c1c98283c24257b8ff5e99e2c4c73364f0afc40a6b",
-        "createdAt": 1787477710719
-      }
-    ]
-  },
   "partial0016BillingColumns": {
     "tables": {
       "aiIdentities": "7a68b0d6db4bd3f360d191823306ff01865661dcaa2ee4cd627a3c8a5a5b03ce",
@@ -706,123 +615,9 @@
       "billing_scheduler_execution_epoch_before_update": "2f7c138f7960b039d25c692dfc735aaf21dab1b9a6f5fd44ecc7183ae470dbbd"
     }
   },
-  "partial0017BillingConstraints": {
-    "tables": {
-      "aiIdentities": "7a68b0d6db4bd3f360d191823306ff01865661dcaa2ee4cd627a3c8a5a5b03ce",
-      "auditLog": "0093660cce62748d849d82ccb10a2ec9ac79ca55e98ef82a8b4c99e3b3d62036",
-      "billing_accounting_event_links": "9ce35c24833c892cc2486a95da3f024085be1fc4f508680a928400419b51b243",
-      "billing_accounting_import_cursors": "080ae7b48eea2db20622b03fe05ccc5d85d852f352f6310526adfec6fe0bc615",
-      "billing_accounting_import_runs": "d6d4c0b74504ef9e7f5593288260856003e5bda6bd3c8eda3d2609985f61f86d",
-      "billing_accounting_provider_events": "39f40d3756eba1ad06c97c2275209a1a5f640a848f621d066a64b4dd4c85ba58",
-      "billing_customers": "f35ec43e4c52d0165b21b518d7a23dca4d91bd5eed57c2e13988ef97815ab2cc",
-      "billing_execution_controls": "1a1f8d0dd14ce30a51d903089651e730110672df9f59b9bacb63a148e0b408f7",
-      "billing_handoff_recovery_events": "dc68d0227b817daa75f679cbdee622cb5194b41c9f6d36cc1f8d01042cd2eb3f",
-      "billing_intents": "f0c47ac5c2ecaae14f92506f345c142064ed327057ce3f9611d12f9adb8157d1",
-      "billing_invoice_sequences": "53f50f23c217e23f2110a6d3c35d5f8112297d071a721fbb471f411d911f3da6",
-      "billing_notification_inbox": "d9c304aaf6d221f5cba895aa9b0a9ff3564fdf3b4f58c8c10e282849961898c3",
-      "billing_notification_receipts": "e65afe84eed200fb238d6948f20910305a1cf560d8e650e6ed0ee093753e133f",
-      "billing_notification_receiver_outbox": "9940d865a770fb58b16080a82d44e800b4c6c6e9513a74c9d1ce5b36cdcbf68d",
-      "billing_notification_scheduler_tenants": "7f746ffac6d9f019724d41c802cacee96dbbef71976f1654ec33b0c0e7a7db8c",
-      "billing_outbox": "3ff8f3c032dd3b806846e152a8fe86b22e3359d0367680f1c056192eef007ed7",
-      "billing_profile_operator_actions": "a98907f87af600e9d4965aed7f1d780dbb8ee0aac3b618ff10062e26f70d8f27",
-      "billing_provider_operations": "1801189c3b600dee29115b89c3b13d2242b9ee4985729091123c570f571afe3b",
-      "billing_reconciliation_anomalies": "27ddcaa4e9fac40c130190ee7007856d12ca3828cb42d061495991156e47199f",
-      "billing_reconciliation_runs": "dfd9105ae1de5b3008a34c922fd5599e4a9949e5c183c41b1cad3808fa85a7ae",
-      "billing_scheduler_process_heartbeats": "1af44fc36844f44e083128a8d47a1f366369f5088f27bdb0901890fca8e6999c",
-      "billing_scheduler_tenants": "8cead87c8e1b9badec2aed8d31ea4ce161c2df73cccb887a61717ca457c341c4",
-      "billing_subscriptions": "9c885c45d6420d559bc265e4bb4738f6d61018f0e3a083eaf411eb72a4f95ee0",
-      "billing_webhook_routes": "38289fefb61c654d57e75a030947586b86c3ca2751cc800ed34118b0bd905e28",
-      "channelConnections": "c56f6aab6d8711a1a2dde5f9fafffaa3054338a600b0b7dc51285f2470f1456b",
-      "dailyQuota": "25fc048215bfd90124616134be05ba0b64670032bb69314deb1b497f2cbf036e",
-      "imageRequests": "38daf0ceff4a1a2258211598264c0b3205812b6621c210722c01420740767c85",
-      "messengerState": "bdac580aae87e4ffd40fa860a37c6770746f1de538bc59c81b58385508976777",
-      "messenger_privacy_subjects": "06184228b28c5c3bbf33f0041ca80cad14d68cca786857f246ca0eb98353abc7",
-      "messenger_provider_attempt_fences": "f234e4641e7575cdac86e10ffd9beb1abe8ffd1c0528d98911bb5951894a8d53",
-      "notificationLog": "7bceee0490baa93e07f06043a043bca0b4b495281f6db70bf9544a74ff8eb304",
-      "payment_ledger": "06bf6daa295c8649b9e0292e34a264cee708326d652957b4e23f2ef07029b956",
-      "portalHandoffTokens": "48342a5131ceb138d45c0dabef77b02e35bdaf15519b6397547811b03120ce71",
-      "usageStats": "fb744e7420b3b9f10397be3d8ee8f86e3ffeff53dba9b3c4c2f721e20ed80957",
-      "users": "fa38a806b839d20a29d8ce215b248564118f1e4e3bec87b88613eb90b96b55b2",
-      "webhook_deliveries": "5771b7ca34c0c96e43c839601a232b96e1b0dd288ab85e4290f4156ce08e78da",
-      "workspaceKnowledgeSources": "4c40e2df8cff3dedee793b9fb37302f985ce0bb94392d9f3786d6072865f59b7",
-      "workspaceMembers": "2291b58e563bf9ef381a1d83ceefd3a04eb872fe690dc119bf71e6a225223a3e",
-      "workspacePrivacyRequests": "b6d447612bc39dab542c3a4d779d0e3fa18af6180ad12af702a8b37811045452",
-      "workspacePrivacySettings": "a83e6ecbdaa87185ecd4b4ec46f30534758b2586c63fe4d791fd9350e00e5d28",
-      "workspaceUpgradeRequests": "b6bdf79f43b34e29c5d94c448c2603f284bae8bc11d0481491aa93e91fbbecdf",
-      "workspaceUsageDaily": "e8bb60498cfde800f49e4ddec75826c1bafca37994cfd0ea79e156ce3cf24018",
-      "workspace_billing_profiles": "30df081aa30a273a66d987c12dba4da380237c969990c519e693b17fea7ff4c5",
-      "workspace_entitlement_usage": "f52b88229cff1f729da0bcf667be4eb7bc97b052d5122e670d723234525d412e",
-      "workspace_entitlement_usage_reservations": "d4aa4e39edfa5a1d5463a200c6ecfb14f3641867cd5987289aec9cfcf42b9245",
-      "workspace_entitlements": "d0f0e3effddc15a0e385860022aa8d92678b109222791b4b42df2be7c7ecc04f",
-      "workspaces": "b0d9b4f4745f2ea82c84ad123a9811017f8e9c1db39bb7862f72ce1f72808b48"
-    },
-    "views": {},
-    "triggers": {
-      "billing_outbox_wake_scheduler_after_insert": "c9579585392f5d826fe771d577c233069851fd5e9468fb7fc37d13e97adcc3f5",
-      "billing_outbox_wake_scheduler_after_update": "c7b109146e82e3591624cba62202248340b4264099f5b6894d324ecbe3a3b34b",
-      "billing_scheduler_execution_epoch_before_update": "2f7c138f7960b039d25c692dfc735aaf21dab1b9a6f5fd44ecc7183ae470dbbd"
-    }
-  },
-  "final0017": {
-    "tables": {
-      "aiIdentities": "7a68b0d6db4bd3f360d191823306ff01865661dcaa2ee4cd627a3c8a5a5b03ce",
-      "auditLog": "0093660cce62748d849d82ccb10a2ec9ac79ca55e98ef82a8b4c99e3b3d62036",
-      "billing_accounting_event_links": "9ce35c24833c892cc2486a95da3f024085be1fc4f508680a928400419b51b243",
-      "billing_accounting_import_cursors": "080ae7b48eea2db20622b03fe05ccc5d85d852f352f6310526adfec6fe0bc615",
-      "billing_accounting_import_runs": "d6d4c0b74504ef9e7f5593288260856003e5bda6bd3c8eda3d2609985f61f86d",
-      "billing_accounting_provider_events": "39f40d3756eba1ad06c97c2275209a1a5f640a848f621d066a64b4dd4c85ba58",
-      "billing_customers": "f35ec43e4c52d0165b21b518d7a23dca4d91bd5eed57c2e13988ef97815ab2cc",
-      "billing_execution_controls": "1a1f8d0dd14ce30a51d903089651e730110672df9f59b9bacb63a148e0b408f7",
-      "billing_handoff_recovery_events": "dc68d0227b817daa75f679cbdee622cb5194b41c9f6d36cc1f8d01042cd2eb3f",
-      "billing_intents": "f0c47ac5c2ecaae14f92506f345c142064ed327057ce3f9611d12f9adb8157d1",
-      "billing_invoice_sequences": "53f50f23c217e23f2110a6d3c35d5f8112297d071a721fbb471f411d911f3da6",
-      "billing_notification_inbox": "d9c304aaf6d221f5cba895aa9b0a9ff3564fdf3b4f58c8c10e282849961898c3",
-      "billing_notification_receipts": "e65afe84eed200fb238d6948f20910305a1cf560d8e650e6ed0ee093753e133f",
-      "billing_notification_receiver_outbox": "9940d865a770fb58b16080a82d44e800b4c6c6e9513a74c9d1ce5b36cdcbf68d",
-      "billing_notification_scheduler_tenants": "7f746ffac6d9f019724d41c802cacee96dbbef71976f1654ec33b0c0e7a7db8c",
-      "billing_outbox": "3ff8f3c032dd3b806846e152a8fe86b22e3359d0367680f1c056192eef007ed7",
-      "billing_profile_operator_actions": "a98907f87af600e9d4965aed7f1d780dbb8ee0aac3b618ff10062e26f70d8f27",
-      "billing_provider_operations": "1801189c3b600dee29115b89c3b13d2242b9ee4985729091123c570f571afe3b",
-      "billing_reconciliation_anomalies": "27ddcaa4e9fac40c130190ee7007856d12ca3828cb42d061495991156e47199f",
-      "billing_reconciliation_runs": "dfd9105ae1de5b3008a34c922fd5599e4a9949e5c183c41b1cad3808fa85a7ae",
-      "billing_scheduler_process_heartbeats": "1af44fc36844f44e083128a8d47a1f366369f5088f27bdb0901890fca8e6999c",
-      "billing_scheduler_tenants": "8cead87c8e1b9badec2aed8d31ea4ce161c2df73cccb887a61717ca457c341c4",
-      "billing_subscriptions": "9c885c45d6420d559bc265e4bb4738f6d61018f0e3a083eaf411eb72a4f95ee0",
-      "billing_webhook_routes": "38289fefb61c654d57e75a030947586b86c3ca2751cc800ed34118b0bd905e28",
-      "channelConnections": "c56f6aab6d8711a1a2dde5f9fafffaa3054338a600b0b7dc51285f2470f1456b",
-      "dailyQuota": "25fc048215bfd90124616134be05ba0b64670032bb69314deb1b497f2cbf036e",
-      "imageRequests": "38daf0ceff4a1a2258211598264c0b3205812b6621c210722c01420740767c85",
-      "messengerState": "bdac580aae87e4ffd40fa860a37c6770746f1de538bc59c81b58385508976777",
-      "messenger_privacy_subjects": "06184228b28c5c3bbf33f0041ca80cad14d68cca786857f246ca0eb98353abc7",
-      "messenger_provider_attempt_fences": "f234e4641e7575cdac86e10ffd9beb1abe8ffd1c0528d98911bb5951894a8d53",
-      "notificationLog": "7bceee0490baa93e07f06043a043bca0b4b495281f6db70bf9544a74ff8eb304",
-      "payment_ledger": "06bf6daa295c8649b9e0292e34a264cee708326d652957b4e23f2ef07029b956",
-      "portalHandoffTokens": "dcaf0836e8ed821d19ce6c045758fd917017c490fe57639638bc4de8ad083a88",
-      "usageStats": "fb744e7420b3b9f10397be3d8ee8f86e3ffeff53dba9b3c4c2f721e20ed80957",
-      "users": "fa38a806b839d20a29d8ce215b248564118f1e4e3bec87b88613eb90b96b55b2",
-      "webhook_deliveries": "5771b7ca34c0c96e43c839601a232b96e1b0dd288ab85e4290f4156ce08e78da",
-      "workspaceKnowledgeSources": "4c40e2df8cff3dedee793b9fb37302f985ce0bb94392d9f3786d6072865f59b7",
-      "workspaceMembers": "2291b58e563bf9ef381a1d83ceefd3a04eb872fe690dc119bf71e6a225223a3e",
-      "workspacePrivacyRequests": "b6d447612bc39dab542c3a4d779d0e3fa18af6180ad12af702a8b37811045452",
-      "workspacePrivacySettings": "a83e6ecbdaa87185ecd4b4ec46f30534758b2586c63fe4d791fd9350e00e5d28",
-      "workspaceUpgradeRequests": "b6bdf79f43b34e29c5d94c448c2603f284bae8bc11d0481491aa93e91fbbecdf",
-      "workspaceUsageDaily": "e8bb60498cfde800f49e4ddec75826c1bafca37994cfd0ea79e156ce3cf24018",
-      "workspace_billing_profiles": "30df081aa30a273a66d987c12dba4da380237c969990c519e693b17fea7ff4c5",
-      "workspace_entitlement_usage": "f52b88229cff1f729da0bcf667be4eb7bc97b052d5122e670d723234525d412e",
-      "workspace_entitlement_usage_reservations": "d4aa4e39edfa5a1d5463a200c6ecfb14f3641867cd5987289aec9cfcf42b9245",
-      "workspace_entitlements": "d0f0e3effddc15a0e385860022aa8d92678b109222791b4b42df2be7c7ecc04f",
-      "workspaces": "b0d9b4f4745f2ea82c84ad123a9811017f8e9c1db39bb7862f72ce1f72808b48"
-    },
-    "views": {},
-    "triggers": {
-      "billing_outbox_wake_scheduler_after_insert": "c9579585392f5d826fe771d577c233069851fd5e9468fb7fc37d13e97adcc3f5",
-      "billing_outbox_wake_scheduler_after_update": "c7b109146e82e3591624cba62202248340b4264099f5b6894d324ecbe3a3b34b",
-      "billing_scheduler_execution_epoch_before_update": "2f7c138f7960b039d25c692dfc735aaf21dab1b9a6f5fd44ecc7183ae470dbbd"
-    }
-  },
-  "finalHistory": {
+  "history0016": {
     "showCreateSha256": "23743b0e2ff071ebc88ce62c6c901a90804efe215b7eab541c573be379f00d50",
-    "nextId": 19,
+    "nextId": 18,
     "rows": [
       {
         "id": 1,
@@ -908,11 +703,6 @@
         "id": 17,
         "hash": "015e06e5c5831a71f7a7b1c1c98283c24257b8ff5e99e2c4c73364f0afc40a6b",
         "createdAt": 1787477710719
-      },
-      {
-        "id": 18,
-        "hash": "2caad5e16a76f11cd365afa3566113361da0da7318d0fdfa2af3f33a9da2326a",
-        "createdAt": 1787481815801
       }
     ]
   }

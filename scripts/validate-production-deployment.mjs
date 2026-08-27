@@ -68,7 +68,6 @@ const ROOT_VALIDATION_WORKFLOW_PATH = ".github/workflows/main.yml";
 const PRODUCTION_SCHEMA_PHASES = Object.freeze([
   "0015_base",
   "0016_expand",
-  "0017_contract",
 ]);
 const REVIEWED_ARTIFACT_KINDS = Object.freeze([
   "legacy-bootstrap",
@@ -3533,9 +3532,9 @@ function validateImageGenMigrationCi(rootDir) {
   }
   for (const required of [
     "pnpm run db:test-production-migrator",
-    "LEADERBOT_PRODUCTION_MIGRATION_MODE: verify-contract",
+    "LEADERBOT_PRODUCTION_MIGRATION_MODE: verify-expand",
     "LEADERBOT_PRODUCTION_MIGRATION_MODE=apply-empty-bootstrap",
-    "LEADERBOT_PRODUCTION_MIGRATION_MODE=verify-contract",
+    "LEADERBOT_PRODUCTION_MIGRATION_MODE=verify-expand",
     "io.leaderbot.schema.minimum",
     "io.leaderbot.schema.maximum",
   ]) {
@@ -3557,7 +3556,7 @@ function validateImageGenMigrationCi(rootDir) {
       )
     ) {
       fail(
-        `${sourcePath} must assert the exact 0016_expand runtime image range until 0017 writer fencing is reviewed`,
+        `${sourcePath} must assert the exact 0016_expand runtime image range`,
       );
     }
   }
@@ -3713,7 +3712,7 @@ function validateTrustedArtifactWorkflow(rootDir) {
     workflow.includes('schema_maximum="0017_contract"')
   ) {
     fail(
-      `${TRUSTED_ARTIFACT_WORKFLOW_PATH} runtime artifacts must remain exactly 0016_expand until the separately fenced 0017 release`,
+      `${TRUSTED_ARTIFACT_WORKFLOW_PATH} runtime artifacts must remain exactly 0016_expand`,
     );
   }
   if (occurrenceCount(workflow, `image: ${PINNED_MYSQL_IMAGE}`) !== 1) {
@@ -5420,9 +5419,7 @@ function sameStringSet(actual, expected) {
 
 function validateImageGenSchemaTransition(app) {
   if (app.databaseSchemaPhase === "0017_contract") {
-    fail(
-      "image-gen 0017 contract is production-blocked until a separate reviewed writer-fencing design exists",
-    );
+    fail("image-gen legacy 0017 contract is retired and unsupported");
   }
   if (Object.hasOwn(app, "contractWriterSourceCommit")) {
     fail("image-gen must not expose the retired self-attested contract gate");
@@ -6172,6 +6169,9 @@ export function validateProductionRepository(rootDir = process.cwd()) {
       fail(`${app.config} must target ${app.app}`);
     }
     if (target === "image-gen") {
+      if (app.databaseSchemaPhase === "0017_contract") {
+        fail("image-gen legacy 0017 contract is retired and unsupported");
+      }
       if (!PRODUCTION_SCHEMA_PHASES.includes(app.databaseSchemaPhase)) {
         fail(`${target} must declare one exact databaseSchemaPhase`);
       }
@@ -6399,7 +6399,7 @@ export function validateProductionRepository(rootDir = process.cwd()) {
         runtimeStage.includes("0017_contract")
       ) {
         fail(
-          "image-gen runtime artifact must stay on the exact 0016_expand schema range until 0017 writer fencing is reviewed",
+          "image-gen runtime artifact must stay on the exact 0016_expand schema range",
         );
       }
       const imageGenCi = fs.readFileSync(

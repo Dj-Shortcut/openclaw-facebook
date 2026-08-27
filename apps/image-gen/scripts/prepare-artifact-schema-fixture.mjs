@@ -35,9 +35,9 @@ const appDirectory = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   ".."
 );
-const { migrations } = await loadAndVerifyMigrationManifest();
-const migrationCount =
-  phase === "0015_base" ? migrations.length - 2 : migrations.length - 1;
+const { migrationPlan } = await loadAndVerifyMigrationManifest();
+const phaseMigrations =
+  phase === "0015_base" ? migrationPlan.through0015 : migrationPlan.through0016;
 const connection = await mysql.createConnection(databaseUrl.toString());
 
 try {
@@ -51,7 +51,7 @@ try {
   await connection.query(
     "CREATE TABLE `__drizzle_migrations` (`id` serial PRIMARY KEY,`hash` text NOT NULL,`created_at` bigint)"
   );
-  for (const migration of migrations.slice(0, migrationCount)) {
+  for (const migration of phaseMigrations) {
     const sql = await fs.readFile(
       path.join(appDirectory, "drizzle", `${migration.tag}.sql`),
       "utf8"

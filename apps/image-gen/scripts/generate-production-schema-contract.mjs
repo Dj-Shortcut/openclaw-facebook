@@ -39,9 +39,8 @@ try {
   );
   const migration0015 = migrationFiles.find(name => name.startsWith("0015_"));
   const migration0016 = migrationFiles.find(name => name.startsWith("0016_"));
-  const migration0017 = migrationFiles.find(name => name.startsWith("0017_"));
-  if (!migration0015 || !migration0016 || !migration0017) {
-    throw new Error("0015, 0016 and 0017 migrations are required");
+  if (!migration0015 || !migration0016) {
+    throw new Error("0015 and 0016 migrations are required");
   }
   const journal = JSON.parse(
     await fs.readFile(
@@ -78,9 +77,6 @@ try {
   let partial0016BillingColumns;
   let final0016;
   let history0016;
-  let partial0017BillingConstraints;
-  let final0017;
-  let finalHistory;
   try {
     await assertProductionMigrationRuntime(connection);
     await createHistoryTable(connection);
@@ -104,15 +100,6 @@ try {
     final0016 = await captureProductionSchemaState(connection);
     await insertMigrationHistory(connection, migration0016);
     history0016 = await captureMigrationHistory(connection);
-
-    const statements0017 = await readFileStatements(migration0017);
-    await applyStatements(connection, statements0017.slice(0, 16));
-    partial0017BillingConstraints =
-      await captureProductionSchemaState(connection);
-    await applyStatements(connection, statements0017.slice(16));
-    final0017 = await captureProductionSchemaState(connection);
-    await insertMigrationHistory(connection, migration0017);
-    finalHistory = await captureMigrationHistory(connection);
   } finally {
     await connection.end();
   }
@@ -161,12 +148,9 @@ try {
     partial0016LastErasedAt,
     partial0016ProviderScope,
     partial0016StaticScope,
-    history0016,
     partial0016BillingColumns,
     final0016,
-    partial0017BillingConstraints,
-    final0017,
-    finalHistory,
+    history0016,
   };
   await fs.writeFile(
     outputPath,

@@ -120,13 +120,6 @@
       "when": 1787477710719,
       "tag": "0016_static_epoch_scope_fks",
       "breakpoints": true
-    },
-    {
-      "idx": 17,
-      "version": "5",
-      "when": 1787481815801,
-      "tag": "0017_handoff_privacy_scope",
-      "breakpoints": true
     }
   ]
 }

@@ -8,14 +8,16 @@ import {
   cleanupMigrationConnection,
   combineMigrationErrors,
   assertProductionSchemaContractManifest,
-  billingHandoffWriterLockName,
   loadAndVerifyMigrationManifest,
   migrationLockName,
   productionMigrationOptionsForMode,
   productionSchemaPhases,
   runProductionMigrations as runProductionMigrationStage,
-  assertContractRolloutRevision,
 } from "./migrate-production.mjs";
+import {
+  productionMigrationTags,
+  resolveProductionMigrationPlan,
+} from "./production-migration-plan.mjs";
 import {
   normalizeShowCreate,
   normalizeSqlOutsideQuotedValues,
@@ -31,54 +33,38 @@ import {
 } from "./production-schema-contract.mjs";
 
 await testCleanupContracts();
-testBillingHandoffWriterLockContract();
 testStagedRolloutContracts();
 testSchemaDigestContracts();
 await testContractManifestBinding();
-
-const reviewedWriterRevision = "a".repeat(40);
 
 async function runProductionMigrations(options = {}) {
   if (options.verifyOnly) {
     return runProductionMigrationStage({
       ...options,
-      target: options.target ?? "contract",
+      target: options.target ?? "expand",
     });
   }
   try {
     return await runProductionMigrationStage({
       ...options,
-      target: "contract",
+      target: "expand",
       allowEmptyBootstrap: true,
-      sourceRevision: reviewedWriterRevision,
-      fullyDeployedWriterRevision: reviewedWriterRevision,
     });
   } catch (error) {
     if (
       String(error?.message).includes(
-        "contract migration cannot skip the reviewed 0016 expand rollout"
+        "expand migration requires the completed 0015 base schema"
       )
     ) {
       await apply0015PrerequisiteForTest(options.databaseUrl);
-    } else if (
-      !String(error?.message).includes(
-        "contract migration requires the completed 0016 expand phase"
-      )
-    ) {
+    } else {
       throw error;
     }
   }
-  await runProductionMigrationStage({
+  return runProductionMigrationStage({
     ...options,
     target: "expand",
     verifyOnly: false,
-  });
-  return runProductionMigrationStage({
-    ...options,
-    target: "contract",
-    verifyOnly: false,
-    sourceRevision: reviewedWriterRevision,
-    fullyDeployedWriterRevision: reviewedWriterRevision,
   });
 }
 
@@ -93,12 +79,6 @@ const resume0016Databases = Array.from(
   { length: 10 },
   (_, index) => `leaderbot_production_migrator_resume_0016_${index}`
 );
-const resume0017Databases = Array.from(
-  { length: 18 },
-  (_, index) => `leaderbot_production_migrator_resume_0017_${index}`
-);
-const handoffWriterLockDatabase =
-  "leaderbot_production_migrator_handoff_writer_lock";
 const stagedRolloutDatabase = "leaderbot_production_migrator_staged_rollout";
 const databases = [
   "leaderbot_production_migrator_concurrency",
@@ -124,10 +104,7 @@ const databases = [
   "leaderbot_production_migrator_legacy_drift",
   "leaderbot_production_migrator_legacy_partial",
   "leaderbot_production_migrator_verify_only",
-  "leaderbot_production_migrator_handoff_backfill",
-  handoffWriterLockDatabase,
   ...resume0016Databases,
-  ...resume0017Databases,
   stagedRolloutDatabase,
 ];
 const admin = await mysql.createConnection({
@@ -148,6 +125,8 @@ try {
     `ALTER DATABASE \`${databases[10]}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_bin`
   );
 
+  const { migrations: manifest, migrationPlan } =
+    await loadAndVerifyMigrationManifest();
   const concurrentUrl = databaseUrl(databases[0]);
   const [[showCreateDefaults]] = await admin.query(
     "SELECT @@GLOBAL.sql_quote_show_create AS quoteShowCreate,@@GLOBAL.show_create_table_verbosity AS tableVerbosity"
@@ -169,7 +148,9 @@ try {
     );
   }
   assert(
-    results.every(result => result.appliedCount === 18),
+    results.every(
+      result => result.appliedCount === migrationPlan.through0016.length
+    ),
     "concurrent apply"
   );
   const beforeNoop = await withDatabaseResult(databases[0], connection =>
@@ -178,18 +159,20 @@ try {
   const idempotent = await runProductionMigrations({
     databaseUrl: concurrentUrl,
   });
-  assert(idempotent.appliedCount === 18, "already-complete idempotent apply");
+  assert(
+    idempotent.appliedCount === migrationPlan.through0016.length,
+    "already-complete idempotent apply"
+  );
   const afterNoop = await withDatabaseResult(databases[0], connection =>
     captureSchemaFingerprint(connection)
   );
   assert(
     beforeNoop === afterNoop,
-    "complete 0017 no-op leaves schema/history unchanged"
+    "complete 0016 no-op leaves schema/history unchanged"
   );
 
-  const { migrations: manifest } = await loadAndVerifyMigrationManifest();
   await withDatabase(stagedRolloutDatabase, async connection => {
-    await applyMigrationPrefix(connection, manifest.slice(0, -2));
+    await applyMigrationPrefix(connection, migrationPlan.through0015);
     await connection.query(
       "INSERT INTO `workspaces` (`id`,`name`,`slug`) VALUES (7201,'Staged rollout','staged-rollout')"
     );
@@ -223,7 +206,8 @@ try {
     target: "expand",
   });
   assert(
-    expanded.schemaPhase === "0016_expand" && expanded.appliedCount === 17,
+    expanded.schemaPhase === "0016_expand" &&
+      expanded.appliedCount === migrationPlan.through0016.length,
     "expand applies only 0016"
   );
   await withDatabase(stagedRolloutDatabase, connection =>
@@ -231,76 +215,17 @@ try {
       "INSERT INTO `billing_intents` (`intent_id`,`workspace_id`,`mode`,`plan_code`,`kind`,`expected_amount`,`currency`,`interval`,`entitlements`,`mollie_description`,`status`,`idempotency_key`,`checkout_scope_key`,`messenger_sender_user_key`,`messenger_page_id`,`billing_profile_version`,`authorization_epoch`) VALUES ('72000000-0000-4000-8000-000000000001',7201,'test','startpilot','startpilot_purchase','19.00','EUR','one-time',JSON_OBJECT('aiAnswers',300),'Old writer during expand','paid','staged-old-writer-key','staged-old-writer-scope','staged-user','staged-page',0,1)"
     )
   );
-  const beforeContractAttestation = await withDatabaseResult(
-    stagedRolloutDatabase,
-    connection => captureSchemaFingerprint(connection)
-  );
-  await expectFailure(
-    runProductionMigrationStage({
-      databaseUrl: databaseUrl(stagedRolloutDatabase),
-      target: "contract",
-    }),
-    "contract without rollout attestation",
-    "exact fully deployed reviewed writer source revision"
-  );
-  await expectFailure(
-    runProductionMigrationStage({
-      databaseUrl: databaseUrl(stagedRolloutDatabase),
-      target: "contract",
-      sourceRevision: "a".repeat(40),
-      fullyDeployedWriterRevision: "b".repeat(40),
-    }),
-    "contract with a different reviewed writer",
-    "exact fully deployed reviewed writer source revision"
-  );
-  const afterContractAttestation = await withDatabaseResult(
-    stagedRolloutDatabase,
-    connection => captureSchemaFingerprint(connection)
-  );
-  assert(
-    beforeContractAttestation === afterContractAttestation,
-    "contract attestation refusal leaves schema and history unchanged"
-  );
-  const contracted = await runProductionMigrationStage({
-    databaseUrl: databaseUrl(stagedRolloutDatabase),
-    target: "contract",
-    sourceRevision: reviewedWriterRevision,
-    fullyDeployedWriterRevision: reviewedWriterRevision,
-  });
-  assert(
-    contracted.schemaPhase === "0017_contract" &&
-      contracted.appliedCount === 18,
-    "attested contract applies only after expand"
-  );
   await withDatabase(stagedRolloutDatabase, async connection => {
-    const [[repaired]] = await connection.query(
+    const [[terminal]] = await connection.query(
       "SELECT `messenger_channel_connection_id` AS connectionId,`messenger_privacy_epoch` AS privacyEpoch FROM `billing_intents` WHERE `intent_id`='72000000-0000-4000-8000-000000000001'"
     );
     assert(
-      repaired.connectionId === 7202 && repaired.privacyEpoch === 3,
-      "contract repairs an old-writer row accepted during expand"
-    );
-    await expectMysqlCheckFailure(
-      connection.query(
-        "INSERT INTO `billing_intents` (`intent_id`,`workspace_id`,`mode`,`plan_code`,`kind`,`expected_amount`,`currency`,`interval`,`entitlements`,`mollie_description`,`status`,`idempotency_key`,`checkout_scope_key`,`messenger_sender_user_key`,`messenger_page_id`,`billing_profile_version`,`authorization_epoch`) VALUES ('72000000-0000-4000-8000-000000000002',7201,'test','startpilot','startpilot_purchase','19.00','EUR','one-time',JSON_OBJECT('aiAnswers',300),'Old writer after contract','paid','staged-fenced-key','staged-fenced-scope','staged-user','staged-page',0,1)"
-      ),
-      "contract fences an old handoff writer"
+      terminal.connectionId === null && terminal.privacyEpoch === null,
+      "0016 remains the exact terminal schema without retired 0017 repair"
     );
   });
   await withDatabase(databases[22], connection =>
-    applyMigrationPrefix(connection, manifest.slice(0, -1))
-  );
-  const beforeVerifyOnlyRefusal = await withDatabaseResult(
-    databases[22],
-    connection => captureSchemaFingerprint(connection)
-  );
-  await expectFailure(
-    runProductionMigrations({
-      databaseUrl: databaseUrl(databases[22]),
-      verifyOnly: true,
-    }),
-    "verify-only release on pending 0017",
-    "schema is at 0016_expand; contract verification refused"
+    applyMigrationPrefix(connection, migrationPlan.through0016)
   );
   const verifiedExpand = await runProductionMigrationStage({
     databaseUrl: databaseUrl(databases[22]),
@@ -309,7 +234,7 @@ try {
   });
   assert(
     verifiedExpand.schemaPhase === "0016_expand" &&
-      verifiedExpand.appliedCount === 17,
+      verifiedExpand.appliedCount === migrationPlan.through0016.length,
     "expand release accepts the exact expanded schema"
   );
   const verifiedExpandBridge = await runProductionMigrationStage({
@@ -321,54 +246,28 @@ try {
     verifiedExpandBridge.schemaPhase === "0016_expand",
     "compatibility bridge accepts the expanded schema"
   );
-  const afterVerifyOnlyRefusal = await withDatabaseResult(
-    databases[22],
-    connection => captureSchemaFingerprint(connection)
-  );
-  assert(
-    beforeVerifyOnlyRefusal === afterVerifyOnlyRefusal,
-    "verify-only release leaves pending schema/history unchanged"
-  );
   const verifiedComplete = await runProductionMigrations({
     databaseUrl: concurrentUrl,
     verifyOnly: true,
   });
   assert(
-    verifiedComplete.appliedCount === 18,
+    verifiedComplete.appliedCount === migrationPlan.through0016.length,
     "verify-only release accepts exact completed schema"
-  );
-  for (const target of ["compatible", "expand"]) {
-    await expectFailure(
-      runProductionMigrationStage({
-        databaseUrl: concurrentUrl,
-        verifyOnly: true,
-        target,
-      }),
-      `${target} verifier on unauthorized 0017`,
-      `schema is at 0017_contract; ${target} verification refused`
-    );
-  }
-  const verifiedContract = await runProductionMigrationStage({
-    databaseUrl: concurrentUrl,
-    verifyOnly: true,
-    target: "contract",
-  });
-  assert(
-    verifiedContract.schemaPhase === "0017_contract",
-    "contract verification accepts only the contract schema"
   );
   await expectFailure(
     runProductionMigrationStage({
       databaseUrl: concurrentUrl,
-      verifyOnly: false,
-      target: "expand",
+      verifyOnly: true,
+      target: "contract",
     }),
-    "expand apply on unauthorized 0017",
-    "expand migration refuses the 0017 contract schema"
+    "retired contract target",
+    "migration target must be compatible or expand"
   );
-  const migration0016ForVerify = await readMigrationStatements(manifest.at(-2));
+  const migration0016ForVerify = await readMigrationStatements(
+    migrationPlan.expand0016
+  );
   await withDatabase(databases[1], async connection => {
-    await applyMigrationPrefix(connection, manifest.slice(0, -2));
+    await applyMigrationPrefix(connection, migrationPlan.through0015);
     await connection.query(
       "INSERT INTO `workspaces` (`id`,`name`,`slug`) VALUES (7101,'Verify only','verify-only')"
     );
@@ -435,8 +334,8 @@ try {
     databaseUrl: databaseUrl(databases[19]),
   });
   assert(
-    migratedLegacy.appliedCount === 18,
-    "bridged 0014 continues through canonical 0017"
+    migratedLegacy.appliedCount === migrationPlan.through0016.length,
+    "bridged 0014 continues through canonical 0016"
   );
 
   await withDatabase(databases[20], async connection => {
@@ -462,13 +361,10 @@ try {
     "database is not an exact supported legacy 0007/0014 state"
   );
   const migration0016Statements = await readMigrationStatements(
-    manifest.at(-2)
-  );
-  const migration0017Statements = await readMigrationStatements(
-    manifest.at(-1)
+    migrationPlan.expand0016
   );
   const migration0015Statements = await readMigrationStatements(
-    manifest.at(-3)
+    migrationPlan.base0015
   );
   await withDatabase(databases[14], async connection => {
     await connection.query("SET SESSION sql_safe_updates=1");
@@ -492,7 +388,7 @@ try {
     databaseUrl: databaseUrl(databases[14]),
   });
   assert(
-    canonicalizedSession.appliedCount === 18,
+    canonicalizedSession.appliedCount === migrationPlan.through0016.length,
     "poisoned session values are canonicalized before fresh migration"
   );
 
@@ -505,17 +401,17 @@ try {
       databaseUrl: databaseUrl(databases[15]),
     });
     assert(
-      primaryKeyFresh.appliedCount === 18,
+      primaryKeyFresh.appliedCount === migrationPlan.through0016.length,
       "fresh migration supports required primary keys"
     );
     await withDatabase(databases[16], connection =>
-      applyMigrationPrefix(connection, manifest.slice(0, -1))
+      applyMigrationPrefix(connection, migrationPlan.through0015)
     );
     const primaryKeyUpgrade = await runProductionMigrations({
       databaseUrl: databaseUrl(databases[16]),
     });
     assert(
-      primaryKeyUpgrade.appliedCount === 18,
+      primaryKeyUpgrade.appliedCount === migrationPlan.through0016.length,
       "0015 upgrade supports required primary keys"
     );
   } finally {
@@ -563,16 +459,14 @@ try {
     assertNoApplicationTables(connection, "single prepared slot refusal")
   );
   await testCompletedSchemaRefusals(databases[0], migration0015Statements);
-  await testHistoryRefusals(databases[0], manifest);
+  await testHistoryRefusals(databases[0], migrationPlan);
   await testEveryTailStatementBoundary({
-    manifest,
+    migrationPlan,
     migration0016Statements,
-    migration0017Statements,
   });
-  await testHandoffPrivacyBackfill(manifest);
 
   await withDatabase(databases[2], async connection => {
-    await applyMigrationPrefix(connection, manifest.slice(0, -3));
+    await applyMigrationPrefix(connection, migrationPlan.through0014);
     await createLegacyMessengerState(connection);
     await connection.query(
       "INSERT INTO `messengerState` (`psid`,`userKey`) VALUES ('migration-preserved-psid','migration-preserved-key')"
@@ -590,8 +484,8 @@ try {
     databaseUrl: databaseUrl(databases[2]),
   });
   assert(
-    upgradedWithState.appliedCount === 18,
-    "0014 with exact legacy state continues through 0017"
+    upgradedWithState.appliedCount === migrationPlan.through0016.length,
+    "0014 with exact legacy state continues through 0016"
   );
   await withDatabase(databases[2], async connection => {
     const [[row]] = await connection.query(
@@ -610,7 +504,7 @@ try {
   );
 
   await withDatabase(databases[4], async connection => {
-    await applyMigrationPrefix(connection, manifest.slice(0, -3));
+    await applyMigrationPrefix(connection, migrationPlan.through0014);
     await createLegacyMessengerState(connection);
     await connection.query(
       "ALTER TABLE `billing_outbox` MODIFY COLUMN `attempt_count` bigint NOT NULL DEFAULT 0"
@@ -643,7 +537,7 @@ try {
   await withDatabase(databases[0], async connection => {
     await connection.query(
       "UPDATE `__drizzle_migrations` SET `hash`=REPEAT('0',64) WHERE `created_at`=?",
-      [manifest.at(-1).when]
+      [migrationPlan.expand0016.when]
     );
   });
   await expectFailure(
@@ -710,7 +604,7 @@ try {
   );
 
   await withDatabase(databases[12], async connection => {
-    await applyMigrationPrefix(connection, manifest.slice(0, -2));
+    await applyMigrationPrefix(connection, migrationPlan.through0015);
     await applyStatements(connection, migration0016Statements.slice(0, 4));
     await connection.query(
       "ALTER TABLE `messenger_privacy_subjects` ADD COLUMN `unexpected_partial_drift` int NULL"
@@ -723,7 +617,7 @@ try {
   );
 
   await withDatabase(databases[13], async connection => {
-    await applyMigrationPrefix(connection, manifest.slice(0, -3));
+    await applyMigrationPrefix(connection, migrationPlan.through0014);
     await connection.query(
       "ALTER TABLE `__drizzle_migrations` AUTO_INCREMENT=100"
     );
@@ -737,21 +631,8 @@ try {
     assertNo0015Objects(connection, "advanced 0014 history refusal")
   );
 
-  await withDatabase(databases[6], async connection => {
-    await applyMigrationPrefix(connection, manifest.slice(0, -1));
-    await applyStatements(connection, migration0017Statements.slice(0, 4));
-    await connection.query(
-      "ALTER TABLE `billing_intents` ADD COLUMN `unexpected_partial_drift` int NULL"
-    );
-  });
-  await expectFailure(
-    runProductionMigrations({ databaseUrl: databaseUrl(databases[6]) }),
-    "arbitrary 0017 partial drift",
-    "0017 partial schema fingerprint mismatch"
-  );
-
   await withDatabase(databases[7], async connection => {
-    await applyMigrationPrefix(connection, manifest.slice(0, -2));
+    await applyMigrationPrefix(connection, migrationPlan.through0015);
     await connection.query(
       "INSERT INTO `workspaces` (`id`,`name`,`slug`) VALUES (7001,'Partial data','partial-data')"
     );
@@ -770,7 +651,7 @@ try {
     databaseUrl: databaseUrl(databases[7]),
   });
   assert(
-    resumedReactivatedSubject.appliedCount === manifest.length,
+    resumedReactivatedSubject.appliedCount === migrationPlan.through0016.length,
     "0016 resume accepts a reactivated subject with retained erasure history"
   );
   await withDatabase(databases[7], async connection => {
@@ -786,7 +667,7 @@ try {
   });
 
   await withDatabase(databases[8], async connection => {
-    await applyMigrationPrefix(connection, manifest.slice(0, -3));
+    await applyMigrationPrefix(connection, migrationPlan.through0014);
     await createLegacyMessengerState(connection);
     await connection.query(
       "ALTER TABLE `messengerState` MODIFY COLUMN `updatedAt` timestamp DEFAULT (now()) NOT NULL"
@@ -853,33 +734,8 @@ try {
     }
   });
 
-  await withDatabase(handoffWriterLockDatabase, async connection => {
-    await applyMigrationPrefix(connection, manifest.slice(0, -1));
-    const lockName = billingHandoffWriterLockName(handoffWriterLockDatabase);
-    const [[lock]] = await connection.query(
-      "SELECT GET_LOCK(?,0) AS acquired",
-      [lockName]
-    );
-    assert(Number(lock.acquired) === 1, "handoff writer test lock acquired");
-    try {
-      await expectFailure(
-        runProductionMigrations({
-          databaseUrl: databaseUrl(handoffWriterLockDatabase),
-          lockTimeoutSeconds: 0,
-        }),
-        "handoff writer lock contention",
-        "billing handoff writer lock is unavailable"
-      );
-    } finally {
-      await connection.query("SELECT RELEASE_LOCK(?)", [lockName]);
-    }
-  });
-  await runProductionMigrations({
-    databaseUrl: databaseUrl(handoffWriterLockDatabase),
-  });
-
   process.stdout.write(
-    "Production migrator passed: singleton, exact manifest, forward resume at every 0016/0017 boundary, and drift refusal.\n"
+    "Production migrator passed: singleton, exact 0000-0016 plan, forward resume at every 0016 boundary, and drift refusal.\n"
   );
 } finally {
   for (const database of databases) {
@@ -889,9 +745,8 @@ try {
 }
 
 async function testEveryTailStatementBoundary({
-  manifest,
+  migrationPlan,
   migration0016Statements,
-  migration0017Statements,
 }) {
   for (
     let boundary = 0;
@@ -900,7 +755,7 @@ async function testEveryTailStatementBoundary({
   ) {
     const database = resume0016Databases[boundary];
     await withDatabase(database, async connection => {
-      await applyMigrationPrefix(connection, manifest.slice(0, -2));
+      await applyMigrationPrefix(connection, migrationPlan.through0015);
       await applyStatements(
         connection,
         migration0016Statements.slice(0, boundary)
@@ -910,221 +765,10 @@ async function testEveryTailStatementBoundary({
       databaseUrl: databaseUrl(database),
     });
     assert(
-      resumed.appliedCount === manifest.length,
+      resumed.appliedCount === migrationPlan.through0016.length,
       `0016 resumes after statement boundary ${boundary}`
     );
   }
-
-  for (
-    let boundary = 0;
-    boundary <= migration0017Statements.length;
-    boundary += 1
-  ) {
-    const database = resume0017Databases[boundary];
-    await withDatabase(database, async connection => {
-      await applyMigrationPrefix(connection, manifest.slice(0, -1));
-      await applyStatements(
-        connection,
-        migration0017Statements.slice(0, boundary)
-      );
-      if (boundary === 12) {
-        await insertInterruptedLegacyDeletionFixture(connection);
-      }
-      if (boundary === 15) {
-        await insertPostErasureLegacyWriterFixture(connection);
-      }
-    });
-    const resumed = await runProductionMigrations({
-      databaseUrl: databaseUrl(database),
-    });
-    assert(
-      resumed.appliedCount === manifest.length,
-      `0017 resumes after statement boundary ${boundary}`
-    );
-    if (boundary === 15) {
-      await withDatabase(database, async connection => {
-        const [[contained]] = await connection.query(
-          "SELECT `status`,`messengerSenderUserKey` AS userKey,`facebookPageId` AS pageId,`messenger_channel_connection_id` AS connectionId,`messenger_privacy_epoch` AS privacyEpoch FROM `portalHandoffTokens` WHERE `tokenHash`='post-erasure-token'"
-        );
-        assert(
-          contained.status === "revoked" &&
-            contained.userKey === null &&
-            contained.pageId === null &&
-            contained.connectionId === null &&
-            contained.privacyEpoch === null,
-          "post-erasure legacy write is scrubbed before constraints"
-        );
-        await expectMysqlCheckFailure(
-          connection.query(
-            "INSERT INTO `portalHandoffTokens` (`workspaceId`,`tokenHash`,`messengerSenderUserKey`,`facebookPageId`,`purpose`,`status`,`expiresAt`) VALUES (7701,'old-shape-after-check','post-erasure-user','post-erasure-page','workspace_onboarding','pending',DATE_ADD(NOW(),INTERVAL 1 HOUR))"
-          ),
-          "old-shape writer after strict handoff check"
-        );
-      });
-    }
-    if (boundary === 12) {
-      await withDatabase(database, async connection => {
-        const [[intent]] = await connection.query(
-          "SELECT `status`,`messenger_sender_user_key` AS userKey,`messenger_page_id` AS pageId,`messenger_channel_connection_id` AS connectionId,`messenger_privacy_epoch` AS privacyEpoch FROM `billing_intents` WHERE `intent_id`='79000000-0000-4000-8000-000000000001'"
-        );
-        assert(
-          intent.status === "paid" &&
-            intent.userKey === null &&
-            intent.pageId === null &&
-            intent.connectionId === null &&
-            intent.privacyEpoch === null,
-          "resume contains a legacy deletion that landed after data COMMIT"
-        );
-      });
-    }
-  }
-}
-
-async function insertInterruptedLegacyDeletionFixture(connection) {
-  await connection.query(
-    "INSERT INTO `workspaces` (`id`,`name`,`slug`) VALUES (7901,'Interrupted deletion','interrupted-deletion')"
-  );
-  await connection.query(
-    "INSERT INTO `channelConnections` (`id`,`workspaceId`,`channel`,`status`,`externalId`) VALUES (7902,7901,'facebook_messenger','connected','interrupted-page')"
-  );
-  await connection.query(
-    "INSERT INTO `messenger_privacy_subjects` (`workspace_id`,`channel_connection_id`,`user_key`,`privacy_epoch`,`status`) VALUES (7901,7902,'interrupted-user',3,'active')"
-  );
-  await connection.query(
-    "INSERT INTO `billing_intents` (`intent_id`,`workspace_id`,`mode`,`plan_code`,`kind`,`expected_amount`,`currency`,`interval`,`entitlements`,`mollie_description`,`status`,`idempotency_key`,`checkout_scope_key`,`messenger_sender_user_key`,`messenger_page_id`,`messenger_channel_connection_id`,`messenger_privacy_epoch`,`billing_profile_version`,`authorization_epoch`) VALUES ('79000000-0000-4000-8000-000000000001',7901,'test','startpilot','startpilot_purchase','19.00','EUR','one-time',JSON_OBJECT('aiAnswers',300),'Interrupted deletion','paid','interrupted-deletion-key','interrupted-deletion-scope','interrupted-user','interrupted-page',7902,3,0,1)"
-  );
-  await connection.query(
-    "UPDATE `messenger_privacy_subjects` SET `privacy_epoch`=4,`status`='erased',`erased_at`='2026-08-23 10:30:00',`last_erased_at`='2026-08-23 10:30:00.000' WHERE `workspace_id`=7901 AND `channel_connection_id`=7902 AND `user_key`='interrupted-user'"
-  );
-  // Old code knows only the legacy pair. This is the reachable durable shape
-  // if it erases identity after the migration data COMMIT but before CHECK DDL.
-  await connection.query(
-    "UPDATE `billing_intents` SET `messenger_sender_user_key`=NULL,`messenger_page_id`=NULL WHERE `intent_id`='79000000-0000-4000-8000-000000000001'"
-  );
-}
-
-async function insertPostErasureLegacyWriterFixture(connection) {
-  await connection.query(
-    "INSERT INTO `workspaces` (`id`,`name`,`slug`) VALUES (7701,'Post erasure','post-erasure')"
-  );
-  await connection.query(
-    "INSERT INTO `channelConnections` (`id`,`workspaceId`,`channel`,`status`,`externalId`) VALUES (7702,7701,'facebook_messenger','connected','post-erasure-page')"
-  );
-  await connection.query(
-    "INSERT INTO `messenger_privacy_subjects` (`workspace_id`,`channel_connection_id`,`user_key`,`privacy_epoch`,`status`,`erased_at`,`last_erased_at`) VALUES (7701,7702,'post-erasure-user',2,'erased','2026-08-23 10:00:00','2026-08-23 10:00:00.000')"
-  );
-  // Simulates an old process that was already past its application-level
-  // privacy check when deletion completed, but writes before the DB CHECK.
-  await connection.query(
-    "INSERT INTO `portalHandoffTokens` (`workspaceId`,`tokenHash`,`messengerSenderUserKey`,`facebookPageId`,`purpose`,`status`,`expiresAt`) VALUES (7701,'post-erasure-token','post-erasure-user','post-erasure-page','workspace_onboarding','pending',DATE_ADD(NOW(),INTERVAL 1 HOUR))"
-  );
-}
-
-async function testHandoffPrivacyBackfill(manifest) {
-  const database = "leaderbot_production_migrator_handoff_backfill";
-  await withDatabase(database, async connection => {
-    await applyMigrationPrefix(connection, manifest.slice(0, -1));
-    await connection.query(
-      "INSERT INTO `workspaces` (`id`,`name`,`slug`) VALUES (7801,'Handoff backfill','handoff-backfill')"
-    );
-    await connection.query(
-      "INSERT INTO `channelConnections` (`id`,`workspaceId`,`channel`,`status`,`externalId`) VALUES (7802,7801,'facebook_messenger','connected','backfill-page')"
-    );
-    await connection.query(
-      "INSERT INTO `messenger_privacy_subjects` (`workspace_id`,`channel_connection_id`,`user_key`,`privacy_epoch`,`status`,`erased_at`,`last_erased_at`) VALUES (7801,7802,'active-user',4,'active',NULL,NULL),(7801,7802,'erased-user',7,'erased','2026-08-23 09:00:00','2026-08-23 09:00:00.000')"
-    );
-    await connection.query(
-      "INSERT INTO `billing_intents` (`intent_id`,`workspace_id`,`mode`,`plan_code`,`kind`,`expected_amount`,`currency`,`interval`,`entitlements`,`mollie_description`,`status`,`idempotency_key`,`checkout_scope_key`,`messenger_sender_user_key`,`messenger_page_id`,`billing_profile_version`,`authorization_epoch`) VALUES ('78000000-0000-4000-8000-000000000001',7801,'test','startpilot','startpilot_purchase','19.00','EUR','one-time',JSON_OBJECT('aiAnswers',300),'Valid backfill','paid','backfill-valid-key','backfill-valid-scope','active-user','backfill-page',0,1),('78000000-0000-4000-8000-000000000002',7801,'test','startpilot','startpilot_purchase','19.00','EUR','one-time',JSON_OBJECT('aiAnswers',300),'Erased backfill','paid','backfill-erased-key','backfill-erased-scope','erased-user','backfill-page',0,1)"
-    );
-    await connection.query(
-      "INSERT INTO `portalHandoffTokens` (`workspaceId`,`tokenHash`,`messengerSenderUserKey`,`facebookPageId`,`purpose`,`status`,`expiresAt`) VALUES (7801,'backfill-valid-token','active-user','backfill-page','workspace_onboarding','consumed',DATE_SUB(NOW(),INTERVAL 1 HOUR)),(7801,'backfill-erased-token','erased-user','backfill-page','workspace_onboarding','pending',DATE_ADD(NOW(),INTERVAL 1 HOUR))"
-    );
-    await connection.query(
-      "INSERT INTO `billing_outbox` (`id`,`delivery_id`,`workspace_id`,`mode`,`event_type`,`deduplication_key`,`payload`,`status`,`available_at`) VALUES (7803,'78000000-0000-4000-8000-000000000003',7801,'test','send_portal_handoff','backfill-valid-outbox',JSON_OBJECT('intentId','78000000-0000-4000-8000-000000000001','messengerSenderUserKey','active-user','messengerPageId','backfill-page'),'pending',NOW()),(7804,'78000000-0000-4000-8000-000000000004',7801,'test','send_portal_handoff','backfill-erased-outbox',JSON_OBJECT('intentId','78000000-0000-4000-8000-000000000002','messengerSenderUserKey','erased-user','messengerPageId','backfill-page'),'pending',NOW())"
-    );
-    await connection.query(
-      "INSERT INTO `billing_handoff_recovery_events` (`outbox_id`,`workspace_id`,`event_id_hash`,`source`,`event_timestamp`) VALUES (7804,7801,REPEAT('a',64),'migration-test',NOW())"
-    );
-  });
-
-  const migrated = await runProductionMigrations({
-    databaseUrl: databaseUrl(database),
-  });
-  assert(
-    migrated.appliedCount === manifest.length,
-    "handoff privacy fixture reaches final schema"
-  );
-  await withDatabase(database, async connection => {
-    const [intents] = await connection.query(
-      "SELECT `intent_id` AS id,`status`,`messenger_sender_user_key` AS userKey,`messenger_page_id` AS pageId,`messenger_channel_connection_id` AS connectionId,`messenger_privacy_epoch` AS privacyEpoch FROM `billing_intents` WHERE `workspace_id`=7801 ORDER BY `intent_id`"
-    );
-    assert(
-      intents[0].status === "paid" &&
-        intents[0].userKey === "active-user" &&
-        intents[0].connectionId === 7802 &&
-        intents[0].privacyEpoch === 4,
-      "active billing identity receives immutable scope"
-    );
-    assert(
-      intents[1].status === "paid" &&
-        intents[1].userKey === null &&
-        intents[1].pageId === null &&
-        intents[1].connectionId === null &&
-        intents[1].privacyEpoch === null,
-      "erased billing identity is scrubbed without changing financial truth"
-    );
-    const [tokens] = await connection.query(
-      "SELECT `tokenHash` AS tokenHash,`status`,`messengerSenderUserKey` AS userKey,`messenger_channel_connection_id` AS connectionId,`messenger_privacy_epoch` AS privacyEpoch FROM `portalHandoffTokens` WHERE `workspaceId`=7801 ORDER BY `tokenHash`"
-    );
-    assert(
-      tokens[0].status === "revoked" && tokens[0].userKey === null,
-      "erased portal capability is revoked and scrubbed"
-    );
-    assert(
-      tokens[1].status === "consumed" &&
-        tokens[1].userKey === "active-user" &&
-        tokens[1].connectionId === 7802 &&
-        tokens[1].privacyEpoch === 4,
-      "consumed active portal capability keeps its immutable scope"
-    );
-    const [outbox] = await connection.query(
-      "SELECT `id`,`status`,`last_error_code` AS errorCode,`privacy_erased_at` AS privacyErasedAt,JSON_UNQUOTE(JSON_EXTRACT(`payload`,'$.messengerChannelConnectionId')) AS payloadConnection,JSON_UNQUOTE(JSON_EXTRACT(`payload`,'$.messengerPrivacyEpoch')) AS payloadEpoch,JSON_UNQUOTE(JSON_EXTRACT(`payload`,'$.privacyErased')) AS payloadErased FROM `billing_outbox` WHERE `workspace_id`=7801 ORDER BY `id`"
-    );
-    assert(
-      outbox[0].status === "pending" &&
-        Number(outbox[0].payloadConnection) === 7802 &&
-        Number(outbox[0].payloadEpoch) === 4,
-      "valid handoff job receives the immutable scope"
-    );
-    assert(
-      outbox[1].status === "failed" &&
-        outbox[1].errorCode === "privacy_erased" &&
-        outbox[1].privacyErasedAt instanceof Date &&
-        outbox[1].payloadErased === "true",
-      "invalid handoff job is fenced and scrubbed"
-    );
-    const [[recovery]] = await connection.query(
-      "SELECT COUNT(*) AS count FROM `billing_handoff_recovery_events` WHERE `outbox_id`=7804"
-    );
-    assert(Number(recovery.count) === 0, "invalid handoff recovery is removed");
-  });
-}
-
-async function expectMysqlCheckFailure(promise, label) {
-  try {
-    await promise;
-  } catch (error) {
-    if (
-      error?.code === "ER_CHECK_CONSTRAINT_VIOLATED" ||
-      Number(error?.errno) === 3819
-    ) {
-      return;
-    }
-    throw new Error(`${label} failed for an unexpected reason`, {
-      cause: error,
-    });
-  }
-  throw new Error(`expected MySQL CHECK refusal: ${label}`);
 }
 
 function databaseUrl(database) {
@@ -1193,7 +837,7 @@ async function testCompletedSchemaRefusals(database, migration0015Statements) {
   await expectRunnerRefusal(
     database,
     "complete schema malformed primary key",
-    "0017 schema fingerprint mismatch"
+    "0016 schema fingerprint mismatch"
   );
   await withDatabase(database, connection =>
     connection.query(
@@ -1212,7 +856,7 @@ async function testCompletedSchemaRefusals(database, migration0015Statements) {
   await expectRunnerRefusal(
     database,
     "complete schema altered check body",
-    "0017 schema fingerprint mismatch"
+    "0016 schema fingerprint mismatch"
   );
   await withDatabase(database, async connection => {
     await connection.query(
@@ -1240,7 +884,7 @@ async function testCompletedSchemaRefusals(database, migration0015Statements) {
   await expectRunnerRefusal(
     database,
     "complete schema altered trigger body",
-    "0017 schema fingerprint mismatch"
+    "0016 schema fingerprint mismatch"
   );
   await withDatabase(database, async connection => {
     await connection.query(
@@ -1279,7 +923,7 @@ async function testCompletedSchemaRefusals(database, migration0015Statements) {
   await expectRunnerRefusal(
     database,
     "migration history table extra column",
-    "0017 migration history table contract mismatch"
+    "0016 migration history table contract mismatch"
   );
   await withDatabase(database, connection =>
     connection.query(
@@ -1288,18 +932,18 @@ async function testCompletedSchemaRefusals(database, migration0015Statements) {
   );
 }
 
-async function testHistoryRefusals(database, manifest) {
+async function testHistoryRefusals(database, migrationPlan) {
   await withDatabase(database, connection =>
     connection.query("ALTER TABLE `__drizzle_migrations` AUTO_INCREMENT=100")
   );
   await expectRunnerRefusal(
     database,
     "complete migration history counter drift",
-    "0017 migration history table contract mismatch"
+    "0016 migration history table contract mismatch"
   );
   await withDatabase(database, connection =>
     connection.query(
-      `ALTER TABLE \`__drizzle_migrations\` AUTO_INCREMENT=${manifest.length + 1}`
+      `ALTER TABLE \`__drizzle_migrations\` AUTO_INCREMENT=${migrationPlan.through0016.length + 1}`
     )
   );
 
@@ -1343,18 +987,18 @@ async function testHistoryRefusals(database, manifest) {
   await withDatabase(database, connection =>
     connection.query(
       "INSERT INTO `__drizzle_migrations` (`hash`,`created_at`) VALUES (?,?)",
-      ["f".repeat(64), manifest.at(-1).when + 1]
+      ["f".repeat(64), migrationPlan.expand0016.when + 1]
     )
   );
   await expectRunnerRefusal(
     database,
-    "migration history extra row",
+    "future migration history row on the 0016 runtime",
     "database contains unknown applied migrations"
   );
   await withDatabase(database, connection =>
     connection.query(
       "DELETE FROM `__drizzle_migrations` WHERE `created_at`=?",
-      [manifest.at(-1).when + 1]
+      [migrationPlan.expand0016.when + 1]
     )
   );
 }
@@ -1414,8 +1058,8 @@ async function applyMigrationPrefix(connection, migrations) {
 }
 
 async function apply0015PrerequisiteForTest(databaseUrlValue) {
-  const { migrations } = await loadAndVerifyMigrationManifest();
-  const migration = migrations.at(-3);
+  const { migrationPlan } = await loadAndVerifyMigrationManifest();
+  const migration = migrationPlan.base0015;
   const connection = await mysql.createConnection(databaseUrlValue);
   try {
     await assertProductionMigrationRuntime(connection);
@@ -1542,25 +1186,65 @@ async function testCleanupContracts() {
   );
 }
 
-function testBillingHandoffWriterLockContract() {
-  const first = billingHandoffWriterLockName("leaderbot_a");
-  const same = billingHandoffWriterLockName("leaderbot_a");
-  const other = billingHandoffWriterLockName("leaderbot_b");
-  assert(first === same, "handoff writer lock is stable per database");
-  assert(first !== other, "handoff writer lock is isolated per database");
-  assert(
-    first.startsWith("leaderbot:handoff:") && first.length <= 64,
-    "handoff writer lock fits the MySQL named-lock contract"
-  );
-}
-
 function testStagedRolloutContracts() {
   assert(
     JSON.stringify(productionSchemaPhases) ===
-      JSON.stringify(["0015_base", "0016_expand", "0017_contract"]),
+      JSON.stringify(["0015_base", "0016_expand"]),
     "schema phase names are stable"
   );
-  assertContractRolloutRevision("a".repeat(40), "a".repeat(40));
+  const exactPlanRows = productionMigrationTags.map((tag, idx) => ({
+    idx,
+    tag,
+  }));
+  const exactPlan = resolveProductionMigrationPlan(exactPlanRows);
+  assert(
+    exactPlan.expand0016.tag === "0016_static_epoch_scope_fks" &&
+      exactPlan.through0016.length === productionMigrationTags.length,
+    "exact named production migration plan terminates at 0016"
+  );
+  for (const [label, tail] of [
+    ["retired 0017", "0017_handoff_privacy_scope"],
+    ["unreviewed future tail", "0018_unreviewed_future_tail"],
+  ]) {
+    const planWithFutureTail = resolveProductionMigrationPlan([
+      ...exactPlanRows,
+      { idx: exactPlanRows.length, tag: tail },
+    ]);
+    assert(
+      planWithFutureTail.all.length === productionMigrationTags.length &&
+        planWithFutureTail.through0016.length ===
+          productionMigrationTags.length &&
+        !planWithFutureTail.all.some(migration => migration.tag === tail),
+      `${label} cannot alter the selected or bootstrapped migration count`
+    );
+  }
+  for (const [label, rows] of [
+    ["missing required migration", exactPlanRows.slice(0, -1)],
+    [
+      "duplicate migration tag",
+      [
+        ...exactPlanRows,
+        {
+          idx: exactPlanRows.length,
+          tag: "0016_static_epoch_scope_fks",
+        },
+      ],
+    ],
+    [
+      "future migration interleaved before 0016",
+      exactPlanRows.map((row, index) =>
+        index === exactPlanRows.length - 1
+          ? { idx: index, tag: "0017_handoff_privacy_scope" }
+          : row
+      ),
+    ],
+  ]) {
+    expectSynchronousFailure(
+      () => resolveProductionMigrationPlan(rows),
+      label,
+      "production migration plan"
+    );
+  }
   assert(
     JSON.stringify(
       productionMigrationOptionsForMode("inspect-recovery-compatibility")
@@ -1612,6 +1296,17 @@ function testStagedRolloutContracts() {
     "runtime artifact refuses the base schema"
   );
   assert(
+    JSON.stringify(
+      productionMigrationOptionsForMode("apply-empty-bootstrap")
+    ) ===
+      JSON.stringify({
+        verifyOnly: false,
+        target: "expand",
+        allowEmptyBootstrap: true,
+      }),
+    "empty bootstrap is bounded to the exact 0016 expand plan"
+  );
+  assert(
     productionMigrationOptionsForMode("apply") === null &&
       productionMigrationOptionsForMode("verify") === null &&
       productionMigrationOptionsForMode("apply-expand") === null &&
@@ -1619,19 +1314,9 @@ function testStagedRolloutContracts() {
       productionMigrationOptionsForMode("verify-artifact") === null &&
       productionMigrationOptionsForMode("verify-artifact", "unknown") ===
         null &&
-      productionMigrationOptionsForMode("apply-contract") === null,
+      productionMigrationOptionsForMode("apply-contract") === null &&
+      productionMigrationOptionsForMode("verify-contract") === null,
     "legacy and production contract apply modes fail closed"
-  );
-  expectSynchronousFailure(
-    () => assertContractRolloutRevision("a".repeat(40), "b".repeat(40)),
-    "contract rejects a different deployed writer",
-    "exact fully deployed reviewed writer"
-  );
-  expectSynchronousFailure(
-    () =>
-      assertContractRolloutRevision("unreviewed-local-build", "a".repeat(40)),
-    "contract rejects an unreviewed local image",
-    "exact fully deployed reviewed writer"
   );
 }
 
@@ -1869,11 +1554,21 @@ function testSchemaDigestContracts() {
 }
 
 async function testContractManifestBinding() {
-  const { migrations, productionContract } =
+  const { migrations, migrationPlan, productionContract } =
     await loadAndVerifyMigrationManifest();
   assertProductionSchemaContractManifest(productionContract, migrations);
+  assertProductionSchemaContractManifest(productionContract, [
+    ...migrations,
+    {
+      idx: migrations.length,
+      tag: "0017_future_append_only",
+      when: Number(migrationPlan.expand0016.when) + 1,
+      sha256: "a".repeat(64),
+    },
+  ]);
   const changedManifest = migrations.map(row => ({ ...row }));
-  changedManifest.at(-1).sha256 = "0".repeat(64);
+  changedManifest.find(row => row.tag === migrationPlan.expand0016.tag).sha256 =
+    "0".repeat(64);
   expectSynchronousFailure(
     () =>
       assertProductionSchemaContractManifest(

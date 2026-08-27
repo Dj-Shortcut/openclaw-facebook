@@ -2397,7 +2397,7 @@ describe("production deployment contract", () => {
     );
   });
 
-  it("keeps runtime artifacts on exact 0016 until writer fencing exists", () => {
+  it("keeps runtime artifacts on the exact supported 0016 phase", () => {
     const root = createRepositoryFixture();
     replaceFixtureText(
       root,
@@ -4127,7 +4127,7 @@ describe("production deployment contract", () => {
     );
   });
 
-  it("keeps the 0017 contract schema blocked in production", () => {
+  it("rejects the retired legacy 0017 contract schema", () => {
     const root = createRepositoryFixture();
     const manifestPath = path.join(root, "deploy/production/apps.json");
     const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
@@ -4148,7 +4148,7 @@ describe("production deployment contract", () => {
     fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 
     expect(() => validateProductionRepository(root)).toThrow(
-      "image-gen 0017 contract is production-blocked",
+      "image-gen legacy 0017 contract is retired and unsupported",
     );
   });
 

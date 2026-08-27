@@ -399,9 +399,10 @@ Rollback and recovery were correctly skipped. This reviewed follow-up records
 ### Image-gen database migration gate
 
 Production moves only from `0015_base` to the backwards-compatible
-`0016_expand` shape. Migration 0017 is blocked. There is no production contract
-command, manifest switch, or operator environment variable that may enable it.
-A later 0017 rollout needs a separate design and review.
+`0016_expand` shape. The old portal-handoff migration numbered 0017 was never
+applied in production and is retired. There is no production contract command,
+manifest switch, or operator environment variable that may enable it. A future
+`0017_credit_wallet_expand` needs its own schema, rollout design, and review.
 
 Use this exact sequence:
 
@@ -422,9 +423,9 @@ Use this exact sequence:
    and removes the temporary restore volume. It records metadata only, never
    customer rows.
 5. **Apply only 0016.** The same workflow runs `apply-expand` and then verifies
-   `0016_expand` from an exact bridge worker. It cannot apply 0017. If the known
-   0016 sequence was interrupted, rerun this same protected workflow with the
-   exact prior run ID and run attempt that uploaded its pre-expand evidence.
+   `0016_expand` from an exact bridge worker. It cannot apply any 0017. If the
+   known 0016 sequence was interrupted, rerun this same protected workflow with
+   the exact prior run ID and run attempt that uploaded its pre-expand evidence.
    The workflow accepts that evidence only when its snapshot, database,
    migration-manifest, schema-contract, and bridge tuple still match. Unknown
    or partial shapes fail closed.

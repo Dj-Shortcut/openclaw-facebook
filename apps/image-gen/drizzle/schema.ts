@@ -478,24 +478,6 @@ export const portalHandoffTokens = mysqlTable(
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
   table => [
-    foreignKey({
-      name: "portal_handoff_tokens_static_connection_fk",
-      columns: [table.messengerChannelConnectionId, table.workspaceId],
-      foreignColumns: [channelConnections.id, channelConnections.workspaceId],
-    }).onDelete("restrict"),
-    foreignKey({
-      name: "portal_handoff_tokens_static_subject_fk",
-      columns: [
-        table.workspaceId,
-        table.messengerChannelConnectionId,
-        table.messengerSenderUserKey,
-      ],
-      foreignColumns: [
-        messengerPrivacySubjects.workspaceId,
-        messengerPrivacySubjects.channelConnectionId,
-        messengerPrivacySubjects.userKey,
-      ],
-    }).onDelete("restrict"),
     uniqueIndex("portalHandoffTokens_tokenHash_unique").on(table.tokenHash),
     uniqueIndex("portalHandoffTokens_delivery_key_hash_unique").on(
       table.deliveryIdempotencyKeyHash
@@ -503,16 +485,6 @@ export const portalHandoffTokens = mysqlTable(
     index("portalHandoffTokens_workspace_status_idx").on(
       table.workspaceId,
       table.status
-    ),
-    index("portal_handoff_tokens_messenger_subject_idx").on(
-      table.workspaceId,
-      table.messengerChannelConnectionId,
-      table.messengerSenderUserKey,
-      table.messengerPrivacyEpoch
-    ),
-    check(
-      "portal_handoff_tokens_messenger_identity_scope",
-      sql`(${table.messengerSenderUserKey} IS NULL AND ${table.facebookPageId} IS NULL AND ${table.messengerChannelConnectionId} IS NULL AND ${table.messengerPrivacyEpoch} IS NULL) OR (${table.messengerSenderUserKey} IS NOT NULL AND ${table.facebookPageId} IS NOT NULL AND ${table.messengerChannelConnectionId} IS NOT NULL AND ${table.messengerPrivacyEpoch} > 0)`
     ),
   ]
 );
@@ -963,24 +935,6 @@ export const billingIntents = mysqlTable(
     updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
   },
   table => [
-    foreignKey({
-      name: "billing_intents_static_messenger_connection_fk",
-      columns: [table.messengerChannelConnectionId, table.workspaceId],
-      foreignColumns: [channelConnections.id, channelConnections.workspaceId],
-    }).onDelete("restrict"),
-    foreignKey({
-      name: "billing_intents_static_messenger_subject_fk",
-      columns: [
-        table.workspaceId,
-        table.messengerChannelConnectionId,
-        table.messengerSenderUserKey,
-      ],
-      foreignColumns: [
-        messengerPrivacySubjects.workspaceId,
-        messengerPrivacySubjects.channelConnectionId,
-        messengerPrivacySubjects.userKey,
-      ],
-    }).onDelete("restrict"),
     uniqueIndex("billing_intents_scope_profile_unique").on(
       table.intentId,
       table.workspaceId,
@@ -998,12 +952,6 @@ export const billingIntents = mysqlTable(
       table.mode,
       table.createdAt
     ),
-    index("billing_intents_messenger_subject_idx").on(
-      table.workspaceId,
-      table.messengerChannelConnectionId,
-      table.messengerSenderUserKey,
-      table.messengerPrivacyEpoch
-    ),
     uniqueIndex("billing_intents_mollie_payment_mode_unique").on(
       table.mode,
       table.molliePaymentId
@@ -1011,10 +959,6 @@ export const billingIntents = mysqlTable(
     uniqueIndex("billing_intents_idempotency_unique").on(table.idempotencyKey),
     uniqueIndex("billing_intents_checkout_scope_unique").on(
       table.checkoutScopeKey
-    ),
-    check(
-      "billing_intents_messenger_identity_scope",
-      sql`(${table.messengerSenderUserKey} IS NULL AND ${table.messengerPageId} IS NULL AND ${table.messengerChannelConnectionId} IS NULL AND ${table.messengerPrivacyEpoch} IS NULL) OR (${table.messengerSenderUserKey} IS NOT NULL AND ${table.messengerPageId} IS NOT NULL AND ${table.messengerChannelConnectionId} IS NOT NULL AND ${table.messengerPrivacyEpoch} > 0)`
     ),
   ]
 );

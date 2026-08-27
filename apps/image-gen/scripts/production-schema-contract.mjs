@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 
-export const productionSchemaContractVersion = 4;
+export const productionSchemaContractVersion = 5;
 export const productionSchemaSqlMode =
   "ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION";
 
