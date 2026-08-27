@@ -1148,7 +1148,7 @@ jobs:
 
       - name: Verify restored storage-proxy release
         if: failure() && steps.deploy.outcome != 'skipped'
-        timeout-minutes: 5
+        timeout-minutes: 10
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_STORAGE_PROXY_DEPLOY_TOKEN }}
         run: |

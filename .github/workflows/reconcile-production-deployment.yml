@@ -725,9 +725,6 @@ jobs:
             echo "Live storage-proxy identity changed after readonly successor classification" >&2
             exit 1
           fi
-          if test "$live_identity" = "$prior_identity"; then
-            wait_for_storage_proxy_health prior
-          fi
           if test "$superseded" = false; then
             if node "$RECOVERY_CONTROLLER" --verify-restored-release storage-proxy "$rollback_image" "$rollback_config" --expected-deployment-identity "$prior_identity" --root-dir "$GITHUB_WORKSPACE"; then
               :

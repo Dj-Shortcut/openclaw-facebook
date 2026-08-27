@@ -2539,11 +2539,22 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
         ));
     const rollbackHealthWaitIsBounded =
       stepName !== "Verify restored storage-proxy release" ||
-      (step.includes("wait_for_storage_proxy_health()") &&
-        step.includes("for attempt in {1..30}") &&
-        step.includes("--connect-timeout 2 --max-time 5") &&
-        step.indexOf("wait_for_storage_proxy_health final") <
-          step.indexOf("--verify-restored-release storage-proxy"));
+      (() => {
+        const healthWaitIndex = step.indexOf(
+          "wait_for_storage_proxy_health final",
+        );
+        const restoredReleaseVerificationIndex = step.indexOf(
+          "--verify-restored-release storage-proxy",
+        );
+        return (
+          step.includes("wait_for_storage_proxy_health()") &&
+          step.includes("for attempt in {1..30}") &&
+          step.includes("--connect-timeout 2 --max-time 5") &&
+          healthWaitIndex >= 0 &&
+          restoredReleaseVerificationIndex >= 0 &&
+          healthWaitIndex < restoredReleaseVerificationIndex
+        );
+      })();
     if (
       steps.length !== 1 ||
       !rollbackReadinessIsContractGated ||
@@ -3044,8 +3055,8 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
     ],
     [
       /^\s*timeout-minutes: 10\s*$/gm,
-      2,
-      "must bound immutable artifact provenance checks",
+      3,
+      "must bound immutable artifact provenance checks and storage-proxy rollback verification",
     ],
     [
       /^\s*timeout-minutes: 3\s*$/gm,
@@ -3059,8 +3070,8 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
     ],
     [
       /^\s*timeout-minutes: 5\s*$/gm,
-      12,
-      "must bound drift, trigger probing, rollback capture, restore verification, and recovery dispatch",
+      11,
+      "must bound drift, trigger probing, rollback capture, and recovery dispatch",
     ],
     [
       /^\s*timeout-minutes: 6\s*$/gm,
@@ -4987,7 +4998,7 @@ function validateProductionReconciliationWorkflow(rootDir) {
         !step.includes("wait_for_storage_proxy_health()") ||
         !step.includes("for attempt in {1..30}") ||
         !step.includes("--connect-timeout 2 --max-time 5") ||
-        !step.includes("wait_for_storage_proxy_health prior") ||
+        step.includes("wait_for_storage_proxy_health prior") ||
         !step.includes("wait_for_storage_proxy_health final") ||
         step.lastIndexOf("wait_for_storage_proxy_health final") >=
           step.lastIndexOf("--verify-restored-release storage-proxy"))
