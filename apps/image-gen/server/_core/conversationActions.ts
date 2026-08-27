@@ -1,8 +1,7 @@
 import { type Lang, t } from "./i18n";
-import type { ConversationResponse } from "./botResponse";
+import type { ConversationResponse, ImageQuotaBalance } from "./botResponse";
 import { FACE_MEMORY_CONSENT_NO, FACE_MEMORY_CONSENT_YES } from "./faceMemory";
 import { formatFaceMemoryRetentionDays } from "./faceMemoryRetention";
-import type { MessengerImageQuotaStatus } from "./messengerImageQuotaStore";
 
 const CONVERSATION_ACTION_NEW_IMAGE = "new_image";
 const CONVERSATION_ACTION_EDIT_PHOTO = "edit_photo";
@@ -45,7 +44,7 @@ export function buildQuickStartResponse(lang: Lang): ConversationResponse {
 
 export function buildGenerationSuccessResponse(
   lang: Lang,
-  quotaStatus?: MessengerImageQuotaStatus
+  quotaStatus?: ImageQuotaBalance
 ): ConversationResponse {
   return {
     text: quotaStatus
@@ -174,7 +173,7 @@ export function buildStartpilotQuotaReachedResponse(
 /** Free users get the same safe portal handoff when today's allowance ends. */
 export function buildFreeQuotaReachedResponse(
   lang: Lang,
-  quotaStatus?: MessengerImageQuotaStatus
+  quotaStatus?: ImageQuotaBalance
 ): ConversationResponse {
   const exhaustedText =
     quotaStatus?.monthly.remaining === 0
@@ -190,7 +189,7 @@ export function buildFreeQuotaReachedResponse(
 
 export function formatImageQuotaBalance(
   lang: Lang,
-  status: MessengerImageQuotaStatus
+  status: ImageQuotaBalance
 ): string {
   if (lang === "nl") {
     return `Vandaag nog ${status.daily.remaining} van ${status.daily.limit} foto's. Deze maand nog ${status.monthly.remaining} van ${status.monthly.limit}.`;
@@ -201,7 +200,7 @@ export function formatImageQuotaBalance(
 /** Neutral balance-only response for an image whose Meta outcome is unknown. */
 export function buildImageQuotaBalanceResponse(
   lang: Lang,
-  status: MessengerImageQuotaStatus
+  status: ImageQuotaBalance
 ): ConversationResponse {
   return { text: formatImageQuotaBalance(lang, status), actions: [] };
 }

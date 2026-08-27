@@ -101,7 +101,6 @@ jobs:
           grep -Fx "package/README.md" /tmp/openclaw-facebook-tarball-files.txt
           grep -Fx "package/docs/setup.md" /tmp/openclaw-facebook-tarball-files.txt
           grep -Fx "package/examples/channels.facebook.json5" /tmp/openclaw-facebook-tarball-files.txt
-          grep -Fx "package/examples/public-leaderbot.json5" /tmp/openclaw-facebook-tarball-files.txt
 
       - name: Install tarball in isolated OpenClaw profile
         run: |
