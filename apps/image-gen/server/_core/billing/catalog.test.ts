@@ -33,25 +33,23 @@ describe("billing catalog", () => {
     expect(plan.amountMinor).toBe(2_900);
   });
 
-  it("publishes only the finite Startpilot launch plan", () => {
+  it("publishes only the one-time premium credit bundle", () => {
     expect(listPublicBillingPlans()).toEqual([
       expect.objectContaining({
-        code: "startpilot_once_v1",
-        amount: "19.00",
+        code: "premium_image_credits_5_v1",
+        amount: "3.00",
         currency: "EUR",
         offerType: "one_time",
-        interval: "30 days",
-        accessDurationDays: 30,
+        interval: "one-time",
+        accessDurationDays: null,
         active: true,
         entitlements: {
-          imagesTotal: 20,
-          imagesPerDay: 5,
-          workspaces: 1,
-          facebookPages: 1,
-          imageQuality: "images_2",
+          premiumImageCredits: 5,
+          imageModel: "gpt-image-2",
+          imageQuality: "high",
         },
         disclosure: expect.objectContaining({
-          paymentAmount: "19.00",
+          paymentAmount: "3.00",
           recurringAmount: null,
           automaticRenewal: false,
           recurringMethod: null,
@@ -59,6 +57,15 @@ describe("billing catalog", () => {
         }),
       }),
     ]);
+  });
+
+  it("keeps legacy workspace products unavailable for new checkout", () => {
+    expect(
+      requireActiveBillingPlan("startpilot_once_v1").publiclyAvailable
+    ).toBe(false);
+    expect(
+      requireActiveBillingPlan("premium_monthly_v1").publiclyAvailable
+    ).toBe(false);
   });
 
   it("keeps the Startpilot catalog snapshot immutable", () => {

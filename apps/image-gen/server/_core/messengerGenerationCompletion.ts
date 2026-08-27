@@ -36,7 +36,8 @@ const USER_INDEX_LOCK_MAX_ATTEMPTS = 20;
 export type MessengerGenerationQuotaAccountingMode =
   | "success_only_v1"
   | "legacy_pre_success_v1"
-  | "startpilot_attempt_committed_v1";
+  | "startpilot_attempt_committed_v1"
+  | "premium_credit_v1";
 
 export type MessengerGenerationCompletion = {
   reqId: string;

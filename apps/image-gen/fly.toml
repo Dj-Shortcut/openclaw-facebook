@@ -13,6 +13,12 @@ kill_timeout = 300
   release_command_timeout = "10m"
 
 [env]
+  # Compatibility-only until the old portal traffic/rollback proof is closed.
+  # New environments default this surface off.
+  LEGACY_CUSTOMER_PORTAL_ENABLED = "true"
+  LEGACY_STARTPILOT_RUNTIME_ENABLED = "false"
+  PREMIUM_CREDIT_ENFORCEMENT_ENABLED = "false"
+  PREMIUM_CREDIT_CHECKOUT_ENABLED = "false"
   # The disabled pilot control keeps only the safety outbox lane enabled.
   # Enable finalization only after the audited scheduler-enable transition has
   # activated the exact pilot lane while commercial exposure remains off.

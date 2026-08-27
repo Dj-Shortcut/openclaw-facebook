@@ -36,6 +36,103 @@ beforeEach(() => {
 });
 
 describe("payment snapshot persistence flow", () => {
+  it("grants one exact Messenger-scoped premium bundle without workspace access", async () => {
+    const flow = paymentFlow({ intent: premiumCreditIntent() });
+    databaseMock.mockResolvedValue(flow.database);
+
+    await expect(
+      applyMolliePaymentSnapshot(
+        molliePayment({
+          amount: { currency: "EUR", value: "3.00" },
+          description: "Leaderbot - 5 premium afbeeldingscredits",
+        }),
+        1
+      )
+    ).resolves.toEqual({ result: "processed", workspaceId: 1 });
+
+    expect(flow.updates).toContainEqual({
+      table: billingIntents,
+      values: {
+        status: "paid",
+        paidAt: new Date("2026-08-01T10:00:00.000Z"),
+      },
+    });
+    expect(flow.updates).toContainEqual({
+      table: paymentLedger,
+      values: { paidEffectApplied: 1 },
+    });
+    expect(
+      flow.inserts.some(entry => entry.table === workspaceEntitlements)
+    ).toBe(false);
+    expect(
+      flow.inserts.some(
+        entry =>
+          entry.table === billingOutbox &&
+          entry.values.eventType === "send_portal_handoff"
+      )
+    ).toBe(false);
+  });
+
+  it("does not grant premium credits twice for a replayed paid snapshot", async () => {
+    const flow = paymentFlow({
+      intent: { ...premiumCreditIntent(), status: "paid" } as BillingIntent,
+      ledgerPaidEffectApplied: 1,
+    });
+    databaseMock.mockResolvedValue(flow.database);
+
+    await applyMolliePaymentSnapshot(
+      molliePayment({
+        amount: { currency: "EUR", value: "3.00" },
+        description: "Leaderbot - 5 premium afbeeldingscredits",
+      }),
+      1
+    );
+
+    expect(
+      flow.updates.filter(
+        entry =>
+          entry.table === billingIntents && entry.values.status === "paid"
+      )
+    ).toEqual([]);
+    expect(
+      flow.updates.filter(
+        entry =>
+          entry.table === paymentLedger && entry.values.paidEffectApplied === 1
+      )
+    ).toEqual([]);
+  });
+
+  it("contains the refunded premium grant even when a later payment exists", async () => {
+    const flow = paymentFlow({
+      intent: { ...premiumCreditIntent(), status: "paid" } as BillingIntent,
+      ledgerPaidEffectApplied: 1,
+      hasLaterPaidLedger: true,
+    });
+    databaseMock.mockResolvedValue(flow.database);
+
+    await applyMolliePaymentSnapshot(
+      molliePayment({
+        amount: { currency: "EUR", value: "3.00" },
+        description: "Leaderbot - 5 premium afbeeldingscredits",
+        _embedded: {
+          refunds: [
+            {
+              id: "re_refund123",
+              status: "refunded",
+              amount: { currency: "EUR", value: "3.00" },
+            },
+          ],
+        },
+      }),
+      1
+    );
+
+    expect(flow.updates).toContainEqual({
+      table: billingIntents,
+      values: { status: "contained" },
+    });
+  });
+
   it("fails before payment effects when the reconciliation lease is lost", async () => {
     const flow = paymentFlow({ intent: startpilotIntent() });
     databaseMock.mockResolvedValue(flow.database);
@@ -561,6 +658,7 @@ function paymentFlow(
     };
     ledgerPaidEffectApplied?: number;
     usageSourceIntentId?: string;
+    hasLaterPaidLedger?: boolean;
   } = {}
 ) {
   const inserts: Array<{
@@ -634,6 +732,9 @@ function paymentFlow(
             paidEffectApplied: options.ledgerPaidEffectApplied ?? 0,
           },
         ];
+      }
+      if (paymentLedgerSelectCount === 3 && options.hasLaterPaidLedger) {
+        return [{ id: 8 }];
       }
       return [];
     }
@@ -761,6 +862,27 @@ function startpilotIntent(): BillingIntent {
       imageQuality: "images_2",
     },
     mollieDescription: "Leaderbot Startpilot - eenmalig 30 dagen",
+  } as BillingIntent;
+}
+
+function premiumCreditIntent(): BillingIntent {
+  return {
+    ...billingIntent(),
+    kind: "startpilot_purchase",
+    status: "open",
+    planCode: "premium_image_credits_5_v1",
+    expectedAmount: "3.00",
+    interval: "one-time",
+    entitlements: {
+      premiumImageCredits: 5,
+      imageModel: "gpt-image-2",
+      imageQuality: "high",
+    },
+    mollieDescription: "Leaderbot - 5 premium afbeeldingscredits",
+    messengerSenderUserKey: "a".repeat(64),
+    messengerPageId: "page_123",
+    messengerChannelConnectionId: 12,
+    messengerPrivacyEpoch: 4,
   } as BillingIntent;
 }
 

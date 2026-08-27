@@ -20,7 +20,7 @@ Every offer is defined server-side and versioned. It contains:
 - EUR price in minor units;
 - exact number of premium image credits;
 - quality/model policy reference;
-- validity or explicit no-expiry policy;
+- explicit no-expiry policy;
 - refund and partial-use policy;
 - active/public flags.
 
@@ -30,20 +30,22 @@ price, currency, quantity, model, quality, or expiry from client input.
 ## Checkout flow
 
 1. Free quota exhaustion returns a channel-neutral checkout action.
-2. The server creates a short-lived, single-use signed handoff bound to the
-   exact conversation subject, Page binding, privacy epoch, offer snapshot,
-   nonce, and expiry.
+2. The server creates a short-lived encrypted handoff bound to the exact
+   conversation subject, Page binding, privacy epoch, offer, nonce, and expiry.
+   Replaying the same capability resolves to the same local payment intent and
+   must never create a second charge.
 3. The checkout page shows the seller, total price, credits, quality, validity,
    no-subscription disclosure, refund/withdrawal terms, and an explicit
    order-and-pay button.
 4. After explicit confirmation, the server creates one Mollie one-off payment
    with a trusted redirect and webhook URL.
 5. Mollie hosts payment method selection and payment credential collection.
-6. The return page displays pending, paid, failed, canceled, or expired state,
-   but never grants credits.
+6. The return page reports that verification is pending and never grants
+   credits or treats browser navigation as payment authority.
 7. The webhook/status worker fetches or verifies the latest Mollie object.
-8. A valid paid amount, currency, mode, profile, offer, and local intent create
-   exactly one immutable credit grant.
+8. A valid paid amount, currency, mode, profile, offer, and local intent mark
+   that exact user-scoped intent paid once. Spendable grants are derived from
+   those paid intents; duplicate payment snapshots cannot add another grant.
 9. The user can spend the balance on premium generations.
 
 Do not place raw PSIDs, prompts, messages, image URLs, or secrets in the handoff
@@ -51,7 +53,8 @@ URL, redirect URL, Mollie description, or metadata.
 
 ## Credit consumption
 
-Paid generation uses an atomic lifecycle:
+Paid generation uses the existing durable provider-attempt fence as its atomic
+credit lifecycle:
 
 ```text
 available -> reserved -> committed
@@ -61,9 +64,10 @@ available -> reserved -> committed
 - Reserve before a billable provider call.
 - Use a stable request receipt/idempotency key.
 - Commit once at the documented usable-output/delivery boundary.
-- Release on preflight rejection, provider failure, cancellation, or an
-  unambiguous failed result.
-- Reconcile ambiguous provider success before retrying.
+- Release on preflight rejection or another failure proven to occur before
+  provider transport.
+- Hold any failure after transport as ambiguous until provider reconciliation
+  proves whether a billable result exists; never retry it automatically.
 - Never fall back from paid admission to an unbounded provider call.
 
 Free daily quota remains a separate counter. Its reset must not alter purchased

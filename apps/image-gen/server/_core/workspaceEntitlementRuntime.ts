@@ -206,6 +206,9 @@ export async function resolveWorkspaceRuntimePolicy(
   pageId: string | undefined,
   now = new Date()
 ): Promise<WorkspaceRuntimePolicy> {
+  if (process.env.LEGACY_STARTPILOT_RUNTIME_ENABLED !== "true") {
+    return { kind: "free" };
+  }
   if (!isMollieEntitlementEnforcementEnabled()) {
     return { kind: "free" };
   }

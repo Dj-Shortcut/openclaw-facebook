@@ -36,11 +36,12 @@ The target product has:
       disabling its callback and gateway. Preserve or delete legacy volume data
       under an explicit privacy/retention decision.
 
-- [ ] **P2 - User-scoped purchased-credit ledger.** Add an append-only credit
-      ledger, wallet projection, and idempotent reservation/commit/release model
-      bound to the exact conversation subject and privacy epoch. Keep free daily
-      quota separate. Prove duplicate events, concurrency, crashes, deletion,
-      Page rebinding, refund adjustments, and insufficient balance.
+- [ ] **P2 - User-scoped purchased-credit accounting.** Derive grants from
+      verified paid intents and consumption from durable provider-attempt
+      fences, with idempotent reserve/start/commit/release transitions bound to
+      the exact conversation subject and privacy epoch. Keep free daily quota
+      separate. Prove duplicate events, concurrency, crashes, deletion, Page
+      rebinding, refund containment, and insufficient balance.
 
 - [ ] **P3 - Quota-exhaustion CTA and one-time checkout.** Return a
       channel-neutral upgrade action when free credits are exhausted. Open a
@@ -65,24 +66,34 @@ The target product has:
 Current release blocker: the 2026-08-27 storage-proxy promotion failed during
 startup because lifecycle inspection ran before the server was ready. Fly
 restored the previous healthy image and `/healthz` returned 200. No new deploy
-may start until the initialization-order fix, recovery workflow, production
-validator, readiness proof, and rollback proof are green together.
+may start until the initialization-order fix and recovery workflow that are
+green locally also pass reviewed production readiness and rollback proof.
+
+Prepared behind default-off flags on 2026-08-27: the versioned EUR 3/five-credit
+catalog offer, encrypted Messenger-bound checkout handoff, exact-subject paid
+intent grants, durable credit reservation/commit/release/ambiguous-hold logic,
+premium provider policy, current public/legal copy, and legacy portal/runtime
+gates. This is local implementation evidence only; it does not close P1-P4 or
+authorize Test Mode/live rollout.
 
 ## Current product hypothesis
 
-Initial experiment, subject to owner sign-off and unit-economics proof:
+Initial experiment selected by the owner, still subject to unit-economics,
+legal, accounting and Test Mode proof:
 
 - free allowance: a small daily number of standard images;
 - exhaustion message: exact reset time plus optional purchase;
-- candidate offer: a small one-time premium bundle, likely priced above EUR 1
-  because fixed payment fees make a EUR 1 purchase inefficient;
-- successful usable outputs consume credits; failures do not;
+- offer `premium_image_credits_5_v1`: five premium image credits for EUR 3;
+- premium policy: `gpt-image-2`, high quality, no product expiry date;
+- successful usable outputs commit credits; failures before provider transport
+  release their reservation, while ambiguous provider outcomes remain held for
+  safe reconciliation;
 - purchased credits do not reset with the daily free allowance;
 - no automatic follow-up outside Meta's allowed messaging window.
 
-The exact price, quantity, quality, expiry, and refund handling are product
-decisions. They must live in the server-owned offer catalog and checkout copy,
-not in client input or this backlog.
+Price, quantity, quality and validity live in the server-owned versioned offer
+catalog and checkout copy, never in client input. Refund handling remains a
+manual, fail-closed review until its legal and accounting policy is approved.
 
 ## Definition of done
 

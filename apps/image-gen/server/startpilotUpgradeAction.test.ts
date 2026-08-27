@@ -72,16 +72,18 @@ describe("Startpilot upgrade action", () => {
     ]);
   });
 
-  it("offers free users a portal CTA when their daily image allowance ends", () => {
-    process.env.NODE_ENV = "production";
-    process.env.PORTAL_BASE_URL = "https://leaderbot.live";
-
-    const response = buildFreeQuotaReachedResponse("nl");
+  it("offers free users a one-time premium CTA when their daily allowance ends", () => {
+    const response = buildFreeQuotaReachedResponse(
+      "nl",
+      undefined,
+      "https://leaderbot-fb-image-gen.fly.dev/credits?token=opaque"
+    );
     expect(response.text).toContain("gratis credits");
+    expect(response.text).toContain("eenmalig en zonder abonnement");
     expect(response.actions).toEqual([
       expect.objectContaining({
-        id: "open_startpilot_upgrade",
-        url: "https://leaderbot.live/?upgrade=startpilot#pricing",
+        id: "buy_premium_image_credits",
+        url: "https://leaderbot-fb-image-gen.fly.dev/credits?token=opaque",
       }),
     ]);
   });

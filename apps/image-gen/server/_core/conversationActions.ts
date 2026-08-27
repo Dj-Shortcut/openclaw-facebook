@@ -173,7 +173,8 @@ export function buildStartpilotQuotaReachedResponse(
 /** Free users get the same safe portal handoff when today's allowance ends. */
 export function buildFreeQuotaReachedResponse(
   lang: Lang,
-  quotaStatus?: ImageQuotaBalance
+  quotaStatus?: ImageQuotaBalance,
+  premiumCheckoutUrl?: string
 ): ConversationResponse {
   const exhaustedText =
     quotaStatus?.monthly.remaining === 0
@@ -184,7 +185,29 @@ export function buildFreeQuotaReachedResponse(
   const text = quotaStatus
     ? `${exhaustedText}\n${formatImageQuotaBalance(lang, quotaStatus)}`
     : exhaustedText;
-  return buildStartpilotPortalResponse(lang, text);
+  return {
+    text: premiumCheckoutUrl
+      ? lang === "nl"
+        ? `${text}\nWil je nu verdergaan met betere kwaliteit? Kies optioneel 5 premium credits voor €3, eenmalig en zonder abonnement.`
+        : `${text}\nWant to continue now with better quality? Optionally buy 5 premium credits for €3, once, with no subscription.`
+      : text,
+    actions: premiumCheckoutUrl
+      ? [
+          {
+            id: "buy_premium_image_credits",
+            label: t(lang, "buyPremiumCredits"),
+            url: premiumCheckoutUrl,
+          },
+        ]
+      : [],
+  };
+}
+
+export function formatPremiumCreditBalance(
+  lang: Lang,
+  remaining: number
+): string {
+  return t(lang, "premiumCreditsRemaining", { link: String(remaining) });
 }
 
 export function formatImageQuotaBalance(

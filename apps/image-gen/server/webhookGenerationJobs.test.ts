@@ -8,6 +8,13 @@ const {
   reserveMessengerProviderAttemptFenceMock,
   admitStartpilotImageProviderAttemptMock,
   recoverStartpilotImageProviderAdmissionMock,
+  reservePremiumImageCreditMock,
+  markPremiumImageCreditStartedMock,
+  releasePremiumImageCreditMock,
+  holdAmbiguousPremiumImageCreditMock,
+  commitPremiumImageCreditForCompletionMock,
+  getPremiumCreditBalanceMock,
+  assertMessengerPrivacySubjectMock,
   assertMessengerGenerationOwnershipMock,
   resolveWorkspaceRuntimePolicyMock,
   safeLogMock,
@@ -23,6 +30,13 @@ const {
   reserveMessengerProviderAttemptFenceMock: vi.fn(),
   admitStartpilotImageProviderAttemptMock: vi.fn(),
   recoverStartpilotImageProviderAdmissionMock: vi.fn(),
+  reservePremiumImageCreditMock: vi.fn(),
+  markPremiumImageCreditStartedMock: vi.fn(),
+  releasePremiumImageCreditMock: vi.fn(),
+  holdAmbiguousPremiumImageCreditMock: vi.fn(),
+  commitPremiumImageCreditForCompletionMock: vi.fn(),
+  getPremiumCreditBalanceMock: vi.fn(),
+  assertMessengerPrivacySubjectMock: vi.fn(),
   assertMessengerGenerationOwnershipMock: vi.fn(),
   resolveWorkspaceRuntimePolicyMock: vi.fn(),
   safeLogMock: vi.fn(),
@@ -45,6 +59,27 @@ vi.mock("./_core/startpilotImageProviderAdmission", () => ({
   recoverStartpilotImageProviderAdmission:
     recoverStartpilotImageProviderAdmissionMock,
 }));
+
+vi.mock("./_core/premiumCreditStore", () => ({
+  isPremiumCreditEnforcementEnabled: () =>
+    process.env.PREMIUM_CREDIT_ENFORCEMENT_ENABLED === "true",
+  reservePremiumImageCredit: reservePremiumImageCreditMock,
+  markPremiumImageCreditStarted: markPremiumImageCreditStartedMock,
+  holdAmbiguousPremiumImageCredit: holdAmbiguousPremiumImageCreditMock,
+  releasePremiumImageCredit: releasePremiumImageCreditMock,
+  commitPremiumImageCreditForCompletion:
+    commitPremiumImageCreditForCompletionMock,
+  getPremiumCreditBalance: getPremiumCreditBalanceMock,
+}));
+
+vi.mock("./_core/messengerPrivacySubject", async importOriginal => {
+  const actual =
+    await importOriginal<typeof import("./_core/messengerPrivacySubject")>();
+  return {
+    ...actual,
+    assertMessengerPrivacySubject: assertMessengerPrivacySubjectMock,
+  };
+});
 
 vi.mock("./_core/messengerProviderAttemptFence", () => ({
   finalizeMessengerProviderAttemptFence:
@@ -152,6 +187,8 @@ const originalFreeMonthlyLimit = process.env.MESSENGER_FREE_MONTHLY_LIMIT;
 const originalQuotaTimeZone = process.env.MESSENGER_IMAGE_QUOTA_TIME_ZONE;
 const originalQuotaBypassIds = process.env.MESSENGER_QUOTA_BYPASS_IDS;
 const originalMessengerAdminIds = process.env.MESSENGER_ADMIN_IDS;
+const originalPremiumCreditEnforcementEnabled =
+  process.env.PREMIUM_CREDIT_ENFORCEMENT_ENABLED;
 
 afterAll(() => {
   if (originalPrivacyPepper === undefined) {
@@ -184,6 +221,12 @@ afterAll(() => {
   } else {
     process.env.MESSENGER_ADMIN_IDS = originalMessengerAdminIds;
   }
+  if (originalPremiumCreditEnforcementEnabled === undefined) {
+    delete process.env.PREMIUM_CREDIT_ENFORCEMENT_ENABLED;
+  } else {
+    process.env.PREMIUM_CREDIT_ENFORCEMENT_ENABLED =
+      originalPremiumCreditEnforcementEnabled;
+  }
 });
 
 beforeEach(() => {
@@ -208,6 +251,31 @@ beforeEach(() => {
   });
   recoverStartpilotImageProviderAdmissionMock.mockReset();
   recoverStartpilotImageProviderAdmissionMock.mockResolvedValue(undefined);
+  reservePremiumImageCreditMock.mockReset();
+  reservePremiumImageCreditMock.mockResolvedValue({
+    status: "exhausted",
+    balance: { purchased: 0, committedOrReserved: 0, remaining: 0 },
+  });
+  markPremiumImageCreditStartedMock.mockReset();
+  markPremiumImageCreditStartedMock.mockResolvedValue(undefined);
+  releasePremiumImageCreditMock.mockReset();
+  releasePremiumImageCreditMock.mockResolvedValue(undefined);
+  holdAmbiguousPremiumImageCreditMock.mockReset();
+  holdAmbiguousPremiumImageCreditMock.mockResolvedValue(undefined);
+  commitPremiumImageCreditForCompletionMock.mockReset();
+  commitPremiumImageCreditForCompletionMock.mockResolvedValue({
+    purchased: 5,
+    committedOrReserved: 1,
+    remaining: 4,
+  });
+  getPremiumCreditBalanceMock.mockReset();
+  getPremiumCreditBalanceMock.mockResolvedValue({
+    purchased: 5,
+    committedOrReserved: 1,
+    remaining: 4,
+  });
+  assertMessengerPrivacySubjectMock.mockReset();
+  assertMessengerPrivacySubjectMock.mockResolvedValue(undefined);
   assertMessengerGenerationOwnershipMock.mockReset();
   assertMessengerGenerationOwnershipMock.mockResolvedValue(undefined);
   resolveWorkspaceRuntimePolicyMock.mockReset();
@@ -230,6 +298,7 @@ beforeEach(() => {
   delete process.env.MESSENGER_FREE_MONTHLY_LIMIT;
   delete process.env.MESSENGER_QUOTA_BYPASS_IDS;
   delete process.env.MESSENGER_ADMIN_IDS;
+  delete process.env.PREMIUM_CREDIT_ENFORCEMENT_ENABLED;
 });
 
 describe("messenger generation job safety", () => {
@@ -2510,23 +2579,137 @@ describe("messenger generation job safety", () => {
       }
     }
 
-    expect(sendButtonTemplateMock).toHaveBeenCalledWith(
+    expect(sendQuickRepliesMock).toHaveBeenCalledWith(
       "quota-exhausted-user",
       `${t("en", "outOfDailyImageCredits")}\nToday you have 0 of 0 photos left. This month you have 20 of 20 left.`,
-      [
-        {
-          type: "web_url",
-          title: "Open Leaderbot",
-          url: "https://leaderbot.live/?upgrade=startpilot#pricing",
-          webview_height_ratio: "full",
-        },
-      ]
+      []
     );
-    expect(sendQuickRepliesMock).not.toHaveBeenCalled();
+    expect(sendButtonTemplateMock).not.toHaveBeenCalled();
     expect(executeGenerationFlowMock).not.toHaveBeenCalled();
     expect(getState("quota-exhausted-user")?.stage).toBe(
       "AWAITING_EDIT_PROMPT"
     );
+  });
+
+  it("spends one premium credit on high-quality generation after free exhaustion", async () => {
+    process.env.MESSENGER_FREE_DAILY_LIMIT = "0";
+    process.env.PREMIUM_CREDIT_ENFORCEMENT_ENABLED = "true";
+    const userId = "a".repeat(64);
+    const premiumFence = {
+      leaseToken: "premium-credit-lease",
+      attemptKeyHash: "b".repeat(64),
+      workspaceId: 42,
+      channelConnectionId: 8,
+      bindingEpoch: 3,
+      pageId: "owner-page",
+      userKey: userId,
+      privacyEpoch: 5,
+      providerOperation: "premium_image_credit_v1",
+    };
+    reservePremiumImageCreditMock.mockResolvedValueOnce({
+      status: "reserved",
+      fence: premiumFence,
+      balance: { purchased: 5, committedOrReserved: 1, remaining: 4 },
+    });
+    executeGenerationFlowMock.mockImplementationOnce(async input => {
+      expect(input.imageModel).toBe("gpt-image-2");
+      expect(input.imageQuality).toBe("high");
+      const admission = await input.onProviderAttempt();
+      await admission?.markTransportStarted();
+      return successGenerationResult();
+    });
+    const runner = createTestRunner();
+
+    await runner.processMessengerGenerationJob({
+      psid: "premium-credit-user",
+      userId,
+      pageId: "owner-page",
+      workspaceId: 42,
+      channelConnectionId: 8,
+      bindingEpoch: 3,
+      privacyEpoch: 5,
+      reqId: "req-premium-credit",
+      lang: "nl",
+    });
+
+    expect(reservePremiumImageCreditMock).toHaveBeenCalledOnce();
+    expect(markPremiumImageCreditStartedMock).toHaveBeenCalledWith(
+      premiumFence
+    );
+    expect(commitPremiumImageCreditForCompletionMock).toHaveBeenCalledOnce();
+    expect(releasePremiumImageCreditMock).not.toHaveBeenCalled();
+    expect(sendImageMock).toHaveBeenCalledOnce();
+    expect(sendQuickRepliesMock).toHaveBeenCalledWith(
+      "premium-credit-user",
+      expect.stringContaining("Je hebt nog 4 premium credits"),
+      expect.any(Array)
+    );
+    await expect(
+      runWithMessengerRequestContext("owner-page", async () =>
+        getMessengerGenerationCompletion("req-premium-credit", {
+          workspaceId: 42,
+          channelConnectionId: 8,
+          bindingEpoch: 3,
+          privacyEpoch: 5,
+          userKey: userId,
+          pageId: "owner-page",
+        })
+      )
+    ).resolves.toMatchObject({
+      quotaAccountingMode: "premium_credit_v1",
+      deliveryStatus: "delivered",
+      successNoticeStatus: "sent",
+    });
+  });
+
+  it("holds a premium credit when provider outcome becomes ambiguous after transport", async () => {
+    process.env.MESSENGER_FREE_DAILY_LIMIT = "0";
+    process.env.PREMIUM_CREDIT_ENFORCEMENT_ENABLED = "true";
+    const userId = "c".repeat(64);
+    const premiumFence = {
+      leaseToken: "premium-ambiguous-lease",
+      attemptKeyHash: "d".repeat(64),
+      workspaceId: 42,
+      channelConnectionId: 8,
+      bindingEpoch: 3,
+      pageId: "owner-page",
+      userKey: userId,
+      privacyEpoch: 5,
+      providerOperation: "premium_image_credit_v1",
+    };
+    reservePremiumImageCreditMock.mockResolvedValueOnce({
+      status: "reserved",
+      fence: premiumFence,
+      balance: { purchased: 5, committedOrReserved: 1, remaining: 4 },
+    });
+    executeGenerationFlowMock.mockImplementationOnce(async input => {
+      const admission = await input.onProviderAttempt();
+      await admission?.markTransportStarted();
+      throw new Error("provider transport outcome unknown");
+    });
+    const runner = createTestRunner();
+
+    await runner.processMessengerGenerationJob({
+      psid: "premium-ambiguous-user",
+      userId,
+      pageId: "owner-page",
+      workspaceId: 42,
+      channelConnectionId: 8,
+      bindingEpoch: 3,
+      privacyEpoch: 5,
+      reqId: "req-premium-ambiguous",
+      lang: "nl",
+    });
+
+    expect(markPremiumImageCreditStartedMock).toHaveBeenCalledWith(
+      premiumFence
+    );
+    expect(holdAmbiguousPremiumImageCreditMock).toHaveBeenCalledWith(
+      premiumFence
+    );
+    expect(releasePremiumImageCreditMock).not.toHaveBeenCalled();
+    expect(commitPremiumImageCreditForCompletionMock).not.toHaveBeenCalled();
+    expect(sendImageMock).not.toHaveBeenCalled();
   });
 
   it("treats sent:false as a retryable exhausted-quota notice", async () => {

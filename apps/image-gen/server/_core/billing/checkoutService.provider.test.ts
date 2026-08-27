@@ -175,14 +175,14 @@ describe("Mollie checkout provider failure boundary", () => {
     expect(storeMocks.markIntentApiUnknown).not.toHaveBeenCalled();
   });
 
-  it("uses a one-off payment and never the first-payment subscription path for Startpilot", async () => {
+  it("uses a one-off payment and never the first-payment subscription path for premium credits", async () => {
     const createOneTimePayment = vi.fn().mockResolvedValue({
       resource: "payment",
       id: "tr_payment123",
       mode: "test",
       status: "open",
-      amount: { currency: "EUR", value: "19.00" },
-      description: "Leaderbot Startpilot - eenmalig 30 dagen",
+      amount: { currency: "EUR", value: "3.00" },
+      description: "Leaderbot - 5 premium afbeeldingscredits",
       customerId: "cst_customer123",
       metadata: { billingIntentId: intentId },
       createdAt: "2026-08-01T00:00:00.000Z",
@@ -206,17 +206,22 @@ describe("Mollie checkout provider failure boundary", () => {
       startMollieCheckout(
         {
           workspaceId: 1,
-          planCode: "startpilot_once_v1",
+          planCode: "premium_image_credits_5_v1",
           countryCode: "BE",
-          kind: "startpilot_purchase",
+          kind: "premium_credit_purchase",
           businessCheckout: false,
+          messengerSenderUserKey: "a".repeat(64),
+          messengerPageId: "page-1",
+          messengerChannelConnectionId: 3,
+          messengerPrivacyEpoch: 4,
+          checkoutScopeKey: `premium:${"b".repeat(64)}`,
         },
         client
       )
     ).resolves.toMatchObject({ status: "open" });
     expect(createOneTimePayment).toHaveBeenCalledWith(
       expect.objectContaining({
-        amount: { currency: "EUR", value: "19.00" },
+        amount: { currency: "EUR", value: "3.00" },
       })
     );
     expect(createFirstPayment).not.toHaveBeenCalled();
@@ -227,10 +232,15 @@ describe("Mollie checkout provider failure boundary", () => {
 function checkoutInput() {
   return {
     workspaceId: 1,
-    planCode: "startpilot_once_v1",
+    planCode: "premium_image_credits_5_v1",
     countryCode: "BE" as const,
-    kind: "startpilot_purchase" as const,
+    kind: "premium_credit_purchase" as const,
     businessCheckout: false,
+    messengerSenderUserKey: "a".repeat(64),
+    messengerPageId: "page-1",
+    messengerChannelConnectionId: 3,
+    messengerPrivacyEpoch: 4,
+    checkoutScopeKey: `premium:${"b".repeat(64)}`,
   };
 }
 
@@ -250,8 +260,8 @@ function checkoutClient(
       id: "tr_payment123",
       mode: overrides.mode ?? "test",
       status: "open",
-      amount: { currency: "EUR", value: "19.00" },
-      description: "Leaderbot Startpilot - eenmalig 30 dagen",
+      amount: { currency: "EUR", value: "3.00" },
+      description: "Leaderbot - 5 premium afbeeldingscredits",
       customerId: overrides.customerId ?? "cst_customer123",
       metadata: overrides.metadata ?? { billingIntentId: intentId },
       createdAt: "2026-08-01T00:00:00.000Z",

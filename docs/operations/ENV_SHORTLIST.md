@@ -49,6 +49,11 @@ deduplication, state, quota, deletion, and future wallet continuity.
 | `MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD` | Provider safety cap | Required before public generation |
 | `MESSENGER_USER_DAILY_SPEND_CAP_USD` | Per-user safety cap | Required before paid premium rollout |
 | `SOURCE_IMAGE_ALLOWED_HOSTS` | Source image fetch allowlist | Exact trusted hosts only |
+| `PREMIUM_CREDIT_ENFORCEMENT_ENABLED` | Spend one durable premium credit per successful premium image | Default `false`; enable only after Test Mode payment and recovery evidence |
+| `PREMIUM_CREDIT_CHECKOUT_ENABLED` | Show the encrypted one-time checkout CTA | Default `false`; never enable before enforcement is ready |
+| `PREMIUM_CREDIT_CHECKOUT_TOKEN_SECRET` | Encrypt short-lived Messenger-bound checkout capabilities | Dedicated random secret of at least 32 characters |
+| `LEGACY_CUSTOMER_PORTAL_ENABLED` | Temporary old workspace portal/API compatibility | `false` in new environments; existing production only until traffic and rollback proof close P5 |
+| `LEGACY_STARTPILOT_RUNTIME_ENABLED` | Temporary historical Startpilot entitlement enforcement | Default `false`; recovery window only |
 
 Also configure the provider-account hard limit. An application credit balance
 is never permission to exceed provider budgets.
@@ -91,15 +96,18 @@ Storage-proxy-specific Redis and signing variables are documented in
 
 ## One-time Mollie payments
 
-The current variable set was built for the legacy Startpilot/subscription
-system. Do not enable it as the new consumer wallet merely because the variables
-exist.
+The consumer offer is one payment of EUR 3 for five premium image credits. It
+has no subscription, mandate, renewal, automatic top-up, or usage-based
+invoice. The existing Mollie transport and webhook machinery is reused, while
+the credit grant stays bound to the exact Messenger Page, channel connection,
+privacy epoch, and pseudonymous user key.
 
 During migration:
 
 - keep `MOLLIE_MODE=test`;
 - keep `MOLLIE_LIVE_BILLING_ENABLED=false`;
-- keep new checkout creation disabled;
+- keep `PREMIUM_CREDIT_CHECKOUT_ENABLED=false` and
+  `PREMIUM_CREDIT_ENFORCEMENT_ENABLED=false` until the Test Mode journey passes;
 - keep subscription, mandate, recurring, notification, and accounting workers
   disabled unless they are required to safely drain a previously created
   provider object;
@@ -107,9 +115,12 @@ During migration:
 - follow [`../BILLING_RUNBOOK.md`](../BILLING_RUNBOOK.md) before introducing
   wallet-specific configuration.
 
-The new paid-credit implementation must add explicit, reviewed configuration
-for offer exposure and wallet enforcement. Do not overload a legacy workspace
-entitlement flag without a migration contract.
+Enable in this order: deploy with both switches false, validate schema and
+webhook recovery, enable enforcement, then expose checkout. A browser return is
+never payment authority; only a validated Mollie webhook can turn the exact
+billing intent into spendable credits. Keep
+`LEGACY_STARTPILOT_RUNTIME_ENABLED=false` except during an explicit historical
+entitlement recovery window.
 
 ## Optional features
 

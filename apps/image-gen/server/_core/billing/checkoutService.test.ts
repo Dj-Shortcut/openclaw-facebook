@@ -21,6 +21,11 @@ import {
 } from "./checkoutService";
 import * as billingReadiness from "./billingReadiness";
 import type { MollieClient } from "./mollieClient";
+import {
+  PREMIUM_IMAGE_CREDITS_PLAN_CODE,
+  PREMIUM_MONTHLY_PLAN_CODE,
+  STARTPILOT_PLAN_CODE,
+} from "./catalog";
 
 const originalEnv = { ...process.env };
 
@@ -174,7 +179,7 @@ describe("Mollie checkout launch gate", () => {
     expect(listMethods).toHaveBeenCalledTimes(2);
   });
 
-  it("checks only one-off Bancontact for the Startpilot", async () => {
+  it("checks only one-off Bancontact for premium credits", async () => {
     process.env = billingTestEnv();
     const listMethods = vi.fn().mockResolvedValue([]);
 
@@ -182,16 +187,38 @@ describe("Mollie checkout launch gate", () => {
       startMollieCheckout(
         {
           workspaceId: 1,
-          planCode: "startpilot_once_v1",
+          planCode: "premium_image_credits_5_v1",
           countryCode: "BE",
-          kind: "startpilot_purchase",
+          kind: "premium_credit_purchase",
           businessCheckout: false,
+          messengerSenderUserKey: "a".repeat(64),
+          messengerPageId: "page-1",
+          messengerChannelConnectionId: 3,
+          messengerPrivacyEpoch: 4,
+          checkoutScopeKey: `premium:${"b".repeat(64)}`,
         },
         { listMethods } as unknown as MollieClient
       )
     ).rejects.toThrow("Bancontact must be enabled");
     expect(listMethods).toHaveBeenCalledTimes(1);
     expect(listMethods).toHaveBeenCalledWith("oneoff");
+  });
+
+  it("rejects a premium checkout before provider work without exact Messenger scope", async () => {
+    process.env = billingTestEnv();
+    const listMethods = vi.fn();
+
+    await expect(
+      startMollieCheckout(
+        {
+          workspaceId: 1,
+          planCode: "premium_image_credits_5_v1",
+          kind: "premium_credit_purchase",
+        },
+        { listMethods } as unknown as MollieClient
+      )
+    ).rejects.toThrow("premium credit checkout scope is incomplete");
+    expect(listMethods).not.toHaveBeenCalled();
   });
 
   it("does not report sandbox ready from provider methods alone", async () => {
@@ -277,13 +304,39 @@ describe("Mollie checkout launch gate", () => {
 
   it("fails closed when a checkout kind does not match its product", () => {
     expect(() =>
-      assertCheckoutKindMatchesPlan("one_time", "subscription_start")
+      assertCheckoutKindMatchesPlan(
+        PREMIUM_IMAGE_CREDITS_PLAN_CODE,
+        "one_time",
+        "subscription_start"
+      )
     ).toThrow("do not match");
     expect(() =>
-      assertCheckoutKindMatchesPlan("subscription", "startpilot_purchase")
+      assertCheckoutKindMatchesPlan(
+        PREMIUM_MONTHLY_PLAN_CODE,
+        "subscription",
+        "startpilot_purchase"
+      )
     ).toThrow("do not match");
     expect(() =>
-      assertCheckoutKindMatchesPlan("one_time", "startpilot_purchase")
+      assertCheckoutKindMatchesPlan(
+        STARTPILOT_PLAN_CODE,
+        "one_time",
+        "startpilot_purchase"
+      )
+    ).not.toThrow();
+    expect(() =>
+      assertCheckoutKindMatchesPlan(
+        STARTPILOT_PLAN_CODE,
+        "one_time",
+        "premium_credit_purchase"
+      )
+    ).toThrow("do not match");
+    expect(() =>
+      assertCheckoutKindMatchesPlan(
+        PREMIUM_IMAGE_CREDITS_PLAN_CODE,
+        "one_time",
+        "premium_credit_purchase"
+      )
     ).not.toThrow();
   });
 });

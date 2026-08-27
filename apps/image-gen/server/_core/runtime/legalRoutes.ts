@@ -4,7 +4,8 @@ import {
 } from "../../../shared/publicBusinessDetails";
 import type express from "express";
 import {
-  STARTPILOT_PLAN_CODE,
+  PREMIUM_IMAGE_CREDITS_PER_PURCHASE,
+  PREMIUM_IMAGE_CREDITS_PLAN_CODE,
   formatAmountMinor,
   getBillingPlan,
 } from "../billing/catalog";
@@ -17,45 +18,43 @@ type LegalPage = {
   sections: Array<{ heading: string; html: string }>;
 };
 
-const FALLBACK_STARTPILOT_PRICING = Object.freeze({
-  startpilotPrice: "€19",
-  startpilotCurrency: "EUR",
+const FALLBACK_CREDIT_PRICING = Object.freeze({
+  price: "€3",
+  currency: "EUR",
 });
 
-export function getStartpilotPricingDisplay(
+export function getPremiumCreditPricingDisplay(
   lookupPlan: typeof getBillingPlan = getBillingPlan
 ) {
   try {
-    const startpilotPlan = lookupPlan(STARTPILOT_PLAN_CODE);
-    if (!startpilotPlan) return FALLBACK_STARTPILOT_PRICING;
+    const plan = lookupPlan(PREMIUM_IMAGE_CREDITS_PLAN_CODE);
+    if (!plan) return FALLBACK_CREDIT_PRICING;
     return {
-      startpilotPrice: `€${formatAmountMinor(
-        startpilotPlan.amountMinor
-      ).replace(/\.00$/, "")}`,
-      startpilotCurrency: startpilotPlan.currency,
+      price: `€${formatAmountMinor(plan.amountMinor).replace(/\.00$/, "")}`,
+      currency: plan.currency,
     };
   } catch {
-    return FALLBACK_STARTPILOT_PRICING;
+    return FALLBACK_CREDIT_PRICING;
   }
 }
 
 export function registerLegalRoutes(app: express.Express) {
   app.get("/privacy", (_req, res) => {
     const faceMemoryRetention = formatFaceMemoryRetentionDays("en");
-    const { startpilotPrice } = getStartpilotPricingDisplay();
+    const { price } = getPremiumCreditPricingDisplay();
     res.type("html").send(
       renderLegalPage({
         title: "Privacy Policy",
         intro:
-          "Leaderbot is a workspace-based AI assistant portal. Customer settings, assistant context, knowledge records, channel data and privacy requests remain scoped to the owning workspace.",
+          "Leaderbot is an owner-operated Messenger image assistant. Each Messenger user has separate pseudonymous state, quota and purchased-credit records.",
         sections: [
           {
             heading: "Data used to provide Leaderbot",
-            html: "<p>Leaderbot may process account and workspace details, assistant instructions, knowledge-source records, Messenger messages and metadata, images submitted for generation or editing, usage data, and export or deletion requests. We process only what is needed to operate, secure and support the service.</p>",
+            html: "<p>Leaderbot may process Messenger messages and metadata, images submitted for generation or editing, pseudonymous usage and credit records, and deletion or support requests. We process only what is needed to operate, secure and support the service.</p>",
           },
           {
-            heading: "Workspace separation",
-            html: "<p>Customer content is private by default and is not intentionally shared or searchable across customer workspaces. Operational logs should contain redacted identifiers and service metadata rather than raw messages, prompts, uploaded knowledge or access tokens.</p>",
+            heading: "User separation",
+            html: "<p>One Messenger user cannot access another user's prompts, images, quota or purchased credits. Operational logs contain redacted identifiers and service metadata rather than raw messages, prompts, photos or payment credentials.</p>",
           },
           {
             heading: "Images and optional photo memory",
@@ -67,11 +66,11 @@ export function registerLegalRoutes(app: express.Express) {
           },
           {
             heading: "Retention and your choices",
-            html: '<p>Retention depends on the feature and legal obligations. Where available, workspace members can request export or deletion through the portal. Messenger users can request deletion by sending <strong>delete my data</strong> or <strong>verwijder mijn data</strong>, or by contacting <a href="mailto:privacy@leaderbot.live">privacy@leaderbot.live</a>.</p>',
+            html: '<p>Retention depends on the feature and legal obligations. Messenger users can request deletion by sending <strong>delete my data</strong> or <strong>verwijder mijn data</strong>, or by contacting <a href="mailto:privacy@leaderbot.live">privacy@leaderbot.live</a>.</p>',
           },
           {
             heading: "Payments",
-            html: `<p>A Startpilot purchase starts only inside the signed-in customer portal. Mollie processes one ${startpilotPrice} payment after the customer reviews and confirms checkout. The pilot does not create a subscription, automatic renewal, direct-debit mandate, top-up or overage charge.</p>`,
+            html: `<p>After the free daily allowance is used, Messenger may show an optional checkout for ${PREMIUM_IMAGE_CREDITS_PER_PURCHASE} premium image credits. Mollie processes one ${price} payment only after explicit confirmation. This creates no subscription, automatic renewal, mandate, automatic top-up or overage charge.</p>`,
           },
         ],
       })
@@ -79,20 +78,20 @@ export function registerLegalRoutes(app: express.Express) {
   });
 
   app.get("/terms", (_req, res) => {
-    const { startpilotPrice } = getStartpilotPricingDisplay();
+    const { price } = getPremiumCreditPricingDisplay();
     res.type("html").send(
       renderLegalPage({
         title: "Terms of Service",
         intro:
-          "These pilot terms apply to the Leaderbot customer portal and connected Messenger image experience. Leaderbot provides AI-generated images and guided Messenger controls together with workspace, usage and privacy controls.",
+          "These terms apply to the Leaderbot Messenger image experience, its free daily allowance and optional one-time premium credits.",
         sections: [
           {
-            heading: "Startpilot offer",
-            html: `<p>Leaderbot Startpilot costs ${startpilotPrice} as a single payment for 30 days. It includes one workspace, one connected Facebook Page, guided Messenger image controls and 20 Images 2.0 image generations, with a maximum of five image generations per day. An image generation counts once when its first AI-provider attempt starts; retries within that same request do not consume extra pilot generations. Purchase starts only in the signed-in portal.</p>`,
+            heading: "Premium credit offer",
+            html: `<p>${PREMIUM_IMAGE_CREDITS_PER_PURCHASE} premium image credits cost ${price} as a single Mollie payment. They have no product expiry date and remain separate from the resetting free allowance. Checkout starts only from a short-lived button offered to the exact Messenger user after free credits are exhausted. A credit is committed for one durable successful premium result. Failures before provider transport release the reservation; an uncertain provider outcome is held for safe reconciliation instead of risking a duplicate charge.</p>`,
           },
           {
             heading: "No subscription or overage",
-            html: "<p>The proposed Startpilot does not renew automatically and does not create a subscription or direct-debit mandate. Usage stops at the included limits; there are no automatic top-ups or additional usage charges. Any later offer requires a separate, explicit choice.</p>",
+            html: "<p>Premium credits do not renew automatically and create no subscription or direct-debit mandate. There are no automatic top-ups or additional usage charges. Every later bundle requires a separate explicit choice.</p>",
           },
           {
             heading: "AI-generated content",
@@ -100,7 +99,7 @@ export function registerLegalRoutes(app: express.Express) {
           },
           {
             heading: "Messenger connection and limits",
-            html: "<p>You may connect only a Facebook Page that you are authorized to manage. Quotas, rate limits, budget limits, abuse protection and temporary safety restrictions may apply and are shown in the portal where relevant.</p>",
+            html: "<p>The service owner connects the Facebook Page. Per-user quotas, rate limits, global budget limits, abuse protection and temporary safety restrictions may apply.</p>",
           },
           {
             heading: "Platform separation",
@@ -116,33 +115,32 @@ export function registerLegalRoutes(app: express.Express) {
   });
 
   app.get("/billing-policy", (_req, res) => {
-    const { startpilotPrice, startpilotCurrency } =
-      getStartpilotPricingDisplay();
+    const { price, currency } = getPremiumCreditPricingDisplay();
     res.type("html").send(
       renderLegalPage({
-        title: "Startpilot Pricing and Billing Information",
+        title: "Premium Credit Pricing and Billing Information",
         intro:
-          "Leaderbot offers a bounded one-time Startpilot. A purchase starts only in the signed-in customer portal and requires an explicit checkout confirmation.",
+          "Leaderbot offers an optional one-time premium image-credit bundle after the free daily allowance is exhausted.",
         sections: [
           {
             heading: "One-time price",
-            html: `<p>Leaderbot Startpilot costs ${startpilotPrice} once in ${startpilotCurrency} for 30 days. Checkout is available only inside the signed-in customer portal, where the customer reviews the exact amount before continuing to Mollie.</p>`,
+            html: `<p>${PREMIUM_IMAGE_CREDITS_PER_PURCHASE} premium image credits cost ${price} once in ${currency}. The exact user reviews the amount and no-subscription disclosure before continuing to Mollie.</p>`,
           },
           {
-            heading: "Included pilot usage",
-            html: "<p>The proposed package covers one workspace, one Facebook Page, guided Messenger image controls and 20 Images 2.0 image generations. Image generation is additionally limited to five per day during the 30-day access period. A generation counts once when its first AI-provider attempt starts; retries within the same request do not consume another pilot generation.</p>",
+            heading: "Included usage",
+            html: "<p>Each credit authorizes one premium-quality image result. Purchased credits have no product expiry date and are separate from the resetting free daily allowance. A failure before provider transport releases its reservation. An uncertain provider outcome is held for reconciliation so Leaderbot cannot issue a duplicate billable request.</p>",
           },
           {
             heading: "No renewal, top-up or overage",
-            html: "<p>The Startpilot is a single purchase without automatic renewal, subscription or direct-debit mandate. Usage stops at the included limits. No automatic top-up or additional usage fee is charged, and continuing later requires a separate explicit choice.</p>",
+            html: "<p>The bundle is a single purchase without automatic renewal, subscription or direct-debit mandate. No automatic top-up or additional usage fee is charged.</p>",
           },
           {
             heading: "No payment from an interest request",
-            html: "<p>Sending an email or early-access request does not authorize a payment or create a contract. A payment can start only from an explicitly enabled checkout shown to an authenticated workspace owner or administrator.</p>",
+            html: "<p>Sending a message does not authorize a payment. Checkout starts only after the user presses the short-lived premium-credit button and confirms the displayed offer.</p>",
           },
           {
             heading: "Before payment",
-            html: "<p>Before any payment, Leaderbot shows the total price, 30-day access period, included usage, payment method, absence of renewal and overage, and applicable cancellation and refund terms.</p>",
+            html: "<p>Before payment, Leaderbot shows the total price, credit count, premium quality, payment method, absence of renewal and overage, and applicable cancellation and refund terms.</p>",
           },
           {
             heading: "Questions",
@@ -158,12 +156,8 @@ export function registerLegalRoutes(app: express.Express) {
       renderLegalPage({
         title: "User Data Deletion Instructions",
         intro:
-          "Leaderbot supports workspace export and deletion requests and Messenger deletion requests for service-controlled data.",
+          "Leaderbot supports Messenger deletion requests for service-controlled data.",
         sections: [
-          {
-            heading: "Portal requests",
-            html: "<p>Signed-in workspace members can create export or deletion requests from the customer portal where those controls are available.</p>",
-          },
           {
             heading: "Messenger requests",
             html: '<p>Send <strong>delete my data</strong> or <strong>verwijder mijn data</strong> in Messenger. You can also email <a href="mailto:privacy@leaderbot.live">privacy@leaderbot.live</a> with your Facebook profile name and the approximate time you contacted the Page so the request can be identified.</p>',
@@ -219,7 +213,7 @@ function renderLegalPage(page: LegalPage): string {
 <body>
   <main>
     <a class="back" href="/">Back to Leaderbot</a>
-    <p class="updated">Last updated 1 August 2026</p>
+    <p class="updated">Last updated 27 August 2026</p>
     <h1>${escapeHtml(page.title)}</h1>
     <p class="intro">${escapeHtml(page.intro)}</p>
     ${sections}

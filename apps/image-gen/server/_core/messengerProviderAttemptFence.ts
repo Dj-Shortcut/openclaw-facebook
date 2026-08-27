@@ -117,6 +117,38 @@ type MessengerProviderAttemptClaimOptions = Readonly<{
   expectedChannel?: "facebook_messenger" | "whatsapp";
 }>;
 
+export function buildMessengerProviderAttemptKeyHash(
+  job: Pick<
+    MessengerGenerationJob,
+    | "workspaceId"
+    | "channelConnectionId"
+    | "bindingEpoch"
+    | "userId"
+    | "privacyEpoch"
+    | "reqId"
+  >,
+  providerOperation: string,
+  providerAttemptSequence: number
+): string {
+  return createHash("sha256")
+    .update(String(job.workspaceId))
+    .update("\0")
+    .update(String(job.channelConnectionId))
+    .update("\0")
+    .update(String(job.bindingEpoch))
+    .update("\0")
+    .update(job.userId)
+    .update("\0")
+    .update(String(job.privacyEpoch))
+    .update("\0")
+    .update(providerOperation)
+    .update("\0")
+    .update(String(providerAttemptSequence))
+    .update("\0")
+    .update(job.reqId)
+    .digest("hex");
+}
+
 async function claimMessengerProviderAttemptFenceInternal(
   job: MessengerGenerationJob,
   providerOperation: string,
@@ -163,23 +195,11 @@ async function claimMessengerProviderAttemptFenceInternal(
   ) {
     throw new Error("Messenger provider privacy mode is invalid");
   }
-  const attemptKeyHash = createHash("sha256")
-    .update(String(workspaceId))
-    .update("\0")
-    .update(String(channelConnectionId))
-    .update("\0")
-    .update(String(bindingEpoch))
-    .update("\0")
-    .update(userKey)
-    .update("\0")
-    .update(String(privacyEpoch))
-    .update("\0")
-    .update(operation)
-    .update("\0")
-    .update(String(providerAttemptSequence))
-    .update("\0")
-    .update(job.reqId)
-    .digest("hex");
+  const attemptKeyHash = buildMessengerProviderAttemptKeyHash(
+    job,
+    operation,
+    providerAttemptSequence
+  );
   const leaseToken = randomUUID();
   const database = await getDatabaseOrThrow();
   return database.transaction(async tx => {

@@ -29,7 +29,10 @@ import {
 } from "./ids";
 
 export type CheckoutKind =
-  "subscription_start" | "payment_method_change" | "startpilot_purchase";
+  | "subscription_start"
+  | "payment_method_change"
+  | "startpilot_purchase"
+  | "premium_credit_purchase";
 
 export type BillingCustomerReservation = {
   customer: BillingCustomer;
@@ -79,6 +82,7 @@ export async function reserveCheckoutIntent(input: {
   messengerPrivacyEpoch?: number | null;
   billingProfileVersion: number;
   authorizationEpoch: number;
+  checkoutScopeKey?: string;
 }): Promise<BillingIntent> {
   const database = await getDatabaseOrThrow();
   return database.transaction(async tx => {
@@ -170,22 +174,60 @@ export async function reserveCheckoutIntent(input: {
       }
     }
 
-    const reusable = await tx
-      .select()
-      .from(billingIntents)
-      .where(
-        and(
-          eq(billingIntents.workspaceId, input.workspaceId),
-          eq(billingIntents.mode, input.mode),
-          inArray(billingIntents.status, [...REUSABLE_INTENT_STATUSES])
-        )
-      )
-      .orderBy(desc(billingIntents.createdAt))
-      .limit(1);
+    const storedKind =
+      input.kind === "premium_credit_purchase"
+        ? ("startpilot_purchase" as const)
+        : input.kind;
+    const explicitScopeKey = input.checkoutScopeKey?.trim();
+    if (explicitScopeKey) {
+      if (!/^[A-Za-z0-9:_-]{16,160}$/.test(explicitScopeKey)) {
+        throw new Error("checkout scope key is invalid");
+      }
+      const scoped = await tx
+        .select()
+        .from(billingIntents)
+        .where(eq(billingIntents.checkoutScopeKey, explicitScopeKey))
+        .limit(1)
+        .for("update");
+      if (scoped[0]) {
+        if (
+          scoped[0].workspaceId !== input.workspaceId ||
+          scoped[0].mode !== input.mode ||
+          scoped[0].planCode !== input.plan.code ||
+          scoped[0].kind !== storedKind ||
+          scoped[0].messengerSenderUserKey !==
+            (input.messengerSenderUserKey ?? null) ||
+          scoped[0].messengerPageId !== (input.messengerPageId ?? null) ||
+          scoped[0].messengerChannelConnectionId !==
+            (input.messengerChannelConnectionId ?? null) ||
+          scoped[0].messengerPrivacyEpoch !==
+            (input.messengerPrivacyEpoch ?? null)
+        ) {
+          throw new Error("checkout scope is already bound");
+        }
+        return scoped[0];
+      }
+    }
+
+    const reusable =
+      input.kind === "premium_credit_purchase"
+        ? []
+        : await tx
+            .select()
+            .from(billingIntents)
+            .where(
+              and(
+                eq(billingIntents.workspaceId, input.workspaceId),
+                eq(billingIntents.mode, input.mode),
+                inArray(billingIntents.status, [...REUSABLE_INTENT_STATUSES])
+              )
+            )
+            .orderBy(desc(billingIntents.createdAt))
+            .limit(1);
     if (reusable[0]) {
       if (
         reusable[0].planCode !== input.plan.code ||
-        reusable[0].kind !== input.kind ||
+        reusable[0].kind !== storedKind ||
         (input.messengerSenderUserKey ?? null) !==
           (reusable[0].messengerSenderUserKey ?? null) ||
         (input.messengerPageId ?? null) !==
@@ -209,7 +251,7 @@ export async function reserveCheckoutIntent(input: {
       workspaceId: input.workspaceId,
       mode: input.mode,
       planCode: input.plan.code,
-      kind: input.kind,
+      kind: storedKind,
       expectedAmount: formatAmountMinor(input.plan.amountMinor),
       currency: input.plan.currency,
       interval: input.plan.interval,
@@ -217,7 +259,9 @@ export async function reserveCheckoutIntent(input: {
       mollieDescription: input.plan.mollieDescription,
       status: "created",
       idempotencyKey,
-      checkoutScopeKey: `${input.mode}:${input.workspaceId}:${input.kind}:${intentId}`,
+      checkoutScopeKey:
+        explicitScopeKey ??
+        `${input.mode}:${input.workspaceId}:${input.kind}:${intentId}`,
       messengerSenderUserKey: input.messengerSenderUserKey ?? null,
       messengerPageId: input.messengerPageId ?? null,
       messengerChannelConnectionId: input.messengerChannelConnectionId ?? null,

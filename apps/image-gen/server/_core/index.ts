@@ -92,10 +92,15 @@ import {
 } from "./runtime/debugRoutes";
 import { registerHealthRoutes } from "./runtime/healthRoutes";
 import { registerLegalRoutes } from "./runtime/legalRoutes";
+import {
+  isLegacyCustomerPortalEnabled,
+  registerOwnerProductWebRoutes,
+} from "./runtime/ownerProductWebRoutes";
 import { registerPublicConfigRoute } from "./runtime/publicConfig";
 import { registerWebhookRuntime } from "./runtime/webhookRuntime";
 import { registerMollieWebhookRoute } from "./billing/webhookRoutes";
 import { registerBillingPortalRoutes } from "./billing/portalRoutes";
+import { registerPremiumCreditRoutes } from "./billing/premiumCreditRoutes";
 import { startBillingOutboxWorker } from "./billing/outboxWorker";
 import { startDailyBillingReconciliation } from "./billing/reconciliation";
 import { startAiAnswerFinalizationWorker } from "./billing/aiAnswerFinalizationWorker";
@@ -359,8 +364,15 @@ async function startServer() {
   registerVersionRoute(app, () => buildVersionPayload(gitSha, bootTimestamp));
   registerMetricsRoute(app);
   registerFaceMemoryAdminRoutes(app);
-  registerPortalRoutes(app);
-  if (mollieRuntimePolicy.registerBillingHistory) {
+  const legacyCustomerPortalEnabled = isLegacyCustomerPortalEnabled();
+  registerOwnerProductWebRoutes(app);
+  if (legacyCustomerPortalEnabled) {
+    registerPortalRoutes(app);
+  }
+  if (
+    legacyCustomerPortalEnabled &&
+    mollieRuntimePolicy.registerBillingHistory
+  ) {
     registerBillingPortalRoutes(app);
   }
 
@@ -368,6 +380,7 @@ async function startServer() {
 
   registerPublicConfigRoute(app);
   registerLegalRoutes(app);
+  registerPremiumCreditRoutes(app);
 
   scheduleFaceMemoryExpiry();
   if (
@@ -391,10 +404,17 @@ async function startServer() {
   }
 
   const oauthServerUrl = process.env.OAUTH_SERVER_URL;
-  if (oauthServerUrl || isDirectFacebookLoginConfigured()) {
+  if (
+    legacyCustomerPortalEnabled &&
+    (oauthServerUrl || isDirectFacebookLoginConfigured())
+  ) {
     registerOAuthRoutes(app);
   } else {
-    safeLog("oauth_routes_skipped", { reason: "missing_oauth_server_url" });
+    safeLog("oauth_routes_skipped", {
+      reason: legacyCustomerPortalEnabled
+        ? "missing_oauth_server_url"
+        : "legacy_customer_portal_disabled",
+    });
   }
   app.use(
     "/api/trpc",

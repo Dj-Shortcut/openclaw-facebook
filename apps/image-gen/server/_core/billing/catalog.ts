@@ -4,7 +4,7 @@ export type BillingPlan = Readonly<{
   amountMinor: number;
   currency: "EUR";
   offerType: "subscription" | "one_time";
-  interval: "1 month" | "30 days";
+  interval: "1 month" | "30 days" | "one-time";
   accessDurationDays: number | null;
   entitlements: Readonly<Record<string, number | string>>;
   mollieDescription: string;
@@ -14,6 +14,9 @@ export type BillingPlan = Readonly<{
 
 export const STARTPILOT_PLAN_CODE = "startpilot_once_v1" as const;
 export const PREMIUM_MONTHLY_PLAN_CODE = "premium_monthly_v1" as const;
+export const PREMIUM_IMAGE_CREDITS_PLAN_CODE =
+  "premium_image_credits_5_v1" as const;
+export const PREMIUM_IMAGE_CREDITS_PER_PURCHASE = 5 as const;
 
 /**
  * Business-owned, server-side product catalog. Browser input may select a code
@@ -60,6 +63,25 @@ const BILLING_PLANS = Object.freeze({
     }),
     mollieDescription: "Leaderbot Startpilot - eenmalig 30 dagen",
     active: true,
+    // Legacy workspace product. Keep it readable for historical payments,
+    // but never expose a new checkout in the single-owner consumer product.
+    publiclyAvailable: false,
+  }),
+  [PREMIUM_IMAGE_CREDITS_PLAN_CODE]: Object.freeze({
+    code: PREMIUM_IMAGE_CREDITS_PLAN_CODE,
+    publicName: "5 premium afbeeldingscredits",
+    amountMinor: 300,
+    currency: "EUR" as const,
+    offerType: "one_time" as const,
+    interval: "one-time" as const,
+    accessDurationDays: null,
+    entitlements: Object.freeze({
+      premiumImageCredits: PREMIUM_IMAGE_CREDITS_PER_PURCHASE,
+      imageModel: "gpt-image-2",
+      imageQuality: "high",
+    }),
+    mollieDescription: "Leaderbot - 5 premium afbeeldingscredits",
+    active: true,
     publiclyAvailable: true,
   }),
 }) satisfies Readonly<Record<string, BillingPlan>>;
@@ -94,20 +116,7 @@ export function listPublicBillingPlans() {
       offerType: plan.offerType,
       interval: plan.interval,
       accessDurationDays: plan.accessDurationDays,
-      // The root OpenClaw gateway is a separate, optional product surface.
-      // Keep its dormant AI-answer allowance out of the public launch offer
-      // until that gateway has its own reviewed rollout. The first paid
-      // product is the independently enforced Messenger image experience.
-      entitlements:
-        plan.code === STARTPILOT_PLAN_CODE
-          ? Object.freeze({
-              imagesTotal: plan.entitlements.imagesTotal,
-              imagesPerDay: plan.entitlements.imagesPerDay,
-              workspaces: plan.entitlements.workspaces,
-              facebookPages: plan.entitlements.facebookPages,
-              imageQuality: plan.entitlements.imageQuality,
-            })
-          : plan.entitlements,
+      entitlements: plan.entitlements,
       active: plan.active,
       disclosure: {
         paymentAmount: formatAmountMinor(plan.amountMinor),

@@ -11,7 +11,9 @@ import {
   buildGenerationSuccessResponse,
   buildImageQuotaBalanceResponse,
   buildStartpilotQuotaReachedResponse,
+  formatPremiumCreditBalance,
 } from "./conversationActions";
+import { createPremiumCreditCheckoutUrl } from "./billing/premiumCreditCheckoutToken";
 import {
   admitStartpilotImageProviderAttempt,
   recoverStartpilotImageProviderAdmission,
@@ -104,6 +106,16 @@ import {
   reserveMessengerProviderAttemptFence,
   type MessengerProviderAttemptFence,
 } from "./messengerProviderAttemptFence";
+import {
+  commitPremiumImageCreditForCompletion,
+  getPremiumCreditBalance,
+  holdAmbiguousPremiumImageCredit,
+  isPremiumCreditEnforcementEnabled,
+  markPremiumImageCreditStarted,
+  releasePremiumImageCredit,
+  reservePremiumImageCredit,
+  type PremiumCreditBalance,
+} from "./premiumCreditStore";
 import { getUserKey } from "./messengerStateNormalization";
 
 type GenerationJobRunner = {
@@ -208,6 +220,17 @@ class MessengerImageQuotaRecoveryError extends Error {
     this.name = "MessengerImageQuotaRecoveryError";
   }
 }
+
+type GenerationCreditReservation =
+  | {
+      kind: "free";
+      reservation: MessengerImageQuotaReservation;
+    }
+  | {
+      kind: "premium";
+      fence: MessengerProviderAttemptFence;
+      balance: PremiumCreditBalance;
+    };
 
 function toConversationImageQuotaBalance(
   status: MessengerImageQuotaStatus
@@ -330,6 +353,7 @@ export function createMessengerGenerationJobRunner(
             : undefined;
         if (
           await finishDuplicateGenerationIfCompleted({
+            job,
             deps,
             psid,
             userId,
@@ -349,8 +373,9 @@ export function createMessengerGenerationJobRunner(
           return;
         }
 
-        const quotaReservation = successQuotaIdentity
+        const creditReservation = successQuotaIdentity
           ? await reserveGenerationQuota({
+              job,
               deps,
               psid,
               reqId,
@@ -359,17 +384,24 @@ export function createMessengerGenerationJobRunner(
               identity: successQuotaIdentity,
             })
           : null;
-        if (successQuotaIdentity && !quotaReservation) {
+        if (successQuotaIdentity && !creditReservation) {
           return;
         }
 
         let pendingQuotaReservation: MessengerImageQuotaReservation | null =
-          quotaReservation;
+          creditReservation?.kind === "free"
+            ? creditReservation.reservation
+            : null;
+        let pendingPremiumCreditFence: MessengerProviderAttemptFence | null =
+          creditReservation?.kind === "premium"
+            ? creditReservation.fence
+            : null;
+        let premiumCreditTransportStarted = false;
         let quotaLeaseHeartbeat: MessengerGenerationQuotaLeaseHeartbeat | null =
-          successQuotaIdentity && quotaReservation
+          successQuotaIdentity && pendingQuotaReservation
             ? startMessengerGenerationQuotaLeaseHeartbeat({
                 identity: successQuotaIdentity,
-                reservation: quotaReservation,
+                reservation: pendingQuotaReservation,
               })
             : null;
         let providerAttemptsStarted = 0;
@@ -483,6 +515,15 @@ export function createMessengerGenerationJobRunner(
                           );
                         }
                       } else {
+                        if (
+                          pendingPremiumCreditFence &&
+                          providerAttemptsStarted === 0
+                        ) {
+                          await markPremiumImageCreditStarted(
+                            pendingPremiumCreditFence
+                          );
+                          premiumCreditTransportStarted = true;
+                        }
                         await markMessengerProviderAttemptStarted(
                           providerFence
                         );
@@ -562,12 +603,14 @@ export function createMessengerGenerationJobRunner(
                     userKey: userId,
                   }
                 : undefined,
-            imageModel:
-              workspacePolicy.kind === "startpilot"
+            imageModel: pendingPremiumCreditFence
+              ? "gpt-image-2"
+              : workspacePolicy.kind === "startpilot"
                 ? workspacePolicy.imageModel
                 : undefined,
-            imageQuality:
-              workspacePolicy.kind === "startpilot"
+            imageQuality: pendingPremiumCreditFence
+              ? "high"
+              : workspacePolicy.kind === "startpilot"
                 ? workspacePolicy.imageQuality
                 : undefined,
           });
@@ -592,12 +635,17 @@ export function createMessengerGenerationJobRunner(
                 rememberSendOutcome,
                 completionFence: completionFenceForJob(job),
                 successQuotaIdentity,
-                quotaAccountingMode:
-                  workspacePolicy.kind === "startpilot"
+                quotaAccountingMode: pendingPremiumCreditFence
+                  ? "premium_credit_v1"
+                  : workspacePolicy.kind === "startpilot"
                     ? "startpilot_attempt_committed_v1"
                     : "success_only_v1",
                 quotaReservation: pendingQuotaReservation,
                 quotaLeaseHeartbeat,
+                premiumCreditJob: pendingPremiumCreditFence ? job : undefined,
+                onPremiumCreditCommitted: () => {
+                  pendingPremiumCreditFence = null;
+                },
                 assertCurrentBinding: () =>
                   assertMessengerGenerationOwnership(job),
                 onDurableRecoveryRequired: () => {
@@ -646,6 +694,16 @@ export function createMessengerGenerationJobRunner(
             return;
           }
 
+          if (pendingPremiumCreditFence) {
+            if (premiumCreditTransportStarted) {
+              await holdAmbiguousPremiumImageCredit(pendingPremiumCreditFence);
+            } else {
+              await releasePremiumImageCredit(pendingPremiumCreditFence);
+            }
+            pendingPremiumCreditFence = null;
+            premiumCreditTransportStarted = false;
+          }
+
           const providerAdmissionRetry =
             asStartpilotProviderAdmissionRetryError(generationResult.error);
           if (providerAdmissionRetry) throw providerAdmissionRetry;
@@ -681,6 +739,13 @@ export function createMessengerGenerationJobRunner(
               identity: successQuotaIdentity ?? imageQuotaIdentityForJob(job),
               reservation: pendingQuotaReservation,
             });
+          }
+          if (pendingPremiumCreditFence) {
+            if (premiumCreditTransportStarted) {
+              await holdAmbiguousPremiumImageCredit(pendingPremiumCreditFence);
+            } else {
+              await releasePremiumImageCredit(pendingPremiumCreditFence);
+            }
           }
           if (quotaLeaseError !== undefined) throw quotaLeaseError;
         }
@@ -1094,6 +1159,7 @@ function logMessengerGenerationRecoveryEvent(
 }
 
 async function finishDuplicateGenerationIfCompleted(input: {
+  job: MessengerGenerationJob;
   deps: GenerationJobRunnerDeps;
   psid: string;
   userId: string;
@@ -1143,51 +1209,56 @@ async function finishDuplicateGenerationIfCompleted(input: {
     input.successQuotaIdentity
   );
   if (recoveryQuotaIdentity && !quotaStatus) {
-    const decision = await reserveMessengerGenerationQuota({
-      psid: input.psid,
-      identity: recoveryQuotaIdentity,
-      requestId: input.reqId,
-    });
-    if (decision.status === "busy") throw new MessengerImageQuotaBusyError();
-    if (
-      decision.status === "reserved" ||
-      decision.status === "already_committed"
-    ) {
-      const committed = await commitMessengerGenerationQuota({
+    if (completedGeneration.quotaAccountingMode === "premium_credit_v1") {
+      await input.assertCurrentBinding();
+      await commitPremiumImageCreditForCompletion(input.job);
+      quotaStatus = await getMessengerImageQuotaStatus(recoveryQuotaIdentity);
+    } else {
+      const decision = await reserveMessengerGenerationQuota({
         psid: input.psid,
         identity: recoveryQuotaIdentity,
-        reservation: decision.reservation,
-        generationKind: input.resolvedGenerationKind,
-        assertCurrentBinding: input.assertCurrentBinding,
+        requestId: input.reqId,
       });
-      quotaStatus = committed.quotaStatus;
-    } else if (isLegacyQuotaGrandfatherAllowed(completedGeneration)) {
-      // This image predates success-only accounting and is already durable.
-      // When today's limit is full, preserve the result and snapshot the
-      // current balance without incrementing beyond either hard limit.
-      quotaStatus = decision.quotaStatus;
-      safeLog("messenger_generation_legacy_quota_grandfathered", {
-        reqId: input.reqId,
-        user: toLogUser(input.userId),
-        generationKind: input.resolvedGenerationKind,
-        reason: decision.status,
-        dailyUsed: quotaStatus.daily.used,
-        dailyLimit: quotaStatus.daily.limit,
-        monthlyUsed: quotaStatus.monthly.used,
-        monthlyLimit: quotaStatus.monthly.limit,
-      });
-    } else {
-      safeLog("messenger_generation_quota_recovery_blocked", {
-        level: "error",
-        reqId: input.reqId,
-        user: toLogUser(input.userId),
-        generationKind: input.resolvedGenerationKind,
-        reason: decision.status,
-        accountingMode:
-          completedGeneration.quotaAccountingMode ?? "unversioned",
-        deliveryStatus: completedGeneration.deliveryStatus ?? "unversioned",
-      });
-      throw new MessengerImageQuotaRecoveryError();
+      if (decision.status === "busy") throw new MessengerImageQuotaBusyError();
+      if (
+        decision.status === "reserved" ||
+        decision.status === "already_committed"
+      ) {
+        const committed = await commitMessengerGenerationQuota({
+          psid: input.psid,
+          identity: recoveryQuotaIdentity,
+          reservation: decision.reservation,
+          generationKind: input.resolvedGenerationKind,
+          assertCurrentBinding: input.assertCurrentBinding,
+        });
+        quotaStatus = committed.quotaStatus;
+      } else if (isLegacyQuotaGrandfatherAllowed(completedGeneration)) {
+        // This image predates success-only accounting and is already durable.
+        // Preserve it without incrementing beyond either hard limit.
+        quotaStatus = decision.quotaStatus;
+        safeLog("messenger_generation_legacy_quota_grandfathered", {
+          reqId: input.reqId,
+          user: toLogUser(input.userId),
+          generationKind: input.resolvedGenerationKind,
+          reason: decision.status,
+          dailyUsed: quotaStatus.daily.used,
+          dailyLimit: quotaStatus.daily.limit,
+          monthlyUsed: quotaStatus.monthly.used,
+          monthlyLimit: quotaStatus.monthly.limit,
+        });
+      } else {
+        safeLog("messenger_generation_quota_recovery_blocked", {
+          level: "error",
+          reqId: input.reqId,
+          user: toLogUser(input.userId),
+          generationKind: input.resolvedGenerationKind,
+          reason: decision.status,
+          accountingMode:
+            completedGeneration.quotaAccountingMode ?? "unversioned",
+          deliveryStatus: completedGeneration.deliveryStatus ?? "unversioned",
+        });
+        throw new MessengerImageQuotaRecoveryError();
+      }
     }
     await markMessengerGenerationQuotaCommitted(
       input.reqId,
@@ -1266,7 +1337,10 @@ async function finishDuplicateGenerationIfCompleted(input: {
     successNoticeStatus === "pending" ||
     (deliveryStatus === "pending" && successNoticeStatus !== "sent");
   if (shouldSendSuccessNotice) {
-    if (recoveryQuotaIdentity) {
+    if (
+      recoveryQuotaIdentity &&
+      completedGeneration.quotaAccountingMode !== "premium_credit_v1"
+    ) {
       // A retry can happen after another successful photo or after the local
       // day rolled over. Never send the stale balance captured at commit time.
       quotaStatus = await refreshGenerationQuotaSnapshot({
@@ -1283,7 +1357,14 @@ async function finishDuplicateGenerationIfCompleted(input: {
       reqId: input.reqId,
       lang: input.lang,
       rememberSendOutcome: input.rememberSendOutcome,
-      quotaStatus,
+      quotaStatus:
+        completedGeneration.quotaAccountingMode === "premium_credit_v1"
+          ? undefined
+          : quotaStatus,
+      premiumCreditsRemaining:
+        completedGeneration.quotaAccountingMode === "premium_credit_v1"
+          ? (await getPremiumCreditBalance(input.job)).remaining
+          : undefined,
     });
     await markMessengerGenerationSuccessNoticeSent(
       input.reqId,
@@ -1314,29 +1395,57 @@ function isLegacyQuotaGrandfatherAllowed(
 }
 
 async function reserveGenerationQuota(input: {
+  job: MessengerGenerationJob;
   deps: GenerationJobRunnerDeps;
   psid: string;
   reqId: string;
   lang: MessengerGenerationJob["lang"];
   rememberSendOutcome: (outcome: MessengerSendOutcome) => MessengerSendOutcome;
   identity: MessengerImageQuotaIdentity;
-}): Promise<MessengerImageQuotaReservation | null> {
+}): Promise<GenerationCreditReservation | null> {
   const decision = await reserveMessengerGenerationQuota({
     psid: input.psid,
     identity: input.identity,
     requestId: input.reqId,
   });
   if (decision.status === "reserved") {
-    return decision.reservation;
+    return { kind: "free", reservation: decision.reservation };
   }
   if (decision.status === "already_committed") {
     throw new MessengerImageQuotaRecoveryError();
   }
   if (decision.status === "busy") throw new MessengerImageQuotaBusyError();
 
+  if (isPremiumCreditEnforcementEnabled()) {
+    const premium = await reservePremiumImageCredit(input.job);
+    if (premium.status === "reserved") {
+      return {
+        kind: "premium",
+        fence: premium.fence,
+        balance: premium.balance,
+      };
+    }
+    if (premium.status === "already_committed") {
+      throw new MessengerImageQuotaRecoveryError();
+    }
+    if (premium.status === "busy") throw new MessengerImageQuotaBusyError();
+  }
+
+  const premiumCheckoutUrl = input.job.pageId
+    ? createPremiumCreditCheckoutUrl({
+        workspaceId: input.identity.workspaceId,
+        channelConnectionId: input.identity.channelConnectionId,
+        bindingEpoch: input.identity.bindingEpoch,
+        privacyEpoch: input.identity.privacyEpoch,
+        userKey: input.identity.userKey,
+        pageId: input.job.pageId,
+      })
+    : undefined;
+
   const response = buildFreeQuotaReachedResponse(
     input.lang,
-    toConversationImageQuotaBalance(decision.quotaStatus)
+    toConversationImageQuotaBalance(decision.quotaStatus),
+    premiumCheckoutUrl
   );
   const outcome = await input.deps.sendLoggedActions(
     input.psid,
@@ -1372,6 +1481,8 @@ async function handleGenerationSuccess(input: {
   quotaAccountingMode: MessengerGenerationQuotaAccountingMode;
   quotaReservation: MessengerImageQuotaReservation | null;
   quotaLeaseHeartbeat: MessengerGenerationQuotaLeaseHeartbeat | null;
+  premiumCreditJob?: MessengerGenerationJob;
+  onPremiumCreditCommitted: () => void;
   assertCurrentBinding: () => Promise<void>;
   onDurableRecoveryRequired: () => void;
 }): Promise<void> {
@@ -1409,7 +1520,7 @@ async function handleGenerationSuccess(input: {
     ok: true,
   });
 
-  if (input.successQuotaIdentity) {
+  if (input.successQuotaIdentity && !input.premiumCreditJob) {
     if (!input.quotaReservation || !input.quotaLeaseHeartbeat) {
       throw new MessengerQuotaReservationCommitError();
     }
@@ -1429,7 +1540,27 @@ async function handleGenerationSuccess(input: {
     )
   );
   let quotaStatus: MessengerImageQuotaStatus | undefined;
-  if (input.successQuotaIdentity) {
+  let premiumCreditsRemaining: number | undefined;
+  if (input.premiumCreditJob) {
+    const premiumBalance = await commitPremiumImageCreditForCompletion(
+      input.premiumCreditJob
+    );
+    input.onPremiumCreditCommitted();
+    premiumCreditsRemaining = premiumBalance.remaining;
+    if (input.successQuotaIdentity) {
+      quotaStatus = await getMessengerImageQuotaStatus(
+        input.successQuotaIdentity
+      );
+      await markMessengerGenerationQuotaCommitted(
+        input.reqId,
+        imageUrl,
+        input.userId,
+        quotaStatus,
+        Date.now(),
+        input.completionFence
+      );
+    }
+  } else if (input.successQuotaIdentity) {
     const committed = await commitMessengerGenerationQuota({
       psid: input.psid,
       identity: input.successQuotaIdentity,
@@ -1494,7 +1625,8 @@ async function handleGenerationSuccess(input: {
     reqId: input.reqId,
     lang: input.lang,
     rememberSendOutcome: input.rememberSendOutcome,
-    quotaStatus,
+    quotaStatus: input.premiumCreditJob ? undefined : quotaStatus,
+    premiumCreditsRemaining,
   });
   await markMessengerGenerationSuccessNoticeSent(
     input.reqId,
@@ -1823,6 +1955,7 @@ async function sendGenerationSuccessActions(input: {
   lang: MessengerGenerationJob["lang"];
   rememberSendOutcome: (outcome: MessengerSendOutcome) => MessengerSendOutcome;
   quotaStatus?: MessengerImageQuotaStatus;
+  premiumCreditsRemaining?: number;
 }): Promise<void> {
   const successResponse = buildGenerationSuccessResponse(
     input.lang,
@@ -1830,11 +1963,18 @@ async function sendGenerationSuccessActions(input: {
       ? toConversationImageQuotaBalance(input.quotaStatus)
       : undefined
   );
+  const successText =
+    input.premiumCreditsRemaining === undefined
+      ? (successResponse.text ?? "")
+      : `${successResponse.text ?? ""}\n${formatPremiumCreditBalance(
+          input.lang,
+          input.premiumCreditsRemaining
+        )}`;
   let outcome: MessengerSendOutcome;
   try {
     outcome = await input.deps.sendLoggedActions(
       input.psid,
-      successResponse.text ?? "",
+      successText,
       successResponse.actions ?? [],
       input.reqId,
       { providerAttemptKey: "generation-success-notice-v1" }

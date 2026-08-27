@@ -74,6 +74,8 @@ type TranslationKey =
   | "startpilotDailyQuotaReached"
   | "startpilotQuotaReached"
   | "openLeaderbot"
+  | "buyPremiumCredits"
+  | "premiumCreditsRemaining"
   | "openPortal"
   | "portalAction"
   | "portalJoinPrompt"
@@ -171,6 +173,9 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
     startpilotQuotaReached:
       "Je Startpilot-tegoed is opgebruikt. Open Leaderbot om je gebruik te bekijken. Er start nooit automatisch een nieuwe betaling.",
     openLeaderbot: "Open Leaderbot",
+    buyPremiumCredits: "Koop 5 premium credits",
+    premiumCreditsRemaining: ({ link }) =>
+      `Je hebt nog ${link ?? "0"} premium credits.`,
     openPortal: "Open klantenportaal",
     portalAction: "Klantenportaal",
     portalJoinPrompt:
@@ -309,6 +314,9 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
     startpilotQuotaReached:
       "Your Startpilot credit is used up. Open Leaderbot to review usage. A new payment never starts automatically.",
     openLeaderbot: "Open Leaderbot",
+    buyPremiumCredits: "Buy 5 premium credits",
+    premiumCreditsRemaining: ({ link }) =>
+      `You have ${link ?? "0"} premium credits left.`,
     openPortal: "Open customer portal",
     portalAction: "Customer portal",
     portalJoinPrompt:

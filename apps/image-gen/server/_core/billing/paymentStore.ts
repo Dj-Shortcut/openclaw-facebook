@@ -17,6 +17,8 @@ import {
   addPlanInterval,
   formatAmountMinor,
   getBillingPlan,
+  PREMIUM_IMAGE_CREDITS_PLAN_CODE,
+  PREMIUM_IMAGE_CREDITS_PER_PURCHASE,
   STARTPILOT_PLAN_CODE,
 } from "./catalog";
 import { deterministicIdempotencyKey } from "./ids";
@@ -72,7 +74,23 @@ type StartpilotPlanSnapshot = {
   mollieDescription: string;
 };
 
-type IntentPlanSnapshot = RecurringPlanSnapshot | StartpilotPlanSnapshot;
+type PremiumCreditPlanSnapshot = {
+  code: typeof PREMIUM_IMAGE_CREDITS_PLAN_CODE;
+  amountMinor: number;
+  currency: "EUR";
+  offerType: "one_time";
+  interval: "one-time";
+  accessDurationDays: null;
+  entitlements: {
+    premiumImageCredits: typeof PREMIUM_IMAGE_CREDITS_PER_PURCHASE;
+    imageModel: "gpt-image-2";
+    imageQuality: "high";
+  };
+  mollieDescription: string;
+};
+
+type IntentPlanSnapshot =
+  RecurringPlanSnapshot | StartpilotPlanSnapshot | PremiumCreditPlanSnapshot;
 
 export type PaymentProcessingResult =
   | { result: "processed" | "mismatch" | "duplicate"; workspaceId: number }
@@ -223,7 +241,10 @@ export async function applyMolliePaymentSnapshot(
               )
             );
         }
-        if (!context.subscription) {
+        if (
+          !context.subscription &&
+          plan?.code !== PREMIUM_IMAGE_CREDITS_PLAN_CODE
+        ) {
           await tx
             .insert(workspaceEntitlements)
             .values({
@@ -403,8 +424,11 @@ export async function applyMolliePaymentSnapshot(
         ));
 
       if (hasChargeback) {
-        if (!hasLaterPaidPeriod) {
-          await applyAccessReview(tx, context, plan.entitlements, "blocked");
+        if (
+          plan.code === PREMIUM_IMAGE_CREDITS_PLAN_CODE ||
+          !hasLaterPaidPeriod
+        ) {
+          await applyPaidProductReview(tx, context, plan, "blocked");
         }
         if (plan.offerType === "subscription") {
           await enqueueOutbox(tx, {
@@ -423,8 +447,11 @@ export async function applyMolliePaymentSnapshot(
           payload: { reason: "chargeback", paymentId: payment.id },
         });
       } else if (completedRefundTotal >= grossMinor && grossMinor > 0) {
-        if (!hasLaterPaidPeriod) {
-          await applyAccessReview(tx, context, plan.entitlements, "inactive");
+        if (
+          plan.code === PREMIUM_IMAGE_CREDITS_PLAN_CODE ||
+          !hasLaterPaidPeriod
+        ) {
+          await applyPaidProductReview(tx, context, plan, "inactive");
         }
         if (plan.offerType === "subscription") {
           await enqueueOutbox(tx, {
@@ -448,13 +475,11 @@ export async function applyMolliePaymentSnapshot(
           });
         }
       } else if (completedRefundTotal > 0) {
-        if (!hasLaterPaidPeriod) {
-          await applyAccessReview(
-            tx,
-            context,
-            plan.entitlements,
-            "manual_review"
-          );
+        if (
+          plan.code === PREMIUM_IMAGE_CREDITS_PLAN_CODE ||
+          !hasLaterPaidPeriod
+        ) {
+          await applyPaidProductReview(tx, context, plan, "manual_review");
         }
         await enqueueOutbox(tx, {
           workspaceId: context.workspaceId,
@@ -464,13 +489,11 @@ export async function applyMolliePaymentSnapshot(
           payload: { reason: "partial_refund", paymentId: payment.id },
         });
       } else if (pendingRefundTotal > 0) {
-        if (!hasLaterPaidPeriod) {
-          await applyAccessReview(
-            tx,
-            context,
-            plan.entitlements,
-            "manual_review"
-          );
+        if (
+          plan.code === PREMIUM_IMAGE_CREDITS_PLAN_CODE ||
+          !hasLaterPaidPeriod
+        ) {
+          await applyPaidProductReview(tx, context, plan, "manual_review");
         }
         await enqueueOutbox(tx, {
           workspaceId: context.workspaceId,
@@ -489,7 +512,14 @@ export async function applyMolliePaymentSnapshot(
       } else {
         const paidEffectApplied =
           plan.offerType === "one_time"
-            ? await applyStartpilotPaymentStatus(tx, context, plan, payment)
+            ? plan.code === PREMIUM_IMAGE_CREDITS_PLAN_CODE
+              ? await applyPremiumCreditPaymentStatus(
+                  tx,
+                  context,
+                  plan,
+                  payment
+                )
+              : await applyStartpilotPaymentStatus(tx, context, plan, payment)
             : payment.subscriptionId
               ? await applyRecurringPaymentStatus(tx, context, plan, payment)
               : await applyFirstPaymentStatus(tx, context, plan, payment);
@@ -924,6 +954,56 @@ async function applyStartpilotPaymentStatus(
   return true;
 }
 
+async function applyPremiumCreditPaymentStatus(
+  tx: Parameters<
+    Parameters<Awaited<ReturnType<typeof getDatabaseOrThrow>>["transaction"]>[0]
+  >[0],
+  context: PaymentContext,
+  _plan: PremiumCreditPlanSnapshot,
+  payment: MolliePayment
+) {
+  if (payment.status !== "paid") {
+    if (["failed", "canceled", "expired"].includes(payment.status)) {
+      await tx
+        .update(billingIntents)
+        .set({ status: payment.status as "failed" | "canceled" | "expired" })
+        .where(
+          and(
+            eq(billingIntents.intentId, context.intent.intentId),
+            eq(billingIntents.workspaceId, context.workspaceId),
+            eq(billingIntents.mode, context.intent.mode),
+            eq(billingIntents.planCode, PREMIUM_IMAGE_CREDITS_PLAN_CODE)
+          )
+        );
+    }
+    return false;
+  }
+  if (
+    !context.intent.messengerSenderUserKey ||
+    !context.intent.messengerPageId ||
+    !context.intent.messengerChannelConnectionId ||
+    !context.intent.messengerPrivacyEpoch
+  ) {
+    throw new Error("premium credit purchase has no Messenger privacy scope");
+  }
+  await tx
+    .update(billingIntents)
+    .set({
+      status: "paid",
+      paidAt: parseProviderDate(payment.paidAt ?? payment.createdAt),
+    })
+    .where(
+      and(
+        eq(billingIntents.intentId, context.intent.intentId),
+        eq(billingIntents.workspaceId, context.workspaceId),
+        eq(billingIntents.mode, context.intent.mode),
+        eq(billingIntents.planCode, PREMIUM_IMAGE_CREDITS_PLAN_CODE),
+        eq(billingIntents.kind, "startpilot_purchase")
+      )
+    );
+  return true;
+}
+
 async function applyFirstPaymentStatus(
   tx: Parameters<
     Parameters<Awaited<ReturnType<typeof getDatabaseOrThrow>>["transaction"]>[0]
@@ -1310,6 +1390,7 @@ async function reviewPaidSnapshotWithoutReapplying(
   plan: NonNullable<ReturnType<typeof getIntentPlanSnapshot>>,
   paymentId: string
 ) {
+  if (plan.code === PREMIUM_IMAGE_CREDITS_PLAN_CODE) return;
   const entitlements = await tx
     .select({ status: workspaceEntitlements.status })
     .from(workspaceEntitlements)
@@ -1346,6 +1427,31 @@ async function reviewPaidSnapshotWithoutReapplying(
       planCode: plan.code,
     },
   });
+}
+
+async function applyPaidProductReview(
+  tx: Parameters<
+    Parameters<Awaited<ReturnType<typeof getDatabaseOrThrow>>["transaction"]>[0]
+  >[0],
+  context: PaymentContext,
+  plan: IntentPlanSnapshot,
+  entitlementStatus: "inactive" | "blocked" | "manual_review"
+) {
+  if (plan.code === PREMIUM_IMAGE_CREDITS_PLAN_CODE) {
+    await tx
+      .update(billingIntents)
+      .set({ status: "contained" })
+      .where(
+        and(
+          eq(billingIntents.intentId, context.intent.intentId),
+          eq(billingIntents.workspaceId, context.workspaceId),
+          eq(billingIntents.mode, context.intent.mode),
+          eq(billingIntents.planCode, PREMIUM_IMAGE_CREDITS_PLAN_CODE)
+        )
+      );
+    return;
+  }
+  await applyAccessReview(tx, context, plan.entitlements, entitlementStatus);
 }
 
 async function applyAccessReview(
@@ -1668,6 +1774,28 @@ function getIntentPlanSnapshot(
   }
   const entitlements = intent.entitlements as Record<string, unknown>;
   if (intent.kind === "startpilot_purchase") {
+    if (intent.planCode === PREMIUM_IMAGE_CREDITS_PLAN_CODE) {
+      const catalogPlan = getPremiumCreditCatalogPlan();
+      if (
+        !catalogPlan ||
+        intent.interval !== catalogPlan.interval ||
+        entitlements.premiumImageCredits !==
+          catalogPlan.entitlements.premiumImageCredits ||
+        entitlements.imageModel !== catalogPlan.entitlements.imageModel ||
+        entitlements.imageQuality !== catalogPlan.entitlements.imageQuality
+      ) {
+        return null;
+      }
+      try {
+        return {
+          ...catalogPlan,
+          amountMinor: parseEurValueMinor(intent.expectedAmount),
+          mollieDescription: intent.mollieDescription,
+        };
+      } catch {
+        return null;
+      }
+    }
     const catalogPlan = getStartpilotCatalogPlan();
     if (
       !catalogPlan ||
@@ -1720,6 +1848,39 @@ function getIntentPlanSnapshot(
   } catch {
     return null;
   }
+}
+
+function getPremiumCreditCatalogPlan(): PremiumCreditPlanSnapshot | null {
+  const plan = getBillingPlan(PREMIUM_IMAGE_CREDITS_PLAN_CODE);
+  const entitlements = plan?.entitlements;
+  if (
+    !plan ||
+    plan.code !== PREMIUM_IMAGE_CREDITS_PLAN_CODE ||
+    plan.currency !== "EUR" ||
+    plan.offerType !== "one_time" ||
+    plan.interval !== "one-time" ||
+    plan.accessDurationDays !== null ||
+    !entitlements ||
+    entitlements.premiumImageCredits !== PREMIUM_IMAGE_CREDITS_PER_PURCHASE ||
+    entitlements.imageModel !== "gpt-image-2" ||
+    entitlements.imageQuality !== "high"
+  ) {
+    return null;
+  }
+  return {
+    code: PREMIUM_IMAGE_CREDITS_PLAN_CODE,
+    amountMinor: plan.amountMinor,
+    currency: "EUR",
+    offerType: "one_time",
+    interval: "one-time",
+    accessDurationDays: null,
+    entitlements: {
+      premiumImageCredits: PREMIUM_IMAGE_CREDITS_PER_PURCHASE,
+      imageModel: "gpt-image-2",
+      imageQuality: "high",
+    },
+    mollieDescription: plan.mollieDescription,
+  };
 }
 
 function getStartpilotCatalogPlan(): StartpilotPlanSnapshot | null {

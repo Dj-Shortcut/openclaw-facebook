@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { formatAmountMinor, getBillingPlan } from "./_core/billing/catalog";
 import { escapeHtml } from "./_core/html";
 import {
-  getStartpilotPricingDisplay,
+  getPremiumCreditPricingDisplay,
   registerLegalRoutes,
 } from "./_core/runtime/legalRoutes";
 
@@ -81,41 +81,31 @@ describe("legal routes", () => {
     expect(terms).toContain("/data-deletion");
   });
 
-  it("publishes the one-time Startpilot with signed-in checkout boundaries", () => {
+  it("publishes one-time premium credits without a portal or subscription", () => {
     const privacy = renderLegalRoute("/privacy").body;
     const terms = renderLegalRoute("/terms").body;
     const billingPolicy = renderLegalRoute("/billing-policy").body;
-    const plan = getBillingPlan("startpilot_once_v1");
+    const plan = getBillingPlan("premium_image_credits_5_v1");
     expect(plan).not.toBeNull();
-    if (!plan) throw new Error("Missing Startpilot billing plan");
+    if (!plan) throw new Error("Missing premium credit billing plan");
     const displayedPrice = `€${formatAmountMinor(plan.amountMinor).replace(
       /\.00$/,
       ""
     )}`;
 
-    expect(privacy).toContain(`Mollie processes one ${displayedPrice} payment`);
-    expect(terms).toContain(
-      `costs ${displayedPrice} as a single payment for 30 days`
-    );
-    expect(terms).toContain("Purchase starts only in the signed-in portal");
-    expect(terms).toContain("guided Messenger image controls");
-    expect(terms).not.toContain("AI answers");
-    expect(terms).toContain("20 Images 2.0");
-    expect(terms).toContain("maximum of five");
-    expect(terms).toContain("first AI-provider attempt starts");
+    expect(privacy).toContain(`one ${displayedPrice} payment`);
+    expect(terms).toContain(`credits cost ${displayedPrice}`);
+    expect(terms).toContain("short-lived button");
+    expect(terms).toContain("Failures before provider transport release");
+    expect(terms).toContain("held for safe reconciliation");
     expect(billingPolicy).toContain(
-      `${displayedPrice} once in ${plan.currency} for 30 days`
+      `credits cost ${displayedPrice} once in ${plan.currency}`
     );
     expect(billingPolicy).toContain(
-      "requires an explicit checkout confirmation"
+      "Purchased credits have no product expiry date"
     );
-    expect(billingPolicy).toContain("guided Messenger image controls");
-    expect(billingPolicy).not.toContain("300 AI answers");
     expect(billingPolicy).toContain("No renewal, top-up or overage");
-    expect(billingPolicy).toContain("one workspace, one Facebook Page");
-    expect(billingPolicy).toContain(
-      "retries within the same request do not consume another pilot generation"
-    );
+    expect(billingPolicy).not.toContain("workspace");
     expect(billingPolicy).not.toContain("billing@leaderbot.live");
     expect(billingPolicy).not.toContain("Bijzondere vrijstellingsregeling");
   });
@@ -126,18 +116,18 @@ describe("legal routes", () => {
     );
   });
 
-  it("keeps legal routes available when Startpilot pricing cannot be loaded", () => {
-    expect(getStartpilotPricingDisplay(() => null)).toEqual({
-      startpilotPrice: "€19",
-      startpilotCurrency: "EUR",
+  it("keeps legal routes available when credit pricing cannot be loaded", () => {
+    expect(getPremiumCreditPricingDisplay(() => null)).toEqual({
+      price: "€3",
+      currency: "EUR",
     });
     expect(
-      getStartpilotPricingDisplay(() => {
+      getPremiumCreditPricingDisplay(() => {
         throw new Error("billing catalog unavailable");
       })
     ).toEqual({
-      startpilotPrice: "€19",
-      startpilotCurrency: "EUR",
+      price: "€3",
+      currency: "EUR",
     });
   });
 });

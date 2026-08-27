@@ -26,9 +26,10 @@ Meta webhook -> Leaderbot runtime -> conversation layer
                                         Messenger
 ```
 
-The paid path is not yet the production source of truth. The current code still
-contains legacy workspace billing, a tenant portal, subscriptions, and an
-OpenClaw plugin while the migration is completed. See
+The paid path is implemented behind default-off rollout flags and is not yet
+approved for production. The current code still contains legacy workspace
+billing, a tenant portal, subscriptions, and an OpenClaw plugin while the
+migration is completed. See
 [`docs/operations/todo.md`](docs/operations/todo.md) for the only active plan.
 
 ## Repository layout
@@ -67,9 +68,9 @@ through OpenClaw or add features to the legacy gateway.
 - free image quota with balance notices;
 - Messenger-native rendering of channel-neutral conversation actions.
 
-The next commercial milestone is a quota-exhaustion action that opens a signed,
-one-time Mollie checkout and grants premium credits to that exact Messenger
-user. Recurring billing is explicitly outside the target product.
+The next commercial milestone is to prove the implemented quota-exhaustion CTA,
+one-time Mollie checkout and exact-user premium accounting in Mollie Test Mode.
+Recurring billing is explicitly outside the target product.
 
 ## Local development
 

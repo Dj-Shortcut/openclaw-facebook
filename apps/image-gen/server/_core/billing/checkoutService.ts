@@ -1,4 +1,9 @@
-import { requireActiveBillingPlan, formatAmountMinor } from "./catalog";
+import {
+  PREMIUM_IMAGE_CREDITS_PLAN_CODE,
+  STARTPILOT_PLAN_CODE,
+  requireActiveBillingPlan,
+  formatAmountMinor,
+} from "./catalog";
 import {
   assertMollieBillingEnabled,
   assertTenantBillingWorkerWorkspace,
@@ -55,6 +60,7 @@ export type CheckoutRequest = {
   messengerPageId?: string | null;
   messengerChannelConnectionId?: number | null;
   messengerPrivacyEpoch?: number | null;
+  checkoutScopeKey?: string;
 };
 
 export async function startMollieCheckout(
@@ -81,7 +87,10 @@ export async function startMollieCheckout(
   if (!plan.publiclyAvailable && input.kind !== "payment_method_change") {
     throw new Error("billing plan is unavailable");
   }
-  assertCheckoutKindMatchesPlan(plan.offerType, input.kind);
+  assertCheckoutKindMatchesPlan(plan.code, plan.offerType, input.kind);
+  if (plan.code === PREMIUM_IMAGE_CREDITS_PLAN_CODE) {
+    assertPremiumCreditCheckoutScope(input);
+  }
   const client = clientOverride ?? new MollieClient(config);
   await assertBillingExecutionBoundary(executionBoundary);
   if (plan.offerType === "one_time") {
@@ -117,6 +126,7 @@ export async function startMollieCheckout(
     messengerPrivacyEpoch: input.messengerPrivacyEpoch,
     billingProfileVersion: billingProfile.eligibilityVersion,
     authorizationEpoch: executionBoundary.authorizationEpoch,
+    checkoutScopeKey: input.checkoutScopeKey,
   });
   if (!(await wakeBillingSchedulerTenant(input.workspaceId, config.mode))) {
     throw new Error("billing scheduler tenant is not enabled");
@@ -268,7 +278,10 @@ export async function startMollieCheckout(
     },
     description: plan.mollieDescription,
     intentId: intent.intentId,
-    redirectUrl: `${config.appBaseUrl}/?billing=return&intent=${encodeURIComponent(intent.intentId)}`,
+    redirectUrl:
+      input.kind === "premium_credit_purchase"
+        ? `${config.appBaseUrl}/credits/return?intent=${encodeURIComponent(intent.intentId)}`
+        : `${config.appBaseUrl}/?billing=return&intent=${encodeURIComponent(intent.intentId)}`,
     webhookUrl: config.paymentWebhookUrl,
     idempotencyKey: intent.idempotencyKey,
   };
@@ -392,13 +405,37 @@ export async function startMollieCheckout(
   };
 }
 
+function assertPremiumCreditCheckoutScope(input: CheckoutRequest): void {
+  if (
+    !Number.isSafeInteger(input.messengerChannelConnectionId) ||
+    (input.messengerChannelConnectionId ?? 0) <= 0 ||
+    !Number.isSafeInteger(input.messengerPrivacyEpoch) ||
+    (input.messengerPrivacyEpoch ?? 0) <= 0 ||
+    !/^[a-f0-9]{64}$/i.test(input.messengerSenderUserKey ?? "") ||
+    !/^[A-Za-z0-9._:-]{1,160}$/.test(input.messengerPageId ?? "") ||
+    !input.checkoutScopeKey
+  ) {
+    throw new Error("premium credit checkout scope is incomplete");
+  }
+}
+
 export function assertCheckoutKindMatchesPlan(
+  planCode: string,
   offerType: "subscription" | "one_time",
   kind: CheckoutKind
 ): void {
   if (
-    (offerType === "one_time" && kind !== "startpilot_purchase") ||
-    (offerType === "subscription" && kind === "startpilot_purchase")
+    (planCode === PREMIUM_IMAGE_CREDITS_PLAN_CODE &&
+      kind !== "premium_credit_purchase") ||
+    (planCode !== PREMIUM_IMAGE_CREDITS_PLAN_CODE &&
+      kind === "premium_credit_purchase") ||
+    (planCode === STARTPILOT_PLAN_CODE && kind !== "startpilot_purchase") ||
+    (planCode !== STARTPILOT_PLAN_CODE && kind === "startpilot_purchase") ||
+    (offerType === "one_time" &&
+      kind !== "startpilot_purchase" &&
+      kind !== "premium_credit_purchase") ||
+    (offerType === "subscription" &&
+      (kind === "startpilot_purchase" || kind === "premium_credit_purchase"))
   ) {
     throw new Error("billing plan and checkout kind do not match");
   }
