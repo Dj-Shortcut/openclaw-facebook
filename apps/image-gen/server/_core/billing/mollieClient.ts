@@ -1,4 +1,5 @@
 import type { MollieConfig } from "./config";
+import { parseEurValueMinor } from "./amounts";
 
 export type MollieAmount = {
   currency: string;
@@ -35,6 +36,7 @@ export type MolliePayment = {
   settlementAmount?: MollieAmount;
   description: string;
   method?: string | null;
+  sequenceType?: "oneoff" | "first" | "recurring";
   customerId?: string | null;
   mandateId?: string | null;
   subscriptionId?: string | null;
@@ -180,6 +182,33 @@ export class MollieClient {
         redirectUrl: input.redirectUrl,
         webhookUrl: input.webhookUrl,
         metadata: { billingIntentId: input.intentId },
+      },
+    });
+  }
+
+  async createCreditPayment(input: {
+    amountValue: string;
+    description: string;
+    creditCheckoutIntentId: string;
+    redirectUrl: string;
+    webhookUrl: string;
+    idempotencyKey: string;
+  }): Promise<MolliePayment> {
+    assertCreditPaymentInput(input);
+    return this.request<MolliePayment>("/payments", {
+      method: "POST",
+      idempotencyKey: input.idempotencyKey,
+      body: {
+        amount: { currency: "EUR", value: input.amountValue },
+        sequenceType: "oneoff",
+        method: "bancontact",
+        locale: "nl_BE",
+        description: input.description,
+        redirectUrl: input.redirectUrl,
+        webhookUrl: input.webhookUrl,
+        metadata: {
+          creditCheckoutIntentId: input.creditCheckoutIntentId,
+        },
       },
     });
   }
@@ -400,6 +429,26 @@ export class MollieClient {
       return null as T;
     }
     return (await response.json()) as T;
+  }
+}
+
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9:_-]{16,160}$/;
+
+function assertCreditPaymentInput(input: {
+  amountValue: string;
+  creditCheckoutIntentId: string;
+  idempotencyKey: string;
+}): void {
+  if (parseEurValueMinor(input.amountValue) <= 0) {
+    throw new Error("invalid credit payment amount");
+  }
+  if (!UUID_PATTERN.test(input.creditCheckoutIntentId)) {
+    throw new Error("invalid credit checkout intent ID");
+  }
+  if (!IDEMPOTENCY_KEY_PATTERN.test(input.idempotencyKey)) {
+    throw new Error("invalid credit payment idempotency key");
   }
 }
 

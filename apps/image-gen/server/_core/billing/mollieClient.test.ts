@@ -133,6 +133,148 @@ describe("MollieClient", () => {
     expect(body).not.toHaveProperty("subscriptionId");
   });
 
+  it("reuses an exact Bancontact credit-payment request without recurring or customer fields", async () => {
+    const providerPayment = payment({
+      amount: { currency: "EUR", value: "9.00" },
+      description: "Leaderbot premium beeldcredits",
+      sequenceType: "oneoff",
+    });
+    const fetchMock = vi.fn(
+      async (_input: string | URL | Request, _init?: RequestInit) =>
+        new Response(JSON.stringify(providerPayment), {
+          status: 201,
+          headers: { "content-type": "application/json" },
+        })
+    );
+    const client = new MollieClient(
+      config,
+      fetchMock as unknown as typeof fetch,
+      "https://api.mollie.test/v2"
+    );
+
+    const input = {
+      amountValue: "9.00",
+      description: "Leaderbot premium beeldcredits",
+      creditCheckoutIntentId: "550e8400-e29b-41d4-a716-446655440000",
+      redirectUrl:
+        "https://leaderbot.test/?creditPayment=return&intent=550e8400-e29b-41d4-a716-446655440000",
+      webhookUrl: "https://billing.test/api/webhooks/mollie/payments",
+      idempotencyKey: "credit_payment_550e8400-e29b-41d4-a716-446655440000",
+    } as const;
+
+    await expect(client.createCreditPayment(input)).resolves.toEqual(
+      providerPayment
+    );
+    await expect(client.createCreditPayment(input)).resolves.toEqual(
+      providerPayment
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const [requestUrl, requestInit] = fetchMock.mock.calls[0]!;
+    const [replayUrl, replayInit] = fetchMock.mock.calls[1]!;
+    expect(requestUrl).toBe("https://api.mollie.test/v2/payments");
+    expect(replayUrl).toBe(requestUrl);
+    expect(requestInit?.method).toBe("POST");
+    expect(requestInit?.headers).toMatchObject({
+      Authorization: "Bearer test_example123",
+      Accept: "application/hal+json",
+      "Content-Type": "application/json",
+      "Idempotency-Key": "credit_payment_550e8400-e29b-41d4-a716-446655440000",
+    });
+    expect(replayInit?.headers).toEqual(requestInit?.headers);
+    expect(replayInit?.body).toBe(requestInit?.body);
+    const body = JSON.parse(String(requestInit?.body));
+    expect(body).toEqual({
+      amount: { currency: "EUR", value: "9.00" },
+      sequenceType: "oneoff",
+      method: "bancontact",
+      locale: "nl_BE",
+      description: "Leaderbot premium beeldcredits",
+      redirectUrl:
+        "https://leaderbot.test/?creditPayment=return&intent=550e8400-e29b-41d4-a716-446655440000",
+      webhookUrl: "https://billing.test/api/webhooks/mollie/payments",
+      metadata: {
+        creditCheckoutIntentId: "550e8400-e29b-41d4-a716-446655440000",
+      },
+    });
+    expect(body).not.toHaveProperty("customerId");
+    expect(body).not.toHaveProperty("mandateId");
+    expect(body).not.toHaveProperty("subscriptionId");
+    expect(body).not.toHaveProperty("storeCredentials");
+    expect(body).not.toHaveProperty("cardToken");
+    expect(body).not.toHaveProperty("profileId");
+    expect(body).not.toHaveProperty("testmode");
+  });
+
+  it.each([
+    {
+      name: "empty idempotency key",
+      input: { idempotencyKey: "" },
+      message: "invalid credit payment idempotency key",
+    },
+    {
+      name: "whitespace idempotency key",
+      input: { idempotencyKey: "                " },
+      message: "invalid credit payment idempotency key",
+    },
+    {
+      name: "non-UUID intent metadata",
+      input: { creditCheckoutIntentId: "private-user-identifier" },
+      message: "invalid credit checkout intent ID",
+    },
+    {
+      name: "zero amount",
+      input: { amountValue: "0.00" },
+      message: "invalid credit payment amount",
+    },
+  ])("rejects $name before transport", async ({ input, message }) => {
+    const fetchMock = vi.fn();
+    const client = new MollieClient(
+      config,
+      fetchMock as unknown as typeof fetch,
+      "https://api.mollie.test/v2"
+    );
+
+    await expect(
+      client.createCreditPayment({
+        amountValue: "9.00",
+        description: "Leaderbot premium beeldcredits",
+        creditCheckoutIntentId: "550e8400-e29b-41d4-a716-446655440000",
+        redirectUrl: "https://leaderbot.test/?creditPayment=return",
+        webhookUrl: "https://billing.test/api/webhooks/mollie/payments",
+        idempotencyKey: "credit_payment_550e8400-e29b-41d4-a716-446655440000",
+        ...input,
+      })
+    ).rejects.toThrow(message);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves a Mollie 409 so the caller can reconcile the same credit operation", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ status: 409 }), {
+          status: 409,
+          headers: { "content-type": "application/json" },
+        })
+    );
+    const client = new MollieClient(
+      config,
+      fetchMock as unknown as typeof fetch,
+      "https://api.mollie.test/v2"
+    );
+
+    await expect(
+      client.createCreditPayment({
+        amountValue: "9.00",
+        description: "Leaderbot premium beeldcredits",
+        creditCheckoutIntentId: "550e8400-e29b-41d4-a716-446655440000",
+        redirectUrl: "https://leaderbot.test/?creditPayment=return",
+        webhookUrl: "https://billing.test/api/webhooks/mollie/payments",
+        idempotencyKey: "credit_payment_550e8400-e29b-41d4-a716-446655440000",
+      })
+    ).rejects.toMatchObject({ status: 409, code: "mollie_409" });
+  });
+
   it.each([
     "https://mollie.com/checkout/select-method/tr_payment123",
     "https://www.mollie.com/checkout/select-method/tr_payment123",
