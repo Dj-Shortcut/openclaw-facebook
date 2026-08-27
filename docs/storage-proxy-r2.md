@@ -260,7 +260,7 @@ closed at `r2_lifecycle_preflight`. The metadata-only stage records proved that
 configuration, Redis connection and readiness, and app construction had
 passed. Read-only inspection of the production bucket showed only Cloudflare's
 default multipart-abort rule: the three required 30-day prefix expiration
-rules are absent. The workflow restored and verified the healthy legacy digest,
+rules were absent. The workflow restored and verified the healthy legacy digest,
 public `/healthz` returned `200`, recovery run `33106363152` passed, and
 completed-run reconciliation `33106369992` passed. The manifest returned to
 `awaiting_attested_runtime`; `a6bb...` remains failed rollout evidence and must

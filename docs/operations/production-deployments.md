@@ -370,8 +370,8 @@ stopped before building because exact-source main CI was still in progress.
 Protected deploy run `33105621166` admitted that exact artifact and source, then
 failed closed in startup phase `r2_lifecycle_preflight`. The safe phase record
 proved configuration, Redis connection and readiness, and app construction had
-passed. Read-only inspection confirmed that the production bucket has only the
-default multipart-abort rule and lacks all three required 30-day prefix
+passed. Read-only inspection confirmed that the production bucket had only the
+default multipart-abort rule and lacked all three required 30-day prefix
 expiration rules. The workflow restored and verified legacy digest `334f...`;
 public `/healthz` returned `200`, exact recovery run `33106363152` passed, and
 completed-run reconciliation `33106369992` passed. The manifest therefore
