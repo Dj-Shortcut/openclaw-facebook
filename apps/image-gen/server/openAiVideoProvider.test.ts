@@ -13,6 +13,7 @@ describe("OpenAiVideoProvider", () => {
   const originalApiKey = process.env.OPENAI_API_KEY;
   const originalRetries = process.env.OPENAI_VIDEO_MAX_RETRIES;
   const originalRetryBase = process.env.OPENAI_VIDEO_RETRY_BASE_MS;
+  const originalMaxOutputBytes = process.env.OPENAI_VIDEO_MAX_OUTPUT_BYTES;
 
   beforeEach(() => {
     process.env.OPENAI_API_KEY = "test-openai-key";
@@ -37,6 +38,11 @@ describe("OpenAiVideoProvider", () => {
       delete process.env.OPENAI_VIDEO_RETRY_BASE_MS;
     } else {
       process.env.OPENAI_VIDEO_RETRY_BASE_MS = originalRetryBase;
+    }
+    if (originalMaxOutputBytes === undefined) {
+      delete process.env.OPENAI_VIDEO_MAX_OUTPUT_BYTES;
+    } else {
+      process.env.OPENAI_VIDEO_MAX_OUTPUT_BYTES = originalMaxOutputBytes;
     }
   });
 
@@ -72,6 +78,7 @@ describe("OpenAiVideoProvider", () => {
     global.fetch = fetchMock;
 
     const onProviderAttempt = vi.fn(async () => undefined);
+    const onProviderJobCreated = vi.fn(async () => undefined);
     const result = await new OpenAiVideoProvider().generateVideo({
       prompt: "make it dance",
       sourceImageUrl: "https://img.example/source.jpg",
@@ -79,26 +86,35 @@ describe("OpenAiVideoProvider", () => {
       userKey: "user-key",
       timeoutMs: 10_000,
       onProviderAttempt,
+      onProviderJobCreated,
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(5);
     expect(onProviderAttempt).toHaveBeenCalledTimes(2);
+    expect(onProviderJobCreated).toHaveBeenCalledWith({
+      provider: "openai",
+      providerJobId: "video_1",
+    });
     const [, createRequest] = fetchMock.mock.calls[1] as [string, RequestInit];
     expect(createRequest.body).toBeInstanceOf(FormData);
-    expect((createRequest.body as FormData).get("input_reference")).toBeInstanceOf(
-      File
-    );
+    expect(
+      (createRequest.body as FormData).get("input_reference")
+    ).toBeInstanceOf(File);
+    expect(
+      (createRequest.headers as Record<string, string>)["X-Client-Request-Id"]
+    ).toMatch(/^video-[a-f0-9]{32}$/u);
+    expect(
+      (createRequest.headers as Record<string, string>)["X-Client-Request-Id"]
+    ).not.toContain("req-openai-video-retry");
     expect(result).toMatchObject({
       kind: "success",
       provider: "openai",
       providerJobId: "video_1",
       contentType: "video/mp4",
     });
-    expect(result.kind === "success" ? Array.from(result.videoBytes) : []).toEqual([
-      1,
-      2,
-      3,
-    ]);
+    expect(
+      result.kind === "success" ? Array.from(result.videoBytes) : []
+    ).toEqual([1, 2, 3]);
     const ledger = await readCostLedgerPeriod(period);
     expect(ledger).toEqual([
       expect.objectContaining({
@@ -182,7 +198,12 @@ describe("OpenAiVideoProvider", () => {
       )
       .mockResolvedValueOnce(
         new Response(
-          JSON.stringify({ error: { code: "invalid_image_reference", message: "private detail" } }),
+          JSON.stringify({
+            error: {
+              code: "invalid_image_reference",
+              message: "private detail",
+            },
+          }),
           { status: 400, headers: { "content-type": "application/json" } }
         )
       );
@@ -203,6 +224,91 @@ describe("OpenAiVideoProvider", () => {
       retryable: false,
       providerStatus: 400,
       providerErrorCode: "invalid_image_reference",
+    });
+  });
+
+  it("rejects a completed provider response that is not MP4", async () => {
+    process.env.OPENAI_VIDEO_MAX_RETRIES = "0";
+    global.fetch = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(new Uint8Array([9]), {
+          status: 200,
+          headers: { "content-type": "image/jpeg" },
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ id: "video_wrong_type", status: "completed" }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(new Uint8Array([1, 2, 3]), {
+          status: 200,
+          headers: { "content-type": "application/octet-stream" },
+        })
+      );
+
+    const result = await new OpenAiVideoProvider().generateVideo({
+      prompt: "animate",
+      sourceImageUrl: "https://img.example/source.jpg",
+      reqId: "req-openai-video-wrong-type",
+      userKey: "user-key",
+      timeoutMs: 10_000,
+    });
+
+    expect(result).toMatchObject({
+      kind: "failure",
+      provider: "openai",
+      errorClass: "provider",
+      retryable: false,
+    });
+  });
+
+  it("stops reading a provider response that exceeds the output cap", async () => {
+    process.env.OPENAI_VIDEO_MAX_RETRIES = "0";
+    process.env.OPENAI_VIDEO_MAX_OUTPUT_BYTES = "2";
+    global.fetch = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(new Uint8Array([9]), {
+          status: 200,
+          headers: { "content-type": "image/jpeg" },
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ id: "video_too_large", status: "completed" }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(new Uint8Array([1, 2, 3]), {
+          status: 200,
+          headers: { "content-type": "video/mp4" },
+        })
+      );
+
+    const result = await new OpenAiVideoProvider().generateVideo({
+      prompt: "animate",
+      sourceImageUrl: "https://img.example/source.jpg",
+      reqId: "req-openai-video-too-large",
+      userKey: "user-key",
+      timeoutMs: 10_000,
+    });
+
+    expect(result).toMatchObject({
+      kind: "failure",
+      provider: "openai",
+      errorClass: "provider",
+      retryable: false,
     });
   });
 });

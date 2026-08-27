@@ -14,6 +14,8 @@ const {
   recoverGenerationAdmissionsMock,
   eraseGenerationJobsMock,
   eraseImageQuotaMock,
+  beginVideoArtifactErasureMock,
+  removeVideoArtifactMock,
 } = vi.hoisted(() => ({
   storageDeleteMock: vi.fn(async () => undefined),
   deleteProviderVideoForUserMock: vi.fn(async () => undefined),
@@ -31,6 +33,8 @@ const {
   recoverGenerationAdmissionsMock: vi.fn(async () => undefined),
   eraseGenerationJobsMock: vi.fn(async () => 0),
   eraseImageQuotaMock: vi.fn(async () => undefined),
+  beginVideoArtifactErasureMock: vi.fn(async () => []),
+  removeVideoArtifactMock: vi.fn(async () => undefined),
 }));
 
 vi.mock("./storage", async importOriginal => {
@@ -115,6 +119,17 @@ vi.mock("./_core/messengerImageQuotaStore", async importOriginal => {
     eraseMessengerImageQuotaForUser: eraseImageQuotaMock,
   };
 });
+vi.mock("./_core/messengerVideoProviderArtifactStore", async importOriginal => {
+  const actual =
+    await importOriginal<
+      typeof import("./_core/messengerVideoProviderArtifactStore")
+    >();
+  return {
+    ...actual,
+    beginMessengerVideoProviderArtifactErasure: beginVideoArtifactErasureMock,
+    removeMessengerVideoProviderArtifact: removeVideoArtifactMock,
+  };
+});
 import { deleteUserData } from "./_core/dataDeletionService";
 import {
   appendCostLedgerEntry,
@@ -186,6 +201,8 @@ describe("data deletion service", () => {
     recoverGenerationAdmissionsMock.mockClear();
     eraseGenerationJobsMock.mockClear();
     eraseImageQuotaMock.mockClear();
+    beginVideoArtifactErasureMock.mockReset().mockResolvedValue([]);
+    removeVideoArtifactMock.mockReset().mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -1098,5 +1115,61 @@ describe("data deletion service", () => {
       reqId: "delete-my-data",
     });
     expect(await Promise.resolve(getState(psid))).toBeNull();
+  });
+
+  it("deletes every indexed provider video in the exact privacy scope", async () => {
+    const psid = "delete-indexed-provider-videos-user";
+    const pageId = "delete-indexed-provider-videos-page";
+    const userKey = anonymizePsid(psid);
+    const artifacts = [
+      { provider: "openai", providerJobId: "video_indexed_1" },
+      { provider: "openai", providerJobId: "video_indexed_2" },
+    ];
+    beginVideoArtifactErasureMock.mockResolvedValue(artifacts);
+
+    await runWithMessengerRequestContext(
+      pageId,
+      async () => {
+        await Promise.resolve(getOrCreateState(psid));
+        await expect(deleteUserData(psid)).resolves.toEqual({
+          status: "completed",
+        });
+      },
+      {
+        channel: "facebook_messenger",
+        workspaceId: 42,
+        channelConnectionId: 7,
+        bindingEpoch: 3,
+        userKey,
+        privacyEpoch: 5,
+      }
+    );
+
+    const expectedScope = {
+      workspaceId: 42,
+      channelConnectionId: 7,
+      bindingEpoch: 3,
+      privacyEpoch: 5,
+      userKey,
+      pageId,
+      channel: "facebook_messenger",
+    };
+    expect(beginVideoArtifactErasureMock).toHaveBeenCalledWith(expectedScope);
+    expect(deleteProviderVideoForUserMock).toHaveBeenCalledWith({
+      ...artifacts[0],
+      reqId: "delete-my-data",
+    });
+    expect(deleteProviderVideoForUserMock).toHaveBeenCalledWith({
+      ...artifacts[1],
+      reqId: "delete-my-data",
+    });
+    expect(removeVideoArtifactMock).toHaveBeenCalledWith(
+      expect.objectContaining(artifacts[0]),
+      expectedScope
+    );
+    expect(removeVideoArtifactMock).toHaveBeenCalledWith(
+      expect.objectContaining(artifacts[1]),
+      expectedScope
+    );
   });
 });

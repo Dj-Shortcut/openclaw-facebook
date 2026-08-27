@@ -8,7 +8,8 @@ const {
   assertPrivacySubjectMock,
   generateSpeechAudioMock,
   muxMp4WithMp3Mock,
-  resolvePremiumMediaAccessMock,
+  registerVideoArtifactMock,
+  removeVideoArtifactMock,
 } = vi.hoisted(() => ({
   safeLogMock: vi.fn(),
   storagePutMock: vi.fn(async () => ({
@@ -19,7 +20,8 @@ const {
   assertPrivacySubjectMock: vi.fn(async () => undefined),
   generateSpeechAudioMock: vi.fn(async () => new Uint8Array([4, 5, 6])),
   muxMp4WithMp3Mock: vi.fn(async (video: Uint8Array) => video),
-  resolvePremiumMediaAccessMock: vi.fn(async () => null),
+  registerVideoArtifactMock: vi.fn(async () => true),
+  removeVideoArtifactMock: vi.fn(async () => undefined),
 }));
 
 vi.mock("./storage", async importOriginal => {
@@ -56,14 +58,15 @@ vi.mock("./_core/mediaMux", () => ({
   muxMp4WithMp3: muxMp4WithMp3Mock,
 }));
 
-vi.mock("./_core/workspaceEntitlementRuntime", async importOriginal => {
+vi.mock("./_core/messengerVideoProviderArtifactStore", async importOriginal => {
   const actual =
     await importOriginal<
-      typeof import("./_core/workspaceEntitlementRuntime")
+      typeof import("./_core/messengerVideoProviderArtifactStore")
     >();
   return {
     ...actual,
-    resolvePremiumMediaAccess: resolvePremiumMediaAccessMock,
+    registerMessengerVideoProviderArtifact: registerVideoArtifactMock,
+    removeMessengerVideoProviderArtifact: removeVideoArtifactMock,
   };
 });
 
@@ -137,6 +140,7 @@ function makeDeps() {
 describe("messenger video generation flow", () => {
   beforeEach(() => {
     process.env.PRIVACY_PEPPER = "video-flow-test-pepper";
+    process.env.MESSENGER_VIDEO_GENERATION_ENABLED = "true";
     process.env.MESSENGER_VIDEO_GENERATION_DAILY_LIMIT = "1";
     process.env.MESSENGER_PSID_LOCK_TTL_MS = "1000";
     resetStateStore();
@@ -149,15 +153,154 @@ describe("messenger video generation flow", () => {
     generateSpeechAudioMock.mockResolvedValue(new Uint8Array([4, 5, 6]));
     muxMp4WithMp3Mock.mockReset();
     muxMp4WithMp3Mock.mockImplementation(async (video: Uint8Array) => video);
-    resolvePremiumMediaAccessMock.mockReset();
-    resolvePremiumMediaAccessMock.mockResolvedValue(null);
+    registerVideoArtifactMock.mockReset().mockResolvedValue(true);
+    removeVideoArtifactMock.mockReset().mockResolvedValue(undefined);
     setVideoProviderForTests(null);
+  });
+
+  it("stops a queued video job after the feature kill-switch is disabled", async () => {
+    const provider = makeProvider({
+      kind: "success",
+      provider: "test",
+      providerJobId: "must-not-run-after-disable",
+      videoBytes: new Uint8Array([1]),
+      contentType: "video/mp4",
+    });
+    setVideoProviderForTests(provider);
+    const deps = makeDeps();
+    const runVideoGeneration = createMessengerVideoGenerationRunner(deps);
+    process.env.MESSENGER_VIDEO_GENERATION_ENABLED = "false";
+
+    await expect(
+      runVideoGeneration(
+        "video-disabled-worker-user",
+        "video-disabled-worker-user-key",
+        "req-video-disabled-worker",
+        "nl",
+        "https://img.example/source.jpg",
+        "laat hem bewegen"
+      )
+    ).resolves.toEqual({ sent: false, reason: "response_window_closed" });
+
+    expect(provider.generateVideo).not.toHaveBeenCalled();
+    expect(storagePutMock).not.toHaveBeenCalled();
+    expect(
+      (await Promise.resolve(getOrCreateState("video-disabled-worker-user")))
+        .videoGenerationQuota.count
+    ).toBe(0);
+  });
+
+  it("stops a queued video job after its user is removed from the pilot", async () => {
+    const provider = makeProvider({
+      kind: "success",
+      provider: "test",
+      providerJobId: "must-not-run-after-revocation",
+      videoBytes: new Uint8Array([1]),
+      contentType: "video/mp4",
+    });
+    setVideoProviderForTests(provider);
+    process.env.MESSENGER_VIDEO_ALLOWED_USER_KEYS = "a".repeat(64);
+    const runVideoGeneration = createMessengerVideoGenerationRunner(makeDeps());
+
+    await runVideoGeneration(
+      "video-revoked-worker-user",
+      "b".repeat(64),
+      "req-video-revoked-worker",
+      "nl",
+      "https://img.example/source.jpg",
+      "laat hem bewegen"
+    );
+
+    expect(provider.generateVideo).not.toHaveBeenCalled();
+    expect(storagePutMock).not.toHaveBeenCalled();
+  });
+
+  it("stops a queued video job outside the exact owner Page binding", async () => {
+    const userKey = "d".repeat(64);
+    process.env.MESSENGER_VIDEO_ALLOWED_USER_KEYS = userKey;
+    process.env.MESSENGER_VIDEO_ALLOWED_PAGE_BINDINGS = "42:7:3:999999";
+    const provider = makeProvider({
+      kind: "success",
+      provider: "test",
+      providerJobId: "must-not-run-on-other-page",
+      videoBytes: new Uint8Array([1]),
+      contentType: "video/mp4",
+    });
+    setVideoProviderForTests(provider);
+    const runVideoGeneration = createMessengerVideoGenerationRunner(makeDeps());
+
+    await runWithMessengerRequestContext(
+      "123456",
+      async () => {
+        setMessengerRequestPrivacySubject({ userKey, privacyEpoch: 5 });
+        await runVideoGeneration(
+          "video-other-page-worker-user",
+          userKey,
+          "req-video-other-page-worker",
+          "nl",
+          "https://img.example/source.jpg",
+          "laat hem bewegen"
+        );
+      },
+      {
+        channel: "facebook_messenger",
+        workspaceId: 42,
+        channelConnectionId: 7,
+        bindingEpoch: 3,
+        userKey,
+        privacyEpoch: 5,
+      }
+    );
+
+    expect(provider.generateVideo).not.toHaveBeenCalled();
+    expect(storagePutMock).not.toHaveBeenCalled();
+  });
+
+  it("enforces the video cap even for a configured Messenger admin", async () => {
+    const psid = "video-bounded-admin-user";
+    process.env.MESSENGER_ADMIN_IDS = psid;
+    const provider = makeProvider({
+      kind: "success",
+      provider: "test",
+      providerJobId: "video-bounded-admin-job",
+      videoBytes: new Uint8Array([1, 2, 3]),
+      contentType: "video/mp4",
+    });
+    setVideoProviderForTests(provider);
+    const deps = makeDeps();
+    const runVideoGeneration = createMessengerVideoGenerationRunner(deps);
+
+    await runVideoGeneration(
+      psid,
+      "video-bounded-admin-user-key",
+      "req-video-bounded-admin-1",
+      "nl",
+      "https://img.example/source.jpg",
+      "laat hem bewegen"
+    );
+    await runVideoGeneration(
+      psid,
+      "video-bounded-admin-user-key",
+      "req-video-bounded-admin-2",
+      "nl",
+      "https://img.example/source.jpg",
+      "laat hem opnieuw bewegen"
+    );
+
+    expect(provider.generateVideo).toHaveBeenCalledTimes(1);
+    expect(
+      (await Promise.resolve(getOrCreateState(psid))).videoGenerationQuota.count
+    ).toBe(1);
+    delete process.env.MESSENGER_ADMIN_IDS;
   });
 
   afterEach(() => {
     resetStateStore();
     setVideoProviderForTests(null);
     delete process.env.MESSENGER_VIDEO_GENERATION_DAILY_LIMIT;
+    delete process.env.MESSENGER_VIDEO_GENERATION_ENABLED;
+    delete process.env.MESSENGER_VIDEO_ALLOWED_USER_KEYS;
+    delete process.env.MESSENGER_VIDEO_ALLOWED_PAGE_BINDINGS;
     delete process.env.MESSENGER_PSID_LOCK_TTL_MS;
     delete process.env.MESSENGER_GLOBAL_DAILY_VIDEO_CAP;
     delete process.env.MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD;
@@ -166,6 +309,7 @@ describe("messenger video generation flow", () => {
     delete process.env.MESSENGER_VIDEO_FLOW_TIMEOUT_MS;
     delete process.env.MESSENGER_TTS_ENABLED;
     delete process.env.MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED;
+    delete process.env.MESSENGER_ADMIN_IDS;
     vi.useRealTimers();
   });
 
@@ -212,6 +356,199 @@ describe("messenger video generation flow", () => {
     expect(state.lastGeneratedVideoUrl).toBe(
       "https://cdn.example/generated/videos/test.mp4"
     );
+  });
+
+  it("registers and deletes the provider copy before scoped delivery", async () => {
+    const userKey = "a".repeat(64);
+    const artifact = {
+      provider: "openai",
+      providerJobId: "video-scoped-cleanup",
+    };
+    const deleteVideo = vi.fn(async () => undefined);
+    const provider: VideoProvider = {
+      generateVideo: vi.fn(async input => {
+        await input.onProviderAttempt?.();
+        await input.onProviderJobCreated?.(artifact);
+        return {
+          kind: "success" as const,
+          ...artifact,
+          videoBytes: new Uint8Array([1, 2, 3]),
+          contentType: "video/mp4" as const,
+        };
+      }),
+      deleteVideo,
+    };
+    setVideoProviderForTests(provider);
+    const deps = makeDeps();
+    const runVideoGeneration = createMessengerVideoGenerationRunner(deps);
+
+    await runWithMessengerRequestContext(
+      "page-video-cleanup",
+      async () => {
+        setMessengerRequestPrivacySubject({ userKey, privacyEpoch: 5 });
+        await runVideoGeneration(
+          "video-cleanup-user",
+          userKey,
+          "req-video-cleanup",
+          "nl",
+          "https://img.example/source.jpg",
+          "laat hem dansen"
+        );
+      },
+      {
+        channel: "facebook_messenger",
+        workspaceId: 42,
+        channelConnectionId: 7,
+        bindingEpoch: 3,
+        userKey,
+        privacyEpoch: 5,
+      }
+    );
+
+    const expectedScope = {
+      workspaceId: 42,
+      channelConnectionId: 7,
+      bindingEpoch: 3,
+      privacyEpoch: 5,
+      userKey,
+      pageId: "page-video-cleanup",
+    };
+    expect(registerVideoArtifactMock).toHaveBeenCalledWith(
+      artifact,
+      expectedScope
+    );
+    expect(deleteVideo).toHaveBeenCalledWith(
+      artifact.providerJobId,
+      "req-video-cleanup"
+    );
+    expect(removeVideoArtifactMock).toHaveBeenCalledWith(
+      artifact,
+      expectedScope
+    );
+    expect(deleteVideo.mock.invocationCallOrder[0]).toBeLessThan(
+      deps.sendLoggedVideo.mock.invocationCallOrder[0]!
+    );
+  });
+
+  it("suppresses delivery and deletes a provider job created after erasure starts", async () => {
+    const userKey = "b".repeat(64);
+    const artifact = {
+      provider: "openai",
+      providerJobId: "video-late-after-erasure",
+    };
+    registerVideoArtifactMock.mockResolvedValue(false);
+    const deleteVideo = vi.fn(async () => undefined);
+    const provider: VideoProvider = {
+      generateVideo: vi.fn(async input => {
+        await input.onProviderAttempt?.();
+        await input.onProviderJobCreated?.(artifact);
+        throw new Error("provider callback should stop generation");
+      }),
+      deleteVideo,
+    };
+    setVideoProviderForTests(provider);
+    const deps = makeDeps();
+    const runVideoGeneration = createMessengerVideoGenerationRunner(deps);
+
+    await runWithMessengerRequestContext(
+      "page-video-erasure-race",
+      async () => {
+        setMessengerRequestPrivacySubject({ userKey, privacyEpoch: 5 });
+        await runVideoGeneration(
+          "video-erasure-race-user",
+          userKey,
+          "req-video-erasure-race",
+          "nl",
+          "https://img.example/source.jpg",
+          "laat hem bewegen"
+        );
+      },
+      {
+        channel: "facebook_messenger",
+        workspaceId: 42,
+        channelConnectionId: 7,
+        bindingEpoch: 3,
+        userKey,
+        privacyEpoch: 5,
+      }
+    );
+
+    expect(deleteVideo).toHaveBeenCalledWith(
+      artifact.providerJobId,
+      "req-video-erasure-race"
+    );
+    expect(deps.sendLoggedVideo).not.toHaveBeenCalled();
+    expect(storagePutMock).not.toHaveBeenCalled();
+  });
+
+  it("registers and deletes the provider job when privacy changes in its callback", async () => {
+    const userKey = "c".repeat(64);
+    const artifact = {
+      provider: "openai",
+      providerJobId: "video-privacy-changed-after-registration",
+    };
+    registerVideoArtifactMock.mockImplementationOnce(async () => {
+      assertPrivacySubjectMock.mockRejectedValue(
+        new MessengerPrivacyFenceError()
+      );
+      return true;
+    });
+    const deleteVideo = vi.fn(async () => undefined);
+    const provider: VideoProvider = {
+      generateVideo: vi.fn(async input => {
+        await input.onProviderAttempt?.();
+        await input.onProviderJobCreated?.(artifact);
+        throw new Error("provider callback should stop generation");
+      }),
+      deleteVideo,
+    };
+    setVideoProviderForTests(provider);
+    const deps = makeDeps();
+    const runVideoGeneration = createMessengerVideoGenerationRunner(deps);
+
+    await runWithMessengerRequestContext(
+      "page-video-privacy-callback",
+      async () => {
+        setMessengerRequestPrivacySubject({ userKey, privacyEpoch: 5 });
+        await runVideoGeneration(
+          "video-privacy-callback-user",
+          userKey,
+          "req-video-privacy-callback",
+          "nl",
+          "https://img.example/source.jpg",
+          "laat hem bewegen"
+        );
+      },
+      {
+        channel: "facebook_messenger",
+        workspaceId: 42,
+        channelConnectionId: 7,
+        bindingEpoch: 3,
+        userKey,
+        privacyEpoch: 5,
+      }
+    );
+
+    expect(registerVideoArtifactMock).toHaveBeenCalledWith(
+      artifact,
+      expect.objectContaining({
+        workspaceId: 42,
+        channelConnectionId: 7,
+        bindingEpoch: 3,
+        privacyEpoch: 5,
+        userKey,
+      })
+    );
+    expect(deleteVideo).toHaveBeenCalledWith(
+      artifact.providerJobId,
+      "req-video-privacy-callback"
+    );
+    expect(removeVideoArtifactMock).toHaveBeenCalledWith(
+      artifact,
+      expect.objectContaining({ userKey, privacyEpoch: 5 })
+    );
+    expect(deps.sendLoggedVideo).not.toHaveBeenCalled();
+    expect(storagePutMock).not.toHaveBeenCalled();
   });
 
   it("cleans the stored video when privacy changes during Graph delivery", async () => {
@@ -268,45 +605,43 @@ describe("messenger video generation flow", () => {
     expect(storageDeleteMock).toHaveBeenCalledWith("generated/videos/test.mp4");
   });
 
-  it("uses the active Premium plan's server-side daily video limit", async () => {
-    const psid = "video-premium-quota-user";
+  it("does not let a legacy subscription entitlement bypass the owner-product video quota", async () => {
+    const psid = "video-owner-product-quota-user";
     process.env.MESSENGER_VIDEO_GENERATION_DAILY_LIMIT = "1";
     const firstReservation = await reserveVideoGenerationForAttempt(psid);
     expect(firstReservation).not.toBeNull();
     await commitVideoGenerationSuccess(psid, firstReservation!);
 
     process.env.MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED = "true";
-    resolvePremiumMediaAccessMock.mockResolvedValue({
-      workspaceId: 42,
-      entitlementId: 7,
-      mode: "test",
-      videoGenerationsPerDay: 10,
+    const provider = makeProvider({
+      kind: "success",
+      provider: "test",
+      providerJobId: "must-not-run",
+      videoBytes: new Uint8Array([1, 2, 3]),
+      contentType: "video/mp4",
     });
-    setVideoProviderForTests(
-      makeProvider({
-        kind: "success",
-        provider: "test",
-        providerJobId: "video-job-premium-quota",
-        videoBytes: new Uint8Array([1, 2, 3]),
-        contentType: "video/mp4",
-      })
-    );
+    setVideoProviderForTests(provider);
     const deps = makeDeps();
 
     await createMessengerVideoGenerationRunner(deps)(
       psid,
-      "video-premium-quota-user-key",
-      "req-video-premium-quota",
+      "video-owner-product-quota-user-key",
+      "req-video-owner-product-quota",
       "nl",
       "https://img.example/source.jpg",
       "laat hem zwaaien"
     );
 
-    expect(resolvePremiumMediaAccessMock).toHaveBeenCalledTimes(1);
-    expect(deps.sendLoggedVideo).toHaveBeenCalledTimes(1);
+    expect(provider.generateVideo).not.toHaveBeenCalled();
+    expect(deps.sendLoggedVideo).not.toHaveBeenCalled();
+    expect(deps.sendLoggedText).toHaveBeenCalledWith(
+      psid,
+      t("nl", "outOfVideoCredits"),
+      "req-video-owner-product-quota"
+    );
     expect(
       (await Promise.resolve(getOrCreateState(psid))).videoGenerationQuota.count
-    ).toBe(2);
+    ).toBe(1);
   });
 
   it("records priced video attempts with final cost when configured", async () => {
@@ -592,6 +927,11 @@ describe("messenger video generation flow", () => {
           status: 200,
           headers: { "content-type": "video/mp4" },
         })
+      )
+      .mockResolvedValueOnce(
+        new Response(null, {
+          status: 204,
+        })
       );
     global.fetch = fetchMock as typeof global.fetch;
     setVideoProviderForTests(new OpenAiVideoProvider());
@@ -616,7 +956,11 @@ describe("messenger video generation flow", () => {
       status: "provider_attempt_succeeded",
       reqId: requestSummaryKey("req-video-openai-single"),
     });
-    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(fetchMock.mock.calls[3]?.[1]).toMatchObject({ method: "DELETE" });
+    const state = await Promise.resolve(getOrCreateState("video-openai-user"));
+    expect(state.lastGeneratedVideoProvider).toBeNull();
+    expect(state.lastGeneratedVideoProviderJobId).toBeNull();
   });
 
   it("marks OpenAI video attempts failed as failed, not duplicated", async () => {

@@ -9,15 +9,6 @@ import {
 } from "./_core/messengerState";
 import type { HandlerContext } from "./_core/webhookHandlerTypes";
 
-const { hasPremiumMediaAccessMock } = vi.hoisted(() => ({
-  hasPremiumMediaAccessMock: vi.fn(async () => true),
-}));
-
-vi.mock("./_core/workspaceEntitlementRuntime", () => ({
-  hasPremiumMediaAccess: hasPremiumMediaAccessMock,
-  WorkspaceEntitlementLookupError: class WorkspaceEntitlementLookupError extends Error {},
-}));
-
 const originalPrivacyPepper = process.env.PRIVACY_PEPPER;
 
 function makeHandlerContext(
@@ -52,8 +43,6 @@ function makeHandlerContext(
 describe("webhook text message router", () => {
   beforeEach(() => {
     process.env.PRIVACY_PEPPER = "webhook-text-router-test-pepper";
-    hasPremiumMediaAccessMock.mockReset();
-    hasPremiumMediaAccessMock.mockResolvedValue(true);
     resetStateStore();
   });
 
@@ -61,6 +50,7 @@ describe("webhook text message router", () => {
     vi.useRealTimers();
     resetStateStore();
     delete process.env.MESSENGER_VIDEO_GENERATION_ENABLED;
+    delete process.env.MESSENGER_VIDEO_ALLOWED_USER_KEYS;
     delete process.env.MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED;
     if (originalPrivacyPepper === undefined) {
       delete process.env.PRIVACY_PEPPER;
@@ -126,8 +116,59 @@ describe("webhook text message router", () => {
     );
   });
 
+  it("keeps video generation unavailable outside the production pilot allowlist", async () => {
+    const psid = "video-not-allowlisted-user";
+    process.env.MESSENGER_VIDEO_GENERATION_ENABLED = "true";
+    process.env.MESSENGER_VIDEO_ALLOWED_USER_KEYS = "a".repeat(64);
+    await setLastGenerated(psid, "https://img.example/source.jpg");
+    const runVideoGeneration = vi.fn(async () => ({ sent: true as const }));
+    const ctx = makeHandlerContext({ runVideoGeneration });
+
+    await handleTextMessage(ctx, {
+      psid,
+      userId: "b".repeat(64),
+      reqId: "req-video-not-allowlisted",
+      lang: "nl",
+      text: "laat hem bewegen",
+    });
+
+    expect(runVideoGeneration).not.toHaveBeenCalled();
+    expect(ctx.sendLoggedText).toHaveBeenCalledWith(
+      psid,
+      t("nl", "videoGenerationUnavailable"),
+      "req-video-not-allowlisted"
+    );
+  });
+
+  it("does not retry a stored video request while the feature is disabled", async () => {
+    const psid = "video-disabled-retry-user";
+    const runVideoGeneration = vi.fn(async () => ({ sent: true as const }));
+    const ctx = makeHandlerContext({ runVideoGeneration });
+    await setPendingVideoGeneration(psid, {
+      sourceImageUrl: "https://img.example/selfie.jpg",
+      promptHint: "laat hem bewegen",
+      requestedAt: 1730000000000,
+    });
+
+    await handleTextMessage(ctx, {
+      psid,
+      userId: "video-disabled-retry-user-key",
+      reqId: "req-video-disabled-retry",
+      lang: "nl",
+      text: "Opnieuw",
+    });
+
+    expect(runVideoGeneration).not.toHaveBeenCalled();
+    expect(ctx.sendLoggedText).toHaveBeenCalledWith(
+      psid,
+      t("nl", "videoGenerationUnavailable"),
+      "req-video-disabled-retry"
+    );
+  });
+
   it("retries the stored video request instead of treating retry text as an image prompt", async () => {
     const psid = "video-retry-user";
+    process.env.MESSENGER_VIDEO_GENERATION_ENABLED = "true";
     const runVideoGeneration = vi.fn(async () => ({ sent: true as const }));
     const ctx = makeHandlerContext({ runVideoGeneration });
     await setPendingVideoGeneration(psid, {
@@ -155,10 +196,10 @@ describe("webhook text message router", () => {
     expect(ctx.runImageGeneration).not.toHaveBeenCalled();
   });
 
-  it("refuses a stored video retry after Premium access is revoked", async () => {
-    const psid = "video-retry-revoked-user";
+  it("does not couple a stored video retry to legacy subscription enforcement", async () => {
+    const psid = "video-retry-owner-product-user";
+    process.env.MESSENGER_VIDEO_GENERATION_ENABLED = "true";
     process.env.MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED = "true";
-    hasPremiumMediaAccessMock.mockResolvedValue(false);
     const runVideoGeneration = vi.fn(async () => ({ sent: true as const }));
     const ctx = makeHandlerContext({ runVideoGeneration });
     await setPendingVideoGeneration(psid, {
@@ -169,18 +210,19 @@ describe("webhook text message router", () => {
 
     await handleTextMessage(ctx, {
       psid,
-      userId: "video-retry-revoked-user-key",
-      reqId: "req-video-retry-revoked",
+      userId: "video-retry-owner-product-user-key",
+      reqId: "req-video-retry-owner-product",
       lang: "nl",
       text: "Opnieuw",
     });
 
-    expect(hasPremiumMediaAccessMock).toHaveBeenCalledTimes(1);
-    expect(runVideoGeneration).not.toHaveBeenCalled();
-    expect(ctx.sendLoggedText).toHaveBeenCalledWith(
+    expect(runVideoGeneration).toHaveBeenCalledWith(
       psid,
-      t("nl", "videoGenerationPremiumRequired"),
-      "req-video-retry-revoked"
+      "video-retry-owner-product-user-key",
+      "req-video-retry-owner-product",
+      "nl",
+      "https://img.example/selfie.jpg",
+      "welkom op mijn kanaal"
     );
   });
 

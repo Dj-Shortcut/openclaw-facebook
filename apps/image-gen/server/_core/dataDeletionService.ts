@@ -46,8 +46,16 @@ import {
   recoverMessengerGenerationAdmissionsForSubject,
 } from "./messengerGenerationQueue";
 import { eraseMessengerImageQuotaForUser } from "./messengerImageQuotaStore";
-import { hashStorageObjectKeyForLog } from "./messengerStorageObject";
+import {
+  hashStorageObjectKeyForLog,
+  type MessengerStorageRequestScope,
+} from "./messengerStorageObject";
 import { isLocalGeneratedImageUrl } from "./generatedImageStore";
+import {
+  beginMessengerVideoProviderArtifactErasure,
+  removeMessengerVideoProviderArtifact,
+  type MessengerVideoProviderArtifact,
+} from "./messengerVideoProviderArtifactStore";
 
 const LEGACY_CHAT_HISTORY_SCOPE = "chat:history";
 
@@ -539,16 +547,63 @@ async function deleteUserDataInternal(
           : undefined
       )
     )) && deleteStepsSucceeded;
-  if (deletionState.lastGeneratedVideoProviderJobId) {
-    deleteStepsSucceeded =
-      (await runStep("video_provider_artifact", () =>
-        deleteProviderVideoForUser({
-          provider: deletionState.lastGeneratedVideoProvider ?? null,
-          providerJobId: deletionState.lastGeneratedVideoProviderJobId!,
+  const videoArtifactScope: MessengerStorageRequestScope | null =
+    requestChannel === "facebook_messenger" &&
+    deletionState.workspaceId &&
+    deletionState.channelConnectionId &&
+    deletionState.bindingEpoch &&
+    deletionState.privacyEpoch &&
+    deletionState.pageId
+      ? {
+          workspaceId: deletionState.workspaceId,
+          channelConnectionId: deletionState.channelConnectionId,
+          bindingEpoch: deletionState.bindingEpoch,
+          privacyEpoch: deletionState.privacyEpoch,
+          userKey: deletionState.userKey,
+          pageId: deletionState.pageId,
+          ...(requestChannel ? { channel: requestChannel } : {}),
+        }
+      : null;
+  deleteStepsSucceeded =
+    (await runStep("video_provider_artifacts", async () => {
+      const indexedArtifacts = videoArtifactScope
+        ? await beginMessengerVideoProviderArtifactErasure(videoArtifactScope)
+        : [];
+      const artifacts = new Map<
+        string,
+        MessengerVideoProviderArtifact & { indexed: boolean }
+      >();
+      for (const artifact of indexedArtifacts) {
+        artifacts.set(`${artifact.provider}\0${artifact.providerJobId}`, {
+          ...artifact,
+          indexed: true,
+        });
+      }
+      if (deletionState.lastGeneratedVideoProviderJobId) {
+        const legacyArtifact = {
+          provider: deletionState.lastGeneratedVideoProvider ?? "openai",
+          providerJobId: deletionState.lastGeneratedVideoProviderJobId,
+        };
+        const key = `${legacyArtifact.provider}\0${legacyArtifact.providerJobId}`;
+        if (!artifacts.has(key)) {
+          artifacts.set(key, { ...legacyArtifact, indexed: false });
+        }
+      }
+
+      for (const artifact of artifacts.values()) {
+        await deleteProviderVideoForUser({
+          provider: artifact.provider,
+          providerJobId: artifact.providerJobId,
           reqId: "delete-my-data",
-        })
-      )) && deleteStepsSucceeded;
-  }
+        });
+        if (artifact.indexed && videoArtifactScope) {
+          await removeMessengerVideoProviderArtifact(
+            artifact,
+            videoArtifactScope
+          );
+        }
+      }
+    })) && deleteStepsSucceeded;
 
   const failedDeletes = Array.from(
     new Set([

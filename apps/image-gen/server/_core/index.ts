@@ -14,6 +14,7 @@ import { assertWhatsAppConfig } from "./env";
 import { assertWhatsAppTenantBindingReadiness } from "./whatsappBindingReadiness";
 import { captureBotWebhookRawBody, getBotStartupConfig } from "./bot";
 import { assertProductionImageStorageConfig } from "./image-generation/imageServiceConfig";
+import { assertProductionMessengerVideoConfig } from "./video-generation/videoConfig";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic } from "./vite";
@@ -209,6 +210,7 @@ async function startServer() {
   const generationWorkerOnly = isMessengerGenerationWorkerOnlyMode();
   safeLog("generator_startup_config", generatorStartupConfig);
   assertProductionImageStorageConfig();
+  assertProductionMessengerVideoConfig();
   assertAuthConfig();
   assertWhatsAppConfig();
   // Keep /healthz as liveness, but refuse to expose webhook drains or workers

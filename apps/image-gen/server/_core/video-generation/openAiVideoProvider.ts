@@ -1,13 +1,15 @@
+import { createHash } from "node:crypto";
 import { safeLog } from "../logger";
 import {
   assertCostLedgerTenantScope,
   safelyAppendCostLedgerEntry,
 } from "../costLedger";
-import type {
-  VideoProvider,
-  VideoProviderFailure,
-  VideoProviderRequest,
-  VideoProviderResult,
+import {
+  VideoProviderJobRegistrationError,
+  type VideoProvider,
+  type VideoProviderFailure,
+  type VideoProviderRequest,
+  type VideoProviderResult,
 } from "./videoProvider";
 
 const OPENAI_VIDEO_ENDPOINT = "https://api.openai.com/v1/videos";
@@ -19,6 +21,10 @@ const DEFAULT_OPENAI_VIDEO_MAX_RETRIES = 1;
 const DEFAULT_OPENAI_VIDEO_RETRY_BASE_MS = 750;
 const DEFAULT_OPENAI_VIDEO_MAX_OUTPUT_BYTES = 24 * 1024 * 1024;
 const DEFAULT_OPENAI_VIDEO_MAX_REFERENCE_IMAGE_BYTES = 12 * 1024 * 1024;
+
+function toOpenAiClientRequestId(reqId: string): string {
+  return `video-${createHash("sha256").update(reqId).digest("hex").slice(0, 32)}`;
+}
 
 type OpenAiVideoJob = {
   id?: string;
@@ -362,6 +368,7 @@ async function createVideoJob(
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
+        "X-Client-Request-Id": toOpenAiClientRequestId(input.reqId),
       },
       body: formData,
     },
@@ -416,18 +423,75 @@ async function downloadVideo(
     return classifyResponse(response.status, await readErrorBody(response));
   }
 
-  const bytes = new Uint8Array(await response.arrayBuffer());
-  const maxBytes = readPositiveInt(
-    "OPENAI_VIDEO_MAX_OUTPUT_BYTES",
-    DEFAULT_OPENAI_VIDEO_MAX_OUTPUT_BYTES
-  );
-  if (bytes.length <= 0 || bytes.length > maxBytes) {
+  const contentType = response.headers
+    .get("content-type")
+    ?.split(";", 1)[0]
+    ?.trim()
+    .toLowerCase();
+  if (contentType !== "video/mp4") {
     return {
       kind: "failure",
       provider: "openai",
       errorClass: "provider",
       retryable: false,
     };
+  }
+
+  const maxBytes = readPositiveInt(
+    "OPENAI_VIDEO_MAX_OUTPUT_BYTES",
+    DEFAULT_OPENAI_VIDEO_MAX_OUTPUT_BYTES
+  );
+  const contentLength = Number(response.headers.get("content-length"));
+  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+    return {
+      kind: "failure",
+      provider: "openai",
+      errorClass: "provider",
+      retryable: false,
+    };
+  }
+
+  if (!response.body) {
+    return {
+      kind: "failure",
+      provider: "openai",
+      errorClass: "provider",
+      retryable: false,
+    };
+  }
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    totalBytes += value.byteLength;
+    if (totalBytes > maxBytes) {
+      await reader.cancel().catch(() => undefined);
+      return {
+        kind: "failure",
+        provider: "openai",
+        errorClass: "provider",
+        retryable: false,
+      };
+    }
+    chunks.push(value);
+  }
+  if (totalBytes === 0) {
+    return {
+      kind: "failure",
+      provider: "openai",
+      errorClass: "provider",
+      retryable: false,
+    };
+  }
+
+  const bytes = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
   }
 
   return bytes;
@@ -449,8 +513,9 @@ export class OpenAiVideoProvider implements VideoProvider {
     for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
       const result = await this.tryGenerateVideo(input).catch(error => {
         if (
-          error instanceof Error &&
-          error.name === "MessengerQuotaReservationCommitError"
+          error instanceof VideoProviderJobRegistrationError ||
+          (error instanceof Error &&
+            error.name === "MessengerQuotaReservationCommitError")
         ) {
           throw error;
         }
@@ -502,6 +567,14 @@ export class OpenAiVideoProvider implements VideoProvider {
         retryable: false,
       };
     }
+    try {
+      await input.onProviderJobCreated?.({
+        provider: "openai",
+        providerJobId: videoId,
+      });
+    } catch (error) {
+      throw new VideoProviderJobRegistrationError(error);
+    }
 
     const pollIntervalMs = readPositiveInt(
       "OPENAI_VIDEO_POLL_INTERVAL_MS",
@@ -545,7 +618,6 @@ export class OpenAiVideoProvider implements VideoProvider {
 
     safeLog("openai_video_response_downloaded", {
       reqId: input.reqId,
-      providerJobId: videoId,
       outputBytes: bytes.length,
     });
     return {
@@ -574,7 +646,6 @@ export class OpenAiVideoProvider implements VideoProvider {
       safeLog("openai_video_delete_failed", {
         level: "warn",
         reqId,
-        providerJobId,
         status: response.status,
       });
       throw new Error(`OpenAI video delete failed (${response.status})`);
@@ -582,7 +653,6 @@ export class OpenAiVideoProvider implements VideoProvider {
 
     safeLog("openai_video_deleted", {
       reqId,
-      providerJobId,
     });
   }
 }
