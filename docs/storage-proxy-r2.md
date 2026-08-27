@@ -178,6 +178,15 @@ delete-my-data can retry cleanup without sweeping a later privacy epoch.
 
 Logs contain only a short SHA-256 object-key hash, never the raw key.
 
+Startup observability is also metadata-only. Structured events identify the
+bounded phase (`config`, `redis_connect`, `app_construction`,
+`redis_readiness`, `r2_lifecycle_preflight`, or `server_bind`), a validated
+deployment identity, duration, error class, and provider HTTP status where available. The
+configuration event records only environment-key presence and whether the R2
+endpoint came from `R2_ENDPOINT` or `R2_ACCOUNT_ID`. It never records an
+endpoint, Redis URL, account or access-key ID, credential, provider response,
+object key, prompt, message, media, or other customer content.
+
 ## Required staged rollout
 
 This invariant cannot be activated safely in one rolling deploy because the
@@ -227,12 +236,22 @@ from reviewed source `16b18195646fe2db8adc70a80e60616c50b6bc7c`. It never
 became deployed-runtime evidence and is superseded; do not dispatch it or the
 failed `d2a2...` candidate.
 
-Build run `33092823815` produced the current startup-safe candidate
+Build run `33092823815` produced the now-failed startup-ordering candidate
 `sha256:99ea65710abb9a2294dcaf02cf76f57b240cb153a69e6020b68a470278103a8d`
 from reviewed source `6a7d0431e1e02076a2db7fcf12c8358d7fbf33cd` and bound it
-to GitHub provenance attestation `43467733`. The manifest retains the healthy
-legacy rollback. The transition remains `runtime_reviewed` until a fresh
-protected deployment passes both health and shared-Redis readiness checks.
+to GitHub provenance attestation `43467733`. Protected deploy run
+`33101076132` proved that provenance, but the candidate refused startup before
+binding its port. Its old presence-only log did not identify whether the
+failure occurred in Redis, app construction, or the R2 lifecycle preflight.
+`R2_ACCOUNT_ID` was absent by design because production supplies the supported
+`R2_ENDPOINT` alternative, so that flag is not a root-cause finding. The
+workflow restored reviewed legacy digest
+`sha256:334f78b92816a92e302a66c4d08742c28361a718b190227d3dbf7b933350cc28`,
+verified its captured configuration, and public `/healthz` returned `200`.
+The transition is frozen back at `awaiting_attested_runtime`, deployment is
+disabled, and the reviewed legacy baseline is selected; this candidate cannot
+be dispatched again and is not deployed runtime evidence. Build and review the
+startup-stage observability change before another protected diagnostic rollout.
 
 Protected run `33080233054` stopped before production mutation. The live
 comparison after two releases during the 2026-08-27 credential rotation showed

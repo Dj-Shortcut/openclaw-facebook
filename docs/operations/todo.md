@@ -81,9 +81,23 @@ ClawHub, install, release, and rollback routes are proven.
   `sha256:99ea65710abb9a2294dcaf02cf76f57b240cb153a69e6020b68a470278103a8d`
   from exact reviewed source `6a7d0431e1e02076a2db7fcf12c8358d7fbf33cd`;
   GitHub provenance attestation `43467733` is the trusted build record.
-- Next: merge the reviewed manifest pin, use the protected deploy workflow,
-  prove health, shared-Redis readiness and rollback, then record the runtime as
-  deployed.
+- Protected deploy run `33101076132` proved artifact and source provenance but
+  the candidate refused startup before binding its port. The existing
+  metadata-only log could not distinguish Redis connection, Redis readiness,
+  app construction, the R2 lifecycle preflight, or server binding.
+  `R2_ACCOUNT_ID` was absent by design because the deployed `R2_ENDPOINT`
+  alternative was present; do not
+  treat that presence flag as the cause. The workflow restored reviewed legacy
+  digest `sha256:334f78b92816a92e302a66c4d08742c28361a718b190227d3dbf7b933350cc28`,
+  verified its captured configuration, and public `/healthz` returned `200`.
+- The manifest is frozen back at `awaiting_attested_runtime` with deployment
+  disabled and the reviewed legacy baseline selected, so the failed `99ea...`
+  digest cannot be dispatched again.
+- Next: merge and build the bounded startup-stage observability change, deploy
+  only its newly pinned reviewed artifact through the protected workflow, use
+  the safe phase code to close the actual dependency/configuration failure,
+  then prove health, shared-Redis readiness and rollback before recording
+  `runtime_deployed`.
 - No direct Page callback or legacy gateway is disabled before that production
   proof and its rollback identity exist.
 

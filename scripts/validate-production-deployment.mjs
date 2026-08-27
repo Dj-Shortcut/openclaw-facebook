@@ -3362,12 +3362,29 @@ function validateStorageProxySafety(rootDir) {
     "secretAccessKey: config.r2SecretAccessKey",
     "const s3 = createLifecycleS3Client(config);",
     "const s3 = createObjectS3Client(config);",
-    "await verifyRequiredR2LifecycleConfig(lifecycleConfig);",
-    "const app = createStorageProxyApp(appConfig, {",
   ]) {
     if (occurrenceCount(source, credentialWiring) !== 1) {
       fail(
         "storage proxy must wire the exact separate lifecycle and object R2 credentials to their own clients",
+      );
+    }
+  }
+  for (const startupWiring of [
+    "createRateLimitBackend: createSharedStorageRateLimitBackend",
+    "createApp: (config, options) => createStorageProxyApp(config, options)",
+    "verifyLifecycle: verifyRequiredR2LifecycleConfig",
+    "bindServer: bindStorageProxyServer",
+    'runStorageProxyStartupStage(\n    "config"',
+    'runStorageProxyStartupStage(\n    "redis_connect"',
+    'runStorageProxyStartupStage("app_construction"',
+    'runStorageProxyStartupStage("redis_readiness"',
+    'runStorageProxyStartupStage("r2_lifecycle_preflight"',
+    'runStorageProxyStartupStage("server_bind"',
+    "await rateLimitBackend.close().catch(() => undefined)",
+  ]) {
+    if (occurrenceCount(source, startupWiring) !== 1) {
+      fail(
+        "storage proxy must label every startup phase and close acquired resources on failure",
       );
     }
   }
@@ -3380,7 +3397,7 @@ function validateStorageProxySafety(rootDir) {
   for (const requiredSource of [
     "GetBucketLifecycleConfigurationCommand",
     "assertRequiredR2LifecycleRules",
-    "await verifyRequiredR2LifecycleConfig(lifecycleConfig)",
+    "dependencies.verifyLifecycle(lifecycleConfig)",
     "maxAttempts: 1",
   ]) {
     if (!source.includes(requiredSource)) {
