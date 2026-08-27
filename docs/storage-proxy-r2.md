@@ -262,12 +262,28 @@ passed. Read-only inspection of the production bucket showed only Cloudflare's
 default multipart-abort rule: the three required 30-day prefix expiration
 rules are absent. The workflow restored and verified the healthy legacy digest,
 public `/healthz` returned `200`, recovery run `33106363152` passed, and
-completed-run reconciliation `33106369992` passed. The manifest is back at
-`awaiting_attested_runtime`; `a6bb...` must not be dispatched again from that
-reviewed slot. Applying the exact lifecycle policy requires explicit owner
-approval because existing matching objects older than 30 days can be deleted.
-After application and verification, build, attest, and review a new diagnostics
-runtime through the protected artifact process before another rollout.
+completed-run reconciliation `33106369992` passed. The manifest returned to
+`awaiting_attested_runtime`; `a6bb...` remains failed rollout evidence and must
+not be dispatched again.
+
+The owner then explicitly approved the retention boundary. Cloudflare stored
+the three enabled 30-day prefix rules from
+`apps/image-gen/infra/cloudflare/r2-lifecycle.json`. A credential-separated,
+read-only `GetBucketLifecycleConfiguration` request returned HTTP `200` and
+exactly four rules: Cloudflare's existing multipart-abort rule plus
+`expire-inbound-source-after-30-days` for `inbound-source/`,
+`expire-generated-images-after-30-days` for `generated/images/`, and
+`expire-generated-videos-after-30-days` for `generated/videos/`. Each required
+rule reported `Enabled` and `30` days.
+
+Trusted build run `33107224397` then built runtime digest
+`sha256:27dd75daaa30dac5a279fc097a57c14133efb419cbdbbd1fdefba26a21ffeace`
+from reviewed main source `cf099e654d289186416b00500cb8f975cbdd906b`.
+GitHub provenance attestation `43489246` binds that exact pair. The manifest now
+records this candidate as `runtime_reviewed`; it is not deployed-runtime
+evidence. Production remains on legacy digest `334f...` until this reviewed PR
+is merged with green CI and one protected storage-proxy rollout proves both
+`/healthz` and `/readyz`.
 
 Protected run `33080233054` stopped before production mutation. The live
 comparison after two releases during the 2026-08-27 credential rotation showed

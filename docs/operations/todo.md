@@ -102,18 +102,26 @@ ClawHub, install, release, and rollback routes are proven.
   bounded diagnostics proved that configuration, Redis connection and
   readiness, and app construction had already passed. Read-only inspection of
   the production R2 bucket then confirmed that only Cloudflare's default
-  multipart-abort rule exists; the three required 30-day prefix expiration
-  rules are absent.
+  multipart-abort rule existed; the three required 30-day prefix expiration
+  rules were absent.
 - The deploy restored and verified reviewed legacy digest `334f...`; public
   `/healthz` returned `200`, recovery run `33106363152` passed, and completed-run
   reconciliation `33106369992` also passed. The manifest is returned to
   `awaiting_attested_runtime`, so neither failed runtime candidate is
   dispatchable.
-- Next: obtain explicit owner approval for the destructive retention boundary,
-  apply and verify the exact rules in
-  `apps/image-gen/infra/cloudflare/r2-lifecycle.json`, then build, attest, and
-  review a new diagnostics runtime through the protected artifact process and
-  repeat the bounded rollout.
+- The owner explicitly approved the retention boundary. Cloudflare stored the
+  exact enabled 30-day rules for `inbound-source/`, `generated/images/`, and
+  `generated/videos/`. A credential-separated, read-only lifecycle request
+  returned HTTP `200` with those three exact rules plus the existing
+  multipart-abort rule.
+- Build run `33107224397` produced runtime digest
+  `sha256:27dd75daaa30dac5a279fc097a57c14133efb419cbdbbd1fdefba26a21ffeace`
+  from reviewed source `cf099e654d289186416b00500cb8f975cbdd906b`;
+  GitHub provenance attestation `43489246` binds the exact pair.
+- Next: merge the focused `runtime_reviewed` manifest change through green CI,
+  then perform exactly one protected storage-proxy rollout. Require the exact
+  reviewed digest, one Machine, no drift, `/healthz` `200 ok`, and `/readyz`
+  `200` with the shared Redis limiter before recording `runtime_deployed`.
 - No direct Page callback or legacy gateway is disabled before that production
   proof and its rollback identity exist.
 

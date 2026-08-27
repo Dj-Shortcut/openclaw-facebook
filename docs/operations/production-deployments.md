@@ -374,13 +374,22 @@ passed. Read-only inspection confirmed that the production bucket has only the
 default multipart-abort rule and lacks all three required 30-day prefix
 expiration rules. The workflow restored and verified legacy digest `334f...`;
 public `/healthz` returned `200`, exact recovery run `33106363152` passed, and
-completed-run reconciliation `33106369992` passed. The manifest is therefore
-back at `awaiting_attested_runtime`; digest `a6bb...` is failed rollout evidence
-and is not dispatchable. Applying the retention rules requires explicit owner
-approval because objects already older than 30 days can become eligible for
-deletion. After the rules are applied and verified, a new runtime must be built,
-attested, and reviewed through the protected artifact process before another
-deployment.
+completed-run reconciliation `33106369992` passed. The manifest therefore
+returned to `awaiting_attested_runtime`; digest `a6bb...` remains failed rollout
+evidence and is not dispatchable.
+
+The owner subsequently approved the retention boundary. Cloudflare stored the
+three enabled 30-day rules for `inbound-source/`, `generated/images/`, and
+`generated/videos/`. A credential-separated, read-only
+`GetBucketLifecycleConfiguration` request returned HTTP `200` with exactly
+those three required rules plus the existing multipart-abort rule; every
+required rule reported the exact prefix, `Enabled`, and `30` days. Trusted build
+run `33107224397` then produced runtime digest
+`sha256:27dd75daaa30dac5a279fc097a57c14133efb419cbdbbd1fdefba26a21ffeace`
+from reviewed main source `cf099e654d289186416b00500cb8f975cbdd906b`.
+GitHub provenance attestation `43489246` binds the exact pair. This manifest
+review advances only to `runtime_reviewed`; production remains on legacy digest
+`334f...` until the protected rollout and both public health checks succeed.
 
 ### Image-gen database migration gate
 
