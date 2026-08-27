@@ -4699,7 +4699,7 @@ describe("production deployment contract", () => {
     ).rejects.toThrow("has no successful main push run");
   });
 
-  it("admits only the exact newly reviewed storage runtime", () => {
+  it("admits only the exact deployed storage runtime", () => {
     const manifest = JSON.parse(
       fs.readFileSync(
         path.join(repoRoot, "deploy/production/apps.json"),
@@ -4718,7 +4718,7 @@ describe("production deployment contract", () => {
       "runtime",
     );
     expect(manifest.apps["storage-proxy"].artifactTransition.state).toBe(
-      "runtime_reviewed",
+      "runtime_deployed",
     );
     expect(manifest.apps["storage-proxy"].reviewedSourceCommit).toBe(
       "cf099e654d289186416b00500cb8f975cbdd906b",

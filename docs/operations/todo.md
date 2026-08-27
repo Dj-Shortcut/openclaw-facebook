@@ -118,12 +118,14 @@ ClawHub, install, release, and rollback routes are proven.
   `sha256:27dd75daaa30dac5a279fc097a57c14133efb419cbdbbd1fdefba26a21ffeace`
   from reviewed source `cf099e654d289186416b00500cb8f975cbdd906b`;
   GitHub provenance attestation `43489246` binds the exact pair.
-- Next: merge the focused `runtime_reviewed` manifest change through green CI,
-  then perform exactly one protected storage-proxy rollout. Require the exact
-  reviewed digest, one Machine, no drift, `/healthz` `200 ok`, and `/readyz`
-  `200` with the shared Redis limiter before recording `runtime_deployed`.
-- No direct Page callback or legacy gateway is disabled before that production
-  proof and its rollback identity exist.
+- Protected deploy run `33110415900` deployed that exact reviewed digest from
+  main commit `19ae52f90a683b2f975823a68d785608a7d8fbec` with identity
+  `deploy-33110415900-1`. The final state has exactly one started Machine in
+  `ams`, no deployment drift, `/healthz` `200 ok`, and `/readyz` `200` with
+  `{ "ok": true, "rateLimiter": "shared_redis" }`. Rollback and recovery were
+  correctly skipped, so the manifest now records `runtime_deployed`.
+- This storage proof does not authorize a Facebook Page callback or gateway
+  change; those remain separate from the customer payment path.
 
 ## Current product hypothesis
 

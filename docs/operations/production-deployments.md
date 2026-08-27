@@ -388,8 +388,13 @@ run `33107224397` then produced runtime digest
 `sha256:27dd75daaa30dac5a279fc097a57c14133efb419cbdbbd1fdefba26a21ffeace`
 from reviewed main source `cf099e654d289186416b00500cb8f975cbdd906b`.
 GitHub provenance attestation `43489246` binds the exact pair. This manifest
-review advances only to `runtime_reviewed`; production remains on legacy digest
-`334f...` until the protected rollout and both public health checks succeed.
+first advanced to `runtime_reviewed`. Protected deploy run `33110415900`, from
+main commit `19ae52f90a683b2f975823a68d785608a7d8fbec`, then deployed that exact
+digest with identity `deploy-33110415900-1`. The settled live state contains
+exactly one started Machine in `ams`, no drift, `/healthz` `200` with exact body
+`ok`, and `/readyz` `200` with `ok=true` and `rateLimiter=shared_redis`.
+Rollback and recovery were correctly skipped. This reviewed follow-up records
+`runtime_deployed` while retaining legacy digest `334f...` as the sole rollback.
 
 ### Image-gen database migration gate
 

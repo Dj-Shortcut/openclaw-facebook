@@ -280,10 +280,13 @@ Trusted build run `33107224397` then built runtime digest
 `sha256:27dd75daaa30dac5a279fc097a57c14133efb419cbdbbd1fdefba26a21ffeace`
 from reviewed main source `cf099e654d289186416b00500cb8f975cbdd906b`.
 GitHub provenance attestation `43489246` binds that exact pair. The manifest now
-records this candidate as `runtime_reviewed`; it is not deployed-runtime
-evidence. Production remains on legacy digest `334f...` until this reviewed PR
-is merged with green CI and one protected storage-proxy rollout proves both
-`/healthz` and `/readyz`.
+records this runtime as `runtime_deployed`. Protected deploy run `33110415900`,
+from main commit `19ae52f90a683b2f975823a68d785608a7d8fbec`, deployed that exact digest
+with identity `deploy-33110415900-1`. The settled live state contains exactly
+one started Machine in `ams`, no drift, `/healthz` `200` with exact body `ok`,
+and `/readyz` `200` with `ok=true` and `rateLimiter=shared_redis`. Rollback and
+recovery were correctly skipped; legacy digest `334f...` remains the sole
+reviewed rollback.
 
 Protected run `33080233054` stopped before production mutation. The live
 comparison after two releases during the 2026-08-27 credential rotation showed
