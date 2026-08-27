@@ -90,14 +90,19 @@ ClawHub, install, release, and rollback routes are proven.
   treat that presence flag as the cause. The workflow restored reviewed legacy
   digest `sha256:334f78b92816a92e302a66c4d08742c28361a718b190227d3dbf7b933350cc28`,
   verified its captured configuration, and public `/healthz` returned `200`.
-- The manifest is frozen back at `awaiting_attested_runtime` with deployment
-  disabled and the reviewed legacy baseline selected, so the failed `99ea...`
-  digest cannot be dispatched again.
-- Next: merge and build the bounded startup-stage observability change, deploy
-  only its newly pinned reviewed artifact through the protected workflow, use
-  the safe phase code to close the actual dependency/configuration failure,
-  then prove health, shared-Redis readiness and rollback before recording
-  `runtime_deployed`.
+- PR #451 merged bounded, metadata-only startup-stage diagnostics at source
+  `1da8da74f301fb368563cd094912e159d3bf6998`. Build run `33104393266`,
+  attempt 2, produced runtime digest
+  `sha256:a6bb22fcdbdfa6cc211afabfae86cc2423f501e589113f2f0a7e32db0f22083d`
+  and GitHub provenance attestation `43482590`. The initial attempt stopped
+  before building because exact-source main CI was still running; attempt 2
+  started only after that CI passed.
+- The manifest now records only that new diagnostics artifact as
+  `runtime_reviewed`, keeps the healthy legacy digest as the sole rollback, and
+  leaves the failed `99ea...` digest undispatchable.
+- Next: deploy the exact `a6bb...` digest through the protected workflow, use
+  the safe startup phase code if it fails, and prove health, shared-Redis
+  readiness and rollback before recording `runtime_deployed`.
 - No direct Page callback or legacy gateway is disabled before that production
   proof and its rollback identity exist.
 

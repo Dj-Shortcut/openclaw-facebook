@@ -4699,7 +4699,7 @@ describe("production deployment contract", () => {
     ).rejects.toThrow("has no successful main push run");
   });
 
-  it("blocks the legacy storage baseline and accepts only a newly reviewed runtime", () => {
+  it("rejects legacy storage candidates and accepts only the reviewed runtime", () => {
     const manifest = JSON.parse(
       fs.readFileSync(
         path.join(repoRoot, "deploy/production/apps.json"),
@@ -4708,11 +4708,21 @@ describe("production deployment contract", () => {
     );
     const reviewedImage = manifest.apps["storage-proxy"].reviewedImage;
 
-    expect(() =>
+    expect(
       validateReviewedImage("storage-proxy", reviewedImage, repoRoot),
-    ).toThrow(
-      "legacy bootstrap image has no trusted build attestation and cannot be deployed",
+    ).toBe(reviewedImage);
+    expect(manifest.apps["storage-proxy"].reviewedArtifactKind).toBe("runtime");
+    expect(manifest.apps["storage-proxy"].artifactTransition.state).toBe(
+      "runtime_reviewed",
     );
+
+    expect(() =>
+      validateReviewedImage(
+        "storage-proxy",
+        manifest.apps["storage-proxy"].artifactTransition.legacyImage,
+        repoRoot,
+      ),
+    ).toThrow("must exactly match the reviewed manifest digest");
 
     const root = createRepositoryFixture();
     const manifestPath = path.join(root, "deploy/production/apps.json");
@@ -4770,16 +4780,16 @@ describe("production deployment contract", () => {
     );
   });
 
-  it("blocks the gateway and failed storage candidate while keeping image-gen enabled", () => {
+  it("blocks the gateway while keeping reviewed runtimes enabled", () => {
     expect(() => validateDeploymentEnabled("gateway", repoRoot)).toThrow(
       "gateway production deployment is blocked",
     );
     expect(
       validateDeploymentEnabled("image-gen", repoRoot).reviewedArtifactKind,
     ).toBe("runtime");
-    expect(() => validateDeploymentEnabled("storage-proxy", repoRoot)).toThrow(
-      "storage-proxy production deployment is blocked",
-    );
+    expect(
+      validateDeploymentEnabled("storage-proxy", repoRoot).reviewedArtifactKind,
+    ).toBe("runtime");
   });
 
   it("refuses to enable the stateful gateway even without a rollback digest", () => {

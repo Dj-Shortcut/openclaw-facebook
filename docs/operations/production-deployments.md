@@ -359,13 +359,18 @@ legacy digest
 `sha256:334f78b92816a92e302a66c4d08742c28361a718b190227d3dbf7b933350cc28`,
 verified its captured configuration, and public `/healthz` returned `200`.
 Digest `99ea...` is not deployed-runtime evidence and must not be dispatched
-again. The manifest is frozen at `awaiting_attested_runtime`, production deploy
-is disabled, and the healthy legacy digest is both the reviewed baseline and
-sole rollback. The next candidate must be a newly built and attested
-startup-stage diagnostics artifact; deploy it only after its exact digest and
-source replace the legacy reviewed baseline through review and restore
-`runtime_reviewed`. It must prove `/healthz`, shared-Redis `/readyz`, and
-rollback before the transition can advance.
+again. PR #451 then added bounded metadata-only diagnostics for configuration,
+Redis connection and readiness, app construction, the R2 lifecycle preflight,
+and server binding. Trusted build run `33104393266`, attempt 2, produced
+diagnostics runtime
+`sha256:a6bb22fcdbdfa6cc211afabfae86cc2423f501e589113f2f0a7e32db0f22083d`
+from reviewed main source `1da8da74f301fb368563cd094912e159d3bf6998`;
+GitHub provenance attestation `43482590` binds the exact pair. Attempt 1
+stopped before building because exact-source main CI was still in progress.
+The manifest records the new digest as `runtime_reviewed` and retains healthy
+legacy digest `334f...` as the sole rollback. The diagnostic rollout must prove
+`/healthz`, shared-Redis `/readyz`, and rollback before the transition can
+advance.
 
 ### Image-gen database migration gate
 
