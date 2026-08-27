@@ -4,6 +4,7 @@ import test from "node:test";
 import { S3Client } from "@aws-sdk/client-s3";
 import { MemoryStore } from "express-rate-limit";
 import { Redis } from "ioredis";
+import { RedisStore, type RedisReply } from "rate-limit-redis";
 
 import {
   assertR2LifecycleCredentialIsolation,
@@ -592,6 +593,62 @@ test("readiness stays public while storage routes require authentication", async
   } finally {
     await closeServer(server);
   }
+});
+
+test("app construction initializes Redis stores before startup readiness", async () => {
+  const commands: string[][] = [];
+  const sendCommand = async (...command: string[]): Promise<RedisReply> => {
+    commands.push(command);
+    if (command[0] === "SCRIPT" && command[1] === "LOAD") {
+      return `sha-${commands.length}`;
+    }
+    if (command[0] === "EVALSHA") {
+      return [1, 60_000];
+    }
+    if (command[0] === "DEL") {
+      return 1;
+    }
+    throw new Error(`Unexpected Redis command: ${command[0] ?? "missing"}`);
+  };
+  const edgeStore = new RedisStore({
+    prefix: "test:edge:",
+    sendCommand,
+  });
+  const scopeStore = new RedisStore({
+    prefix: "test:scope:",
+    sendCommand,
+  });
+  const assertReady = async (): Promise<void> => {
+    for (const [name, store] of [
+      ["edge", edgeStore],
+      ["scope", scopeStore],
+    ] as const) {
+      const key = `readiness-${name}`;
+      const result = await store.increment(key);
+      assert.equal(result.totalHits, 1);
+      assert.ok(result.resetTime instanceof Date);
+      await store.resetKey(key);
+    }
+  };
+
+  await assert.rejects(assertReady(), TypeError);
+  assert.equal(commands.length, 0);
+
+  const { createStorageProxyApp } = await import("./index.ts");
+  createStorageProxyApp(buildTestConfig(), {
+    backend: {
+      edgeStore,
+      scopeStore,
+      assertReady,
+      close: async () => undefined,
+    },
+  });
+
+  await assert.doesNotReject(assertReady());
+  assert.equal(
+    commands.filter(command => command[0] === "EVALSHA").length,
+    2
+  );
 });
 
 test("production refuses to start without the shared Redis limiter", async () => {

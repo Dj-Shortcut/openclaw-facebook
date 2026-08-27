@@ -2528,26 +2528,35 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
     "Verify restored storage-proxy release",
   ]) {
     const steps = namedWorkflowStepBodies(workflow, stepName);
+    const step = steps[0] ?? "";
     const rollbackReadinessIsContractGated =
       stepName !== "Verify restored storage-proxy release" ||
-      (steps[0]?.includes(
+      (step.includes(
         '--reviewed-artifact-kind storage-proxy "$rollback_image"',
-      ) === true &&
-        steps[0]?.includes(
+      ) &&
+        step.includes(
           'if [[ "$rollback_kind" != "legacy-bootstrap" ]]; then',
-        ) === true);
+        ));
+    const rollbackHealthWaitIsBounded =
+      stepName !== "Verify restored storage-proxy release" ||
+      (step.includes("wait_for_storage_proxy_health()") &&
+        step.includes("for attempt in {1..30}") &&
+        step.includes("--connect-timeout 2 --max-time 5") &&
+        step.indexOf("wait_for_storage_proxy_health final") <
+          step.indexOf("--verify-restored-release storage-proxy"));
     if (
       steps.length !== 1 ||
       !rollbackReadinessIsContractGated ||
+      !rollbackHealthWaitIsBounded ||
       !referencesExactHttpUrl(
-        steps[0],
+        step,
         "https://leaderbot-storage-proxy.fly.dev/healthz",
       ) ||
       !referencesExactHttpUrl(
-        steps[0],
+        step,
         "https://leaderbot-storage-proxy.fly.dev/readyz",
       ) ||
-      !steps[0].includes(
+      !step.includes(
         "jq -e '.ok == true and .rateLimiter == \"shared_redis\"'",
       )
     ) {
@@ -3081,7 +3090,7 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
     ],
     [
       "--retry-all-errors",
-      13,
+      12,
       "must retry exact flyctl downloads and transient deploy and rollback smokes",
     ],
     [
@@ -4974,7 +4983,14 @@ function validateProductionReconciliationWorkflow(rootDir) {
         ) ||
         !step.includes(
           "jq -e '.ok == true and .rateLimiter == \"shared_redis\"'",
-        ))
+        ) ||
+        !step.includes("wait_for_storage_proxy_health()") ||
+        !step.includes("for attempt in {1..30}") ||
+        !step.includes("--connect-timeout 2 --max-time 5") ||
+        !step.includes("wait_for_storage_proxy_health prior") ||
+        !step.includes("wait_for_storage_proxy_health final") ||
+        step.lastIndexOf("wait_for_storage_proxy_health final") >=
+          step.lastIndexOf("--verify-restored-release storage-proxy"))
     ) {
       fail(
         `${PRODUCTION_RECONCILIATION_WORKFLOW_PATH} must prove restored storage-proxy liveness and shared-limiter readiness`,

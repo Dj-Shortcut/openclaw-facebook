@@ -686,6 +686,22 @@ jobs:
           RECOVERY_RUN_ID: ${{ inputs.recovery_run_id }}
           RECOVERY_RUN_ATTEMPT: ${{ needs.inspect.outputs.run_attempt }}
         run: |
+          set -euo pipefail
+          wait_for_storage_proxy_health() {
+            local phase="${1:?storage-proxy health phase is required}"
+            local body status
+            body="$(mktemp)"
+            for attempt in {1..30}; do
+              if status="$(curl --ipv4 --silent --show-error --location --connect-timeout 2 --max-time 5 --output "$body" --write-out '%{http_code}' https://leaderbot-storage-proxy.fly.dev/healthz)" &&
+                 test "$status" = "200" &&
+                 grep -Fx "ok" "$body" >/dev/null; then
+                return 0
+              fi
+              sleep 3
+            done
+            echo "storage-proxy did not become healthy during $phase wake" >&2
+            return 1
+          }
           test "$(sha256sum "$RECOVERY_CONTROLLER" | cut -d ' ' -f1)" = "$RECOVERY_CONTROLLER_SHA256"
           test -n "$FLY_API_TOKEN"
           rollback_image="$(cat "$RUNNER_TEMP/leaderbot-recovery/rollback-image.txt")"
@@ -708,6 +724,9 @@ jobs:
              test "$live_identity" != "deploy-${RECOVERY_RUN_ID}-${RECOVERY_RUN_ATTEMPT}"; then
             echo "Live storage-proxy identity changed after readonly successor classification" >&2
             exit 1
+          fi
+          if test "$live_identity" = "$prior_identity"; then
+            wait_for_storage_proxy_health prior
           fi
           if test "$superseded" = false; then
             if node "$RECOVERY_CONTROLLER" --verify-restored-release storage-proxy "$rollback_image" "$rollback_config" --expected-deployment-identity "$prior_identity" --root-dir "$GITHUB_WORKSPACE"; then
@@ -732,12 +751,9 @@ jobs:
               count="$(jq -er '.count' <<<"$scale_entry")"
               flyctl scale count "$count" --process-group "$process" --app leaderbot-storage-proxy --yes
             done < <(jq -c '.[]' <<<"$scale_plan")
-            node "$RECOVERY_CONTROLLER" --verify-restored-release storage-proxy "$rollback_image" "$rollback_config" --expected-deployment-identity "$prior_identity" --root-dir "$GITHUB_WORKSPACE"
           fi
-          body="$(mktemp)"
-          status="$(curl --ipv4 --silent --show-error --location --max-time 20 --retry 2 --retry-delay 5 --retry-all-errors --output "$body" --write-out '%{http_code}' https://leaderbot-storage-proxy.fly.dev/healthz)"
-          test "$status" = "200"
-          grep -Fx "ok" "$body"
+          wait_for_storage_proxy_health final
+          node "$RECOVERY_CONTROLLER" --verify-restored-release storage-proxy "$rollback_image" "$rollback_config" --expected-deployment-identity "$prior_identity" --root-dir "$GITHUB_WORKSPACE"
           if [[ "$rollback_kind" != "legacy-bootstrap" ]]; then
             ready_body="$(mktemp)"
             ready_status="$(curl --ipv4 --silent --show-error --location --max-time 20 --retry 2 --retry-delay 5 --retry-all-errors --output "$ready_body" --write-out '%{http_code}' https://leaderbot-storage-proxy.fly.dev/readyz)"
