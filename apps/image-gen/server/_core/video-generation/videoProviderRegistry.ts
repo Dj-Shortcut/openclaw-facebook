@@ -25,6 +25,10 @@ export async function deleteProviderVideoForUser(input: {
   providerJobId: string;
   reqId?: string;
 }): Promise<void> {
+  if (videoProviderOverride?.deleteVideo) {
+    await videoProviderOverride.deleteVideo(input.providerJobId, input.reqId);
+    return;
+  }
   const providerName =
     input.provider?.trim().toLowerCase() ||
     process.env.MESSENGER_VIDEO_PROVIDER?.trim().toLowerCase();

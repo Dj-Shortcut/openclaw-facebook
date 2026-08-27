@@ -1,4 +1,12 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import {
   canGenerate,
   canGenerateVideo,
@@ -16,7 +24,12 @@ import {
   reserveTranscriptionForAttempt,
   reserveVideoGenerationForAttempt,
 } from "./_core/messengerQuota";
-import { getOrCreateState, resetStateStore, setFlowState, setPendingImage } from "./_core/messengerState";
+import {
+  getOrCreateState,
+  resetStateStore,
+  setFlowState,
+  setPendingImage,
+} from "./_core/messengerState";
 import { getDayKey } from "./_core/messengerStateNormalization";
 import {
   getAudioTranscriptionDailyLimit,
@@ -71,7 +84,8 @@ describe("messenger quota dayKey", () => {
   it("keeps the same dayKey throughout the same UTC day", async () => {
     const userId = "same-day-user";
     process.env.MESSENGER_FREE_DAILY_LIMIT = "3";
-    const initialDayKey = (await Promise.resolve(getOrCreateState(userId))).quota.dayKey;
+    const initialDayKey = (await Promise.resolve(getOrCreateState(userId)))
+      .quota.dayKey;
 
     await increment(userId);
 
@@ -95,7 +109,8 @@ describe("messenger quota dayKey", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-01T23:59:59.999Z"));
 
-    const initialDayKey = (await Promise.resolve(getOrCreateState(userId))).quota.dayKey;
+    const initialDayKey = (await Promise.resolve(getOrCreateState(userId)))
+      .quota.dayKey;
 
     await increment(userId);
     vi.setSystemTime(new Date("2026-03-02T00:00:00.000Z"));
@@ -111,7 +126,9 @@ describe("messenger quota dayKey", () => {
   it("keeps active session state in the same store while quota changes", async () => {
     const userId = "shared-store-user";
 
-    await Promise.resolve(setPendingImage(userId, "https://img.example/photo.jpg", 1000));
+    await Promise.resolve(
+      setPendingImage(userId, "https://img.example/photo.jpg", 1000)
+    );
     await Promise.resolve(setFlowState(userId, "PROCESSING"));
     await increment(userId);
 
@@ -132,7 +149,9 @@ describe("messenger quota dayKey", () => {
     await increment(userId);
 
     expect(await canGenerate(userId)).toBe(true);
-    expect((await Promise.resolve(getOrCreateState(userId))).quota.count).toBe(0);
+    expect((await Promise.resolve(getOrCreateState(userId))).quota.count).toBe(
+      0
+    );
   });
 
   it("uses the configured daily quota limit", async () => {
@@ -149,7 +168,9 @@ describe("messenger quota dayKey", () => {
     await increment(userId);
 
     expect(await canGenerate(userId)).toBe(false);
-    expect((await Promise.resolve(getOrCreateState(userId))).quota.count).toBe(5);
+    expect((await Promise.resolve(getOrCreateState(userId))).quota.count).toBe(
+      5
+    );
   });
 
   it("uses 20 image provider attempts as the default daily quota limit", async () => {
@@ -160,7 +181,9 @@ describe("messenger quota dayKey", () => {
     }
 
     expect(await canGenerate(userId)).toBe(false);
-    expect((await Promise.resolve(getOrCreateState(userId))).quota.count).toBe(20);
+    expect((await Promise.resolve(getOrCreateState(userId))).quota.count).toBe(
+      20
+    );
   });
 
   it("falls back to documented limits for blank quota env values", () => {
@@ -204,7 +227,9 @@ describe("messenger quota dayKey", () => {
       commitImageGenerationSuccess(userId, { token: "fabricated-token" })
     ).resolves.toBe(false);
 
-    expect((await Promise.resolve(getOrCreateState(userId))).quota.count).toBe(0);
+    expect((await Promise.resolve(getOrCreateState(userId))).quota.count).toBe(
+      0
+    );
     expect(await canGenerate(userId)).toBe(true);
   });
 
@@ -324,7 +349,9 @@ describe("messenger quota dayKey", () => {
     await increment(userId);
 
     await expect(reserveImageGenerationForAttempt(userId)).resolves.toBeNull();
-    expect((await Promise.resolve(getOrCreateState(userId))).quota.count).toBe(1);
+    expect((await Promise.resolve(getOrCreateState(userId))).quota.count).toBe(
+      1
+    );
   });
 
   it("prevents concurrent active image quota reservations", async () => {
@@ -338,11 +365,15 @@ describe("messenger quota dayKey", () => {
     const reservations = results.filter(result => result !== null);
 
     expect(reservations).toHaveLength(1);
-    expect((await Promise.resolve(getOrCreateState(userId))).quota.count).toBe(0);
+    expect((await Promise.resolve(getOrCreateState(userId))).quota.count).toBe(
+      0
+    );
 
     await releaseImageGenerationReservation(userId, reservations[0]!);
 
-    await expect(reserveImageGenerationForAttempt(userId)).resolves.not.toBeNull();
+    await expect(
+      reserveImageGenerationForAttempt(userId)
+    ).resolves.not.toBeNull();
   });
 
   it("keeps image quota unchanged for configured bypass ids", async () => {
@@ -356,7 +387,9 @@ describe("messenger quota dayKey", () => {
     await commitImageGenerationSuccess(userId, reservation!);
 
     expect(await canGenerate(userId)).toBe(true);
-    expect((await Promise.resolve(getOrCreateState(userId))).quota.count).toBe(0);
+    expect((await Promise.resolve(getOrCreateState(userId))).quota.count).toBe(
+      0
+    );
   });
 
   it("keeps video quota unchanged for configured Messenger admins", async () => {
@@ -375,6 +408,35 @@ describe("messenger quota dayKey", () => {
       (await Promise.resolve(getOrCreateState(userId))).videoGenerationQuota
         .count
     ).toBe(0);
+  });
+
+  it("enforces video quota when the owner pilot disables admin bypass", async () => {
+    const userId = "video-admin-bounded-pilot-user";
+    process.env.MESSENGER_ADMIN_IDS = userId;
+    process.env.MESSENGER_VIDEO_GENERATION_DAILY_LIMIT = "1";
+
+    const reservation = await reserveVideoGenerationForAttempt(
+      userId,
+      undefined,
+      { allowBypass: false }
+    );
+
+    expect(reservation).toMatchObject({
+      dailyLimit: 1,
+      allowBypass: false,
+    });
+    await expect(
+      commitVideoGenerationSuccess(userId, reservation!)
+    ).resolves.toBe(true);
+    await expect(
+      reserveVideoGenerationForAttempt(userId, undefined, {
+        allowBypass: false,
+      })
+    ).resolves.toBeNull();
+    expect(
+      (await Promise.resolve(getOrCreateState(userId))).videoGenerationQuota
+        .count
+    ).toBe(1);
   });
 
   it("commits a normal reserved video quota success", async () => {
@@ -432,7 +494,8 @@ describe("messenger quota dayKey", () => {
       reserveVideoGenerationForAttempt(userId, 10)
     ).resolves.toBeNull();
     expect(
-      (await Promise.resolve(getOrCreateState(userId))).videoGenerationQuota.count
+      (await Promise.resolve(getOrCreateState(userId))).videoGenerationQuota
+        .count
     ).toBe(10);
   });
 
@@ -469,13 +532,16 @@ describe("messenger quota dayKey", () => {
     const reservations = results.filter(result => result !== null);
 
     expect(reservations).toHaveLength(1);
-    expect((await Promise.resolve(getOrCreateState(userId))).videoGenerationQuota.count).toBe(
-      0
-    );
+    expect(
+      (await Promise.resolve(getOrCreateState(userId))).videoGenerationQuota
+        .count
+    ).toBe(0);
 
     await releaseVideoGenerationReservation(userId, reservations[0]!);
 
-    await expect(reserveVideoGenerationForAttempt(userId)).resolves.not.toBeNull();
+    await expect(
+      reserveVideoGenerationForAttempt(userId)
+    ).resolves.not.toBeNull();
   });
 
   it("tracks transcription quota independently from image quota", async () => {
@@ -514,9 +580,9 @@ describe("messenger quota dayKey", () => {
     }
 
     expect(await canTranscribe(userId)).toBe(false);
-    expect((await Promise.resolve(getOrCreateState(userId))).transcriptionQuota.count).toBe(
-      5
-    );
+    expect(
+      (await Promise.resolve(getOrCreateState(userId))).transcriptionQuota.count
+    ).toBe(5);
   });
 
   it("prevents concurrent transcription quota bypass", async () => {
@@ -532,9 +598,9 @@ describe("messenger quota dayKey", () => {
     expect(results.filter(Boolean)).toHaveLength(2);
     expect(results.filter(result => !result)).toHaveLength(1);
     expect(await canTranscribe(userId)).toBe(false);
-    expect((await Promise.resolve(getOrCreateState(userId))).transcriptionQuota.count).toBe(
-      2
-    );
+    expect(
+      (await Promise.resolve(getOrCreateState(userId))).transcriptionQuota.count
+    ).toBe(2);
   });
 
   it("only increments reserved transcription quota on commit", async () => {
@@ -544,15 +610,15 @@ describe("messenger quota dayKey", () => {
     const reservation = await reserveTranscriptionForAttempt(userId);
 
     expect(reservation).not.toBeNull();
-    expect((await Promise.resolve(getOrCreateState(userId))).transcriptionQuota.count).toBe(
-      0
-    );
+    expect(
+      (await Promise.resolve(getOrCreateState(userId))).transcriptionQuota.count
+    ).toBe(0);
 
     await commitTranscriptionSuccess(userId, reservation!);
 
-    expect((await Promise.resolve(getOrCreateState(userId))).transcriptionQuota.count).toBe(
-      1
-    );
+    expect(
+      (await Promise.resolve(getOrCreateState(userId))).transcriptionQuota.count
+    ).toBe(1);
     expect(await canTranscribe(userId)).toBe(false);
   });
 
@@ -564,9 +630,9 @@ describe("messenger quota dayKey", () => {
       commitTranscriptionSuccess(userId, { token: "fabricated-token" })
     ).resolves.toBe(false);
 
-    expect((await Promise.resolve(getOrCreateState(userId))).transcriptionQuota.count).toBe(
-      0
-    );
+    expect(
+      (await Promise.resolve(getOrCreateState(userId))).transcriptionQuota.count
+    ).toBe(0);
     expect(await canTranscribe(userId)).toBe(true);
   });
 
@@ -579,9 +645,9 @@ describe("messenger quota dayKey", () => {
     expect(reservation).not.toBeNull();
     await releaseTranscriptionReservation(userId, reservation!);
 
-    expect((await Promise.resolve(getOrCreateState(userId))).transcriptionQuota.count).toBe(
-      0
-    );
+    expect(
+      (await Promise.resolve(getOrCreateState(userId))).transcriptionQuota.count
+    ).toBe(0);
     expect(await canTranscribe(userId)).toBe(true);
   });
 
@@ -592,7 +658,10 @@ describe("messenger quota dayKey", () => {
     await Promise.resolve(setFlowState(userId, "IDLE"));
     await Promise.resolve(
       updateStoredState(userId, storedState => {
-        const nextState = { ...(storedState as object) } as Record<string, unknown>;
+        const nextState = { ...(storedState as object) } as Record<
+          string,
+          unknown
+        >;
         delete nextState.transcriptionQuota;
         return nextState as typeof storedState;
       })
@@ -617,5 +686,4 @@ describe("messenger quota dayKey", () => {
     });
     expect(persistedState?.transcriptionQuota?.dayKey).toBe(dayKey);
   });
-
 });

@@ -27,6 +27,7 @@ export type ImageGenerationQuotaReservation = {
 export type VideoGenerationQuotaReservation = {
   token: string;
   dailyLimit: number;
+  allowBypass?: boolean;
 };
 
 export type TranscriptionQuotaReservation = {
@@ -448,7 +449,8 @@ export async function canGenerateVideo(psid: string): Promise<boolean> {
 
 export async function reserveVideoGenerationForAttempt(
   psid: string,
-  dailyLimit?: number
+  dailyLimit?: number,
+  options?: { allowBypass?: boolean }
 ): Promise<VideoGenerationQuotaReservation | null> {
   const lockToken = await reserveVideoGenerationSlot(psid);
   if (!lockToken) {
@@ -459,11 +461,13 @@ export async function reserveVideoGenerationForAttempt(
     const now = Date.now();
     const fallbackState = await Promise.resolve(getOrCreateState(psid));
     const limit = resolveVideoGenerationLimit(dailyLimit);
+    const allowBypass = options?.allowBypass !== false;
     let allowed = false;
     const reservationState = {
       token: lockToken,
       expiresAt: videoGenerationReservationExpiresAt(now),
       dailyLimit: limit,
+      ...(allowBypass ? {} : { allowBypass: false }),
     };
 
     await Promise.resolve(
@@ -473,7 +477,7 @@ export async function reserveVideoGenerationForAttempt(
           now
         );
 
-        if (hasQuotaBypass(psid, baseState.userKey)) {
+        if (allowBypass && hasQuotaBypass(psid, baseState.userKey)) {
           allowed = true;
           return {
             ...baseState,
@@ -503,7 +507,11 @@ export async function reserveVideoGenerationForAttempt(
       return null;
     }
 
-    return { token: lockToken, dailyLimit: limit };
+    return {
+      token: lockToken,
+      dailyLimit: limit,
+      ...(allowBypass ? {} : { allowBypass: false }),
+    };
   } catch (error) {
     await deleteEphemeralKeyIfValue(
       videoGenerationQuotaLockKey(psid),
@@ -521,6 +529,7 @@ export async function commitVideoGenerationSuccess(
   try {
     const now = Date.now();
     const limit = resolveVideoGenerationLimit(reservation.dailyLimit);
+    const allowBypass = reservation.allowBypass !== false;
 
     await Promise.resolve(
       updateExistingStoredState<MessengerUserState>(psid, storedState => {
@@ -532,13 +541,14 @@ export async function commitVideoGenerationSuccess(
         const hasValidStoredReservation =
           storedReservation?.token === reservation.token &&
           storedReservation.dailyLimit === reservation.dailyLimit &&
+          (storedReservation.allowBypass !== false) === allowBypass &&
           storedReservation.expiresAt > now;
 
         if (!hasValidStoredReservation) {
           return baseState;
         }
 
-        if (hasQuotaBypass(psid, baseState.userKey)) {
+        if (allowBypass && hasQuotaBypass(psid, baseState.userKey)) {
           committed = true;
           return {
             ...baseState,

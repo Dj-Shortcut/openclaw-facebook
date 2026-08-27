@@ -39,6 +39,7 @@ export type QuotaReservationState = {
   token: string;
   expiresAt: number;
   dailyLimit?: number;
+  allowBypass?: boolean;
 };
 
 export type SourceImageOrigin = "external" | "stored";

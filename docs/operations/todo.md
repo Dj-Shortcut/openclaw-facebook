@@ -126,6 +126,17 @@ ClawHub, install, release, and rollback routes are proven.
   correctly skipped, so the manifest now records `runtime_deployed`.
 - This storage proof does not authorize a Facebook Page callback or gateway
   change; those remain separate from the customer payment path.
+- The owner-operated photo-to-video path is implemented behind a default-off
+  flag and a production-only pseudonymous pilot allowlist. It has a separate
+  per-user attempt quota, global attempt cap, priced spend admission, zero
+  automatic provider retries, bounded MP4 download, exact-scope provider-job
+  cleanup, and delete-my-data coverage. This is not production proof and does
+  not authorize enabling video before the remaining P1 callback proof and Meta
+  Messenger demo checklist pass. Before activation, the owner must explicitly
+  accept the residual provider-side 30-day retention boundary for a create
+  timeout that occurs before a job id is returned; the client supplies an
+  opaque support-reconciliation request id, but the provider documents no video
+  create idempotency or programmatic recovery key.
 
 ## Current product hypothesis
 

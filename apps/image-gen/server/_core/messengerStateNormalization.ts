@@ -328,6 +328,7 @@ function resolveVideoGenerationQuotaReservation(
       Number(reservation.dailyLimit) >= 0
         ? { dailyLimit: Number(reservation.dailyLimit) }
         : {}),
+      ...(reservation.allowBypass === false ? { allowBypass: false } : {}),
     };
   }
 

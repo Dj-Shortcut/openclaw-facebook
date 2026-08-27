@@ -205,7 +205,15 @@ entry. The root copy is removed only after standalone build, install, release,
 and rollback paths are proven. The Leaderbot runtime must never depend on it.
 
 WhatsApp and video are non-blocking capabilities. Do not extend their commercial
-credit behavior until the Messenger one-time purchase journey is proven.
+credit behavior until the Messenger one-time purchase journey is proven. The
+video path is an owner-operated, feature-flagged photo-to-video beta with its
+own per-user attempt quota, global attempt cap, priced spend admission, scoped
+pilot allowlist, storage, deletion, and delivery fences. Provider job references
+remain in the exact user/privacy cleanup inventory until provider deletion is
+confirmed, bounded by a 31-day retention window aligned to the provider's
+[documented 30-day video data window](https://platform.openai.com/docs/models/default-usage-policies-by-endpoint);
+the provider copy is removed before Messenger delivery. It does not read
+subscription state or consume purchased image credits.
 
 ## Failure model
 

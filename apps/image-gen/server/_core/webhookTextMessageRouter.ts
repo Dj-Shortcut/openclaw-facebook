@@ -14,13 +14,15 @@ import {
 } from "./messengerState";
 import { toLogUser } from "./privacy";
 import { handleSharedTextMessage } from "./sharedTextHandler";
-import { isMessengerVideoGenerationEnabled } from "./video-generation/videoConfig";
-import { getMessengerRequestPageId } from "./messengerRequestContext";
-import { hasQuotaBypass } from "./messengerQuota";
 import {
-  hasPremiumMediaAccess,
-  WorkspaceEntitlementLookupError,
-} from "./workspaceEntitlementRuntime";
+  isMessengerVideoGenerationEnabled,
+  isMessengerVideoPageBindingAllowed,
+  isMessengerVideoUserAllowed,
+} from "./video-generation/videoConfig";
+import {
+  getMessengerRequestOwnership,
+  getMessengerRequestPageId,
+} from "./messengerRequestContext";
 import type { HandlerContext } from "./webhookHandlerTypes";
 
 type TextMessageInput = {
@@ -60,6 +62,14 @@ function isVideoRetryText(text: string): boolean {
   );
 }
 
+function isCurrentVideoPageBindingAllowed(): boolean {
+  const ownership = getMessengerRequestOwnership();
+  const pageId = getMessengerRequestPageId();
+  return isMessengerVideoPageBindingAllowed(
+    ownership && pageId ? { ...ownership, pageId } : null
+  );
+}
+
 async function retryPendingVideoGeneration(
   ctx: HandlerContext,
   input: TextMessageInput
@@ -73,34 +83,16 @@ async function retryPendingVideoGeneration(
     return false;
   }
   if (
-    process.env.MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED === "true" &&
-    !hasQuotaBypass(input.psid, input.userId)
+    !isMessengerVideoGenerationEnabled() ||
+    !isMessengerVideoUserAllowed(input.userId) ||
+    !isCurrentVideoPageBindingAllowed()
   ) {
-    try {
-      if (!(await hasPremiumMediaAccess(getMessengerRequestPageId()))) {
-        await ctx.sendLoggedText(
-          input.psid,
-          t(input.lang, "videoGenerationPremiumRequired"),
-          input.reqId
-        );
-        return true;
-      }
-    } catch (error) {
-      safeLog("messenger_video_retry_entitlement_lookup_failed", {
-        level: "error",
-        reqId: input.reqId,
-        errorCode:
-          error instanceof WorkspaceEntitlementLookupError
-            ? error.name
-            : "WorkspaceEntitlementLookupError",
-      });
-      await ctx.sendLoggedText(
-        input.psid,
-        t(input.lang, "videoGenerationUnavailable"),
-        input.reqId
-      );
-      return true;
-    }
+    await ctx.sendLoggedText(
+      input.psid,
+      t(input.lang, "videoGenerationUnavailable"),
+      input.reqId
+    );
+    return true;
   }
   await ctx.sendLoggedText(
     input.psid,
@@ -210,34 +202,15 @@ async function handleSharedMessengerText(
       }
 
       if (
-        process.env.MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED === "true" &&
-        !hasQuotaBypass(input.psid, input.userId)
+        !isMessengerVideoUserAllowed(input.userId) ||
+        !isCurrentVideoPageBindingAllowed()
       ) {
-        try {
-          if (!(await hasPremiumMediaAccess(getMessengerRequestPageId()))) {
-            await ctx.sendLoggedText(
-              input.psid,
-              t(input.lang, "videoGenerationPremiumRequired"),
-              input.reqId
-            );
-            return true;
-          }
-        } catch (error) {
-          safeLog("messenger_video_entitlement_lookup_failed", {
-            level: "error",
-            reqId: input.reqId,
-            errorCode:
-              error instanceof WorkspaceEntitlementLookupError
-                ? error.name
-                : "WorkspaceEntitlementLookupError",
-          });
-          await ctx.sendLoggedText(
-            input.psid,
-            t(input.lang, "videoGenerationUnavailable"),
-            input.reqId
-          );
-          return true;
-        }
+        await ctx.sendLoggedText(
+          input.psid,
+          t(input.lang, "videoGenerationUnavailable"),
+          input.reqId
+        );
+        return true;
       }
 
       if (!hasPhoto) {

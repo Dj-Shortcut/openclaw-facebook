@@ -11,6 +11,10 @@ export type VideoProviderRequest = {
   costLedgerScope?: CostLedgerTenantScope;
   timeoutMs: number;
   onProviderAttempt?: () => Promise<string | undefined>;
+  onProviderJobCreated?: (artifact: {
+    provider: string;
+    providerJobId: string;
+  }) => Promise<void>;
 };
 
 export type VideoProviderSuccess = {
@@ -38,3 +42,13 @@ export type VideoProvider = {
   generateVideo(input: VideoProviderRequest): Promise<VideoProviderResult>;
   deleteVideo?(providerJobId: string, reqId?: string): Promise<void>;
 };
+
+export class VideoProviderJobRegistrationError extends Error {
+  readonly cause: unknown;
+
+  constructor(cause: unknown) {
+    super("Video provider job cleanup registration failed");
+    this.name = "VideoProviderJobRegistrationError";
+    this.cause = cause;
+  }
+}
