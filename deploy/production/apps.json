@@ -192,7 +192,7 @@
       "artifactTransition": {
         "state": "runtime_reviewed",
         "legacyImage": "registry.fly.io/leaderbot-storage-proxy@sha256:334f78b92816a92e302a66c4d08742c28361a718b190227d3dbf7b933350cc28",
-        "legacyFlyctlVersion": "0.4.38"
+        "legacyFlyctlVersion": "2026.8.27-dev.1787839287"
       },
       "reviewedRollbackImages": [
         "registry.fly.io/leaderbot-storage-proxy@sha256:334f78b92816a92e302a66c4d08742c28361a718b190227d3dbf7b933350cc28"

@@ -59,8 +59,13 @@ Eigen pagina -> Meta webhook -> OpenClaw Facebook-plugin -> persoonlijke OpenCla
       `33069256896` heeft daarna uit groene `main`-commit `16b1819...` het
       nieuwe geattesteerde kandidaatimage `sha256:3f2861c2...` opgeleverd en
       het manifest bindt exact die bron en digest. Resterend is een nieuwe
-      beschermde deploy met health- en readinessbewijs; tot dan blijft de
-      gezonde legacyrollback de live baseline.
+      beschermde deploy met health- en readinessbewijs. Run `33080233054`
+      stopte vóór productiemutatie: na de secretrotaties van 2026-08-27 bleven
+      de exacte legacy-image en configuratie intact, maar de actuele
+      Fly-toolmetadata was `2026.8.27-dev.1787839287`. Die exacte tijdelijke
+      predecessor wordt gereviewd vastgelegd en na promotie vervangen door de
+      gepinde deploytool. Tot dan blijft de gezonde legacyrollback de live
+      baseline.
 
 ## Definition of done
 

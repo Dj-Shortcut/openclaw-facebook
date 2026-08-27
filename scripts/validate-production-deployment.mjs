@@ -5512,7 +5512,9 @@ function validateStorageProxyArtifactTransition(app) {
     ].includes(transition.state) ||
     !isImmutableAppImage(app, transition.legacyImage) ||
     typeof transition.legacyFlyctlVersion !== "string" ||
-    !/^(?:v)?[0-9]+\.[0-9]+\.[0-9]+$/.test(transition.legacyFlyctlVersion)
+    !/^(?:v)?[0-9]+\.[0-9]+\.[0-9]+(?:-dev\.[1-9][0-9]*)?$/.test(
+      transition.legacyFlyctlVersion,
+    )
   ) {
     fail("storage-proxy must declare its exact trusted artifact transition");
   }
