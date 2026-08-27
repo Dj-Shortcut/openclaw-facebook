@@ -334,9 +334,9 @@ digest is not deployed-runtime evidence and the manifest must not advance to
 replacement candidate
 `sha256:3f2861c2ddc373ae777122f9b6cbac0f333c7ce65c094cc5fd2dbccfdf6df1e9`
 from reviewed source `16b18195646fe2db8adc70a80e60616c50b6bc7c`; the
-manifest records that exact pair and retains the healthy legacy rollback. A
-fresh protected deploy must still pass `/healthz` and `/readyz` before the
-transition advances to `runtime_deployed`.
+manifest previously recorded that exact pair and retained the healthy legacy
+rollback. It never became deployed-runtime evidence and is superseded by the
+startup-safe candidate below; do not dispatch the old digest.
 
 Protected run `33080233054` stopped before production mutation because the
 current Machine metadata no longer matched the recorded predecessor. The live
