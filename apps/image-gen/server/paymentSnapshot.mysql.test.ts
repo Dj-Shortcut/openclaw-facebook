@@ -2,6 +2,22 @@ import { randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+// Keep the historical checkout/payment concurrency contract covered without
+// republishing Startpilot in the production catalog.
+vi.mock("./_core/billing/catalog", async importOriginal => {
+  const actual =
+    await importOriginal<typeof import("./_core/billing/catalog")>();
+  return {
+    ...actual,
+    requireActiveBillingPlan: (planCode: string) => {
+      const plan = actual.requireActiveBillingPlan(planCode);
+      return plan.code === actual.STARTPILOT_PLAN_CODE
+        ? { ...plan, publiclyAvailable: true }
+        : plan;
+    },
+  };
+});
+
 import {
   auditLog,
   billingCustomers,

@@ -33,38 +33,15 @@ describe("billing catalog", () => {
     expect(plan.amountMinor).toBe(2_900);
   });
 
-  it("publishes only the finite Startpilot launch plan", () => {
-    expect(listPublicBillingPlans()).toEqual([
-      expect.objectContaining({
-        code: "startpilot_once_v1",
-        amount: "19.00",
-        currency: "EUR",
-        offerType: "one_time",
-        interval: "30 days",
-        accessDurationDays: 30,
-        active: true,
-        entitlements: {
-          imagesTotal: 20,
-          imagesPerDay: 5,
-          workspaces: 1,
-          facebookPages: 1,
-          imageQuality: "images_2",
-        },
-        disclosure: expect.objectContaining({
-          paymentAmount: "19.00",
-          recurringAmount: null,
-          automaticRenewal: false,
-          recurringMethod: null,
-          noTopUps: true,
-        }),
-      }),
-    ]);
+  it("publishes no legacy workspace plan", () => {
+    expect(listPublicBillingPlans()).toEqual([]);
   });
 
   it("keeps the Startpilot catalog snapshot immutable", () => {
     const plan = requireActiveBillingPlan("startpilot_once_v1");
     expect(Object.isFrozen(plan)).toBe(true);
     expect(Object.isFrozen(plan.entitlements)).toBe(true);
+    expect(plan.publiclyAvailable).toBe(false);
     expect(Reflect.set(plan.entitlements, "imagesTotal", 2_000)).toBe(false);
     expect(plan.entitlements.imagesTotal).toBe(20);
   });

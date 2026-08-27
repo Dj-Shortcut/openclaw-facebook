@@ -63,14 +63,6 @@ export async function startMollieCheckout(
 ) {
   assertMollieBillingEnabled();
   assertTenantBillingWorkerWorkspace(input.workspaceId);
-  const config = getMollieConfig();
-  const executionBoundary = await assertBillingSchedulerTenantEnabled(
-    input.workspaceId,
-    config.mode
-  );
-  const billingProfile = await assertWorkspaceBillingProfileEligible(
-    input.workspaceId
-  );
   if (input.businessCheckout) {
     throw new Error(
       "B2B checkout is unavailable until Peppol invoicing is configured"
@@ -82,6 +74,14 @@ export async function startMollieCheckout(
     throw new Error("billing plan is unavailable");
   }
   assertCheckoutKindMatchesPlan(plan.offerType, input.kind);
+  const config = getMollieConfig();
+  const executionBoundary = await assertBillingSchedulerTenantEnabled(
+    input.workspaceId,
+    config.mode
+  );
+  const billingProfile = await assertWorkspaceBillingProfileEligible(
+    input.workspaceId
+  );
   const client = clientOverride ?? new MollieClient(config);
   await assertBillingExecutionBoundary(executionBoundary);
   if (plan.offerType === "one_time") {
