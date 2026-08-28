@@ -29,10 +29,13 @@ LABEL org.opencontainers.image.source="https://github.com/Dj-Shortcut/openclaw-f
       io.leaderbot.schema.minimum="${MIGRATION_BRIDGE_SCHEMA_MINIMUM}" \
       io.leaderbot.schema.maximum="0018_credit_checkout_reservation"
 COPY --from=build /app/dist/migrate-production.cjs ./dist/migrate-production.cjs
+COPY --from=build /app/dist/credit-migration-definer-grants.cjs ./dist/credit-migration-definer-grants.cjs
 COPY --from=build /app/dist/billing-trigger-runtime-preflight.cjs ./dist/billing-trigger-runtime-preflight.cjs
 COPY --from=build /app/drizzle ./drizzle
 RUN test -s /app/dist/billing-trigger-runtime-preflight.cjs && \
-    node --check /app/dist/billing-trigger-runtime-preflight.cjs
+    test -s /app/dist/credit-migration-definer-grants.cjs && \
+    node --check /app/dist/billing-trigger-runtime-preflight.cjs && \
+    node --check /app/dist/credit-migration-definer-grants.cjs
 RUN printf '%s\n' 'migration-bridge' > /app/.leaderbot-artifact-kind
 
 FROM ${NODE_BASE_IMAGE} AS runtime

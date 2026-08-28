@@ -748,6 +748,18 @@ export const productionSchemaPhases = Object.freeze([
   "0018_credit_checkout_reservation",
 ]);
 
+export const productionDatabasePrivilegeProfiles = Object.freeze([
+  "inspection",
+  "runtime",
+  "credit-runtime",
+  "expand",
+  "credit-expand-pregrant",
+  "credit-expand",
+  "bootstrap",
+  "credit-bootstrap",
+  "phase-bound-runtime",
+]);
+
 const productionMigrationModes = Object.freeze({
   "verify-compatible": { verifyOnly: true, target: "compatible" },
   "inspect-expand-transition": {
@@ -772,7 +784,7 @@ const productionMigrationModes = Object.freeze({
     verifyOnly: true,
     target: "expand",
     inspectCreditWalletTransition: true,
-    privilegeProfile: "credit-expand",
+    privilegeProfile: "credit-expand-pregrant",
   },
   "inspect-credit-wallet-recovery": {
     verifyOnly: true,
@@ -905,10 +917,11 @@ function assertMigrationTarget(target, verifyOnly) {
   }
 }
 
-function assertVerifiedPhase(
+export function assertVerifiedPhase(
   target,
   phase,
-  bridgeArtifactVerification = false
+  bridgeArtifactVerification = false,
+  inspectCreditWalletTransition = false
 ) {
   if (bridgeArtifactVerification) {
     if (
@@ -917,6 +930,21 @@ function assertVerifiedPhase(
     ) {
       throw new Error(
         `schema is at ${phase ?? "an interrupted migration"}; bridge artifact verification refused`
+      );
+    }
+    return;
+  }
+  if (inspectCreditWalletTransition) {
+    if (
+      target !== "expand" ||
+      !new Set([
+        "0016_expand",
+        "0017_credit_wallet_expand",
+        "0018_credit_checkout_reservation",
+      ]).has(phase)
+    ) {
+      throw new Error(
+        `schema is at ${phase ?? "an interrupted migration"}; credit transition inspection refused`
       );
     }
     return;
@@ -934,14 +962,18 @@ function assertVerifiedPhase(
   }
 }
 
-function schemaCapturePlanForPrivilege(fullContract, privilegeProfile) {
+export function schemaCapturePlanForPrivilege(fullContract, privilegeProfile) {
   const includePrivilegedObjects = new Set([
     "bootstrap",
     "credit-bootstrap",
     "credit-expand",
+    "credit-expand-pregrant",
   ]).has(privilegeProfile);
   const privilegedObjectNamePrefix =
-    privilegeProfile === "credit-expand" ? "credit_" : "";
+    privilegeProfile === "credit-expand" ||
+    privilegeProfile === "credit-expand-pregrant"
+      ? "credit_"
+      : "";
   const schemaCaptureOptions = {
     includePrivilegedObjects,
     privilegedObjectNamePrefix,
@@ -1074,18 +1106,7 @@ export async function runProductionMigrations(options = {}) {
     throw new Error("bridge artifact verification option must be boolean");
   }
   const privilegeProfile = options.privilegeProfile ?? "bootstrap";
-  if (
-    !new Set([
-      "inspection",
-      "runtime",
-      "credit-runtime",
-      "expand",
-      "credit-expand",
-      "bootstrap",
-      "credit-bootstrap",
-      "phase-bound-runtime",
-    ]).has(privilegeProfile)
-  ) {
+  if (!productionDatabasePrivilegeProfiles.includes(privilegeProfile)) {
     throw new Error("production database privilege profile is unsupported");
   }
   if (
@@ -1222,7 +1243,8 @@ export async function runProductionMigrations(options = {}) {
         assertVerifiedPhase(
           target,
           initialStablePhase,
-          bridgeArtifactVerification
+          bridgeArtifactVerification,
+          inspectCreditWalletTransition
         );
         result = {
           appliedCount:

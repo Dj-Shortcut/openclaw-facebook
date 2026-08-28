@@ -8,7 +8,8 @@ kill_timeout = 300
 
 [deploy]
   # The immutable artifact marker selects its fail-closed schema check:
-  # the bridge accepts 0015/0016, while the runtime requires 0016 or newer.
+  # the bridge accepts stable 0016_expand and 0018_credit_checkout_reservation,
+  # while the final runtime requires exactly 0018_credit_checkout_reservation.
   release_command = "timeout -k 30s 8m env LEADERBOT_PRODUCTION_MIGRATION_MODE=verify-artifact node dist/migrate-production.cjs"
   release_command_timeout = "10m"
 
