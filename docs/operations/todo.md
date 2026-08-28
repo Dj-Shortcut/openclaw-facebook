@@ -32,6 +32,13 @@ ClawHub, install, release, and rollback routes are proven.
 
 ## Active order
 
+Owner-directed execution note (2026-08-28): implementation and Test Mode work
+for P2 through P4 may continue while the currently deployed bot remains in use.
+That sequencing decision is not production evidence for P1. P1 remains open
+until the direct owner Page callback, zero OpenClaw gateway traffic, rollback,
+retention, and standalone-channel extraction proofs below are actually recorded.
+Live payment enablement remains gated by the relevant P1 through P4 evidence.
+
 - [ ] **P1 - Direct owner bot and OpenClaw retirement proof.** Point the owner
       Page at the direct `apps/image-gen` Messenger callback using the intended
       Meta app and credentials. Prove verification, signatures, text, consent,
