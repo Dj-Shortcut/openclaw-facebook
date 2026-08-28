@@ -398,58 +398,89 @@ Rollback and recovery were correctly skipped. This reviewed follow-up records
 
 ### Image-gen database migration gate
 
-Production moves only from `0015_base` to the backwards-compatible
-`0016_expand` shape. The old portal-handoff migration numbered 0017 was never
-applied in production and is retired. There is no production contract command,
-manifest switch, or operator environment variable that may enable it. A future
-`0017_credit_wallet_expand` needs its own schema, rollout design, and review.
+Production currently runs `0016_expand`. The only reviewed successor is the
+ordered credit transition through `0017_credit_wallet_expand` to the exact
+`0018_credit_checkout_reservation` runtime. The protected schema workflow may
+apply those two checked-in migrations only; no application deploy, shell
+command, or ad-hoc Machine may change the production schema.
 
 Use this exact sequence:
 
-1. **Build the bridge.** Dispatch `Build trusted production artifact` with
-   `image-gen-bridge`. The workflow proves that the bridge keeps the exact live
-   application runtime, works with both 0015 and 0016, and attests both its
-   reviewed source and exact legacy base image.
-2. **Review and deploy the bridge.** Record its digest and source commit in the
-   manifest with state `bridge_reviewed`. After green CI, deploy that exact
-   digest through `Deploy production`. Prove every app and worker Machine runs
-   it.
-3. **Freeze deploys.** In a new reviewed PR, set state `expand_pending`, disable
-   application deploys, and keep only the bridge as the recovery image.
-4. **Back up and prove recovery.** Dispatch
-   `Apply reviewed image-gen schema expand`. The protected workflow first checks
-   that every Machine is the attested bridge. It creates a fresh encrypted
-   snapshot, restores it into an isolated encrypted volume, runs MySQL checks,
-   and removes the temporary restore volume. It records metadata only, never
-   customer rows.
-5. **Apply only 0016.** The same workflow runs `apply-expand` and then verifies
-   `0016_expand` from an exact bridge worker. It cannot apply any 0017. If the
-   known 0016 sequence was interrupted, rerun this same protected workflow with
-   the exact prior run ID and run attempt that uploaded its pre-expand evidence.
-   The workflow accepts that evidence only when its snapshot, database,
-   migration-manifest, schema-contract, and bridge tuple still match. Unknown
-   or partial shapes fail closed.
-6. **Build the runtime.** Record the successful expand phase and state
-   `runtime_build_pending` in a reviewed PR. Then dispatch
-   `Build trusted production artifact` with `image-gen-runtime`. The build must
-   reject 0015, accept 0016, and produce a trusted attestation.
-7. **Review and deploy the runtime.** Record that exact digest and source commit
-   with state `runtime_reviewed`, retain the bridge as the only rollback, and
-   enable deployment in a reviewed PR. After green CI, deploy it through
-   `Deploy production`, prove every Machine switched, and complete both image
-   smoke tests.
+1. **Open the reviewed transition.** In a dedicated manifest PR, set the
+   transition to `0016_expand -> 0018_credit_checkout_reservation`, state
+   `awaiting_attested_bridge`, keep the exact settled 0016 runtime as
+   `legacyBaseImage`, disable deploys, and retain only that image as rollback.
+2. **Build the bridge.** After that PR is green and merged, dispatch `Build
+trusted production artifact` with `image-gen-bridge`. The workflow proves
+   that the bridge keeps the exact settled application runtime, carries only
+   the reviewed 0017/0018 migration material, supports all three declared
+   phases, and attests its source plus exact base digest.
+3. **Review and deploy the bridge.** In a separate manifest PR, record the
+   bridge digest and its build-source commit with state `bridge_reviewed`.
+   After green CI, deploy that exact digest through `Deploy production` and
+   prove every app and worker Machine runs it. Commercial, paid-credit, and
+   Mollie exposure flags remain off.
+4. **Freeze deploys.** In another reviewed manifest PR, set state
+   `expand_pending`, disable application deploys, and retain only the bridge as
+   recovery image.
+5. **Back up and prove recovery.** Dispatch `Apply reviewed image-gen credit
+schema`. The protected workflow first proves every Machine is the attested
+   bridge and the live database is the exact 0016 base. It creates a fresh
+   encrypted snapshot, restores it into an isolated encrypted volume, runs
+   MySQL integrity checks, uploads metadata-only recovery evidence, and removes
+   the temporary restore Machine and volume.
+6. **Apply only 0017 then 0018.** The same protected workflow applies only the
+   reviewed credit migrations and verifies the exact final 0018 contract from
+   the bridge. A resume must name the exact earlier recovery run and attempt;
+   the snapshot, database, migration manifest, schema contract, bridge digest,
+   and bridge source must all still match. Unknown or partial shapes fail
+   closed.
+7. **Build the final runtime.** In a reviewed manifest PR, record the successful
+   schema phase and state `runtime_build_pending`, leaving deploys frozen on the
+   bridge. Then dispatch `Build trusted production artifact` with
+   `image-gen-runtime`. The image must reject pre-0018 schemas, accept only the
+   exact 0018 contract, and receive trusted provenance for its immutable digest
+   and build-source commit.
+8. **Review the immutable runtime before staging credentials.** In a separate
+   manifest PR, record that digest and its artifact build-source commit, set
+   state `runtime_principal_pending`, keep deployment disabled, and retain the
+   bridge as rollback. This manifest-review commit is expected to be later than
+   the artifact build-source commit; they must not be forced to the same Git
+   SHA. The protected staging workflow requires green CI for both commits,
+   verifies the immutable image label and attestation against the recorded
+   artifact source, runs the exact trigger/runtime privilege probe through the
+   newly created restricted principal, and stages `DATABASE_URL` without
+   restarting a Machine.
+9. **Review and deploy the staged principal.** Record the metadata-only staged
+   principal fingerprint in another reviewed manifest PR, set state
+   `runtime_reviewed`, enable deployment, and keep the bridge as the only
+   application rollback. `Deploy production` must prove the exact candidate
+   image, configuration, and deployment identity, then run the reviewed probe
+   through the staged principal on every desired app and worker Machine before
+   `/healthz` and `/readyz` may complete the rollout. A failed rollout restores
+   the bridge and its captured configuration; the 0018 schema remains in place.
+10. **Settle before commercial exposure.** Record a healthy final-schema
+    runtime predecessor and move to `complete` only in a later reviewed
+    manifest PR that removes the bridge from the rollback allowlist and retains
+    at least one exact 0018 runtime rollback. Do not expose a Mollie checkout
+    while the only rollback is the migration bridge. Obsolete broad database
+    principals may be locked only after every desired Machine reproves the
+    restricted principal under the settled deployment identity. Preserve the
+    protected unlock path for at least 24 hours before a separately approved
+    drop.
 
 Do not type migration commands into a production shell and do not start an
 ad-hoc migration Machine. Normal releases use the image's compatibility check;
 the protected schema workflow is the only production path that changes this
 database.
 
-Application rollback leaves the successfully applied schema in place and may
-use only an image explicitly reviewed for that phase. Never blindly restore a
-pre-migration snapshot after production writers continued: that would silently
-discard later writes. A production restore requires point-in-time recovery to a
-verified boundary, or a coordinated writer pause with a durable buffer and a
-proven replay plan. Otherwise preserve the database and recover forward.
+Application rollback after step 6 leaves the successfully applied 0018 schema
+in place and may use only the reviewed migration bridge or a runtime explicitly
+reviewed for 0018. Never blindly restore the pre-migration snapshot after
+production writers continued: that would silently discard later writes. A
+production restore requires point-in-time recovery to a verified boundary, or
+a coordinated writer pause with a durable buffer and a proven replay plan.
+Otherwise preserve the database and recover forward.
 
 ### Messenger queue two-phase rollout
 

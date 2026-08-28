@@ -5,6 +5,7 @@ on:
 
 permissions:
   actions: read
+  attestations: read
   contents: read
 
 env:
@@ -48,8 +49,9 @@ jobs:
           test "$(jq -er '.apps["image-gen"].databaseSchemaTransition.state' deploy/production/apps.json)" = "runtime_principal_pending"
           test "$(jq -er '.apps["image-gen"].databaseSchemaPhase' deploy/production/apps.json)" = "0018_credit_checkout_reservation"
           test "$(jq -er '.apps["image-gen"].deploymentEnabled' deploy/production/apps.json)" = "false"
-          test "$(jq -er '.apps["image-gen"].reviewedSourceCommit' deploy/production/apps.json)" = "$GITHUB_SHA"
+          reviewed_image="$(jq -er '.apps["image-gen"].reviewedImage' deploy/production/apps.json)"
           node scripts/validate-production-deployment.mjs --verify-source-ci "$GITHUB_SHA"
+          node scripts/validate-production-deployment.mjs --verify-reviewed-ci image-gen "$reviewed_image"
 
   stage:
     name: Create and stage the exact runtime database principal
@@ -91,11 +93,16 @@ jobs:
           test "$(jq -er '.apps["image-gen"].databaseSchemaTransition.state' deploy/production/apps.json)" = "runtime_principal_pending"
           test "$(jq -er '.apps["image-gen"].databaseSchemaPhase' deploy/production/apps.json)" = "0018_credit_checkout_reservation"
           test "$(jq -er '.apps["image-gen"].deploymentEnabled' deploy/production/apps.json)" = "false"
-          test "$(jq -er '.apps["image-gen"].reviewedSourceCommit' deploy/production/apps.json)" = "$GITHUB_SHA"
+          reviewed_image="$(jq -er '.apps["image-gen"].reviewedImage' deploy/production/apps.json)"
+          reviewed_source_commit="$(node scripts/validate-production-deployment.mjs --reviewed-source-commit image-gen "$reviewed_image")"
+          [[ "$reviewed_source_commit" =~ ^[a-f0-9]{40}$ ]]
           node scripts/validate-production-deployment.mjs --verify-source-ci "$GITHUB_SHA"
+          node scripts/validate-production-deployment.mjs --verify-reviewed-ci image-gen "$reviewed_image"
           {
             echo "RUNTIME_PRINCIPAL_MANIFEST_SHA256=$(sha256sum deploy/production/apps.json | cut -d ' ' -f1)"
             echo "RUNTIME_PRINCIPAL_DATABASE_NAME=$(jq -er '.apps["image-gen"].databaseRecovery.databaseName' deploy/production/apps.json)"
+            echo "RUNTIME_PRINCIPAL_ARTIFACT_IMAGE=$reviewed_image"
+            echo "RUNTIME_PRINCIPAL_ARTIFACT_SOURCE_COMMIT=$reviewed_source_commit"
           } >> "$GITHUB_ENV"
 
       - name: Install exact verified flyctl
@@ -164,15 +171,28 @@ jobs:
         timeout-minutes: 10
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_IMAGE_GEN_DEPLOY_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           test -n "$FLY_API_TOKEN"
-          reviewed_image="$(jq -er '.apps["image-gen"].reviewedImage' deploy/production/apps.json)"
+          test -n "$GH_TOKEN"
           node scripts/validate-production-deployment.mjs \
-            --validate-reviewed-image image-gen "$reviewed_image"
+            --validate-reviewed-image image-gen "$RUNTIME_PRINCIPAL_ARTIFACT_IMAGE"
           flyctl auth docker
-          docker pull "$reviewed_image"
-          probe_container="$(docker create "$reviewed_image")"
+          docker pull "$RUNTIME_PRINCIPAL_ARTIFACT_IMAGE"
+          actual_source_commit="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$RUNTIME_PRINCIPAL_ARTIFACT_IMAGE")"
+          test "$actual_source_commit" = "$RUNTIME_PRINCIPAL_ARTIFACT_SOURCE_COMMIT"
+          test "$(docker image inspect --format '{{ index .Config.Labels "io.leaderbot.artifact.kind" }}' "$RUNTIME_PRINCIPAL_ARTIFACT_IMAGE")" = "runtime"
+          test "$(docker image inspect --format '{{ index .Config.Labels "io.leaderbot.schema.minimum" }}' "$RUNTIME_PRINCIPAL_ARTIFACT_IMAGE")" = "0018_credit_checkout_reservation"
+          test "$(docker image inspect --format '{{ index .Config.Labels "io.leaderbot.schema.maximum" }}' "$RUNTIME_PRINCIPAL_ARTIFACT_IMAGE")" = "0018_credit_checkout_reservation"
+          signer="$GITHUB_REPOSITORY/.github/workflows/build-production-artifacts.yml"
+          gh attestation verify "oci://$RUNTIME_PRINCIPAL_ARTIFACT_IMAGE" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$signer" \
+            --source-digest "$RUNTIME_PRINCIPAL_ARTIFACT_SOURCE_COMMIT" \
+            --source-ref refs/heads/main \
+            --deny-self-hosted-runners
+          probe_container="$(docker create "$RUNTIME_PRINCIPAL_ARTIFACT_IMAGE")"
           [[ "$probe_container" =~ ^[a-f0-9]{64}$ ]]
           cleanup_container() {
             if [[ "$probe_container" =~ ^[a-f0-9]{64}$ ]]; then
@@ -328,12 +348,14 @@ jobs:
           stage_succeeded=1
           rm -f "$created_marker"
           jq -n \
-            --arg sourceCommit "$GITHUB_SHA" \
+            --arg manifestSourceCommit "$GITHUB_SHA" \
+            --arg artifactImage "$RUNTIME_PRINCIPAL_ARTIFACT_IMAGE" \
+            --arg artifactSourceCommit "$RUNTIME_PRINCIPAL_ARTIFACT_SOURCE_COMMIT" \
             --arg manifestSha256 "$RUNTIME_PRINCIPAL_MANIFEST_SHA256" \
             --arg databaseMachineId "$RUNTIME_PRINCIPAL_DATABASE_MACHINE_ID" \
             --arg principalSha256 "$principal_fingerprint" \
             --arg stagedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            '{sourceCommit:$sourceCommit,schemaPhase:"0018_credit_checkout_reservation",deploymentEnabled:false,databaseMachineId:$databaseMachineId,principalSha256:$principalSha256,manifestSha256:$manifestSha256,triggerPreflightPassed:true,stagedAt:$stagedAt}' \
+            '{manifestSourceCommit:$manifestSourceCommit,artifact:{image:$artifactImage,sourceCommit:$artifactSourceCommit},schemaPhase:"0018_credit_checkout_reservation",deploymentEnabled:false,databaseMachineId:$databaseMachineId,principalSha256:$principalSha256,manifestSha256:$manifestSha256,triggerPreflightPassed:true,stagedAt:$stagedAt}' \
             > "$RUNNER_TEMP/leaderbot-runtime-principal/staged.json"
 
       - name: Upload metadata-only staging evidence

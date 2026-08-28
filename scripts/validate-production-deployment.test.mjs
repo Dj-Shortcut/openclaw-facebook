@@ -1091,8 +1091,55 @@ describe("production deployment contract", () => {
     expect(workflow).toContain(
       'flyctl secrets set --stage "DATABASE_URL=$runtime_database_url" --app leaderbot-fb-image-gen',
     );
+    expect(workflow).toContain(
+      '--verify-reviewed-ci image-gen "$reviewed_image"',
+    );
+    expect(workflow).toContain(
+      'test "$actual_source_commit" = "$RUNTIME_PRINCIPAL_ARTIFACT_SOURCE_COMMIT"',
+    );
+    expect(workflow).toContain(
+      '--source-digest "$RUNTIME_PRINCIPAL_ARTIFACT_SOURCE_COMMIT"',
+    );
     expect(workflow).not.toContain("flyctl deploy");
     expect(workflow).not.toContain("fly deploy");
+  });
+
+  it("keeps the reviewed runtime artifact source distinct from its later manifest-review commit", () => {
+    const workflow = fs.readFileSync(
+      path.join(
+        repoRoot,
+        ".github/workflows/stage-image-gen-credit-runtime-principal.yml",
+      ),
+      "utf8",
+    );
+
+    expect(workflow).toContain(
+      'reviewed_source_commit="$(node scripts/validate-production-deployment.mjs --reviewed-source-commit image-gen "$reviewed_image")"',
+    );
+    expect(workflow).toContain('--arg manifestSourceCommit "$GITHUB_SHA"');
+    expect(workflow).toContain(
+      '--arg artifactSourceCommit "$RUNTIME_PRINCIPAL_ARTIFACT_SOURCE_COMMIT"',
+    );
+    expect(workflow).toContain(
+      "artifact:{image:$artifactImage,sourceCommit:$artifactSourceCommit}",
+    );
+    expect(workflow).not.toContain(
+      'reviewedSourceCommit\' deploy/production/apps.json)" = "$GITHUB_SHA"',
+    );
+  });
+
+  it("rejects a staged runtime whose image label is checked against the manifest commit instead of the reviewed artifact source", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/stage-image-gen-credit-runtime-principal.yml",
+      'test "$actual_source_commit" = "$RUNTIME_PRINCIPAL_ARTIFACT_SOURCE_COMMIT"',
+      'test "$actual_source_commit" = "$GITHUB_SHA"',
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must bind the staged runtime to its exact reviewed artifact source",
+    );
   });
 
   it("never stages the tunnel-local runtime principal URL", () => {

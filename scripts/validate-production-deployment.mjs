@@ -4416,12 +4416,20 @@ function validateRuntimePrincipalStagingWorkflow(rootDir) {
       "must refuse staging while deploys are enabled",
     ],
     [
-      'reviewedSourceCommit\' deploy/production/apps.json)" = "$GITHUB_SHA"',
-      "must bind the reviewed runtime source to the exact main SHA",
+      '--verify-source-ci "$GITHUB_SHA"',
+      "must require green CI for the exact manifest source SHA",
     ],
     [
-      '--verify-source-ci "$GITHUB_SHA"',
-      "must require green CI for the exact main SHA",
+      '--verify-reviewed-ci image-gen "$reviewed_image"',
+      "must separately require green CI for the reviewed runtime artifact source",
+    ],
+    [
+      '--reviewed-source-commit image-gen "$reviewed_image"',
+      "must resolve the immutable runtime artifact source from the reviewed manifest",
+    ],
+    [
+      "RUNTIME_PRINCIPAL_ARTIFACT_SOURCE_COMMIT=$reviewed_source_commit",
+      "must retain the reviewed runtime artifact source independently from the later manifest commit",
     ],
     [
       "IMAGE_GEN_DATABASE_MIGRATION_URL",
@@ -4492,6 +4500,18 @@ function validateRuntimePrincipalStagingWorkflow(rootDir) {
       "must extract the trigger probe from the exact reviewed runtime",
     ],
     [
+      'test "$actual_source_commit" = "$RUNTIME_PRINCIPAL_ARTIFACT_SOURCE_COMMIT"',
+      "must bind the staged runtime to its exact reviewed artifact source",
+    ],
+    [
+      'gh attestation verify "oci://$RUNTIME_PRINCIPAL_ARTIFACT_IMAGE"',
+      "must verify trusted provenance for the exact immutable runtime digest",
+    ],
+    [
+      '--source-digest "$RUNTIME_PRINCIPAL_ARTIFACT_SOURCE_COMMIT"',
+      "must bind trusted provenance to the reviewed artifact source rather than the manifest commit",
+    ],
+    [
       String.raw`DATABASE_URL="$runtime_verification_url" \
             MOLLIE_MODE=test`,
       "must run the trigger probe through the tunnel-local replacement principal",
@@ -4536,6 +4556,10 @@ function validateRuntimePrincipalStagingWorkflow(rootDir) {
       "image-gen-runtime-principal-stage-",
       "must retain metadata-only staging evidence",
     ],
+    [
+      "artifact:{image:$artifactImage,sourceCommit:$artifactSourceCommit}",
+      "must retain both immutable digest and artifact source in staging evidence",
+    ],
   ]) {
     if (!workflow.includes(needle)) {
       fail(`${RUNTIME_PRINCIPAL_STAGING_WORKFLOW_PATH} ${message}`);
@@ -4547,10 +4571,13 @@ function validateRuntimePrincipalStagingWorkflow(rootDir) {
     workflow.includes("fly deploy") ||
     workflow.includes("flyctl machine restart") ||
     workflow.includes("flyctl machine start") ||
-    workflow.includes("flyctl secrets deploy")
+    workflow.includes("flyctl secrets deploy") ||
+    workflow.includes(
+      'reviewedSourceCommit\' deploy/production/apps.json)" = "$GITHUB_SHA"',
+    )
   ) {
     fail(
-      `${RUNTIME_PRINCIPAL_STAGING_WORKFLOW_PATH} must stage credentials without deployment or machine mutation`,
+      `${RUNTIME_PRINCIPAL_STAGING_WORKFLOW_PATH} must stage credentials without deployment, machine mutation, or a circular manifest/artifact source identity`,
     );
   }
   if (workflow.includes('RUNTIME_DATABASE_URL="$runtime_database_url"')) {
