@@ -244,11 +244,15 @@ async function assertInstalledShape(connection) {
 
 async function assertRuntimePrivilegeBoundary(connection, database) {
   const runtimeUser = "lb_credit_rt_rehearsal";
+  // GitHub service-container connections reach MySQL through the Docker bridge
+  // rather than as localhost. This disposable principal remains database-
+  // scoped and is removed in the finally block.
+  const runtimeHost = "%";
   const runtimePassword = "credit-runtime-rehearsal-only";
   const walletId = "17170000-0000-4000-8000-000000000001";
   const userKey = "a".repeat(64);
   const financialSubjectRef = "b".repeat(64);
-  await admin.query(`DROP USER IF EXISTS '${runtimeUser}'@'localhost'`);
+  await admin.query(`DROP USER IF EXISTS '${runtimeUser}'@'${runtimeHost}'`);
   try {
     await connection.query(
       "INSERT INTO `workspaces` (`id`,`name`,`slug`) VALUES (1717,'Credit privilege','credit-privilege')"
@@ -264,14 +268,14 @@ async function assertRuntimePrivilegeBoundary(connection, database) {
       [userKey]
     );
     await admin.query(
-      `CREATE USER '${runtimeUser}'@'localhost' IDENTIFIED BY '${runtimePassword}'`
+      `CREATE USER '${runtimeUser}'@'${runtimeHost}' IDENTIFIED BY '${runtimePassword}'`
     );
     await admin.query(
-      `GRANT SELECT ON \`${database}\`.* TO '${runtimeUser}'@'localhost'`
+      `GRANT SELECT ON \`${database}\`.* TO '${runtimeUser}'@'${runtimeHost}'`
     );
     for (const procedure of expectedProcedures) {
       await admin.query(
-        `GRANT EXECUTE ON PROCEDURE \`${database}\`.\`${procedure}\` TO '${runtimeUser}'@'localhost'`
+        `GRANT EXECUTE ON PROCEDURE \`${database}\`.\`${procedure}\` TO '${runtimeUser}'@'${runtimeHost}'`
       );
     }
     const runtime = await mysql.createConnection({
@@ -320,7 +324,7 @@ async function assertRuntimePrivilegeBoundary(connection, database) {
       await runtime.end();
     }
   } finally {
-    await admin.query(`DROP USER IF EXISTS '${runtimeUser}'@'localhost'`);
+    await admin.query(`DROP USER IF EXISTS '${runtimeUser}'@'${runtimeHost}'`);
   }
 }
 
