@@ -1,5 +1,5 @@
 import { createHash, createHmac } from "node:crypto";
-import { and, eq, inArray, lte, sql } from "drizzle-orm";
+import { and, eq, inArray, lte, ne, sql } from "drizzle-orm";
 
 import {
   auditLog,
@@ -442,6 +442,7 @@ export async function revokeWorkspaceBillingProfile(input: {
       .where(
         and(
           eq(billingIntents.workspaceId, input.workspaceId),
+          ne(billingIntents.kind, "credit_purchase"),
           inArray(billingIntents.status, ["open", "api_unknown"])
         )
       )
@@ -452,6 +453,7 @@ export async function revokeWorkspaceBillingProfile(input: {
       .where(
         and(
           eq(billingIntents.workspaceId, input.workspaceId),
+          ne(billingIntents.kind, "credit_purchase"),
           inArray(billingIntents.status, [
             "created",
             "creating_payment",
@@ -466,7 +468,19 @@ export async function revokeWorkspaceBillingProfile(input: {
       .where(
         and(
           eq(billingProviderOperations.workspaceId, input.workspaceId),
-          eq(billingProviderOperations.state, "reserved")
+          eq(billingProviderOperations.state, "reserved"),
+          inArray(
+            billingProviderOperations.intentId,
+            tx
+              .select({ intentId: billingIntents.intentId })
+              .from(billingIntents)
+              .where(
+                and(
+                  eq(billingIntents.workspaceId, input.workspaceId),
+                  ne(billingIntents.kind, "credit_purchase")
+                )
+              )
+          )
         )
       );
     for (const intent of paymentIntents) {
@@ -665,7 +679,12 @@ export async function expireWorkspaceBillingProfileIfDue(
         molliePaymentId: billingIntents.molliePaymentId,
       })
       .from(billingIntents)
-      .where(eq(billingIntents.workspaceId, workspaceId))
+      .where(
+        and(
+          eq(billingIntents.workspaceId, workspaceId),
+          ne(billingIntents.kind, "credit_purchase")
+        )
+      )
       .for("update");
     const subscriptions = await tx
       .select()
@@ -678,6 +697,7 @@ export async function expireWorkspaceBillingProfileIfDue(
       .where(
         and(
           eq(billingIntents.workspaceId, workspaceId),
+          ne(billingIntents.kind, "credit_purchase"),
           inArray(billingIntents.status, [
             "created",
             "creating_payment",
@@ -692,7 +712,19 @@ export async function expireWorkspaceBillingProfileIfDue(
       .where(
         and(
           eq(billingProviderOperations.workspaceId, workspaceId),
-          eq(billingProviderOperations.state, "reserved")
+          eq(billingProviderOperations.state, "reserved"),
+          inArray(
+            billingProviderOperations.intentId,
+            tx
+              .select({ intentId: billingIntents.intentId })
+              .from(billingIntents)
+              .where(
+                and(
+                  eq(billingIntents.workspaceId, workspaceId),
+                  ne(billingIntents.kind, "credit_purchase")
+                )
+              )
+          )
         )
       );
     for (const intent of intents) {

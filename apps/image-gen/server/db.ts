@@ -129,6 +129,11 @@ export type MessengerPrivacyIdentityFence = Readonly<{
   pageId: string;
 }>;
 
+export type ExactMessengerPrivacyIdentityFence = MessengerPrivacyIdentityFence &
+  Readonly<{
+    bindingEpoch: number;
+  }>;
+
 /**
  * Serializes identity-bearing SQL writes with Messenger erasure. The subject
  * row is always locked before any intent, outbox, or handoff-token row.
@@ -136,6 +141,29 @@ export type MessengerPrivacyIdentityFence = Readonly<{
 export async function lockActiveMessengerPrivacyIdentity(
   tx: ImageGenTransaction,
   input: MessengerPrivacyIdentityFence
+): Promise<void> {
+  return lockMessengerPrivacyIdentity(tx, input);
+}
+
+/**
+ * Credit-bearing writes must prove the immutable Page-binding epoch. Legacy
+ * portal handoffs predate that stored field and continue to use the bounded
+ * compatibility helper above until their retirement migration is complete.
+ */
+export async function lockExactActiveMessengerPrivacyIdentity(
+  tx: ImageGenTransaction,
+  input: ExactMessengerPrivacyIdentityFence
+): Promise<void> {
+  if (!Number.isSafeInteger(input.bindingEpoch) || input.bindingEpoch <= 0) {
+    throw new Error("Exact Messenger Page binding epoch is required");
+  }
+  return lockMessengerPrivacyIdentity(tx, input, input.bindingEpoch);
+}
+
+async function lockMessengerPrivacyIdentity(
+  tx: ImageGenTransaction,
+  input: MessengerPrivacyIdentityFence,
+  bindingEpoch?: number
 ): Promise<void> {
   const pageId = input.pageId.trim();
   if (
@@ -182,7 +210,10 @@ export async function lockActiveMessengerPrivacyIdentity(
         eq(channelConnections.workspaceId, input.workspaceId),
         eq(channelConnections.channel, "facebook_messenger"),
         eq(channelConnections.status, "connected"),
-        eq(channelConnections.externalId, pageId)
+        eq(channelConnections.externalId, pageId),
+        ...(bindingEpoch === undefined
+          ? []
+          : [eq(channelConnections.bindingEpoch, bindingEpoch)])
       )
     )
     .limit(1)
