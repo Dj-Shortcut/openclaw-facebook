@@ -11,7 +11,7 @@ const IDENTITY = {
   workspaceId: 42,
   channelConnectionId: 7,
   bindingEpoch: 3,
-  userKey: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  userKey: "a".repeat(64),
   privacyEpoch: 5,
   pageId: "facebook-page-42",
 } as const;
