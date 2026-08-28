@@ -1,6 +1,73 @@
 import crypto from "node:crypto";
 
-export const productionSchemaContractVersion = 4;
+export const productionSchemaContractVersion = 8;
+export const creditWalletRoutineNames = Object.freeze([
+  "credit_apply_chargeback_debit",
+  "credit_apply_chargeback_restore",
+  "credit_apply_refund_debit",
+  "credit_commit_reservation",
+  "credit_consume_checkout_capability",
+  "credit_create_reservation_hold",
+  "credit_reserve_checkout_intent",
+  "credit_erase_wallet",
+  "credit_expire_pristine_checkout",
+  "credit_expire_reservation",
+  "credit_freeze_wallet_for_review",
+  "credit_grant_purchase",
+  "credit_mark_reservation_provider_accepted",
+  "credit_mark_reservation_transport_started",
+  "credit_release_rejected_reservation",
+  "credit_release_reservation",
+  "credit_scrub_terminal_reservation",
+]);
+export const productionRuntimeWritableTableNames = Object.freeze([
+  "users",
+  "workspaces",
+  "workspaceMembers",
+  "aiIdentities",
+  "channelConnections",
+  "messenger_privacy_subjects",
+  "workspaceKnowledgeSources",
+  "workspacePrivacySettings",
+  "workspacePrivacyRequests",
+  "workspaceUpgradeRequests",
+  "portalHandoffTokens",
+  "auditLog",
+  "billing_customers",
+  "workspace_billing_profiles",
+  "billing_execution_controls",
+  "billing_profile_operator_actions",
+  "billing_scheduler_tenants",
+  "billing_notification_scheduler_tenants",
+  "billing_scheduler_process_heartbeats",
+  "messenger_provider_attempt_fences",
+  "billing_intents",
+  "billing_provider_operations",
+  "billing_subscriptions",
+  "billing_invoice_sequences",
+  "payment_ledger",
+  "webhook_deliveries",
+  "workspace_entitlements",
+  "workspace_entitlement_usage",
+  "workspace_entitlement_usage_reservations",
+  "billing_outbox",
+  "billing_webhook_routes",
+  "billing_notification_receipts",
+  "billing_accounting_import_runs",
+  "billing_accounting_import_cursors",
+  "billing_accounting_provider_events",
+  "billing_accounting_event_links",
+  "billing_notification_receiver_outbox",
+  "billing_notification_inbox",
+  "billing_handoff_recovery_events",
+  "billing_reconciliation_runs",
+  "billing_reconciliation_anomalies",
+]);
+export const creditWalletTableNames = Object.freeze([
+  "credit_wallets",
+  "credit_reservations",
+  "credit_ledger",
+]);
 export const productionSchemaSqlMode =
   "ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION";
 
@@ -28,15 +95,21 @@ export async function assertProductionMigrationRuntime(
   privilegeProfile = "bootstrap"
 ) {
   if (
-    !new Set(["inspection", "runtime", "expand", "bootstrap"]).has(
-      privilegeProfile
-    )
+    !new Set([
+      "inspection",
+      "runtime",
+      "credit-runtime",
+      "expand",
+      "credit-expand",
+      "bootstrap",
+      "credit-bootstrap",
+    ]).has(privilegeProfile)
   ) {
     throw new Error("production database privilege profile is unsupported");
   }
   await configureProductionSchemaSession(connection);
   const [[runtime]] = await connection.query(
-    "SELECT VERSION() AS version,DATABASE() AS databaseName,@@SESSION.sql_mode AS sqlMode,@@SESSION.time_zone AS timeZone,@@SESSION.transaction_isolation AS transactionIsolation,@@SESSION.foreign_key_checks AS foreignKeyChecks,@@SESSION.default_storage_engine AS defaultStorageEngine,@@GLOBAL.innodb_default_row_format AS innodbDefaultRowFormat,@@GLOBAL.innodb_page_size AS innodbPageSize,@@GLOBAL.innodb_force_recovery AS innodbForceRecovery,@@GLOBAL.innodb_read_only AS innodbReadOnly,@@GLOBAL.read_only AS readOnly,@@GLOBAL.super_read_only AS superReadOnly,@@GLOBAL.disabled_storage_engines AS disabledStorageEngines,@@SESSION.innodb_strict_mode AS innodbStrictMode,@@lower_case_table_names AS lowerCaseTableNames,@@SESSION.explicit_defaults_for_timestamp AS explicitTimestampDefaults,@@SESSION.auto_increment_increment AS autoIncrementIncrement,@@SESSION.auto_increment_offset AS autoIncrementOffset,@@SESSION.information_schema_stats_expiry AS informationSchemaStatsExpiry,@@SESSION.sql_quote_show_create AS sqlQuoteShowCreate,@@SESSION.show_create_table_verbosity AS showCreateTableVerbosity,@@SESSION.sql_safe_updates AS sqlSafeUpdates,@@SESSION.unique_checks AS uniqueChecks,@@SESSION.transaction_read_only AS transactionReadOnly,(ABS(@@SESSION.timestamp-UNIX_TIMESTAMP()) <= 1) AS timestampIsDefault,@@SESSION.insert_id AS insertId,(@@SESSION.sql_select_limit = 18446744073709551615) AS sqlSelectLimitIsDefault,@@SESSION.sql_big_selects AS sqlBigSelects,@@GLOBAL.log_bin AS logBin,@@GLOBAL.log_bin_trust_function_creators AS logBinTrustFunctionCreators"
+    "SELECT VERSION() AS version,DATABASE() AS databaseName,@@SESSION.sql_mode AS sqlMode,@@SESSION.time_zone AS timeZone,@@SESSION.transaction_isolation AS transactionIsolation,@@SESSION.foreign_key_checks AS foreignKeyChecks,@@SESSION.default_storage_engine AS defaultStorageEngine,@@GLOBAL.innodb_default_row_format AS innodbDefaultRowFormat,@@GLOBAL.innodb_page_size AS innodbPageSize,@@GLOBAL.innodb_force_recovery AS innodbForceRecovery,@@GLOBAL.innodb_read_only AS innodbReadOnly,@@GLOBAL.read_only AS readOnly,@@GLOBAL.super_read_only AS superReadOnly,@@GLOBAL.disabled_storage_engines AS disabledStorageEngines,@@SESSION.innodb_strict_mode AS innodbStrictMode,@@lower_case_table_names AS lowerCaseTableNames,@@SESSION.explicit_defaults_for_timestamp AS explicitTimestampDefaults,@@SESSION.auto_increment_increment AS autoIncrementIncrement,@@SESSION.auto_increment_offset AS autoIncrementOffset,@@SESSION.information_schema_stats_expiry AS informationSchemaStatsExpiry,@@SESSION.sql_quote_show_create AS sqlQuoteShowCreate,@@SESSION.show_create_table_verbosity AS showCreateTableVerbosity,@@SESSION.sql_safe_updates AS sqlSafeUpdates,@@SESSION.unique_checks AS uniqueChecks,@@SESSION.transaction_read_only AS transactionReadOnly,(ABS(@@SESSION.timestamp-UNIX_TIMESTAMP()) <= 1) AS timestampIsDefault,@@SESSION.insert_id AS insertId,(@@SESSION.sql_select_limit = 18446744073709551615) AS sqlSelectLimitIsDefault,@@SESSION.sql_big_selects AS sqlBigSelects,@@GLOBAL.log_bin AS logBin,@@GLOBAL.log_bin_trust_function_creators AS logBinTrustFunctionCreators,@@GLOBAL.binlog_format AS binlogFormat"
   );
   const [[schema]] = await connection.query(
     "SELECT DEFAULT_CHARACTER_SET_NAME AS characterSet,DEFAULT_COLLATION_NAME AS collationName,DEFAULT_ENCRYPTION AS defaultEncryption,(SELECT EXISTS(SELECT 1 FROM information_schema.SCHEMATA_EXTENSIONS se WHERE se.SCHEMA_NAME=DATABASE() AND UPPER(COALESCE(se.OPTIONS,'')) LIKE '%READ ONLY=1%')) AS schemaReadOnly FROM information_schema.SCHEMATA WHERE SCHEMA_NAME=DATABASE()"
@@ -47,8 +120,19 @@ export async function assertProductionMigrationRuntime(
     assertProductionInspectionGrantScope(grants, runtime.databaseName);
   } else if (privilegeProfile === "runtime") {
     assertProductionRuntimeGrantScope(grants, runtime.databaseName);
+  } else if (privilegeProfile === "credit-runtime") {
+    assertCreditWalletRuntimeGrantScope(grants, runtime.databaseName);
   } else if (privilegeProfile === "expand") {
     assertExpandMigrationGrantScope(grants, runtime.databaseName);
+    await assertCheckConstraintsEnforced(connection);
+  } else if (privilegeProfile === "credit-expand") {
+    assertCreditWalletMigrationGrantScope(
+      grants,
+      runtime.databaseName,
+      Number(runtime.logBin) === 1 &&
+        Number(runtime.logBinTrustFunctionCreators) !== 1
+    );
+    assertCreditWalletBinlogFormat(runtime);
     await assertCheckConstraintsEnforced(connection);
   } else {
     await assertCheckConstraintsEnforced(connection);
@@ -58,6 +142,9 @@ export async function assertProductionMigrationRuntime(
       Number(runtime.logBin) === 1 &&
         Number(runtime.logBinTrustFunctionCreators) !== 1
     );
+    if (privilegeProfile === "credit-bootstrap") {
+      assertCreditWalletBinlogFormat(runtime);
+    }
   }
   return { databaseName: runtime.databaseName };
 }
@@ -150,6 +237,145 @@ export function assertProductionRuntimeGrantScope(grants, databaseName) {
   );
 }
 
+export function assertCreditWalletRuntimeGrantScope(grants, databaseName) {
+  const schemaPrivileges = new Set();
+  const revokedSchemaPrivileges = new Set();
+  const grantedTablePrivileges = new Map();
+  const revokedTablePrivileges = new Map();
+  const grantedRoutines = new Set();
+  const revokedRoutines = new Set();
+  const unexpected = [];
+  const expectedTables = new Set(productionRuntimeWritableTableNames);
+  const expectedRoutines = new Set(creditWalletRoutineNames);
+  for (const grant of grants) {
+    const parsed = /^(GRANT|REVOKE) (.+) ON (.+) (?:TO|FROM) /i.exec(grant);
+    if (!parsed) {
+      unexpected.push(grant);
+      continue;
+    }
+    const operation = parsed[1].toUpperCase();
+    const privileges = parsed[2]
+      .split(",")
+      .map(value => value.trim().toUpperCase());
+    const rawScope = parsed[3].replaceAll("`", "");
+    if (
+      privileges.length === 0 ||
+      privileges.some(privilege =>
+        new Set(["ALL", "ALL PRIVILEGES"]).has(privilege)
+      ) ||
+      /\bWITH GRANT OPTION\b/i.test(grant)
+    ) {
+      unexpected.push(grant);
+      continue;
+    }
+    if (
+      operation === "GRANT" &&
+      rawScope === "*.*" &&
+      privileges.length === 1 &&
+      privileges[0] === "USAGE"
+    ) {
+      continue;
+    }
+    const procedure = /^PROCEDURE\s+([^\.]+)\.(.+)$/i.exec(rawScope);
+    if (procedure) {
+      const [, schemaName, routineName] = procedure;
+      if (
+        schemaName !== databaseName ||
+        !expectedRoutines.has(routineName) ||
+        privileges.length !== 1 ||
+        privileges[0] !== "EXECUTE"
+      ) {
+        unexpected.push(grant);
+        continue;
+      }
+      (operation === "REVOKE" ? revokedRoutines : grantedRoutines).add(
+        routineName
+      );
+      continue;
+    }
+
+    if (rawScope === `${databaseName}.*`) {
+      if (privileges.some(privilege => privilege !== "SELECT")) {
+        unexpected.push(grant);
+        continue;
+      }
+      const target =
+        operation === "REVOKE" ? revokedSchemaPrivileges : schemaPrivileges;
+      for (const privilege of privileges) target.add(privilege);
+      continue;
+    }
+
+    const table = /^([^\.]+)\.(.+)$/.exec(rawScope);
+    if (
+      !table ||
+      table[1] !== databaseName ||
+      !expectedTables.has(table[2]) ||
+      privileges.some(
+        privilege => !new Set(["INSERT", "UPDATE", "DELETE"]).has(privilege)
+      )
+    ) {
+      unexpected.push(grant);
+      continue;
+    }
+    const target =
+      operation === "REVOKE" ? revokedTablePrivileges : grantedTablePrivileges;
+    const tablePrivileges = target.get(table[2]) ?? new Set();
+    for (const privilege of privileges) tablePrivileges.add(privilege);
+    target.set(table[2], tablePrivileges);
+  }
+
+  for (const privilege of revokedSchemaPrivileges) {
+    schemaPrivileges.delete(privilege);
+  }
+  const schemaBoundaryMismatch =
+    schemaPrivileges.size !== 1 || !schemaPrivileges.has("SELECT");
+
+  const requiredTablePrivileges = new Set(["INSERT", "UPDATE", "DELETE"]);
+  const missingTablePrivileges = [];
+  for (const tableName of productionRuntimeWritableTableNames) {
+    const effective = new Set(grantedTablePrivileges.get(tableName) ?? []);
+    for (const privilege of revokedTablePrivileges.get(tableName) ?? []) {
+      effective.delete(privilege);
+    }
+    const missing = [...requiredTablePrivileges].filter(
+      privilege => !effective.has(privilege)
+    );
+    if (missing.length > 0) {
+      missingTablePrivileges.push(`${tableName}:${missing.join("+")}`);
+    }
+  }
+
+  for (const name of revokedRoutines) grantedRoutines.delete(name);
+  const missingRoutines = [...expectedRoutines].filter(
+    name => !grantedRoutines.has(name)
+  );
+  const excessiveRoutines = [...grantedRoutines].filter(
+    name => !expectedRoutines.has(name)
+  );
+  if (
+    unexpected.length > 0 ||
+    schemaBoundaryMismatch ||
+    missingTablePrivileges.length > 0 ||
+    missingRoutines.length > 0 ||
+    excessiveRoutines.length > 0
+  ) {
+    throw new Error(
+      "credit runtime privilege boundary mismatch" +
+        (schemaBoundaryMismatch ? "; schema SELECT mismatch" : "") +
+        (missingTablePrivileges.length > 0
+          ? `; missing table privileges ${missingTablePrivileges.join(",")}`
+          : "") +
+        (missingRoutines.length > 0
+          ? `; missing routines ${missingRoutines.join(",")}`
+          : "") +
+        (excessiveRoutines.length > 0
+          ? `; excessive routines ${excessiveRoutines.join(",")}`
+          : "") +
+        (unexpected.length > 0 ? "; unexpected grant scope" : "")
+    );
+  }
+}
+
 export function assertProductionInspectionGrantScope(grants, databaseName) {
   assertExactScopedPrivileges(
     grants,
@@ -176,6 +402,85 @@ export function assertExpandMigrationGrantScope(grants, databaseName) {
   );
 }
 
+export function assertCreditWalletMigrationGrantScope(
+  grants,
+  databaseName,
+  requireSuper = false
+) {
+  const schemaGrants = [];
+  let globalSuper = false;
+  let revokedGlobalSuper = false;
+  const expectedRoutines = new Set([
+    ...creditWalletRoutineNames,
+    // MySQL 8.4 automatically grants the creator ALTER ROUTINE and EXECUTE
+    // on this 0017-only helper until 0018 drops it. Accept only that exact
+    // transitional procedure so the same least-privilege principal can resume.
+    "credit_create_wallet",
+  ]);
+  for (const grant of grants) {
+    const parsed = /^(GRANT|REVOKE) (.+) ON (.+) (?:TO|FROM) /i.exec(grant);
+    const privileges = parsed?.[2]
+      ?.split(",")
+      .map(value => value.trim().toUpperCase());
+    const scope = parsed?.[3]?.replaceAll("`", "");
+    if (
+      parsed &&
+      scope === "*.*" &&
+      privileges.length === 1 &&
+      privileges[0] === "SUPER" &&
+      !/\bWITH GRANT OPTION\b/i.test(grant)
+    ) {
+      if (parsed[1].toUpperCase() === "REVOKE") revokedGlobalSuper = true;
+      else globalSuper = true;
+      continue;
+    }
+    const procedure = /^PROCEDURE\s+([^\.]+)\.(.+)$/i.exec(scope ?? "");
+    if (procedure) {
+      const allowedRoutinePrivilege =
+        parsed[1].toUpperCase() === "GRANT" &&
+        procedure[1] === databaseName &&
+        expectedRoutines.has(procedure[2]) &&
+        privileges.length > 0 &&
+        privileges.every(privilege =>
+          new Set(["ALTER ROUTINE", "EXECUTE"]).has(privilege)
+        ) &&
+        !/\bWITH GRANT OPTION\b/i.test(grant);
+      if (!allowedRoutinePrivilege) schemaGrants.push(grant);
+      continue;
+    }
+    schemaGrants.push(grant);
+  }
+  assertExactScopedPrivileges(
+    schemaGrants,
+    databaseName,
+    [
+      "CREATE",
+      "CREATE TEMPORARY TABLES",
+      "ALTER",
+      "INDEX",
+      "REFERENCES",
+      "SELECT",
+      "INSERT",
+      "UPDATE",
+      "TRIGGER",
+      "CREATE ROUTINE",
+      "ALTER ROUTINE",
+    ],
+    "credit wallet migration principal"
+  );
+  const hasSuper = globalSuper && !revokedGlobalSuper;
+  if (requireSuper && !hasSuper) {
+    throw new Error(
+      "credit wallet migration principal lacks global SUPER for triggers"
+    );
+  }
+  if (!requireSuper && hasSuper) {
+    throw new Error(
+      "credit wallet migration principal has excessive global SUPER"
+    );
+  }
+}
+
 export function assertTriggerGrantScope(grants, databaseName, requireSuper) {
   const required = new Set([
     "CREATE",
@@ -187,6 +492,7 @@ export function assertTriggerGrantScope(grants, databaseName, requireSuper) {
     "INSERT",
     "UPDATE",
     "TRIGGER",
+    "CREATE ROUTINE",
   ]);
   const allowed = new Set();
   const revoked = new Set();
@@ -236,6 +542,12 @@ export function assertTriggerGrantScope(grants, databaseName, requireSuper) {
   }
   if (requireSuper && !globalSuper) {
     throw new Error("migration principal lacks global SUPER for triggers");
+  }
+}
+
+export function assertCreditWalletBinlogFormat(runtime) {
+  if (String(runtime.binlogFormat).toUpperCase() !== "ROW") {
+    throw new Error("credit wallet migration requires ROW binary logging");
   }
 }
 
@@ -463,7 +775,7 @@ export function normalizeSqlOutsideQuotedValues(value) {
 
 export async function captureProductionSchemaState(
   connection,
-  { includePrivilegedObjects = true } = {}
+  { includePrivilegedObjects = true, privilegedObjectNamePrefix = "" } = {}
 ) {
   const [objects] = await connection.query(
     "SELECT `TABLE_NAME` AS name,`TABLE_TYPE` AS objectType FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() ORDER BY `TABLE_TYPE`,`TABLE_NAME`"
@@ -493,6 +805,7 @@ export async function captureProductionSchemaState(
   }
 
   const triggers = {};
+  const routines = {};
   if (includePrivilegedObjects) {
     const [[identity]] = await connection.query(
       "SELECT CURRENT_USER() AS currentUser"
@@ -501,25 +814,56 @@ export async function captureProductionSchemaState(
       "SELECT `TRIGGER_NAME` AS name,`DEFINER` AS definer,`ACTION_TIMING` AS timing,`EVENT_MANIPULATION` AS eventName,`EVENT_OBJECT_TABLE` AS tableName,`ACTION_ORIENTATION` AS orientation,`ACTION_ORDER` AS actionOrder,`ACTION_CONDITION` AS actionCondition,`ACTION_STATEMENT` AS actionStatement,`SQL_MODE` AS sqlMode,`CHARACTER_SET_CLIENT` AS characterSetClient,`COLLATION_CONNECTION` AS collationConnection,`DATABASE_COLLATION` AS databaseCollation FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=DATABASE() ORDER BY `TRIGGER_NAME`"
     );
     for (const trigger of triggerRows) {
+      if (
+        privilegedObjectNamePrefix &&
+        !trigger.name.startsWith(privilegedObjectNamePrefix)
+      ) {
+        continue;
+      }
       triggers[trigger.name] = sha256(
         JSON.stringify(canonicalTriggerTuple(trigger, identity.currentUser))
       );
     }
 
-    const [[programmable]] = await connection.query(
-      "SELECT (SELECT COUNT(*) FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA=DATABASE()) AS routineCount,(SELECT COUNT(*) FROM information_schema.EVENTS WHERE EVENT_SCHEMA=DATABASE()) AS eventCount"
+    const [routineRows] = await connection.query(
+      "SELECT `ROUTINE_NAME` AS name,`ROUTINE_TYPE` AS routineType,`DEFINER` AS definer,`SECURITY_TYPE` AS securityType,`IS_DETERMINISTIC` AS isDeterministic,`SQL_DATA_ACCESS` AS sqlDataAccess,`SQL_MODE` AS sqlMode,`CHARACTER_SET_CLIENT` AS characterSetClient,`COLLATION_CONNECTION` AS collationConnection,`DATABASE_COLLATION` AS databaseCollation FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA=DATABASE() ORDER BY `ROUTINE_NAME`"
     );
-    if (
-      Number(programmable.routineCount) !== 0 ||
-      Number(programmable.eventCount) !== 0
-    ) {
-      throw new Error(
-        "production schema contract requires no routines or events"
+    for (const routine of routineRows) {
+      if (
+        privilegedObjectNamePrefix &&
+        !routine.name.startsWith(privilegedObjectNamePrefix)
+      ) {
+        continue;
+      }
+      if (routine.routineType !== "PROCEDURE") {
+        throw new Error(
+          `unsupported production routine type ${routine.routineType}`
+        );
+      }
+      const escapedName = routine.name.replaceAll("`", "``");
+      const [[created]] = await connection.query(
+        `SHOW CREATE PROCEDURE \`${escapedName}\``
       );
+      routines[routine.name] = sha256(
+        JSON.stringify(
+          canonicalRoutineTuple(
+            routine,
+            created["Create Procedure"],
+            identity.currentUser
+          )
+        )
+      );
+    }
+
+    const [[programmable]] = await connection.query(
+      "SELECT COUNT(*) AS eventCount FROM information_schema.EVENTS WHERE EVENT_SCHEMA=DATABASE()"
+    );
+    if (Number(programmable.eventCount) !== 0) {
+      throw new Error("production schema contract requires no events");
     }
   }
 
-  return { tables, views, triggers };
+  return { tables, views, triggers, routines };
 }
 
 export function canonicalTriggerTuple(trigger, currentUser) {
@@ -539,6 +883,33 @@ export function canonicalTriggerTuple(trigger, currentUser) {
     characterSetClient: trigger.characterSetClient,
     collationConnection: trigger.collationConnection,
     databaseCollation: trigger.databaseCollation,
+  };
+}
+
+export function canonicalRoutineTuple(routine, showCreate, currentUser) {
+  if (!currentUser || routine.definer !== currentUser) {
+    throw new Error("routine definer does not match the migration principal");
+  }
+  const normalizedCreate = normalizeShowCreate(showCreate).replace(
+    /^CREATE DEFINER=`(?:``|[^`])+`@`(?:``|[^`])+` PROCEDURE\b/i,
+    "CREATE DEFINER=$MIGRATION_USER PROCEDURE"
+  );
+  if (
+    !normalizedCreate.startsWith("CREATE DEFINER=$MIGRATION_USER PROCEDURE")
+  ) {
+    throw new Error("routine SHOW CREATE definer is unsupported");
+  }
+  return {
+    definer: "$MIGRATION_USER",
+    routineType: routine.routineType,
+    securityType: routine.securityType,
+    isDeterministic: routine.isDeterministic,
+    sqlDataAccess: routine.sqlDataAccess,
+    sqlMode: routine.sqlMode,
+    characterSetClient: routine.characterSetClient,
+    collationConnection: routine.collationConnection,
+    databaseCollation: routine.databaseCollation,
+    createStatement: normalizeSqlOutsideQuotedValues(normalizedCreate),
   };
 }
 
@@ -584,4 +955,29 @@ export function canonicalJson(value) {
       .join(",")}}`;
   }
   return JSON.stringify(value);
+}
+
+export function canonicalPrettyJson(value) {
+  const serialized = JSON.stringify(
+    value,
+    (_key, nestedValue) => {
+      if (
+        !nestedValue ||
+        typeof nestedValue !== "object" ||
+        Array.isArray(nestedValue)
+      ) {
+        return nestedValue;
+      }
+      return Object.fromEntries(
+        Object.keys(nestedValue)
+          .sort()
+          .map(key => [key, nestedValue[key]])
+      );
+    },
+    2
+  );
+  if (serialized === undefined) {
+    throw new Error("production schema contract must be JSON-serializable");
+  }
+  return serialized;
 }

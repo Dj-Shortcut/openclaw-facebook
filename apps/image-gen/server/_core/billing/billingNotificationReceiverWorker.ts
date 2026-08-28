@@ -2,21 +2,27 @@ import { randomUUID } from "node:crypto";
 import { and, asc, eq, isNull, lte, or, sql } from "drizzle-orm";
 import {
   billingNotificationInbox,
+  billingNotificationReceipts,
   billingNotificationReceiverOutbox,
   billingNotificationSchedulerTenants,
 } from "../../../drizzle/schema";
 import { getDatabaseOrThrow } from "../../db";
 import { safeLog } from "../logger";
-import { getConfiguredBillingMode } from "./config";
+import { getConfiguredBillingMode, type MollieMode } from "./config";
 import { recordBillingSchedulerPoll } from "./billingSchedulerStore";
 
 const LEASE_MS = 30_000;
 const POLL_MS = 2_000;
 
 export async function runBillingNotificationReceiverOnce(
-  now = new Date()
+  now = new Date(),
+  options: Readonly<{
+    mode?: MollieMode;
+    manualReviewOnly?: boolean;
+  }> = {}
 ): Promise<boolean> {
-  const mode = getConfiguredBillingMode();
+  const mode = options.mode ?? getConfiguredBillingMode();
+  const manualReviewOnly = options.manualReviewOnly === true;
   await recordBillingSchedulerPoll(mode, "notification_receiver", now);
   const database = await getDatabaseOrThrow();
   const claim = await database.transaction(async tx => {
@@ -74,6 +80,9 @@ export async function runBillingNotificationReceiverOnce(
             scheduler.workspaceId
           ),
           eq(billingNotificationReceiverOutbox.mode, mode),
+          ...(manualReviewOnly
+            ? [eq(billingNotificationReceiverOutbox.eventType, "manual_review")]
+            : []),
           lte(
             billingNotificationReceiverOutbox.lockedAt,
             new Date(now.getTime() - LEASE_MS)
@@ -91,6 +100,9 @@ export async function runBillingNotificationReceiverOnce(
             scheduler.workspaceId
           ),
           eq(billingNotificationReceiverOutbox.mode, mode),
+          ...(manualReviewOnly
+            ? [eq(billingNotificationReceiverOutbox.eventType, "manual_review")]
+            : []),
           lte(billingNotificationReceiverOutbox.availableAt, now),
           or(
             isNull(billingNotificationReceiverOutbox.leaseToken),
@@ -149,6 +161,7 @@ export async function runBillingNotificationReceiverOnce(
       leaseToken,
       attemptCount,
       tenantLeaseToken,
+      manualReviewOnly,
     };
   });
   if (!claim) return false;
@@ -248,6 +261,7 @@ async function releaseNotificationSchedulerTenant(
     mode: "test" | "live";
     tenantLeaseToken: string;
     attemptCount: number;
+    manualReviewOnly: boolean;
   },
   now: Date
 ): Promise<void> {
@@ -261,7 +275,10 @@ async function releaseNotificationSchedulerTenant(
     .where(
       and(
         eq(billingNotificationReceiverOutbox.workspaceId, claim.workspaceId),
-        eq(billingNotificationReceiverOutbox.mode, claim.mode)
+        eq(billingNotificationReceiverOutbox.mode, claim.mode),
+        ...(claim.manualReviewOnly
+          ? [eq(billingNotificationReceiverOutbox.eventType, "manual_review")]
+          : [])
       )
     );
   const released = await tx
@@ -295,15 +312,42 @@ async function releaseNotificationSchedulerTenant(
 
 export function startBillingNotificationReceiverWorker(): void {
   const timer = setInterval(() => {
-    void runBillingNotificationReceiverOnce().catch(error => {
+    void runBillingNotificationReceiversSafely();
+  }, POLL_MS);
+  timer.unref();
+}
+
+/**
+ * Drains only provider-key-free manual-review notifications from the mode that
+ * is no longer configured. Historical payment/provider work must never be
+ * inferred from the current mode, but an operator still needs to see and
+ * resolve an old Test Mode hold after a later live cutover.
+ */
+export async function runHistoricalBillingNotificationReceiverOnce(
+  now = new Date()
+): Promise<boolean> {
+  const currentMode = getConfiguredBillingMode();
+  const historicalMode: MollieMode = currentMode === "test" ? "live" : "test";
+  return runBillingNotificationReceiverOnce(now, {
+    mode: historicalMode,
+    manualReviewOnly: true,
+  });
+}
+
+async function runBillingNotificationReceiversSafely(): Promise<void> {
+  for (const lane of ["current", "historical"] as const) {
+    try {
+      if (lane === "current") await runBillingNotificationReceiverOnce();
+      else await runHistoricalBillingNotificationReceiverOnce();
+    } catch (error) {
       safeLog("billing_notification_receiver_worker_failed", {
         level: "error",
+        lane,
         errorCode:
           error instanceof Error ? error.constructor.name : "UnknownError",
       });
-    });
-  }, POLL_MS);
-  timer.unref();
+    }
+  }
 }
 
 export async function listWorkspaceBillingNotifications(input: {
@@ -315,12 +359,27 @@ export async function listWorkspaceBillingNotifications(input: {
   return database
     .select({
       id: billingNotificationInbox.id,
+      mode: billingNotificationReceipts.mode,
       eventType: billingNotificationInbox.eventType,
       reason: billingNotificationInbox.reason,
       occurredAt: billingNotificationInbox.occurredAt,
       readAt: billingNotificationInbox.readAt,
     })
     .from(billingNotificationInbox)
+    .innerJoin(
+      billingNotificationReceipts,
+      and(
+        eq(billingNotificationReceipts.id, billingNotificationInbox.receiptId),
+        eq(
+          billingNotificationReceipts.workspaceId,
+          billingNotificationInbox.workspaceId
+        ),
+        eq(
+          billingNotificationReceipts.audience,
+          billingNotificationInbox.audience
+        )
+      )
+    )
     .where(
       and(
         eq(billingNotificationInbox.workspaceId, input.workspaceId),

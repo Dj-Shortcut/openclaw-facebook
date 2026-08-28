@@ -138,6 +138,46 @@ describe("Messenger webhook ingress privacy admission", () => {
     );
   });
 
+  it("keeps a delivery receipt under the immutable queued user scope", async () => {
+    const timestamp = 1_777_000_000_125;
+    const deliveries =
+      await webhookIngressQueueTestHooks.createFacebookIngressDeliveries(
+        messengerPayload({
+          timestamp,
+          delivery: { mids: ["mid-paid-delivery"] },
+        })
+      );
+
+    expect(mocks.admitPrivacy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userKey: toUserKey("sender-a"),
+        eventOccurredAt: new Date(timestamp),
+        allowReactivation: false,
+      })
+    );
+    expect(deliveries).toHaveLength(1);
+    expect(deliveries[0]?.subjects).toEqual([
+      expect.objectContaining({
+        privacyEpoch: 4,
+        userKey: toUserKey("sender-a"),
+        pageId: "page-a",
+      }),
+    ]);
+    expect(deliveries[0]?.payload).toEqual(
+      expect.objectContaining({
+        entry: [
+          expect.objectContaining({
+            messaging: [
+              expect.objectContaining({
+                delivery: { mids: ["mid-paid-delivery"] },
+              }),
+            ],
+          }),
+        ],
+      })
+    );
+  });
+
   it("rejects an event without a stable Meta timestamp", async () => {
     await expect(
       webhookIngressQueueTestHooks.createFacebookIngressDeliveries(
@@ -569,6 +609,7 @@ describe("WhatsApp webhook ingress privacy admission", () => {
 function messengerPayload(event: {
   timestamp?: number;
   message?: { mid: string; text: string };
+  delivery?: { mids: string[] };
 }) {
   return {
     object: "page",

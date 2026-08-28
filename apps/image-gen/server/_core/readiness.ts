@@ -39,6 +39,11 @@ import {
   isMollieAccountingImportEnabled,
 } from "./billing/accountingWorker";
 import { assertWhatsAppTenantBindingReadiness } from "./whatsappBindingReadiness";
+import {
+  getCreditCheckoutPilotConfig,
+  withCreditCheckoutHmacKeyring,
+} from "./billing/creditCheckoutConfig";
+import { assertCreditCheckoutDatabaseReadiness } from "./billing/creditCheckoutReadiness";
 
 export type ReadinessCheck = {
   name: string;
@@ -147,6 +152,19 @@ export function buildRuntimeReadinessChecks(): ReadinessCheck[] {
     {
       name: "mollie_billing_drain_lifecycle",
       check: assertMollieBillingDrainLifecycle,
+    },
+    {
+      name: "credit_checkout",
+      check: async () => {
+        const config = getCreditCheckoutPilotConfig();
+        if (!config.paidCreditsEnabled && !config.checkoutEnabled) return;
+        withCreditCheckoutHmacKeyring(() => undefined);
+        await assertCreditCheckoutDatabaseReadiness({
+          mode: config.mode,
+          workspaceId: config.workspaceId!,
+          commercialExposureEnabled: config.checkoutEnabled,
+        });
+      },
     },
     {
       name: "billing_notification_plane",

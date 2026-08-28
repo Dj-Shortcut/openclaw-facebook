@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import {
@@ -474,25 +474,7 @@ suite("billing handoff privacy erasure", () => {
     const database = await getDatabaseOrThrow();
     const intentId = randomUUID();
     const tokenHash = `sha256:${"8".repeat(64)}`;
-    let intentCheckRelaxed = false;
-    let tokenCheckRelaxed = false;
     try {
-      // The final schema correctly refuses new unscoped identities. Relax the
-      // two exact checks only in this disposable, serialized MySQL fixture so
-      // it can reproduce rows that existed before the 0017 contract.
-      await database.execute(
-        sql.raw(
-          "ALTER TABLE `billing_intents` ALTER CHECK `billing_intents_messenger_identity_scope` NOT ENFORCED"
-        )
-      );
-      intentCheckRelaxed = true;
-      await database.execute(
-        sql.raw(
-          "ALTER TABLE `portalHandoffTokens` ALTER CHECK `portal_handoff_tokens_messenger_identity_scope` NOT ENFORCED"
-        )
-      );
-      tokenCheckRelaxed = true;
-
       await database.insert(billingIntents).values({
         ...intentValues({
           intentId,
@@ -551,28 +533,12 @@ suite("billing handoff privacy erasure", () => {
           .where(eq(portalHandoffTokens.tokenHash, tokenHash))
       ).toHaveLength(0);
     } finally {
-      if (intentCheckRelaxed) {
-        await database
-          .delete(billingIntents)
-          .where(eq(billingIntents.intentId, intentId));
-      }
-      if (tokenCheckRelaxed) {
-        await database
-          .delete(portalHandoffTokens)
-          .where(eq(portalHandoffTokens.tokenHash, tokenHash));
-        await database.execute(
-          sql.raw(
-            "ALTER TABLE `portalHandoffTokens` ALTER CHECK `portal_handoff_tokens_messenger_identity_scope` ENFORCED"
-          )
-        );
-      }
-      if (intentCheckRelaxed) {
-        await database.execute(
-          sql.raw(
-            "ALTER TABLE `billing_intents` ALTER CHECK `billing_intents_messenger_identity_scope` ENFORCED"
-          )
-        );
-      }
+      await database
+        .delete(billingIntents)
+        .where(eq(billingIntents.intentId, intentId));
+      await database
+        .delete(portalHandoffTokens)
+        .where(eq(portalHandoffTokens.tokenHash, tokenHash));
     }
   });
 

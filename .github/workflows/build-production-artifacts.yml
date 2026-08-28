@@ -128,17 +128,18 @@ jobs:
               context="apps/image-gen"
               dockerfile=""
               kind="migration-bridge"
-              schema_minimum="0015_base"
-              schema_maximum="0016_expand"
+              schema_minimum="$(jq -er '.apps["image-gen"].databaseSchemaTransition.from' deploy/production/apps.json)"
+              schema_maximum="0018_credit_checkout_reservation"
               base_image="$(jq -er '.apps["image-gen"].databaseSchemaTransition.legacyBaseImage' deploy/production/apps.json)"
+              [[ "$schema_minimum" =~ ^(0015_base|0016_expand)$ ]]
               ;;
             image-gen-runtime)
               app="leaderbot-fb-image-gen"
               context="apps/image-gen"
               dockerfile=""
               kind="runtime"
-              schema_minimum="0016_expand"
-              schema_maximum="0016_expand"
+              schema_minimum="0018_credit_checkout_reservation"
+              schema_maximum="0018_credit_checkout_reservation"
               base_image=""
               ;;
             storage-proxy)
@@ -214,6 +215,7 @@ jobs:
             args+=(
               --target migration_bridge
               --build-arg "MIGRATION_BRIDGE_BASE_IMAGE=$ARTIFACT_BASE_IMAGE"
+              --build-arg "MIGRATION_BRIDGE_SCHEMA_MINIMUM=$ARTIFACT_SCHEMA_MINIMUM"
             )
           elif [[ "$ARTIFACT_APP" = "leaderbot-fb-image-gen" ]]; then
             args+=(--target runtime)
@@ -261,10 +263,10 @@ jobs:
             test "$base" = "$ARTIFACT_BASE_IMAGE"
           fi
 
-      - name: Prepare exact base and expand schema fixtures
+      - name: Prepare exact base, expand, and credit-checkout schema fixtures
         if: startsWith(inputs.target, 'image-gen-')
         run: |
-          mysql -h127.0.0.1 -uroot -proot -e "CREATE DATABASE leaderbot_artifact_base CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci; CREATE DATABASE leaderbot_artifact_expand CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci"
+          mysql -h127.0.0.1 -uroot -proot -e "CREATE DATABASE leaderbot_artifact_base CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci; CREATE DATABASE leaderbot_artifact_expand CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci; CREATE DATABASE leaderbot_artifact_credit_checkout CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci"
           NODE_ENV=test \
             LEADERBOT_ALLOW_TEST_SCHEMA_FIXTURE=1 \
             LEADERBOT_TEST_SCHEMA_PHASE=0015_base \
@@ -275,9 +277,42 @@ jobs:
             LEADERBOT_TEST_SCHEMA_PHASE=0016_expand \
             DATABASE_URL=mysql://root:root@127.0.0.1:3306/leaderbot_artifact_expand \
             node apps/image-gen/scripts/prepare-artifact-schema-fixture.mjs
-          mysql -h127.0.0.1 -uroot -proot -e "CREATE USER 'runtime_base'@'%' IDENTIFIED BY 'runtime_base'; GRANT SELECT, INSERT, UPDATE, DELETE ON leaderbot_artifact_base.* TO 'runtime_base'@'%'; CREATE USER 'runtime_expand'@'%' IDENTIFIED BY 'runtime_expand'; GRANT SELECT, INSERT, UPDATE, DELETE ON leaderbot_artifact_expand.* TO 'runtime_expand'@'%';"
+          NODE_ENV=test \
+            LEADERBOT_ALLOW_TEST_SCHEMA_FIXTURE=1 \
+            LEADERBOT_TEST_SCHEMA_PHASE=0018_credit_checkout_reservation \
+            DATABASE_URL=mysql://root:root@127.0.0.1:3306/leaderbot_artifact_credit_checkout \
+            node apps/image-gen/scripts/prepare-artifact-schema-fixture.mjs
+          mysql -h127.0.0.1 -uroot -proot -e "CREATE USER 'runtime_base'@'%' IDENTIFIED BY 'runtime_base'; GRANT SELECT, INSERT, UPDATE, DELETE ON leaderbot_artifact_base.* TO 'runtime_base'@'%'; CREATE USER 'runtime_expand'@'%' IDENTIFIED BY 'runtime_expand'; GRANT SELECT, INSERT, UPDATE, DELETE ON leaderbot_artifact_expand.* TO 'runtime_expand'@'%'; CREATE USER 'runtime_legacy_credit'@'%' IDENTIFIED BY 'runtime_legacy_credit'; GRANT SELECT, INSERT, UPDATE, DELETE ON leaderbot_artifact_credit_checkout.* TO 'runtime_legacy_credit'@'%'; CREATE USER 'runtime_credit'@'%' IDENTIFIED BY 'runtime_credit';"
+          pnpm --dir apps/image-gen exec node --input-type=module <<'NODE'
+          import mysql from "mysql2/promise";
+          import {
+            creditWalletRoutineNames,
+            productionRuntimeWritableTableNames,
+          } from "./scripts/production-schema-contract.mjs";
 
-      - name: Prove exact bridge runtime and both supported schemas
+          const connection = await mysql.createConnection(
+            "mysql://root:root@127.0.0.1:3306/leaderbot_artifact_credit_checkout"
+          );
+          const database = "`leaderbot_artifact_credit_checkout`";
+          const account = "'runtime_credit'@'%'";
+          try {
+            await connection.query(`GRANT SELECT ON ${database}.* TO ${account}`);
+            for (const table of productionRuntimeWritableTableNames) {
+              await connection.query(
+                `GRANT INSERT, UPDATE, DELETE ON ${database}.\`${table}\` TO ${account}`
+              );
+            }
+            for (const routine of creditWalletRoutineNames) {
+              await connection.query(
+                `GRANT EXECUTE ON PROCEDURE ${database}.\`${routine}\` TO ${account}`
+              );
+            }
+          } finally {
+            await connection.end();
+          }
+          NODE
+
+      - name: Prove exact bridge bytes and all supported schema boundaries
         if: inputs.target == 'image-gen-bridge'
         run: |
           docker run --rm "$ARTIFACT_IMAGE" timeout -k 1s 1s true
@@ -288,14 +323,25 @@ jobs:
           test "$(docker image inspect --format '{{json .Config.Cmd}}' "$ARTIFACT_BASE_IMAGE")" = "$(docker image inspect --format '{{json .Config.Cmd}}' "$ARTIFACT_IMAGE")"
           test "$(docker image inspect --format '{{json .Config.Entrypoint}}' "$ARTIFACT_BASE_IMAGE")" = "$(docker image inspect --format '{{json .Config.Entrypoint}}' "$ARTIFACT_IMAGE")"
           docker run --rm --entrypoint node "$ARTIFACT_IMAGE" --check /app/dist/index.cjs
-          for phase in base expand; do
-            docker run --rm --network host \
-              --env "DATABASE_URL=mysql://runtime_${phase}:runtime_${phase}@127.0.0.1:3306/leaderbot_artifact_${phase}" \
-              --env LEADERBOT_PRODUCTION_MIGRATION_MODE=verify-artifact \
-              "$ARTIFACT_IMAGE" node dist/migrate-production.cjs
-          done
+          docker run --rm "$ARTIFACT_IMAGE" test -s /app/dist/billing-trigger-runtime-preflight.cjs
+          docker run --rm --entrypoint node "$ARTIFACT_IMAGE" --check /app/dist/billing-trigger-runtime-preflight.cjs
+          docker run --rm --network host \
+            --env DATABASE_URL=mysql://runtime_expand:runtime_expand@127.0.0.1:3306/leaderbot_artifact_expand \
+            --env LEADERBOT_PRODUCTION_MIGRATION_MODE=verify-artifact \
+            "$ARTIFACT_IMAGE" node dist/migrate-production.cjs
+          docker run --rm --network host \
+            --env DATABASE_URL=mysql://runtime_credit:runtime_credit@127.0.0.1:3306/leaderbot_artifact_credit_checkout \
+            --env LEADERBOT_PRODUCTION_MIGRATION_MODE=verify-artifact \
+            "$ARTIFACT_IMAGE" node dist/migrate-production.cjs
+          if docker run --rm --network host \
+            --env DATABASE_URL=mysql://runtime_legacy_credit:runtime_legacy_credit@127.0.0.1:3306/leaderbot_artifact_credit_checkout \
+            --env LEADERBOT_PRODUCTION_MIGRATION_MODE=verify-artifact \
+            "$ARTIFACT_IMAGE" node dist/migrate-production.cjs; then
+            echo "Bridge unexpectedly accepted legacy runtime rights on 0018" >&2
+            exit 1
+          fi
 
-      - name: Prove runtime refuses base and accepts expand
+      - name: Prove runtime refuses pre-credit schemas and accepts exact 0018
         if: inputs.target == 'image-gen-runtime'
         run: |
           docker run --rm "$ARTIFACT_IMAGE" timeout -k 1s 1s true
@@ -307,8 +353,15 @@ jobs:
             echo "Runtime unexpectedly accepted the base schema" >&2
             exit 1
           fi
-          docker run --rm --network host \
+          if docker run --rm --network host \
             --env DATABASE_URL=mysql://runtime_expand:runtime_expand@127.0.0.1:3306/leaderbot_artifact_expand \
+            --env LEADERBOT_PRODUCTION_MIGRATION_MODE=verify-artifact \
+            "$ARTIFACT_IMAGE" node dist/migrate-production.cjs; then
+            echo "Runtime unexpectedly accepted the expand schema" >&2
+            exit 1
+          fi
+          docker run --rm --network host \
+            --env DATABASE_URL=mysql://runtime_credit:runtime_credit@127.0.0.1:3306/leaderbot_artifact_credit_checkout \
             --env LEADERBOT_PRODUCTION_MIGRATION_MODE=verify-artifact \
             "$ARTIFACT_IMAGE" node dist/migrate-production.cjs
 

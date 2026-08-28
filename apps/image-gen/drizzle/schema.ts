@@ -478,24 +478,6 @@ export const portalHandoffTokens = mysqlTable(
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
   table => [
-    foreignKey({
-      name: "portal_handoff_tokens_static_connection_fk",
-      columns: [table.messengerChannelConnectionId, table.workspaceId],
-      foreignColumns: [channelConnections.id, channelConnections.workspaceId],
-    }).onDelete("restrict"),
-    foreignKey({
-      name: "portal_handoff_tokens_static_subject_fk",
-      columns: [
-        table.workspaceId,
-        table.messengerChannelConnectionId,
-        table.messengerSenderUserKey,
-      ],
-      foreignColumns: [
-        messengerPrivacySubjects.workspaceId,
-        messengerPrivacySubjects.channelConnectionId,
-        messengerPrivacySubjects.userKey,
-      ],
-    }).onDelete("restrict"),
     uniqueIndex("portalHandoffTokens_tokenHash_unique").on(table.tokenHash),
     uniqueIndex("portalHandoffTokens_delivery_key_hash_unique").on(
       table.deliveryIdempotencyKeyHash
@@ -503,16 +485,6 @@ export const portalHandoffTokens = mysqlTable(
     index("portalHandoffTokens_workspace_status_idx").on(
       table.workspaceId,
       table.status
-    ),
-    index("portal_handoff_tokens_messenger_subject_idx").on(
-      table.workspaceId,
-      table.messengerChannelConnectionId,
-      table.messengerSenderUserKey,
-      table.messengerPrivacyEpoch
-    ),
-    check(
-      "portal_handoff_tokens_messenger_identity_scope",
-      sql`(${table.messengerSenderUserKey} IS NULL AND ${table.facebookPageId} IS NULL AND ${table.messengerChannelConnectionId} IS NULL AND ${table.messengerPrivacyEpoch} IS NULL) OR (${table.messengerSenderUserKey} IS NOT NULL AND ${table.facebookPageId} IS NOT NULL AND ${table.messengerChannelConnectionId} IS NOT NULL AND ${table.messengerPrivacyEpoch} > 0)`
     ),
   ]
 );
@@ -917,6 +889,7 @@ export const billingIntents = mysqlTable(
       "subscription_start",
       "payment_method_change",
       "startpilot_purchase",
+      "credit_purchase",
     ])
       .default("subscription_start")
       .notNull(),
@@ -945,7 +918,7 @@ export const billingIntents = mysqlTable(
     molliePaymentId: varchar("mollie_payment_id", { length: 64 }),
     idempotencyKey: varchar("idempotency_key", { length: 96 }).notNull(),
     checkoutScopeKey: varchar("checkout_scope_key", { length: 160 }).notNull(),
-    /** HMAC-derived Messenger identity captured only for an opted-in handoff checkout. */
+    /** Exact privacy-subject key (legacy HMAC or versioned key); never a raw PSID. */
     messengerSenderUserKey: varchar("messenger_sender_user_key", {
       length: 96,
     }),
@@ -953,8 +926,30 @@ export const billingIntents = mysqlTable(
     messengerPageId: varchar("messenger_page_id", { length: 160 }),
     /** Immutable channel scope that authorized the Messenger checkout handoff. */
     messengerChannelConnectionId: int("messenger_channel_connection_id"),
+    /** Immutable Page-binding epoch for a direct Messenger credit purchase. */
+    messengerBindingEpoch: int("messenger_binding_epoch"),
     /** Privacy epoch snapshot; historical rows never follow a reactivated subject. */
     messengerPrivacyEpoch: int("messenger_privacy_epoch"),
+    /** Exact purchased-credit wallet. Only populated for credit_purchase. */
+    creditWalletId: varchar("credit_wallet_id", { length: 36 }),
+    /** Opaque retained financial subject; never a raw Messenger identifier. */
+    creditFinancialSubjectRef: varchar("credit_financial_subject_ref", {
+      length: 64,
+    }),
+    /** Immutable server-owned offer quantity captured at checkout creation. */
+    creditCount: int("credit_count"),
+    /** Hash of the canonical, non-secret Mollie credit metadata. */
+    creditMetadataHash: varchar("credit_metadata_hash", { length: 64 }),
+    /** Hash of a short-lived, fragment-delivered single-use checkout capability. */
+    checkoutCapabilityHash: varchar("checkout_capability_hash", { length: 64 }),
+    checkoutCapabilityExpiresAt: timestamp("checkout_capability_expires_at"),
+    checkoutCapabilityConsumedAt: timestamp("checkout_capability_consumed_at"),
+    checkoutCapabilitySessionNonceHash: varchar(
+      "checkout_capability_session_nonce_hash",
+      { length: 64 }
+    ),
+    /** Set when the current Messenger identity mapping is irreversibly scrubbed. */
+    creditIdentityErasedAt: timestamp("credit_identity_erased_at"),
     billingProfileVersion: int("billing_profile_version").notNull(),
     authorizationEpoch: int("authorization_epoch").notNull(),
     urlExposedAt: timestamp("url_exposed_at"),
@@ -963,24 +958,6 @@ export const billingIntents = mysqlTable(
     updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
   },
   table => [
-    foreignKey({
-      name: "billing_intents_static_messenger_connection_fk",
-      columns: [table.messengerChannelConnectionId, table.workspaceId],
-      foreignColumns: [channelConnections.id, channelConnections.workspaceId],
-    }).onDelete("restrict"),
-    foreignKey({
-      name: "billing_intents_static_messenger_subject_fk",
-      columns: [
-        table.workspaceId,
-        table.messengerChannelConnectionId,
-        table.messengerSenderUserKey,
-      ],
-      foreignColumns: [
-        messengerPrivacySubjects.workspaceId,
-        messengerPrivacySubjects.channelConnectionId,
-        messengerPrivacySubjects.userKey,
-      ],
-    }).onDelete("restrict"),
     uniqueIndex("billing_intents_scope_profile_unique").on(
       table.intentId,
       table.workspaceId,
@@ -993,16 +970,16 @@ export const billingIntents = mysqlTable(
       table.workspaceId,
       table.mode
     ),
+    uniqueIndex("billing_intents_credit_funding_scope_unique").on(
+      table.intentId,
+      table.creditWalletId,
+      table.workspaceId,
+      table.mode
+    ),
     index("billing_intents_workspace_mode_created_idx").on(
       table.workspaceId,
       table.mode,
       table.createdAt
-    ),
-    index("billing_intents_messenger_subject_idx").on(
-      table.workspaceId,
-      table.messengerChannelConnectionId,
-      table.messengerSenderUserKey,
-      table.messengerPrivacyEpoch
     ),
     uniqueIndex("billing_intents_mollie_payment_mode_unique").on(
       table.mode,
@@ -1012,9 +989,36 @@ export const billingIntents = mysqlTable(
     uniqueIndex("billing_intents_checkout_scope_unique").on(
       table.checkoutScopeKey
     ),
+    uniqueIndex("billing_intents_checkout_capability_unique").on(
+      table.checkoutCapabilityHash
+    ),
+    uniqueIndex("billing_intents_checkout_session_nonce_unique").on(
+      table.checkoutCapabilitySessionNonceHash
+    ),
+    uniqueIndex("billing_intents_credit_payment_binding_unique").on(
+      table.intentId,
+      table.creditWalletId,
+      table.workspaceId,
+      table.mode,
+      table.creditMetadataHash
+    ),
+    index("billing_intents_credit_subject_idx").on(
+      table.workspaceId,
+      table.mode,
+      table.messengerChannelConnectionId,
+      table.messengerBindingEpoch,
+      table.messengerPrivacyEpoch,
+      table.creditFinancialSubjectRef
+    ),
+    index("billing_intents_credit_capability_expiry_idx").on(
+      table.kind,
+      table.status,
+      table.checkoutCapabilityExpiresAt,
+      table.intentId
+    ),
     check(
-      "billing_intents_messenger_identity_scope",
-      sql`(${table.messengerSenderUserKey} IS NULL AND ${table.messengerPageId} IS NULL AND ${table.messengerChannelConnectionId} IS NULL AND ${table.messengerPrivacyEpoch} IS NULL) OR (${table.messengerSenderUserKey} IS NOT NULL AND ${table.messengerPageId} IS NOT NULL AND ${table.messengerChannelConnectionId} IS NOT NULL AND ${table.messengerPrivacyEpoch} > 0)`
+      "billing_intents_credit_purchase_shape",
+      sql`(((${table.kind} <> 'credit_purchase') AND ${table.creditWalletId} IS NULL AND ${table.messengerBindingEpoch} IS NULL AND ${table.creditFinancialSubjectRef} IS NULL AND ${table.creditCount} IS NULL AND ${table.creditMetadataHash} IS NULL AND ${table.checkoutCapabilityHash} IS NULL AND ${table.checkoutCapabilityExpiresAt} IS NULL AND ${table.checkoutCapabilityConsumedAt} IS NULL AND ${table.checkoutCapabilitySessionNonceHash} IS NULL AND ${table.creditIdentityErasedAt} IS NULL) OR (${table.kind} = 'credit_purchase' AND ${table.interval} = 'oneoff' AND ${table.billingProfileVersion} = 0 AND JSON_TYPE(${table.entitlements}) = 'OBJECT' AND JSON_LENGTH(${table.entitlements}) = 0 AND ${table.expectedAmount} > 0 AND BINARY ${table.currency} = BINARY 'EUR' AND ${table.creditCount} > 0 AND ${table.messengerPageId} IS NULL AND ${table.messengerChannelConnectionId} IS NOT NULL AND ${table.messengerBindingEpoch} > 0 AND ${table.messengerPrivacyEpoch} > 0 AND REGEXP_LIKE(${table.intentId}, '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', 'c') AND REGEXP_LIKE(${table.creditWalletId}, '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', 'c') AND REGEXP_LIKE(${table.creditFinancialSubjectRef}, '^[0-9a-f]{64}$', 'c') AND REGEXP_LIKE(${table.creditMetadataHash}, '^[0-9a-f]{64}$', 'c') AND CHAR_LENGTH(TRIM(${table.planCode})) > 0 AND CHAR_LENGTH(TRIM(${table.mollieDescription})) > 0 AND ((${table.creditIdentityErasedAt} IS NULL AND REGEXP_LIKE(${table.messengerSenderUserKey}, '^([0-9a-f]{64}|u2[.]k[1-9][0-9]{0,5}[.][0-9a-f]{64})$', 'c') AND REGEXP_LIKE(${table.checkoutCapabilityHash}, '^[0-9a-f]{64}$', 'c') AND ${table.checkoutCapabilityExpiresAt} >= ${table.createdAt} AND ${table.checkoutCapabilityExpiresAt} <= TIMESTAMPADD(MINUTE, 15, ${table.createdAt}) AND ((${table.checkoutCapabilityConsumedAt} IS NULL AND ${table.checkoutCapabilitySessionNonceHash} IS NULL) OR (${table.checkoutCapabilityConsumedAt} >= ${table.createdAt} AND ${table.checkoutCapabilityConsumedAt} <= ${table.checkoutCapabilityExpiresAt} AND REGEXP_LIKE(${table.checkoutCapabilitySessionNonceHash}, '^[0-9a-f]{64}$', 'c')))) OR (${table.creditIdentityErasedAt} IS NOT NULL AND ${table.creditIdentityErasedAt} >= ${table.createdAt} AND ${table.messengerSenderUserKey} IS NULL AND ${table.checkoutCapabilityHash} IS NULL AND ${table.checkoutCapabilityExpiresAt} IS NULL AND ${table.checkoutCapabilityConsumedAt} IS NULL AND ${table.checkoutCapabilitySessionNonceHash} IS NULL AND ${table.status} IN ('paid','failed','canceled','expired','mismatch','contained'))))) IS TRUE`
     ),
   ]
 );
@@ -1236,6 +1240,16 @@ export const paymentLedger = mysqlTable(
       length: 64,
     }).notNull(),
     paidEffectApplied: int("paid_effect_applied").default(0).notNull(),
+    paymentEffectOwnerKind: mysqlEnum("payment_effect_owner_kind", [
+      "legacy_billing",
+      "credit_grant",
+    ]),
+    paymentEffectOwnerRef: varchar("payment_effect_owner_ref", { length: 36 }),
+    paymentEffectClaimedAt: timestamp("payment_effect_claimed_at"),
+    creditPurpose: varchar("credit_purpose", { length: 32 }),
+    creditIntentId: varchar("credit_intent_id", { length: 36 }),
+    creditWalletId: varchar("credit_wallet_id", { length: 36 }),
+    creditMetadataHash: varchar("credit_metadata_hash", { length: 64 }),
     settlementId: varchar("settlement_id", { length: 64 }),
     settlementAmount: decimal("settlement_amount", { precision: 10, scale: 2 }),
     mollieFees: decimal("mollie_fees", { precision: 10, scale: 2 }),
@@ -1254,12 +1268,52 @@ export const paymentLedger = mysqlTable(
       table.workspaceId,
       table.mode
     ),
+    uniqueIndex("payment_ledger_exact_payment_scope_unique").on(
+      table.id,
+      table.workspaceId,
+      table.mode,
+      table.molliePaymentId
+    ),
+    uniqueIndex("payment_ledger_credit_intent_unique").on(
+      table.mode,
+      table.creditIntentId
+    ),
+    uniqueIndex("payment_ledger_effect_owner_unique").on(
+      table.mode,
+      table.paymentEffectOwnerKind,
+      table.paymentEffectOwnerRef
+    ),
+    foreignKey({
+      name: "payment_ledger_credit_intent_scope_fk",
+      columns: [
+        table.creditIntentId,
+        table.creditWalletId,
+        table.workspaceId,
+        table.mode,
+        table.creditMetadataHash,
+      ],
+      foreignColumns: [
+        billingIntents.intentId,
+        billingIntents.creditWalletId,
+        billingIntents.workspaceId,
+        billingIntents.mode,
+        billingIntents.creditMetadataHash,
+      ],
+    }).onDelete("restrict"),
     uniqueIndex("payment_ledger_invoice_unique").on(table.invoiceNumber),
     index("payment_ledger_workspace_mode_occurred_idx").on(
       table.workspaceId,
       table.mode,
       table.occurredAt,
       table.id
+    ),
+    check(
+      "payment_ledger_credit_binding_shape",
+      sql`((${table.creditPurpose} IS NULL AND ${table.creditIntentId} IS NULL AND ${table.creditWalletId} IS NULL AND ${table.creditMetadataHash} IS NULL AND (${table.paymentEffectOwnerKind} IS NULL OR ${table.paymentEffectOwnerKind} = 'legacy_billing')) OR (BINARY ${table.creditPurpose} = BINARY 'premium_image_credits' AND ${table.paymentEffectOwnerKind} = 'credit_grant' AND BINARY ${table.paymentEffectOwnerRef} = BINARY ${table.creditIntentId} AND REGEXP_LIKE(${table.creditIntentId}, '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', 'c') AND REGEXP_LIKE(${table.creditWalletId}, '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', 'c') AND REGEXP_LIKE(${table.creditMetadataHash}, '^[0-9a-f]{64}$', 'c'))) IS TRUE`
+    ),
+    check(
+      "payment_ledger_effect_owner_shape",
+      sql`((${table.paymentEffectOwnerKind} IS NULL AND ${table.paymentEffectOwnerRef} IS NULL AND ${table.paymentEffectClaimedAt} IS NULL AND ${table.paidEffectApplied} IN (0,1)) OR (${table.paymentEffectOwnerKind} IS NOT NULL AND REGEXP_LIKE(${table.paymentEffectOwnerRef}, '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', 'c') AND ((${table.paidEffectApplied} = 0 AND ${table.paymentEffectClaimedAt} IS NULL) OR (${table.paidEffectApplied} = 1 AND ${table.paymentEffectClaimedAt} IS NOT NULL)))) IS TRUE`
     ),
   ]
 );
@@ -1519,6 +1573,7 @@ export const billingOutbox = mysqlTable(
       "ensure_subscription",
       "cancel_subscription",
       "cancel_payment",
+      "credit_adjustment_retry",
       "payment_warning",
       "manual_review",
       "send_portal_handoff",
@@ -2000,3 +2055,508 @@ export type BillingReconciliationAnomaly =
   typeof billingReconciliationAnomalies.$inferSelect;
 export type InsertBillingReconciliationAnomaly =
   typeof billingReconciliationAnomalies.$inferInsert;
+
+/**
+ * One purchased-credit wallet per immutable Messenger privacy binding. The
+ * current user mapping is nullable so erasure can break the link while the
+ * opaque financial reference and accounting evidence remain retained.
+ */
+export const creditWallets = mysqlTable(
+  "credit_wallets",
+  {
+    walletId: varchar("wallet_id", { length: 36 }).primaryKey(),
+    workspaceId: int("workspace_id").notNull(),
+    mode: mysqlEnum("mode", ["test", "live"]).notNull(),
+    channelConnectionId: int("channel_connection_id").notNull(),
+    bindingEpoch: int("binding_epoch").notNull(),
+    privacyEpoch: int("privacy_epoch").notNull(),
+    currentUserKeyHash: varchar("current_user_key_hash", { length: 96 }),
+    financialSubjectRef: varchar("financial_subject_ref", {
+      length: 64,
+    }).notNull(),
+    status: mysqlEnum("status", ["active", "frozen", "erased"])
+      .default("active")
+      .notNull(),
+    creditBalance: int("credit_balance").default(0).notNull(),
+    reservedCredits: int("reserved_credits").default(0).notNull(),
+    balanceVersion: int("balance_version").default(1).notNull(),
+    lastLedgerEntryId: varchar("last_ledger_entry_id", { length: 36 }),
+    refundAdjustmentEntryId: varchar("refund_adjustment_entry_id", {
+      length: 36,
+    }),
+    privacyErasedAt: timestamp("privacy_erased_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  },
+  table => [
+    foreignKey({
+      name: "credit_wallets_connection_workspace_fk",
+      columns: [table.channelConnectionId, table.workspaceId],
+      foreignColumns: [channelConnections.id, channelConnections.workspaceId],
+    }).onDelete("restrict"),
+    foreignKey({
+      name: "credit_wallets_privacy_subject_fk",
+      columns: [
+        table.workspaceId,
+        table.channelConnectionId,
+        table.currentUserKeyHash,
+      ],
+      foreignColumns: [
+        messengerPrivacySubjects.workspaceId,
+        messengerPrivacySubjects.channelConnectionId,
+        messengerPrivacySubjects.userKey,
+      ],
+    }).onDelete("restrict"),
+    uniqueIndex("credit_wallets_financial_subject_unique").on(
+      table.workspaceId,
+      table.mode,
+      table.financialSubjectRef
+    ),
+    uniqueIndex("credit_wallets_active_subject_unique").on(
+      table.workspaceId,
+      table.mode,
+      table.channelConnectionId,
+      table.bindingEpoch,
+      table.privacyEpoch,
+      table.currentUserKeyHash
+    ),
+    uniqueIndex("credit_wallets_exact_scope_unique").on(
+      table.walletId,
+      table.workspaceId,
+      table.mode,
+      table.channelConnectionId,
+      table.bindingEpoch,
+      table.privacyEpoch,
+      table.financialSubjectRef
+    ),
+    index("credit_wallets_subject_lookup_idx").on(
+      table.workspaceId,
+      table.channelConnectionId,
+      table.currentUserKeyHash,
+      table.status
+    ),
+    check(
+      "credit_wallets_epochs_positive",
+      sql`${table.bindingEpoch} > 0 AND ${table.privacyEpoch} > 0`
+    ),
+    check(
+      "credit_wallets_identity_hashes_valid",
+      sql`REGEXP_LIKE(${table.financialSubjectRef}, '^[0-9a-f]{64}$', 'c') AND (${table.currentUserKeyHash} IS NULL OR REGEXP_LIKE(${table.currentUserKeyHash}, '^([0-9a-f]{64}|u2[.]k[1-9][0-9]{0,5}[.][0-9a-f]{64})$', 'c'))`
+    ),
+    check(
+      "credit_wallets_id_valid",
+      sql`REGEXP_LIKE(${table.walletId}, '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', 'c') AND (${table.lastLedgerEntryId} IS NULL OR REGEXP_LIKE(${table.lastLedgerEntryId}, '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', 'c')) AND (${table.refundAdjustmentEntryId} IS NULL OR REGEXP_LIKE(${table.refundAdjustmentEntryId}, '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', 'c'))`
+    ),
+    check(
+      "credit_wallets_refund_adjustment_shape",
+      sql`${table.refundAdjustmentEntryId} IS NULL OR ${table.status} IN ('active','frozen')`
+    ),
+    check(
+      "credit_wallets_counters_valid",
+      sql`${table.reservedCredits} >= 0 AND ${table.reservedCredits} <= GREATEST(${table.creditBalance}, 0) AND (${table.status} <> 'active' OR ${table.creditBalance} >= 0) AND ${table.balanceVersion} > 0 AND ((${table.balanceVersion} = 1 AND ${table.lastLedgerEntryId} IS NULL AND ${table.creditBalance} = 0 AND ${table.reservedCredits} = 0) OR (${table.balanceVersion} > 1 AND ${table.lastLedgerEntryId} IS NOT NULL))`
+    ),
+    check(
+      "credit_wallets_erasure_shape",
+      sql`(${table.status} = 'erased' AND ${table.currentUserKeyHash} IS NULL AND ${table.privacyErasedAt} IS NOT NULL AND ${table.privacyErasedAt} >= ${table.createdAt} AND ${table.reservedCredits} = 0 AND ${table.refundAdjustmentEntryId} IS NULL) OR (${table.status} <> 'erased' AND ${table.currentUserKeyHash} IS NOT NULL AND ${table.privacyErasedAt} IS NULL)`
+    ),
+  ]
+);
+
+export type CreditWallet = typeof creditWallets.$inferSelect;
+export type InsertCreditWallet = typeof creditWallets.$inferInsert;
+
+/** A bounded paid-credit claim for one generation request. */
+export const creditReservations = mysqlTable(
+  "credit_reservations",
+  {
+    reservationId: varchar("reservation_id", { length: 36 }).primaryKey(),
+    walletId: varchar("wallet_id", { length: 36 }).notNull(),
+    workspaceId: int("workspace_id").notNull(),
+    mode: mysqlEnum("mode", ["test", "live"]).notNull(),
+    channelConnectionId: int("channel_connection_id").notNull(),
+    bindingEpoch: int("binding_epoch").notNull(),
+    privacyEpoch: int("privacy_epoch").notNull(),
+    financialSubjectRef: varchar("financial_subject_ref", {
+      length: 64,
+    }).notNull(),
+    reservedCreditCount: int("reserved_credit_count").notNull(),
+    generationRequestKeyHash: varchar("generation_request_key_hash", {
+      length: 64,
+    }),
+    ownerTokenHash: varchar("owner_token_hash", { length: 64 }),
+    status: mysqlEnum("status", [
+      "initializing",
+      "reserved",
+      "committed",
+      "released",
+      "expired",
+    ])
+      .default("initializing")
+      .notNull(),
+    transportState: mysqlEnum("transport_state", [
+      "pretransport",
+      "transport_started",
+      "known_accepted",
+      "known_rejected",
+      "output_not_delivered",
+    ])
+      .default("pretransport")
+      .notNull(),
+    transportStartedAt: timestamp("transport_started_at"),
+    providerAcceptedAt: timestamp("provider_accepted_at"),
+    providerRejectedAt: timestamp("provider_rejected_at"),
+    providerRejectedStatus: int("provider_rejected_status"),
+    stateVersion: int("state_version").default(1).notNull(),
+    ownerLeaseUntil: timestamp("owner_lease_until").notNull(),
+    expiresAt: timestamp("expires_at").notNull(),
+    resolutionDueAt: timestamp("resolution_due_at").notNull(),
+    committedAt: timestamp("committed_at"),
+    releasedAt: timestamp("released_at"),
+    holdLedgerEntryId: varchar("hold_ledger_entry_id", { length: 36 }),
+    terminalLedgerEntryId: varchar("terminal_ledger_entry_id", { length: 36 }),
+    terminalEvidenceHash: varchar("terminal_evidence_hash", { length: 64 }),
+    operationalScrubbedAt: timestamp("operational_scrubbed_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  },
+  table => [
+    foreignKey({
+      name: "credit_reservations_wallet_scope_fk",
+      columns: [
+        table.walletId,
+        table.workspaceId,
+        table.mode,
+        table.channelConnectionId,
+        table.bindingEpoch,
+        table.privacyEpoch,
+        table.financialSubjectRef,
+      ],
+      foreignColumns: [
+        creditWallets.walletId,
+        creditWallets.workspaceId,
+        creditWallets.mode,
+        creditWallets.channelConnectionId,
+        creditWallets.bindingEpoch,
+        creditWallets.privacyEpoch,
+        creditWallets.financialSubjectRef,
+      ],
+    }).onDelete("restrict"),
+    uniqueIndex("credit_reservations_generation_unique").on(
+      table.walletId,
+      table.workspaceId,
+      table.mode,
+      table.channelConnectionId,
+      table.bindingEpoch,
+      table.privacyEpoch,
+      table.generationRequestKeyHash
+    ),
+    uniqueIndex("credit_reservations_exact_scope_unique").on(
+      table.reservationId,
+      table.walletId,
+      table.workspaceId,
+      table.mode,
+      table.channelConnectionId,
+      table.bindingEpoch,
+      table.privacyEpoch,
+      table.financialSubjectRef,
+      table.reservedCreditCount
+    ),
+    uniqueIndex("credit_reservations_ledger_scope_unique").on(
+      table.reservationId,
+      table.walletId,
+      table.workspaceId,
+      table.mode,
+      table.reservedCreditCount
+    ),
+    index("credit_reservations_expiry_idx").on(
+      table.workspaceId,
+      table.mode,
+      table.status,
+      table.transportState,
+      table.expiresAt
+    ),
+    check(
+      "credit_reservations_values_valid",
+      sql`${table.reservedCreditCount} > 0 AND ${table.stateVersion} > 0`
+    ),
+    check(
+      "credit_reservations_ids_valid",
+      sql`REGEXP_LIKE(${table.reservationId}, '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', 'c') AND REGEXP_LIKE(${table.walletId}, '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', 'c') AND (${table.holdLedgerEntryId} IS NULL OR REGEXP_LIKE(${table.holdLedgerEntryId}, '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', 'c')) AND (${table.terminalLedgerEntryId} IS NULL OR REGEXP_LIKE(${table.terminalLedgerEntryId}, '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', 'c'))`
+    ),
+    check(
+      "credit_reservations_hashes_valid",
+      sql`((${table.operationalScrubbedAt} IS NULL AND ${table.generationRequestKeyHash} IS NOT NULL AND ${table.ownerTokenHash} IS NOT NULL AND REGEXP_LIKE(${table.generationRequestKeyHash}, '^[0-9a-f]{64}$', 'c') AND REGEXP_LIKE(${table.ownerTokenHash}, '^[0-9a-f]{64}$', 'c')) OR (${table.operationalScrubbedAt} IS NOT NULL AND ${table.status} IN ('committed','released','expired') AND ${table.generationRequestKeyHash} IS NULL AND ${table.ownerTokenHash} IS NULL AND ${table.operationalScrubbedAt} >= ${table.resolutionDueAt})) IS TRUE`
+    ),
+    check(
+      "credit_reservations_terminal_state",
+      sql`((${table.status} = 'initializing' AND ${table.transportState} = 'pretransport' AND ${table.stateVersion} = 1 AND ${table.holdLedgerEntryId} IS NULL AND ${table.committedAt} IS NULL AND ${table.releasedAt} IS NULL AND ${table.terminalLedgerEntryId} IS NULL AND ${table.terminalEvidenceHash} IS NULL) OR (${table.status} = 'reserved' AND ${table.stateVersion} = 2 AND ${table.holdLedgerEntryId} IS NOT NULL AND ${table.committedAt} IS NULL AND ${table.releasedAt} IS NULL AND ${table.terminalLedgerEntryId} IS NULL AND ${table.terminalEvidenceHash} IS NULL) OR (${table.status} = 'committed' AND ${table.transportState} = 'known_accepted' AND ${table.stateVersion} = 3 AND ${table.holdLedgerEntryId} IS NOT NULL AND ${table.committedAt} IS NOT NULL AND ${table.releasedAt} IS NULL AND ${table.terminalLedgerEntryId} IS NOT NULL AND ${table.terminalEvidenceHash} IS NOT NULL AND REGEXP_LIKE(${table.terminalEvidenceHash}, '^[0-9a-f]{64}$', 'c')) OR (${table.status} IN ('released','expired') AND ${table.transportState} IN ('pretransport','known_rejected','output_not_delivered') AND ${table.stateVersion} = 3 AND ${table.holdLedgerEntryId} IS NOT NULL AND ${table.releasedAt} IS NOT NULL AND ${table.committedAt} IS NULL AND ${table.terminalLedgerEntryId} IS NOT NULL AND ${table.terminalEvidenceHash} IS NOT NULL AND REGEXP_LIKE(${table.terminalEvidenceHash}, '^[0-9a-f]{64}$', 'c'))) IS TRUE`
+    ),
+    check(
+      "credit_reservations_transport_evidence",
+      sql`((${table.transportState} = 'pretransport' AND ${table.transportStartedAt} IS NULL AND ${table.providerAcceptedAt} IS NULL AND ${table.providerRejectedAt} IS NULL AND ${table.providerRejectedStatus} IS NULL) OR (${table.transportState} = 'transport_started' AND ${table.transportStartedAt} IS NOT NULL AND ${table.providerAcceptedAt} IS NULL AND ${table.providerRejectedAt} IS NULL AND ${table.providerRejectedStatus} IS NULL) OR (${table.transportState} = 'known_accepted' AND ${table.transportStartedAt} IS NOT NULL AND ${table.providerAcceptedAt} IS NOT NULL AND ${table.providerAcceptedAt} >= ${table.transportStartedAt} AND ${table.providerRejectedAt} IS NULL AND ${table.providerRejectedStatus} IS NULL) OR (${table.transportState} = 'known_rejected' AND ${table.transportStartedAt} IS NOT NULL AND ${table.providerAcceptedAt} IS NULL AND ${table.providerRejectedAt} IS NOT NULL AND ${table.providerRejectedAt} >= ${table.transportStartedAt} AND ${table.providerRejectedStatus} BETWEEN 400 AND 499 AND ${table.providerRejectedStatus} NOT IN (408,429)) OR (${table.transportState} = 'output_not_delivered' AND ${table.transportStartedAt} IS NOT NULL AND (${table.providerAcceptedAt} IS NULL OR ${table.providerAcceptedAt} >= ${table.transportStartedAt}) AND ${table.providerRejectedAt} IS NULL AND ${table.providerRejectedStatus} IS NULL)) IS TRUE`
+    ),
+    check(
+      "credit_reservations_timestamp_order",
+      sql`${table.createdAt} <= ${table.ownerLeaseUntil} AND ${table.ownerLeaseUntil} <= ${table.expiresAt} AND ${table.expiresAt} <= ${table.resolutionDueAt} AND (${table.transportStartedAt} IS NULL OR (${table.transportStartedAt} >= ${table.createdAt} AND ${table.transportStartedAt} <= ${table.resolutionDueAt})) AND (${table.providerAcceptedAt} IS NULL OR ${table.providerAcceptedAt} >= ${table.createdAt}) AND (${table.providerRejectedAt} IS NULL OR ${table.providerRejectedAt} >= ${table.createdAt}) AND (${table.committedAt} IS NULL OR ${table.committedAt} >= ${table.createdAt}) AND (${table.releasedAt} IS NULL OR ${table.releasedAt} >= ${table.createdAt})`
+    ),
+  ]
+);
+
+export type CreditReservation = typeof creditReservations.$inferSelect;
+export type InsertCreditReservation = typeof creditReservations.$inferInsert;
+
+/**
+ * Immutable purchased-credit evidence. A payment can create one grant, a
+ * reservation can create one spend, and a full refund/chargeback can occupy
+ * only the single adjustment slot of its exact root grant.
+ */
+export const creditLedger = mysqlTable(
+  "credit_ledger",
+  {
+    entryId: varchar("entry_id", { length: 36 }).primaryKey(),
+    walletId: varchar("wallet_id", { length: 36 }).notNull(),
+    workspaceId: int("workspace_id").notNull(),
+    mode: mysqlEnum("mode", ["test", "live"]).notNull(),
+    channelConnectionId: int("channel_connection_id").notNull(),
+    bindingEpoch: int("binding_epoch").notNull(),
+    privacyEpoch: int("privacy_epoch").notNull(),
+    financialSubjectRef: varchar("financial_subject_ref", {
+      length: 64,
+    }).notNull(),
+    sourceIntentId: varchar("source_intent_id", { length: 36 }),
+    authorizationEpoch: int("authorization_epoch"),
+    paymentLedgerId: int("payment_ledger_id"),
+    providerPaymentId: varchar("provider_payment_id", { length: 64 }),
+    offerId: varchar("offer_id", { length: 80 }),
+    paymentAmount: decimal("payment_amount", {
+      precision: 10,
+      scale: 2,
+    }),
+    currency: varchar("currency", { length: 3 }),
+    purchasedCreditCount: int("purchased_credit_count"),
+    providerDescription: varchar("provider_description", { length: 255 }),
+    entryKind: mysqlEnum("entry_kind", [
+      "purchase_grant",
+      "reservation_hold",
+      "generation_spend",
+      "reservation_release",
+      "refund_debit",
+      "chargeback_debit",
+      "chargeback_restore",
+    ]).notNull(),
+    balanceDelta: int("balance_delta").notNull(),
+    reservedDelta: int("reserved_delta").notNull(),
+    eventKeyHash: varchar("event_key_hash", { length: 64 }).notNull(),
+    providerEventHash: varchar("provider_event_hash", { length: 64 }),
+    providerEffectId: varchar("provider_effect_id", { length: 64 }),
+    providerEffectType: mysqlEnum("provider_effect_type", [
+      "refund",
+      "chargeback",
+    ]),
+    providerEffectStatus: mysqlEnum("provider_effect_status", [
+      "refunded",
+      "active",
+      "reversed",
+    ]),
+    providerEffectAmount: decimal("provider_effect_amount", {
+      precision: 10,
+      scale: 2,
+    }),
+    providerEffectCurrency: varchar("provider_effect_currency", { length: 3 }),
+    providerEffectEvidence: json("provider_effect_evidence"),
+    grantPaymentId: varchar("grant_payment_id", { length: 64 }),
+    reservationId: varchar("reservation_id", { length: 36 }),
+    reservationCreditCount: int("reservation_credit_count"),
+    reservationTerminalSlot: int("reservation_terminal_slot"),
+    reservationTerminalStatus: mysqlEnum("reservation_terminal_status", [
+      "committed",
+      "released",
+      "expired",
+    ]),
+    rootGrantEntryId: varchar("root_grant_entry_id", { length: 36 }),
+    rootAdjustmentSlot: int("root_adjustment_slot"),
+    evidenceHash: varchar("evidence_hash", {
+      length: 64,
+    }).notNull(),
+    previousEntryId: varchar("previous_entry_id", { length: 36 }),
+    walletVersionBefore: int("wallet_version_before").notNull(),
+    walletVersionAfter: int("wallet_version_after").notNull(),
+    balanceBefore: int("balance_before").notNull(),
+    reservedBefore: int("reserved_before").notNull(),
+    balanceAfter: int("balance_after").notNull(),
+    reservedAfter: int("reserved_after").notNull(),
+    occurredAt: timestamp("occurred_at").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  table => [
+    foreignKey({
+      name: "credit_ledger_wallet_scope_fk",
+      columns: [
+        table.walletId,
+        table.workspaceId,
+        table.mode,
+        table.channelConnectionId,
+        table.bindingEpoch,
+        table.privacyEpoch,
+        table.financialSubjectRef,
+      ],
+      foreignColumns: [
+        creditWallets.walletId,
+        creditWallets.workspaceId,
+        creditWallets.mode,
+        creditWallets.channelConnectionId,
+        creditWallets.bindingEpoch,
+        creditWallets.privacyEpoch,
+        creditWallets.financialSubjectRef,
+      ],
+    }).onDelete("restrict"),
+    foreignKey({
+      name: "credit_ledger_financial_intent_fk",
+      columns: [
+        table.sourceIntentId,
+        table.walletId,
+        table.workspaceId,
+        table.mode,
+      ],
+      foreignColumns: [
+        billingIntents.intentId,
+        billingIntents.creditWalletId,
+        billingIntents.workspaceId,
+        billingIntents.mode,
+      ],
+    }).onDelete("restrict"),
+    foreignKey({
+      name: "credit_ledger_reservation_scope_fk",
+      columns: [
+        table.reservationId,
+        table.walletId,
+        table.workspaceId,
+        table.mode,
+        table.reservationCreditCount,
+      ],
+      foreignColumns: [
+        creditReservations.reservationId,
+        creditReservations.walletId,
+        creditReservations.workspaceId,
+        creditReservations.mode,
+        creditReservations.reservedCreditCount,
+      ],
+    }).onDelete("restrict"),
+    foreignKey({
+      name: "credit_ledger_payment_scope_fk",
+      columns: [
+        table.paymentLedgerId,
+        table.workspaceId,
+        table.mode,
+        table.providerPaymentId,
+      ],
+      foreignColumns: [
+        paymentLedger.id,
+        paymentLedger.workspaceId,
+        paymentLedger.mode,
+        paymentLedger.molliePaymentId,
+      ],
+    }).onDelete("restrict"),
+    foreignKey({
+      name: "credit_ledger_root_grant_wallet_fk",
+      columns: [
+        table.rootGrantEntryId,
+        table.walletId,
+        table.workspaceId,
+        table.mode,
+      ],
+      foreignColumns: [
+        table.entryId,
+        table.walletId,
+        table.workspaceId,
+        table.mode,
+      ],
+    }).onDelete("restrict"),
+    uniqueIndex("credit_ledger_wallet_entry_unique").on(
+      table.entryId,
+      table.walletId,
+      table.workspaceId,
+      table.mode
+    ),
+    uniqueIndex("credit_ledger_event_unique").on(
+      table.mode,
+      table.eventKeyHash
+    ),
+    uniqueIndex("credit_ledger_grant_payment_unique").on(
+      table.mode,
+      table.grantPaymentId
+    ),
+    uniqueIndex("credit_ledger_reservation_effect_unique").on(
+      table.mode,
+      table.reservationId,
+      table.entryKind
+    ),
+    uniqueIndex("credit_ledger_reservation_terminal_unique").on(
+      table.mode,
+      table.reservationId,
+      table.reservationTerminalSlot
+    ),
+    uniqueIndex("credit_ledger_root_adjustment_unique").on(
+      table.mode,
+      table.rootGrantEntryId,
+      table.rootAdjustmentSlot
+    ),
+    uniqueIndex("credit_ledger_provider_effect_unique").on(
+      table.mode,
+      table.providerEventHash
+    ),
+    uniqueIndex("credit_ledger_provider_effect_slot_unique").on(
+      table.mode,
+      table.providerEffectId,
+      table.rootAdjustmentSlot
+    ),
+    uniqueIndex("credit_ledger_wallet_version_unique").on(
+      table.walletId,
+      table.walletVersionAfter
+    ),
+    index("credit_ledger_wallet_time_idx").on(
+      table.walletId,
+      table.occurredAt,
+      table.entryId
+    ),
+    check(
+      "credit_ledger_values_valid",
+      sql`(${table.balanceDelta} <> 0 OR ${table.reservedDelta} <> 0) AND REGEXP_LIKE(${table.eventKeyHash}, '^[0-9a-f]{64}$', 'c') AND REGEXP_LIKE(${table.evidenceHash}, '^[0-9a-f]{64}$', 'c') AND ${table.walletVersionBefore} > 0 AND ${table.walletVersionAfter} = ${table.walletVersionBefore} + 1 AND ${table.balanceAfter} = ${table.balanceBefore} + ${table.balanceDelta} AND ${table.reservedAfter} = ${table.reservedBefore} + ${table.reservedDelta} AND ${table.reservedBefore} >= 0 AND ${table.reservedAfter} >= 0 AND ${table.reservedAfter} <= GREATEST(${table.balanceAfter}, 0) AND ${table.occurredAt} <= ${table.createdAt}`
+    ),
+    check(
+      "credit_ledger_ids_valid",
+      sql`REGEXP_LIKE(${table.entryId}, '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', 'c') AND REGEXP_LIKE(${table.walletId}, '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', 'c') AND (${table.previousEntryId} IS NULL OR REGEXP_LIKE(${table.previousEntryId}, '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', 'c')) AND (${table.reservationId} IS NULL OR REGEXP_LIKE(${table.reservationId}, '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', 'c')) AND (${table.rootGrantEntryId} IS NULL OR REGEXP_LIKE(${table.rootGrantEntryId}, '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', 'c'))`
+    ),
+    check(
+      "credit_ledger_entry_shape",
+      sql`((${table.entryKind} = 'purchase_grant' AND ${table.balanceDelta} = ${table.purchasedCreditCount} AND ${table.reservedDelta} = 0 AND ${table.grantPaymentId} IS NOT NULL AND ${table.providerPaymentId} IS NOT NULL AND ${table.grantPaymentId} = ${table.providerPaymentId} AND ${table.sourceIntentId} IS NOT NULL AND ${table.authorizationEpoch} IS NOT NULL AND ${table.authorizationEpoch} > 0 AND ${table.paymentLedgerId} IS NOT NULL AND ${table.offerId} IS NOT NULL AND ${table.paymentAmount} IS NOT NULL AND ${table.paymentAmount} > 0 AND ${table.currency} IS NOT NULL AND ${table.currency} = 'EUR' AND ${table.purchasedCreditCount} IS NOT NULL AND ${table.purchasedCreditCount} > 0 AND ${table.providerDescription} IS NOT NULL AND ${table.reservationId} IS NULL AND ${table.reservationCreditCount} IS NULL AND ${table.reservationTerminalSlot} IS NULL AND ${table.rootGrantEntryId} IS NULL AND ${table.rootAdjustmentSlot} IS NULL AND ${table.providerEventHash} IS NULL) OR (${table.entryKind} = 'reservation_hold' AND ${table.balanceDelta} = 0 AND ${table.reservationCreditCount} IS NOT NULL AND ${table.reservedDelta} = ${table.reservationCreditCount} AND ${table.reservationCreditCount} > 0 AND ${table.reservationId} IS NOT NULL AND ${table.reservationTerminalSlot} IS NULL AND ${table.sourceIntentId} IS NULL AND ${table.authorizationEpoch} IS NULL AND ${table.paymentLedgerId} IS NULL AND ${table.providerPaymentId} IS NULL AND ${table.offerId} IS NULL AND ${table.paymentAmount} IS NULL AND ${table.currency} IS NULL AND ${table.purchasedCreditCount} IS NULL AND ${table.providerDescription} IS NULL AND ${table.grantPaymentId} IS NULL AND ${table.rootGrantEntryId} IS NULL AND ${table.rootAdjustmentSlot} IS NULL AND ${table.providerEventHash} IS NULL) OR (${table.entryKind} = 'generation_spend' AND ${table.reservationCreditCount} IS NOT NULL AND ${table.balanceDelta} = -${table.reservationCreditCount} AND ${table.reservedDelta} = -${table.reservationCreditCount} AND ${table.reservationCreditCount} > 0 AND ${table.reservationId} IS NOT NULL AND ${table.reservationTerminalSlot} = 1 AND ${table.sourceIntentId} IS NULL AND ${table.authorizationEpoch} IS NULL AND ${table.paymentLedgerId} IS NULL AND ${table.providerPaymentId} IS NULL AND ${table.offerId} IS NULL AND ${table.paymentAmount} IS NULL AND ${table.currency} IS NULL AND ${table.purchasedCreditCount} IS NULL AND ${table.providerDescription} IS NULL AND ${table.grantPaymentId} IS NULL AND ${table.rootGrantEntryId} IS NULL AND ${table.rootAdjustmentSlot} IS NULL AND ${table.providerEventHash} IS NULL) OR (${table.entryKind} = 'reservation_release' AND ${table.reservationCreditCount} IS NOT NULL AND ${table.balanceDelta} = 0 AND ${table.reservedDelta} = -${table.reservationCreditCount} AND ${table.reservationCreditCount} > 0 AND ${table.reservationId} IS NOT NULL AND ${table.reservationTerminalSlot} = 1 AND ${table.sourceIntentId} IS NULL AND ${table.authorizationEpoch} IS NULL AND ${table.paymentLedgerId} IS NULL AND ${table.providerPaymentId} IS NULL AND ${table.offerId} IS NULL AND ${table.paymentAmount} IS NULL AND ${table.currency} IS NULL AND ${table.purchasedCreditCount} IS NULL AND ${table.providerDescription} IS NULL AND ${table.grantPaymentId} IS NULL AND ${table.rootGrantEntryId} IS NULL AND ${table.rootAdjustmentSlot} IS NULL AND ${table.providerEventHash} IS NULL) OR (${table.entryKind} IN ('refund_debit','chargeback_debit') AND ${table.purchasedCreditCount} IS NOT NULL AND ${table.balanceDelta} = -${table.purchasedCreditCount} AND ${table.reservedDelta} = 0 AND ${table.sourceIntentId} IS NOT NULL AND ${table.authorizationEpoch} IS NOT NULL AND ${table.authorizationEpoch} > 0 AND ${table.paymentLedgerId} IS NOT NULL AND ${table.providerPaymentId} IS NOT NULL AND ${table.offerId} IS NOT NULL AND ${table.paymentAmount} IS NOT NULL AND ${table.paymentAmount} > 0 AND ${table.currency} IS NOT NULL AND ${table.currency} = 'EUR' AND ${table.purchasedCreditCount} > 0 AND ${table.providerDescription} IS NOT NULL AND ${table.grantPaymentId} IS NULL AND ${table.reservationId} IS NULL AND ${table.reservationCreditCount} IS NULL AND ${table.reservationTerminalSlot} IS NULL AND ${table.rootGrantEntryId} IS NOT NULL AND ${table.rootAdjustmentSlot} = 1 AND ${table.providerEventHash} IS NOT NULL AND CHAR_LENGTH(${table.providerEventHash}) = 64) OR (${table.entryKind} = 'chargeback_restore' AND ${table.purchasedCreditCount} IS NOT NULL AND ${table.balanceDelta} = ${table.purchasedCreditCount} AND ${table.reservedDelta} = 0 AND ${table.sourceIntentId} IS NOT NULL AND ${table.authorizationEpoch} IS NOT NULL AND ${table.authorizationEpoch} > 0 AND ${table.paymentLedgerId} IS NOT NULL AND ${table.providerPaymentId} IS NOT NULL AND ${table.offerId} IS NOT NULL AND ${table.paymentAmount} IS NOT NULL AND ${table.paymentAmount} > 0 AND ${table.currency} IS NOT NULL AND ${table.currency} = 'EUR' AND ${table.purchasedCreditCount} > 0 AND ${table.providerDescription} IS NOT NULL AND ${table.grantPaymentId} IS NULL AND ${table.reservationId} IS NULL AND ${table.reservationCreditCount} IS NULL AND ${table.reservationTerminalSlot} IS NULL AND ${table.rootGrantEntryId} IS NOT NULL AND ${table.rootAdjustmentSlot} = 2 AND ${table.providerEventHash} IS NOT NULL AND CHAR_LENGTH(${table.providerEventHash}) = 64)) IS TRUE`
+    ),
+    check(
+      "credit_ledger_required_fields_total",
+      sql`(CASE WHEN ${table.entryKind} = 'purchase_grant' THEN ${table.sourceIntentId} IS NOT NULL AND ${table.authorizationEpoch} IS NOT NULL AND ${table.paymentLedgerId} IS NOT NULL AND ${table.providerPaymentId} IS NOT NULL AND ${table.offerId} IS NOT NULL AND ${table.paymentAmount} IS NOT NULL AND ${table.currency} IS NOT NULL AND ${table.purchasedCreditCount} IS NOT NULL AND ${table.providerDescription} IS NOT NULL AND ${table.grantPaymentId} IS NOT NULL WHEN ${table.entryKind} = 'reservation_hold' THEN ${table.reservationId} IS NOT NULL AND ${table.reservationCreditCount} IS NOT NULL WHEN ${table.entryKind} IN ('generation_spend','reservation_release') THEN ${table.reservationId} IS NOT NULL AND ${table.reservationCreditCount} IS NOT NULL AND ${table.reservationTerminalStatus} IS NOT NULL WHEN ${table.entryKind} IN ('refund_debit','chargeback_debit','chargeback_restore') THEN ${table.sourceIntentId} IS NOT NULL AND ${table.authorizationEpoch} IS NOT NULL AND ${table.paymentLedgerId} IS NOT NULL AND ${table.providerPaymentId} IS NOT NULL AND ${table.offerId} IS NOT NULL AND ${table.paymentAmount} IS NOT NULL AND ${table.currency} IS NOT NULL AND ${table.purchasedCreditCount} IS NOT NULL AND ${table.providerDescription} IS NOT NULL AND ${table.rootGrantEntryId} IS NOT NULL AND ${table.providerEventHash} IS NOT NULL AND ${table.providerEffectId} IS NOT NULL AND ${table.providerEffectType} IS NOT NULL AND ${table.providerEffectStatus} IS NOT NULL AND ${table.providerEffectAmount} IS NOT NULL AND ${table.providerEffectCurrency} IS NOT NULL ELSE false END) IS TRUE`
+    ),
+    check(
+      "credit_ledger_effect_shape",
+      sql`((${table.entryKind} NOT IN ('refund_debit','chargeback_debit','chargeback_restore') AND ${table.providerEventHash} IS NULL AND ${table.providerEffectId} IS NULL AND ${table.providerEffectType} IS NULL AND ${table.providerEffectStatus} IS NULL AND ${table.providerEffectAmount} IS NULL AND ${table.providerEffectCurrency} IS NULL) OR (${table.entryKind} = 'refund_debit' AND ${table.providerEventHash} IS NOT NULL AND ${table.providerEffectId} IS NOT NULL AND REGEXP_LIKE(${table.providerEventHash}, '^[0-9a-f]{64}$', 'c') AND ${table.providerEffectId} REGEXP '^[A-Za-z0-9_-]{1,64}$' AND ${table.providerEffectType} = 'refund' AND ${table.providerEffectStatus} = 'refunded' AND ${table.providerEffectAmount} = ${table.paymentAmount} AND BINARY ${table.providerEffectCurrency} = BINARY ${table.currency}) OR (${table.entryKind} = 'chargeback_debit' AND ${table.providerEventHash} IS NOT NULL AND ${table.providerEffectId} IS NOT NULL AND REGEXP_LIKE(${table.providerEventHash}, '^[0-9a-f]{64}$', 'c') AND ${table.providerEffectId} REGEXP '^[A-Za-z0-9_-]{1,64}$' AND ${table.providerEffectType} = 'chargeback' AND ${table.providerEffectStatus} = 'active' AND ${table.providerEffectAmount} = ${table.paymentAmount} AND BINARY ${table.providerEffectCurrency} = BINARY ${table.currency}) OR (${table.entryKind} = 'chargeback_restore' AND ${table.providerEventHash} IS NOT NULL AND ${table.providerEffectId} IS NOT NULL AND REGEXP_LIKE(${table.providerEventHash}, '^[0-9a-f]{64}$', 'c') AND ${table.providerEffectId} REGEXP '^[A-Za-z0-9_-]{1,64}$' AND ${table.providerEffectType} = 'chargeback' AND ${table.providerEffectStatus} = 'reversed' AND ${table.providerEffectAmount} = ${table.paymentAmount} AND BINARY ${table.providerEffectCurrency} = BINARY ${table.currency})) IS TRUE`
+    ),
+    check(
+      "credit_ledger_provider_effect_evidence_shape",
+      sql`(${table.entryKind} = 'refund_debit' AND ${table.providerEffectEvidence} IS NOT NULL AND JSON_TYPE(${table.providerEffectEvidence}) = 'ARRAY' AND JSON_LENGTH(${table.providerEffectEvidence}) > 0) OR (${table.entryKind} <> 'refund_debit' AND ${table.providerEffectEvidence} IS NULL)`
+    ),
+    check(
+      "credit_ledger_reservation_terminal_shape",
+      sql`((${table.entryKind} = 'generation_spend' AND ${table.reservationTerminalStatus} = 'committed') OR (${table.entryKind} = 'reservation_release' AND ${table.reservationTerminalStatus} IN ('released','expired')) OR (${table.entryKind} NOT IN ('generation_spend','reservation_release') AND ${table.reservationTerminalStatus} IS NULL)) IS TRUE`
+    ),
+    check(
+      "credit_ledger_chain_shape",
+      sql`(${table.walletVersionBefore} = 1 AND ${table.previousEntryId} IS NULL) OR (${table.walletVersionBefore} > 1 AND ${table.previousEntryId} IS NOT NULL)`
+    ),
+    check(
+      "credit_ledger_financial_bytes",
+      sql`(${table.currency} IS NULL OR BINARY ${table.currency} = BINARY 'EUR') AND (${table.providerEffectCurrency} IS NULL OR BINARY ${table.providerEffectCurrency} = BINARY 'EUR')`
+    ),
+  ]
+);
+
+export type CreditLedgerEntry = typeof creditLedger.$inferSelect;
+export type InsertCreditLedgerEntry = typeof creditLedger.$inferInsert;

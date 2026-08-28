@@ -108,9 +108,10 @@ describe("billing reconciliation tenant boundary", () => {
     expect(flow.inserts.some(entry => entry.table === billingOutbox)).toBe(
       false
     );
-    // Provider-operation resolution, profile expiry, the anomaly receipt and
-    // final completion use separate tenant-scoped transactions.
-    expect(flow.transactionMock).toHaveBeenCalledTimes(4);
+    // Provider-operation resolution, customerless credit recovery, profile
+    // expiry, the anomaly receipt and final completion use separate
+    // tenant-scoped transactions.
+    expect(flow.transactionMock).toHaveBeenCalledTimes(5);
   });
 
   it("fails closed when the workspace billing-customer row is missing", async () => {
@@ -174,8 +175,9 @@ describe("billing reconciliation tenant boundary", () => {
     expect(flow.inserts.some(entry => entry.table === billingOutbox)).toBe(
       false
     );
-    // Both metadata-only anomaly receipts are transactionally fenced.
-    expect(flow.transactionMock).toHaveBeenCalledTimes(5);
+    // Customerless credit recovery and both metadata-only anomaly receipts are
+    // transactionally fenced.
+    expect(flow.transactionMock).toHaveBeenCalledTimes(6);
   });
 });
 

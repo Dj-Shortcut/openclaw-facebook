@@ -1,12 +1,12 @@
 {
   "version": 1,
-  "journalSha256": "635a80d1ff0fb61b8777ccd8cc74dd01cc075c7c4a7788c87fa592557cf65df6",
+  "journalSha256": "bdfcaee304bd0bfefe5c61bb351cbdef111c9f22cb30fb5411f0503f631f9a65",
   "baseSchemaSnapshot": "meta/0014_snapshot.json",
   "baseSchemaSnapshotSha256": "e0102aad23d607b4b359d1a11458d56c63533d73f056f332076ba952b7468b35",
-  "schemaSnapshot": "meta/0017_snapshot.json",
-  "schemaSnapshotSha256": "3d70ef983382af3252a1295b548b1dec6c7931ce8cc61401ad7b0247822fe4d6",
+  "schemaSnapshot": "meta/0018_snapshot.json",
+  "schemaSnapshotSha256": "7b1440a644d2e30a1beb79a21dbeadf5d97252857226a919e78c0c0a20a17a64",
   "productionSchemaContract": "production-schema-contract.json",
-  "productionSchemaContractSha256": "d1c2f4bebec39e4103ef3f2ba460b94acb006d4b3ed9e603f450d9ae1d6dcaca",
+  "productionSchemaContractSha256": "6bdef47572ba32b6e6dca20ac421037f80cb690bd68bd195c817b8864989ff8e",
   "migrations": [
     {
       "idx": 0,
@@ -112,9 +112,15 @@
     },
     {
       "idx": 17,
-      "when": 1787481815801,
-      "tag": "0017_handoff_privacy_scope",
-      "sha256": "2caad5e16a76f11cd365afa3566113361da0da7318d0fdfa2af3f33a9da2326a"
+      "when": 1787881948952,
+      "tag": "0017_credit_wallet_expand",
+      "sha256": "e37de0afd5b4d930b34853b423281aa33f073e961e306c64b2e53e08f0172b2a"
+    },
+    {
+      "idx": 18,
+      "when": 1787886000000,
+      "tag": "0018_credit_checkout_reservation",
+      "sha256": "039eb055fbcf83b9988ae5c428ebe1d884c525b1608913e9e597f7938ee6c7c2"
     }
   ]
 }

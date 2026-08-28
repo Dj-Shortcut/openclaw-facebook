@@ -17,7 +17,9 @@ const databaseUrl = new URL(process.env.DATABASE_URL ?? "");
 const databaseName = databaseUrl.pathname.slice(1);
 if (
   !["127.0.0.1", "localhost"].includes(databaseUrl.hostname) ||
-  !/^leaderbot_artifact_(?:base|expand)$/.test(databaseName)
+  !/^leaderbot_artifact_(?:base|expand|credit_wallet|credit_checkout)$/.test(
+    databaseName
+  )
 ) {
   throw new Error(
     "artifact schema fixture requires a disposable local database"
@@ -25,9 +27,16 @@ if (
 }
 
 const phase = process.env.LEADERBOT_TEST_SCHEMA_PHASE;
-if (!new Set(["0015_base", "0016_expand"]).has(phase)) {
+if (
+  !new Set([
+    "0015_base",
+    "0016_expand",
+    "0017_credit_wallet_expand",
+    "0018_credit_checkout_reservation",
+  ]).has(phase)
+) {
   throw new Error(
-    "artifact schema fixture phase must be 0015_base or 0016_expand"
+    "artifact schema fixture phase must be 0015_base, 0016_expand, 0017_credit_wallet_expand, or 0018_credit_checkout_reservation"
   );
 }
 
@@ -35,13 +44,24 @@ const appDirectory = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   ".."
 );
-const { migrations } = await loadAndVerifyMigrationManifest();
-const migrationCount =
-  phase === "0015_base" ? migrations.length - 2 : migrations.length - 1;
+const { migrationPlan } = await loadAndVerifyMigrationManifest();
+const phaseMigrations =
+  phase === "0015_base"
+    ? migrationPlan.through0015
+    : phase === "0016_expand"
+      ? migrationPlan.through0016
+      : phase === "0017_credit_wallet_expand"
+        ? migrationPlan.through0017
+        : migrationPlan.through0018;
 const connection = await mysql.createConnection(databaseUrl.toString());
 
 try {
-  await assertProductionMigrationRuntime(connection);
+  await assertProductionMigrationRuntime(
+    connection,
+    phase === "0015_base" || phase === "0016_expand"
+      ? "bootstrap"
+      : "credit-bootstrap"
+  );
   const [[state]] = await connection.query(
     "SELECT COUNT(*) AS tableCount FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE()"
   );
@@ -51,7 +71,7 @@ try {
   await connection.query(
     "CREATE TABLE `__drizzle_migrations` (`id` serial PRIMARY KEY,`hash` text NOT NULL,`created_at` bigint)"
   );
-  for (const migration of migrations.slice(0, migrationCount)) {
+  for (const migration of phaseMigrations) {
     const sql = await fs.readFile(
       path.join(appDirectory, "drizzle", `${migration.tag}.sql`),
       "utf8"

@@ -8,6 +8,8 @@ import {
 
 const databaseUrl = process.env.DATABASE_URL?.trim();
 const mode = process.env.MOLLIE_MODE?.trim();
+const expectedPrincipalSha256 =
+  process.env.EXPECTED_RUNTIME_PRINCIPAL_SHA256?.trim();
 
 async function main() {
   if (!databaseUrl || !mode) {
@@ -21,7 +23,9 @@ async function main() {
   let connection;
   try {
     connection = await mysql.createConnection(databaseUrl);
-    await assertBillingTriggerRuntimePreflight(connection, mode);
+    await assertBillingTriggerRuntimePreflight(connection, mode, {
+      ...(expectedPrincipalSha256 ? { expectedPrincipalSha256 } : {}),
+    });
     process.stdout.write("Billing trigger runtime preflight passed.\n");
   } catch (error) {
     process.stderr.write(

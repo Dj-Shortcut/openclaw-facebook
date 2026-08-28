@@ -51,6 +51,24 @@ kill_timeout = 300
   MESSENGER_GENERATION_QUEUE_WRITE_VERSION = "v1"
   MESSENGER_IMAGE_QUOTA_TIME_ZONE = "Europe/Brussels"
   MESSENGER_USER_DAILY_SPEND_CAP_USD = "2.00"
+  # Direct Messenger credit checkout lands dark. Enable paid consumption and
+  # then checkout only in separate reviewed Test Mode transitions.
+  MESSENGER_PAID_CREDITS_ENABLED = "false"
+  MOLLIE_CREDIT_CHECKOUT_ENABLED = "false"
+  MOLLIE_CREDIT_WORKSPACE_ID = "1"
+  # Conservative spend reservation for one paid medium image. This is not
+  # booked as the provider's actual invoice cost and must be re-reviewed when
+  # the model, quality, size or source-image policy changes.
+  MESSENGER_PAID_IMAGE_PROVIDER_MAX_COST_USD = "1.00"
+  # A reviewed Test Mode activation must fill all four values. The hash is
+  # domain-separated from the pseudonymous Messenger user key; never configure
+  # or expose the underlying key or PSID.
+  MOLLIE_CREDIT_TEST_CHANNEL_CONNECTION_ID = ""
+  MOLLIE_CREDIT_TEST_BINDING_EPOCH = ""
+  MOLLIE_CREDIT_TEST_PRIVACY_EPOCH = ""
+  MOLLIE_CREDIT_TEST_USER_KEY_HASH = ""
+  # Non-secret version label for the active credit-checkout HMAC key.
+  CREDIT_CHECKOUT_HMAC_ACTIVE_KEY_ID = "k1"
   MOLLIE_ACCOUNTING_IMPORT_ENABLED = "false"
   MOLLIE_BILLING_ENABLED = "false"
   # The first rollout of the reviewed runtime is provider-silent. The safety

@@ -16,8 +16,53 @@ import {
   acknowledgeOperatorBillingNotification,
   listOperatorBillingNotifications,
 } from "./billingNotificationInboxStore";
+import {
+  listOpenCreditReservationTransportReviews,
+  resolveAmbiguousPaidCreditReservation,
+} from "./creditReservationOperatorResolution";
 
 const workspaceId = z.number().int().positive();
+const operatorReservationResolution = z
+  .object({
+    requestId: z.uuid(),
+    workspaceId,
+    mode: z.enum(["test", "live"]),
+    reservationId: z.uuid(),
+    walletId: z.uuid(),
+    decision: z.enum([
+      "delivered_output",
+      "output_not_delivered",
+      "provider_rejected",
+    ]),
+    providerStatus: z.number().int().min(200).max(499).optional(),
+    evidenceReference: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]{7,255}$/),
+  })
+  .strict()
+  .superRefine((input, context) => {
+    const delivered =
+      input.decision === "delivered_output" &&
+      input.providerStatus !== undefined &&
+      input.providerStatus >= 200 &&
+      input.providerStatus <= 299;
+    const outputNotDelivered =
+      input.decision === "output_not_delivered" &&
+      (input.providerStatus === undefined ||
+        (input.providerStatus >= 200 && input.providerStatus <= 299));
+    const rejected =
+      input.decision === "provider_rejected" &&
+      input.providerStatus !== undefined &&
+      input.providerStatus >= 400 &&
+      input.providerStatus <= 499 &&
+      input.providerStatus !== 408 &&
+      input.providerStatus !== 429;
+    if (!delivered && !outputNotDelivered && !rejected) {
+      context.addIssue({
+        code: "custom",
+        path: ["providerStatus"],
+        message: "Provider proof does not match the operator decision",
+      });
+    }
+  });
 
 export const billingAdminRouter = router({
   operatorNotifications: adminProcedure
@@ -38,6 +83,25 @@ export const billingAdminRouter = router({
     )
     .mutation(({ ctx, input }) =>
       acknowledgeOperatorBillingNotification({
+        ...input,
+        actorUserId: ctx.user.id,
+      })
+    ),
+
+  creditReservationTransportReviews: adminProcedure
+    .input(
+      z.object({
+        workspaceId,
+        mode: z.enum(["test", "live"]),
+        limit: z.number().int().min(1).max(50).optional(),
+      })
+    )
+    .query(({ input }) => listOpenCreditReservationTransportReviews(input)),
+
+  resolveCreditReservationTransport: adminProcedure
+    .input(operatorReservationResolution)
+    .mutation(({ ctx, input }) =>
+      resolveAmbiguousPaidCreditReservation({
         ...input,
         actorUserId: ctx.user.id,
       })

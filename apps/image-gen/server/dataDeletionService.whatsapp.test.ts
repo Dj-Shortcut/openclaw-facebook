@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const {
   storageDeleteMock,
   eraseBillingHandoffIdentityMock,
+  eraseCreditWalletsMock,
   getConnectedFacebookPageConnectionMock,
   getConnectedMetaChannelConnectionMock,
   beginPrivacyErasureMock,
@@ -18,6 +19,10 @@ const {
 } = vi.hoisted(() => ({
   storageDeleteMock: vi.fn(async () => undefined),
   eraseBillingHandoffIdentityMock: vi.fn(async () => 1),
+  eraseCreditWalletsMock: vi.fn(async () => ({
+    result: "erased" as const,
+    walletCount: 0,
+  })),
   getConnectedFacebookPageConnectionMock: vi.fn(async () => null),
   getConnectedMetaChannelConnectionMock: vi.fn(
     async (
@@ -61,6 +66,15 @@ vi.mock("./db", async importOriginal => {
     eraseBillingHandoffIdentity: eraseBillingHandoffIdentityMock,
     getConnectedFacebookPageConnection: getConnectedFacebookPageConnectionMock,
     getConnectedMetaChannelConnection: getConnectedMetaChannelConnectionMock,
+  };
+});
+
+vi.mock("./_core/billing/creditWalletStore", async importOriginal => {
+  const actual =
+    await importOriginal<typeof import("./_core/billing/creditWalletStore")>();
+  return {
+    ...actual,
+    eraseCreditWalletsForPrivacySubject: eraseCreditWalletsMock,
   };
 });
 
@@ -225,6 +239,10 @@ describe("WhatsApp data deletion tenant boundary", () => {
     recoverGenerationAdmissionsMock.mockClear();
     eraseGenerationJobsMock.mockClear();
     eraseImageQuotaMock.mockClear();
+    eraseCreditWalletsMock.mockReset().mockResolvedValue({
+      result: "erased",
+      walletCount: 0,
+    });
     deleteCostLedgerEntriesMock.mockClear();
   });
 
@@ -331,6 +349,14 @@ describe("WhatsApp data deletion tenant boundary", () => {
       channelConnectionId: 12,
       bindingEpoch: 3,
       privacyEpoch: 5,
+      userKey,
+    });
+    expect(eraseCreditWalletsMock).toHaveBeenCalledWith({
+      workspaceId: 42,
+      channelConnectionId: 12,
+      bindingEpoch: 3,
+      dataPrivacyEpoch: 5,
+      erasurePrivacyEpoch: 6,
       userKey,
     });
     expect(storageDeleteMock).toHaveBeenCalledWith(objectKey);

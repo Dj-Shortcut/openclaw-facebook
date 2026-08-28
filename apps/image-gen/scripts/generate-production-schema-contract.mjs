@@ -7,10 +7,13 @@ import {
   captureMigrationHistory,
   captureProductionSchemaState,
   assertProductionMigrationRuntime,
+  canonicalJson,
+  canonicalPrettyJson,
   productionMigrationSetSha256,
   productionSchemaContractVersion,
   sha256,
 } from "./production-schema-contract.mjs";
+import { resolveProductionMigrationPlan } from "./production-migration-plan.mjs";
 
 const adminUrlValue = process.env.MYSQL_REHEARSAL_URL?.trim();
 if (!adminUrlValue) throw new Error("MYSQL_REHEARSAL_URL is required");
@@ -31,41 +34,46 @@ const admin = await mysql.createConnection(connectionOptions());
 try {
   await recreateDatabase(database);
   await recreateDatabase(legacyDatabase);
-  const migrationFiles = (await fs.readdir(path.join(appDirectory, "drizzle")))
+  const discoveredMigrationFiles = (
+    await fs.readdir(path.join(appDirectory, "drizzle"))
+  )
     .filter(name => /^\d{4}_.+\.sql$/.test(name))
     .sort();
-  const through0014 = migrationFiles.filter(
-    name => Number(name.slice(0, 4)) <= 14
-  );
-  const migration0015 = migrationFiles.find(name => name.startsWith("0015_"));
-  const migration0016 = migrationFiles.find(name => name.startsWith("0016_"));
-  const migration0017 = migrationFiles.find(name => name.startsWith("0017_"));
-  if (!migration0015 || !migration0016 || !migration0017) {
-    throw new Error("0015, 0016 and 0017 migrations are required");
-  }
   const journal = JSON.parse(
     await fs.readFile(
       path.join(appDirectory, "drizzle", "meta", "_journal.json"),
       "utf8"
     )
   );
-  const migrationSet = await Promise.all(
-    migrationFiles.map(async (file, idx) => {
-      const tag = file.replace(/\.sql$/, "");
-      const entry = journal.entries.find(item => item.tag === tag);
-      if (!entry || entry.idx !== idx) {
-        throw new Error(`journal entry mismatch for ${tag}`);
+  if (
+    !Array.isArray(journal.entries) ||
+    journal.entries.length !== discoveredMigrationFiles.length
+  ) {
+    throw new Error("journal and migration file count mismatch");
+  }
+  const discoveredMigrations = await Promise.all(
+    journal.entries.map(async (entry, idx) => {
+      const file = `${entry.tag}.sql`;
+      if (entry.idx !== idx || discoveredMigrationFiles[idx] !== file) {
+        throw new Error(`journal entry mismatch for ${entry.tag}`);
       }
       return {
         idx,
         when: Number(entry.when),
-        tag,
+        tag: entry.tag,
         sha256: sha256(
           await fs.readFile(path.join(appDirectory, "drizzle", file), "utf8")
         ),
       };
     })
   );
+  const migrationPlan = resolveProductionMigrationPlan(discoveredMigrations);
+  const migrationSet = migrationPlan.all;
+  const through0014 = migrationPlan.through0014.map(migrationFile);
+  const migration0015 = migrationFile(migrationPlan.base0015);
+  const migration0016 = migrationFile(migrationPlan.expand0016);
+  const migration0017 = migrationFile(migrationPlan.creditWallet0017);
+  const migration0018 = migrationFile(migrationPlan.creditCheckout0018);
 
   const connection = await mysql.createConnection(databaseUrl());
   let base0014;
@@ -78,11 +86,14 @@ try {
   let partial0016BillingColumns;
   let final0016;
   let history0016;
-  let partial0017BillingConstraints;
+  let partial0017CreditWallet;
   let final0017;
-  let finalHistory;
+  let history0017;
+  let partial0018CreditCheckout;
+  let final0018;
+  let history0018;
   try {
-    await assertProductionMigrationRuntime(connection);
+    await assertProductionMigrationRuntime(connection, "credit-bootstrap");
     await createHistoryTable(connection);
     await applyFiles(connection, through0014);
     base0014 = await captureProductionSchemaState(connection);
@@ -106,13 +117,111 @@ try {
     history0016 = await captureMigrationHistory(connection);
 
     const statements0017 = await readFileStatements(migration0017);
-    await applyStatements(connection, statements0017.slice(0, 16));
-    partial0017BillingConstraints =
-      await captureProductionSchemaState(connection);
-    await applyStatements(connection, statements0017.slice(16));
+    if (statements0017.length !== 54) {
+      throw new Error("0017 statement contract is unsupported");
+    }
+    if (
+      !/^CREATE TEMPORARY TABLE `credit_0017_legacy_effect_preflight`(?:\s|\(|$)/i.test(
+        statements0017[0]
+      ) ||
+      !/^DROP TEMPORARY TABLE `credit_0017_legacy_effect_preflight`(?:\s|;|$)/i.test(
+        statements0017[1]
+      )
+    ) {
+      throw new Error(
+        "0017 data preflight must precede permanent schema changes"
+      );
+    }
+    const stateByFingerprint = new Map();
+    const boundaries = [];
+    const captureBoundary = async boundary => {
+      const schema = await captureProductionSchemaState(connection);
+      const serializedSchema = canonicalJson(schema);
+      const schemaSha256 = sha256(serializedSchema);
+      let state = stateByFingerprint.get(serializedSchema);
+      if (!state) {
+        state = {
+          resumeFrom: boundary,
+          lastBoundary: boundary,
+          schemaSha256,
+          schema,
+        };
+        stateByFingerprint.set(serializedSchema, state);
+      } else {
+        if (boundary !== state.lastBoundary + 1) {
+          throw new Error("0017 schema state replay is non-contiguous");
+        }
+        state.lastBoundary = boundary;
+      }
+      boundaries.push({
+        boundary,
+        resumeFrom: state.resumeFrom,
+        schemaSha256: state.schemaSha256,
+      });
+    };
+    await captureBoundary(0);
+    for (let index = 0; index < statements0017.length; index += 1) {
+      await connection.query(statements0017[index]);
+      await captureBoundary(index + 1);
+    }
+    const partialStates = [...stateByFingerprint.values()].map(
+      ({ lastBoundary: _lastBoundary, ...state }) => state
+    );
+    if (
+      boundaries.length !== statements0017.length + 1 ||
+      partialStates.length < 2 ||
+      partialStates.at(-1)?.resumeFrom !== statements0017.length
+    ) {
+      throw new Error("0017 partial schema contract is unsupported");
+    }
+    partial0017CreditWallet = {
+      statementCount: statements0017.length,
+      statementSha256: statements0017.map(statement => sha256(statement)),
+      boundaries,
+      states: partialStates,
+    };
     final0017 = await captureProductionSchemaState(connection);
     await insertMigrationHistory(connection, migration0017);
-    finalHistory = await captureMigrationHistory(connection);
+    history0017 = await captureMigrationHistory(connection);
+
+    const statements0018 = await readFileStatements(migration0018);
+    if (
+      statements0018.length !== 5 ||
+      statements0018[0] !==
+        "DROP PROCEDURE IF EXISTS `credit_create_wallet`;" ||
+      !/^CREATE PROCEDURE `credit_reserve_checkout_intent`(?:\s|\()/i.test(
+        statements0018[1]
+      ) ||
+      statements0018[2] !==
+        "DROP PROCEDURE IF EXISTS `credit_expire_pristine_checkout`;" ||
+      !/^CREATE PROCEDURE `credit_expire_pristine_checkout`(?:\s|\()/i.test(
+        statements0018[3]
+      ) ||
+      statements0018[4] !==
+        "CREATE INDEX `billing_intents_credit_capability_expiry_idx` ON `billing_intents` (`kind`,`status`,`checkout_capability_expires_at`,`intent_id`);"
+    ) {
+      throw new Error("0018 statement contract is unsupported");
+    }
+    const states0018 = [];
+    const boundaries0018 = [];
+    for (let boundary = 0; boundary <= statements0018.length; boundary += 1) {
+      const schema = await captureProductionSchemaState(connection);
+      const schemaSha256 = sha256(canonicalJson(schema));
+      states0018.push({ resumeFrom: boundary, schemaSha256, schema });
+      boundaries0018.push({ boundary, resumeFrom: boundary, schemaSha256 });
+      if (boundary < statements0018.length) {
+        await connection.query(statements0018[boundary]);
+      }
+    }
+    partial0018CreditCheckout = {
+      statementCount: statements0018.length,
+      statementSha256: statements0018.map(statement => sha256(statement)),
+      boundaries: boundaries0018,
+      states: states0018,
+    };
+    final0018 = await captureProductionSchemaState(connection);
+    await insertMigrationHistory(connection, migration0018);
+    history0018 = await captureMigrationHistory(connection);
   } finally {
     await connection.end();
   }
@@ -125,7 +234,10 @@ try {
   try {
     await assertProductionMigrationRuntime(legacyConnection);
     await createHistoryTable(legacyConnection);
-    await applyFiles(legacyConnection, migrationFiles.slice(0, 8));
+    await applyFiles(
+      legacyConnection,
+      migrationPlan.all.slice(0, 8).map(migrationFile)
+    );
     await normalizeLegacy0007History(legacyConnection);
     legacy0007 = await captureProductionSchemaState(legacyConnection);
     legacyHistory = await captureMigrationHistory(legacyConnection);
@@ -150,7 +262,7 @@ try {
   const contract = {
     version: productionSchemaContractVersion,
     generatedBy: { mysqlVersion },
-    normalization: "show-create-and-trigger-v1",
+    normalization: "show-create-trigger-and-routine-v2",
     migrationSetSha256: productionMigrationSetSha256(migrationSet),
     legacy0007,
     legacyHistory,
@@ -161,18 +273,17 @@ try {
     partial0016LastErasedAt,
     partial0016ProviderScope,
     partial0016StaticScope,
-    history0016,
     partial0016BillingColumns,
     final0016,
-    partial0017BillingConstraints,
+    history0016,
+    partial0017CreditWallet,
     final0017,
-    finalHistory,
+    history0017,
+    partial0018CreditCheckout,
+    final0018,
+    history0018,
   };
-  await fs.writeFile(
-    outputPath,
-    `${JSON.stringify(contract, null, 2)}\n`,
-    "utf8"
-  );
+  await fs.writeFile(outputPath, `${canonicalPrettyJson(contract)}\n`, "utf8");
   process.stdout.write(
     `Generated ${path.relative(appDirectory, outputPath)} with MySQL ${mysqlVersion}.\n`
   );
@@ -180,6 +291,10 @@ try {
   await admin.query(`DROP DATABASE IF EXISTS \`${database}\``);
   await admin.query(`DROP DATABASE IF EXISTS \`${legacyDatabase}\``);
   await admin.end();
+}
+
+function migrationFile(migration) {
+  return `${migration.tag}.sql`;
 }
 
 function connectionOptions() {

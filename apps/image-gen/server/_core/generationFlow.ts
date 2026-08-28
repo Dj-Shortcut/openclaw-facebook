@@ -88,6 +88,7 @@ type ExecuteGenerationFlowInput = {
   lastPhotoSource?: SourceImageOrigin | null;
   onProviderAttempt?: () => Promise<ProviderAttemptAdmission | void>;
   onProviderSuccess?: () => Promise<void>;
+  onProviderRejected?: (status: number) => Promise<void>;
   bypassBudgetLimits?: boolean;
   costLedgerChannel?: string;
   costLedgerScope?: CostLedgerTenantScope;
@@ -358,6 +359,7 @@ export async function executeGenerationFlow(
       promptHint: input.promptHint,
       onProviderAttempt: input.onProviderAttempt,
       onProviderSuccess: input.onProviderSuccess,
+      onProviderRejected: input.onProviderRejected,
       bypassBudgetLimits: input.bypassBudgetLimits,
       costLedgerChannel: input.costLedgerChannel,
       costLedgerScope: input.costLedgerScope,

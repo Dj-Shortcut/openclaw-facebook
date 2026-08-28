@@ -4,6 +4,7 @@ const {
   storageDeleteMock,
   deleteProviderVideoForUserMock,
   eraseBillingHandoffIdentityMock,
+  eraseCreditWalletsMock,
   getConnectedFacebookPageConnectionMock,
   beginPrivacyErasureMock,
   runPrivacyErasureMock,
@@ -20,6 +21,10 @@ const {
   storageDeleteMock: vi.fn(async () => undefined),
   deleteProviderVideoForUserMock: vi.fn(async () => undefined),
   eraseBillingHandoffIdentityMock: vi.fn(async () => 0),
+  eraseCreditWalletsMock: vi.fn(async () => ({
+    result: "erased" as const,
+    walletCount: 0,
+  })),
   getConnectedFacebookPageConnectionMock: vi.fn(async () => ({
     id: 12,
     workspaceId: 42,
@@ -50,6 +55,14 @@ vi.mock("./db", async importOriginal => {
     ...actual,
     eraseBillingHandoffIdentity: eraseBillingHandoffIdentityMock,
     getConnectedFacebookPageConnection: getConnectedFacebookPageConnectionMock,
+  };
+});
+vi.mock("./_core/billing/creditWalletStore", async importOriginal => {
+  const actual =
+    await importOriginal<typeof import("./_core/billing/creditWalletStore")>();
+  return {
+    ...actual,
+    eraseCreditWalletsForPrivacySubject: eraseCreditWalletsMock,
   };
 });
 vi.mock(
@@ -159,6 +172,7 @@ import {
   writeScopedState,
   writeState,
 } from "./_core/stateStore";
+import { buildMessengerStorageObjectKey } from "./_core/messengerStorageObject";
 import { deletePersistedStateForErasure } from "./_core/messengerStatePersistence";
 
 describe("data deletion service", () => {
@@ -201,6 +215,10 @@ describe("data deletion service", () => {
     recoverGenerationAdmissionsMock.mockClear();
     eraseGenerationJobsMock.mockClear();
     eraseImageQuotaMock.mockClear();
+    eraseCreditWalletsMock.mockReset().mockResolvedValue({
+      result: "erased",
+      walletCount: 0,
+    });
     beginVideoArtifactErasureMock.mockReset().mockResolvedValue([]);
     removeVideoArtifactMock.mockReset().mockResolvedValue(undefined);
   });
@@ -290,6 +308,127 @@ describe("data deletion service", () => {
       userKey,
       privacyEpoch: 6,
     });
+    expect(eraseCreditWalletsMock).toHaveBeenCalledWith({
+      workspaceId: 42,
+      channelConnectionId: 7,
+      bindingEpoch: 3,
+      dataPrivacyEpoch: 5,
+      erasurePrivacyEpoch: 6,
+      userKey,
+    });
+    expect(completePrivacyErasureMock).toHaveBeenCalledWith({
+      workspaceId: 42,
+      channelConnectionId: 7,
+      userKey,
+      privacyEpoch: 6,
+    });
+  });
+
+  it("erases private content while an exact credit wallet remains pending", async () => {
+    const psid = "delete-credit-wallet-pending";
+    const userKey = anonymizePsid(psid);
+    const objectKey = buildMessengerStorageObjectKey({
+      kind: "generated_image",
+      scope: {
+        workspaceId: 42,
+        channelConnectionId: 7,
+        bindingEpoch: 3,
+        privacyEpoch: 5,
+        userKey,
+      },
+      fileName: "1771000000000-00000000-0000-4000-8000-000000000001.png",
+    });
+    const objectUrl = `https://assets.example/${objectKey}`;
+    eraseCreditWalletsMock.mockResolvedValueOnce({
+      result: "pending",
+      walletCount: 1,
+    });
+
+    await runWithMessengerRequestContext(
+      "page-credit-wallet-pending",
+      async () => {
+        await Promise.resolve(getOrCreateState(psid));
+        await Promise.resolve(
+          setPendingImage(psid, objectUrl, Date.now(), "stored")
+        );
+        await Promise.resolve(
+          writeScopedState(
+            "chat:history",
+            userKey,
+            [{ role: "user", text: "private wallet-era message" }],
+            60
+          )
+        );
+        await expect(Promise.resolve(getState(psid))).resolves.toMatchObject({
+          pendingImageUrl: objectUrl,
+        });
+        await expect(deleteUserData(psid)).resolves.toEqual({
+          status: "pending",
+        });
+
+        await expect(Promise.resolve(getState(psid))).resolves.toBeNull();
+        await expect(
+          Promise.resolve(readScopedState("chat:history", userKey))
+        ).resolves.toBeNull();
+      },
+      {
+        channel: "facebook_messenger",
+        workspaceId: 42,
+        channelConnectionId: 7,
+        bindingEpoch: 3,
+        userKey,
+        privacyEpoch: 5,
+      }
+    );
+
+    expect(eraseCreditWalletsMock).toHaveBeenCalledWith({
+      workspaceId: 42,
+      channelConnectionId: 7,
+      bindingEpoch: 3,
+      dataPrivacyEpoch: 5,
+      erasurePrivacyEpoch: 6,
+      userKey,
+    });
+    expect(runPrivacyErasureMock).toHaveBeenCalledWith(
+      {
+        workspaceId: 42,
+        channelConnectionId: 7,
+        userKey,
+        privacyEpoch: 6,
+        dataPrivacyEpoch: 5,
+      },
+      expect.any(Function)
+    );
+    expect(storageDeleteMock).toHaveBeenCalledWith(objectKey);
+    expect(eraseImageQuotaMock).toHaveBeenCalledWith({
+      workspaceId: 42,
+      channelConnectionId: 7,
+      userKey,
+      privacyEpoch: 6,
+    });
+    expect(completePrivacyErasureMock).not.toHaveBeenCalled();
+
+    await runWithMessengerRequestContext(
+      "page-credit-wallet-pending",
+      async () => {
+        setMessengerRequestErasurePrivacySubject({
+          userKey,
+          privacyEpoch: 6,
+          dataPrivacyEpoch: 5,
+        });
+        await expect(deleteUserData(psid)).resolves.toEqual({
+          status: "completed",
+        });
+      },
+      {
+        channel: "facebook_messenger",
+        workspaceId: 42,
+        channelConnectionId: 7,
+        bindingEpoch: 3,
+      }
+    );
+
+    expect(eraseCreditWalletsMock).toHaveBeenCalledTimes(2);
     expect(completePrivacyErasureMock).toHaveBeenCalledWith({
       workspaceId: 42,
       channelConnectionId: 7,

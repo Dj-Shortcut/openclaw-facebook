@@ -389,7 +389,7 @@ jobs:
         run: |
           rollback_image="$(cat "$RUNNER_TEMP/leaderbot-recovery/rollback-image.txt")"
           phase="$(cat "$RUNNER_TEMP/leaderbot-recovery/rollback-schema-phase.txt")"
-          [[ "$phase" =~ ^(0015_base|0016_expand)$ ]]
+          [[ "$phase" =~ ^(0015_base|0016_expand|0017_credit_wallet_expand|0018_credit_checkout_reservation)$ ]]
           test "$phase" = "$(jq -er '.apps["image-gen"].databaseSchemaPhase' deploy/production/apps.json)"
           node "$RECOVERY_CONTROLLER" \
             --validate-reviewed-schema-phase image-gen "$rollback_image" \

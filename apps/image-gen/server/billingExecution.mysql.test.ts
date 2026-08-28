@@ -43,6 +43,10 @@ import {
 } from "./_core/billing/checkoutStore";
 import { runDailyBillingReconciliation } from "./_core/billing/reconciliation";
 import { assertBillingTriggerRuntimePreflight } from "../scripts/billing-trigger-runtime-preflight.mjs";
+import {
+  creditWalletRoutineNames,
+  productionRuntimeWritableTableNames,
+} from "../scripts/production-schema-contract.mjs";
 
 const suite = describe.runIf(process.env.RUN_MYSQL_INTEGRATION === "1");
 
@@ -239,6 +243,9 @@ suite("billing execution MySQL safety boundary", () => {
     const url = process.env.DATABASE_URL;
     if (!url) throw new Error("DATABASE_URL is required");
     const connection = await mysql.createConnection(url);
+    const runtimeUser = `lb_ci_rt_${process.pid}_${randomUUID().replaceAll("-", "").slice(0, 8)}`;
+    const runtimePassword = randomUUID().replaceAll("-", "");
+    let runtimePrincipalCreated = false;
     let autoIncrementBefore: Record<string, string> = {};
     let autoIncrementAfter: Record<string, string> = {};
     try {
@@ -253,7 +260,43 @@ suite("billing execution MySQL safety boundary", () => {
           }>
         ).map(row => [row.tableName, String(row.autoIncrement)])
       );
-      await assertBillingTriggerRuntimePreflight(connection, "test");
+      const [databaseRows] = await connection.query(
+        "SELECT DATABASE() AS databaseName"
+      );
+      const databaseName = String(
+        (databaseRows as Array<{ databaseName?: unknown }>)[0]?.databaseName ??
+          ""
+      );
+      if (!databaseName) throw new Error("Test database name is required");
+      const databaseIdentifier = mysql.escapeId(databaseName);
+      await connection.query(
+        `CREATE USER \`${runtimeUser}\`@'%' IDENTIFIED BY '${runtimePassword}'`
+      );
+      runtimePrincipalCreated = true;
+      await connection.query(
+        `GRANT SELECT ON ${databaseIdentifier}.* TO \`${runtimeUser}\`@'%'`
+      );
+      for (const tableName of productionRuntimeWritableTableNames) {
+        await connection.query(
+          `GRANT INSERT, UPDATE, DELETE ON ${databaseIdentifier}.${mysql.escapeId(tableName)} TO \`${runtimeUser}\`@'%'`
+        );
+      }
+      for (const routineName of creditWalletRoutineNames) {
+        await connection.query(
+          `GRANT EXECUTE ON PROCEDURE ${databaseIdentifier}.${mysql.escapeId(routineName)} TO \`${runtimeUser}\`@'%'`
+        );
+      }
+      const runtimeUrl = new URL(url);
+      runtimeUrl.username = runtimeUser;
+      runtimeUrl.password = runtimePassword;
+      const runtimeConnection = await mysql.createConnection(
+        runtimeUrl.toString()
+      );
+      try {
+        await assertBillingTriggerRuntimePreflight(runtimeConnection, "test");
+      } finally {
+        await runtimeConnection.end();
+      }
       const [afterCounterRows] = await connection.query(
         "SELECT `TABLE_NAME` AS tableName,`AUTO_INCREMENT` AS autoIncrement FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN ('workspaces','billing_scheduler_tenants','billing_outbox') ORDER BY `TABLE_NAME`"
       );
@@ -266,7 +309,13 @@ suite("billing execution MySQL safety boundary", () => {
         ).map(row => [row.tableName, String(row.autoIncrement)])
       );
     } finally {
-      await connection.end();
+      try {
+        if (runtimePrincipalCreated) {
+          await connection.query(`DROP USER \`${runtimeUser}\`@'%'`);
+        }
+      } finally {
+        await connection.end();
+      }
     }
     const afterLanes = await database
       .select({

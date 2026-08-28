@@ -1,4 +1,9 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+
+import {
+  assertCreditWalletRuntimeGrantScope,
+  creditWalletTableNames,
+} from "./production-schema-contract.mjs";
 
 const billingModes = new Set(["test", "live"]);
 
@@ -28,10 +33,45 @@ async function runStage(stage, action) {
  * Exercises every production billing scheduler trigger through the DML-only
  * runtime principal. All writes use synthetic metadata and are rolled back.
  */
-export async function assertBillingTriggerRuntimePreflight(connection, mode) {
+export async function assertBillingTriggerRuntimePreflight(
+  connection,
+  mode,
+  options = {}
+) {
   if (!billingModes.has(mode)) {
     throw new BillingTriggerRuntimePreflightError("configuration");
   }
+
+  if (options.expectedPrincipalSha256 !== undefined) {
+    const expectedPrincipalSha256 = options.expectedPrincipalSha256;
+    if (!/^[a-f0-9]{64}$/.test(expectedPrincipalSha256)) {
+      throw new BillingTriggerRuntimePreflightError("principal_identity");
+    }
+    await runStage("principal_identity", async () => {
+      const [[identity]] = await connection.query(
+        "SELECT CURRENT_USER() AS currentUser"
+      );
+      const match = /^([^@]+)@[^@]+$/.exec(identity?.currentUser ?? "");
+      const actualPrincipalSha256 = match
+        ? createHash("sha256").update(match[1], "utf8").digest("hex")
+        : "";
+      if (actualPrincipalSha256 !== expectedPrincipalSha256) {
+        throw new BillingTriggerRuntimePreflightError("principal_identity");
+      }
+    });
+  }
+
+  await runStage("grant_scope", async () => {
+    const [[database]] = await connection.query(
+      "SELECT DATABASE() AS databaseName"
+    );
+    if (!database?.databaseName) {
+      throw new BillingTriggerRuntimePreflightError("grant_scope");
+    }
+    const [rows] = await connection.query("SHOW GRANTS FOR CURRENT_USER()");
+    const grants = rows.flatMap(row => Object.values(row)).map(String);
+    assertCreditWalletRuntimeGrantScope(grants, database.databaseName);
+  });
 
   await runStage("session", async () => {
     await connection.query("SET SESSION time_zone='+00:00'");
@@ -52,6 +92,8 @@ export async function assertBillingTriggerRuntimePreflight(connection, mode) {
   try {
     await runStage("transaction", () => connection.beginTransaction());
     transactionStarted = true;
+
+    await assertCreditTableDmlDenied(connection);
 
     const [sentinelRows] = await runStage("sentinel_absence", () =>
       connection.query(
@@ -159,6 +201,16 @@ export async function assertBillingTriggerRuntimePreflight(connection, mode) {
       },
       "outbox_update_effect"
     );
+
+    const [outboxDelete] = await runStage("outbox_delete", () =>
+      connection.query(
+        "DELETE FROM `billing_outbox` WHERE `id`=0 AND `delivery_id`=? AND `workspace_id`=0 AND `mode`=? AND `status`='failed'",
+        [deliveryId, mode]
+      )
+    );
+    if (Number(outboxDelete.affectedRows) !== 1) {
+      throw new BillingTriggerRuntimePreflightError("outbox_delete");
+    }
   } catch (error) {
     operationError = error;
   }
@@ -192,6 +244,59 @@ export async function assertBillingTriggerRuntimePreflight(connection, mode) {
     throw new BillingTriggerRuntimePreflightError("rollback_verification");
   }
   if (operationError) throw operationError;
+
+  await assertCreditProcedureExecuteBoundary(connection);
+}
+
+async function assertCreditTableDmlDenied(connection) {
+  const identityColumns = new Map([
+    ["credit_wallets", "wallet_id"],
+    ["credit_reservations", "reservation_id"],
+    ["credit_ledger", "entry_id"],
+  ]);
+  for (const tableName of creditWalletTableNames) {
+    const identityColumn = identityColumns.get(tableName);
+    for (const statement of [
+      `INSERT INTO \`${tableName}\` SELECT * FROM \`${tableName}\` WHERE 1=0`,
+      `UPDATE \`${tableName}\` SET \`${identityColumn}\`=\`${identityColumn}\` WHERE 1=0`,
+      `DELETE FROM \`${tableName}\` WHERE 1=0`,
+    ]) {
+      try {
+        await connection.query(statement);
+      } catch (error) {
+        if (
+          error?.code === "ER_TABLEACCESS_DENIED_ERROR" ||
+          error?.code === "ER_COLUMNACCESS_DENIED_ERROR" ||
+          Number(error?.errno) === 1142 ||
+          Number(error?.errno) === 1143
+        ) {
+          continue;
+        }
+        throw asPreflightError("credit_direct_dml", error);
+      }
+      throw new BillingTriggerRuntimePreflightError("credit_direct_dml");
+    }
+  }
+}
+
+async function assertCreditProcedureExecuteBoundary(connection) {
+  try {
+    await connection.query(
+      "CALL `credit_reserve_checkout_intent`(NULL,NULL,0,'test',0,0,0,NULL,NULL,0,NULL,NULL,0,NULL,NULL,NULL,NULL,NULL,NULL)"
+    );
+  } catch (error) {
+    if (
+      (error?.code === "ER_SIGNAL_EXCEPTION" ||
+        Number(error?.errno) === 1644) &&
+      String(error?.message).includes(
+        "credit checkout reservation input is invalid"
+      )
+    ) {
+      return;
+    }
+    throw asPreflightError("credit_procedure_execution", error);
+  }
+  throw new BillingTriggerRuntimePreflightError("credit_procedure_execution");
 }
 
 function readSyntheticScheduler(connection, mode) {
@@ -223,8 +328,10 @@ export function billingTriggerPreflightPublicErrorCode(error) {
   }
   return new Set([
     "configuration",
+    "grant_scope",
     "session",
     "transaction",
+    "credit_direct_dml",
     "sentinel_absence",
     "workspace_insert",
     "scheduler_insert",
@@ -234,8 +341,10 @@ export function billingTriggerPreflightPublicErrorCode(error) {
     "outbox_insert_effect",
     "outbox_update_trigger",
     "outbox_update_effect",
+    "outbox_delete",
     "rollback",
     "rollback_verification",
+    "credit_procedure_execution",
   ]).has(error.stage)
     ? error.stage
     : "unexpected_error";

@@ -1,7 +1,7 @@
 {
   "version": "5",
   "dialect": "mysql",
-  "id": "033a7380-4ae3-4fdf-b584-e111641f9498",
+  "id": "a6639731-46f8-458a-9a9f-5f72ab021515",
   "prevId": "125ad8da-4fe7-4275-8c0b-fafab3b94996",
   "tables": {
     "aiIdentities": {
@@ -921,7 +921,7 @@
         },
         "kind": {
           "name": "kind",
-          "type": "enum('subscription_start','payment_method_change','startpilot_purchase')",
+          "type": "enum('subscription_start','payment_method_change','startpilot_purchase','credit_purchase')",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
@@ -1012,9 +1012,79 @@
           "notNull": false,
           "autoincrement": false
         },
+        "messenger_binding_epoch": {
+          "name": "messenger_binding_epoch",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "messenger_privacy_epoch": {
           "name": "messenger_privacy_epoch",
           "type": "int",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "credit_wallet_id": {
+          "name": "credit_wallet_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "credit_financial_subject_ref": {
+          "name": "credit_financial_subject_ref",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "credit_count": {
+          "name": "credit_count",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "credit_metadata_hash": {
+          "name": "credit_metadata_hash",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "checkout_capability_hash": {
+          "name": "checkout_capability_hash",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "checkout_capability_expires_at": {
+          "name": "checkout_capability_expires_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "checkout_capability_consumed_at": {
+          "name": "checkout_capability_consumed_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "checkout_capability_session_nonce_hash": {
+          "name": "checkout_capability_session_nonce_hash",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "credit_identity_erased_at": {
+          "name": "credit_identity_erased_at",
+          "type": "timestamp",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
@@ -1082,19 +1152,14 @@
           "columns": ["intent_id", "workspace_id", "mode"],
           "isUnique": true
         },
+        "billing_intents_credit_funding_scope_unique": {
+          "name": "billing_intents_credit_funding_scope_unique",
+          "columns": ["intent_id", "credit_wallet_id", "workspace_id", "mode"],
+          "isUnique": true
+        },
         "billing_intents_workspace_mode_created_idx": {
           "name": "billing_intents_workspace_mode_created_idx",
           "columns": ["workspace_id", "mode", "created_at"],
-          "isUnique": false
-        },
-        "billing_intents_messenger_subject_idx": {
-          "name": "billing_intents_messenger_subject_idx",
-          "columns": [
-            "workspace_id",
-            "messenger_channel_connection_id",
-            "messenger_sender_user_key",
-            "messenger_privacy_epoch"
-          ],
           "isUnique": false
         },
         "billing_intents_mollie_payment_mode_unique": {
@@ -1111,6 +1176,39 @@
           "name": "billing_intents_checkout_scope_unique",
           "columns": ["checkout_scope_key"],
           "isUnique": true
+        },
+        "billing_intents_checkout_capability_unique": {
+          "name": "billing_intents_checkout_capability_unique",
+          "columns": ["checkout_capability_hash"],
+          "isUnique": true
+        },
+        "billing_intents_checkout_session_nonce_unique": {
+          "name": "billing_intents_checkout_session_nonce_unique",
+          "columns": ["checkout_capability_session_nonce_hash"],
+          "isUnique": true
+        },
+        "billing_intents_credit_payment_binding_unique": {
+          "name": "billing_intents_credit_payment_binding_unique",
+          "columns": [
+            "intent_id",
+            "credit_wallet_id",
+            "workspace_id",
+            "mode",
+            "credit_metadata_hash"
+          ],
+          "isUnique": true
+        },
+        "billing_intents_credit_subject_idx": {
+          "name": "billing_intents_credit_subject_idx",
+          "columns": [
+            "workspace_id",
+            "mode",
+            "messenger_channel_connection_id",
+            "messenger_binding_epoch",
+            "messenger_privacy_epoch",
+            "credit_financial_subject_ref"
+          ],
+          "isUnique": false
         }
       },
       "foreignKeys": {
@@ -1120,28 +1218,6 @@
           "tableTo": "workspaces",
           "columnsFrom": ["workspace_id"],
           "columnsTo": ["id"],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
-        },
-        "billing_intents_static_messenger_connection_fk": {
-          "name": "billing_intents_static_messenger_connection_fk",
-          "tableFrom": "billing_intents",
-          "tableTo": "channelConnections",
-          "columnsFrom": ["messenger_channel_connection_id", "workspace_id"],
-          "columnsTo": ["id", "workspaceId"],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
-        },
-        "billing_intents_static_messenger_subject_fk": {
-          "name": "billing_intents_static_messenger_subject_fk",
-          "tableFrom": "billing_intents",
-          "tableTo": "messenger_privacy_subjects",
-          "columnsFrom": [
-            "workspace_id",
-            "messenger_channel_connection_id",
-            "messenger_sender_user_key"
-          ],
-          "columnsTo": ["workspace_id", "channel_connection_id", "user_key"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         }
@@ -1154,9 +1230,9 @@
       },
       "uniqueConstraints": {},
       "checkConstraint": {
-        "billing_intents_messenger_identity_scope": {
-          "name": "billing_intents_messenger_identity_scope",
-          "value": "(`billing_intents`.`messenger_sender_user_key` IS NULL AND `billing_intents`.`messenger_page_id` IS NULL AND `billing_intents`.`messenger_channel_connection_id` IS NULL AND `billing_intents`.`messenger_privacy_epoch` IS NULL) OR (`billing_intents`.`messenger_sender_user_key` IS NOT NULL AND `billing_intents`.`messenger_page_id` IS NOT NULL AND `billing_intents`.`messenger_channel_connection_id` IS NOT NULL AND `billing_intents`.`messenger_privacy_epoch` > 0)"
+        "billing_intents_credit_purchase_shape": {
+          "name": "billing_intents_credit_purchase_shape",
+          "value": "(((`billing_intents`.`kind` <> 'credit_purchase') AND `billing_intents`.`credit_wallet_id` IS NULL AND `billing_intents`.`messenger_binding_epoch` IS NULL AND `billing_intents`.`credit_financial_subject_ref` IS NULL AND `billing_intents`.`credit_count` IS NULL AND `billing_intents`.`credit_metadata_hash` IS NULL AND `billing_intents`.`checkout_capability_hash` IS NULL AND `billing_intents`.`checkout_capability_expires_at` IS NULL AND `billing_intents`.`checkout_capability_consumed_at` IS NULL AND `billing_intents`.`checkout_capability_session_nonce_hash` IS NULL AND `billing_intents`.`credit_identity_erased_at` IS NULL) OR (`billing_intents`.`kind` = 'credit_purchase' AND `billing_intents`.`interval` = 'oneoff' AND `billing_intents`.`billing_profile_version` = 0 AND JSON_TYPE(`billing_intents`.`entitlements`) = 'OBJECT' AND JSON_LENGTH(`billing_intents`.`entitlements`) = 0 AND `billing_intents`.`expected_amount` > 0 AND BINARY `billing_intents`.`currency` = BINARY 'EUR' AND `billing_intents`.`credit_count` > 0 AND `billing_intents`.`messenger_page_id` IS NULL AND `billing_intents`.`messenger_channel_connection_id` IS NOT NULL AND `billing_intents`.`messenger_binding_epoch` > 0 AND `billing_intents`.`messenger_privacy_epoch` > 0 AND REGEXP_LIKE(`billing_intents`.`intent_id`, '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', 'c') AND REGEXP_LIKE(`billing_intents`.`credit_wallet_id`, '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', 'c') AND REGEXP_LIKE(`billing_intents`.`credit_financial_subject_ref`, '^[0-9a-f]{64}$', 'c') AND REGEXP_LIKE(`billing_intents`.`credit_metadata_hash`, '^[0-9a-f]{64}$', 'c') AND CHAR_LENGTH(TRIM(`billing_intents`.`plan_code`)) > 0 AND CHAR_LENGTH(TRIM(`billing_intents`.`mollie_description`)) > 0 AND ((`billing_intents`.`credit_identity_erased_at` IS NULL AND REGEXP_LIKE(`billing_intents`.`messenger_sender_user_key`, '^([0-9a-f]{64}|u2[.]k[1-9][0-9]{0,5}[.][0-9a-f]{64})$', 'c') AND REGEXP_LIKE(`billing_intents`.`checkout_capability_hash`, '^[0-9a-f]{64}$', 'c') AND `billing_intents`.`checkout_capability_expires_at` >= `billing_intents`.`created_at` AND `billing_intents`.`checkout_capability_expires_at` <= TIMESTAMPADD(MINUTE, 15, `billing_intents`.`created_at`) AND ((`billing_intents`.`checkout_capability_consumed_at` IS NULL AND `billing_intents`.`checkout_capability_session_nonce_hash` IS NULL) OR (`billing_intents`.`checkout_capability_consumed_at` >= `billing_intents`.`created_at` AND `billing_intents`.`checkout_capability_consumed_at` <= `billing_intents`.`checkout_capability_expires_at` AND REGEXP_LIKE(`billing_intents`.`checkout_capability_session_nonce_hash`, '^[0-9a-f]{64}$', 'c')))) OR (`billing_intents`.`credit_identity_erased_at` IS NOT NULL AND `billing_intents`.`credit_identity_erased_at` >= `billing_intents`.`created_at` AND `billing_intents`.`messenger_sender_user_key` IS NULL AND `billing_intents`.`checkout_capability_hash` IS NULL AND `billing_intents`.`checkout_capability_expires_at` IS NULL AND `billing_intents`.`checkout_capability_consumed_at` IS NULL AND `billing_intents`.`checkout_capability_session_nonce_hash` IS NULL AND `billing_intents`.`status` IN ('paid','failed','canceled','expired','mismatch','contained'))))) IS TRUE"
         }
       }
     },
@@ -1716,7 +1792,7 @@
         },
         "event_type": {
           "name": "event_type",
-          "type": "enum('ensure_subscription','cancel_subscription','cancel_payment','payment_warning','manual_review','send_portal_handoff')",
+          "type": "enum('ensure_subscription','cancel_subscription','cancel_payment','credit_adjustment_retry','payment_warning','manual_review','send_portal_handoff')",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
@@ -3131,6 +3207,1071 @@
       "uniqueConstraints": {},
       "checkConstraint": {}
     },
+    "credit_ledger": {
+      "name": "credit_ledger",
+      "columns": {
+        "entry_id": {
+          "name": "entry_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "wallet_id": {
+          "name": "wallet_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "workspace_id": {
+          "name": "workspace_id",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "mode": {
+          "name": "mode",
+          "type": "enum('test','live')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "channel_connection_id": {
+          "name": "channel_connection_id",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "binding_epoch": {
+          "name": "binding_epoch",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "privacy_epoch": {
+          "name": "privacy_epoch",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "financial_subject_ref": {
+          "name": "financial_subject_ref",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "source_intent_id": {
+          "name": "source_intent_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "authorization_epoch": {
+          "name": "authorization_epoch",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "payment_ledger_id": {
+          "name": "payment_ledger_id",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "provider_payment_id": {
+          "name": "provider_payment_id",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "offer_id": {
+          "name": "offer_id",
+          "type": "varchar(80)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "payment_amount": {
+          "name": "payment_amount",
+          "type": "decimal(10,2)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "currency": {
+          "name": "currency",
+          "type": "varchar(3)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "purchased_credit_count": {
+          "name": "purchased_credit_count",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "provider_description": {
+          "name": "provider_description",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "entry_kind": {
+          "name": "entry_kind",
+          "type": "enum('purchase_grant','reservation_hold','generation_spend','reservation_release','refund_debit','chargeback_debit','chargeback_restore')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "balance_delta": {
+          "name": "balance_delta",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "reserved_delta": {
+          "name": "reserved_delta",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "event_key_hash": {
+          "name": "event_key_hash",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "provider_event_hash": {
+          "name": "provider_event_hash",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "provider_effect_id": {
+          "name": "provider_effect_id",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "provider_effect_type": {
+          "name": "provider_effect_type",
+          "type": "enum('refund','chargeback')",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "provider_effect_status": {
+          "name": "provider_effect_status",
+          "type": "enum('refunded','active','reversed')",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "provider_effect_amount": {
+          "name": "provider_effect_amount",
+          "type": "decimal(10,2)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "provider_effect_currency": {
+          "name": "provider_effect_currency",
+          "type": "varchar(3)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "provider_effect_evidence": {
+          "name": "provider_effect_evidence",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "grant_payment_id": {
+          "name": "grant_payment_id",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "reservation_id": {
+          "name": "reservation_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "reservation_credit_count": {
+          "name": "reservation_credit_count",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "reservation_terminal_slot": {
+          "name": "reservation_terminal_slot",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "reservation_terminal_status": {
+          "name": "reservation_terminal_status",
+          "type": "enum('committed','released','expired')",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "root_grant_entry_id": {
+          "name": "root_grant_entry_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "root_adjustment_slot": {
+          "name": "root_adjustment_slot",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "evidence_hash": {
+          "name": "evidence_hash",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "previous_entry_id": {
+          "name": "previous_entry_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "wallet_version_before": {
+          "name": "wallet_version_before",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "wallet_version_after": {
+          "name": "wallet_version_after",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "balance_before": {
+          "name": "balance_before",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "reserved_before": {
+          "name": "reserved_before",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "balance_after": {
+          "name": "balance_after",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "reserved_after": {
+          "name": "reserved_after",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "occurred_at": {
+          "name": "occurred_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(now())"
+        }
+      },
+      "indexes": {
+        "credit_ledger_wallet_entry_unique": {
+          "name": "credit_ledger_wallet_entry_unique",
+          "columns": ["entry_id", "wallet_id", "workspace_id", "mode"],
+          "isUnique": true
+        },
+        "credit_ledger_event_unique": {
+          "name": "credit_ledger_event_unique",
+          "columns": ["mode", "event_key_hash"],
+          "isUnique": true
+        },
+        "credit_ledger_grant_payment_unique": {
+          "name": "credit_ledger_grant_payment_unique",
+          "columns": ["mode", "grant_payment_id"],
+          "isUnique": true
+        },
+        "credit_ledger_reservation_effect_unique": {
+          "name": "credit_ledger_reservation_effect_unique",
+          "columns": ["mode", "reservation_id", "entry_kind"],
+          "isUnique": true
+        },
+        "credit_ledger_reservation_terminal_unique": {
+          "name": "credit_ledger_reservation_terminal_unique",
+          "columns": ["mode", "reservation_id", "reservation_terminal_slot"],
+          "isUnique": true
+        },
+        "credit_ledger_root_adjustment_unique": {
+          "name": "credit_ledger_root_adjustment_unique",
+          "columns": ["mode", "root_grant_entry_id", "root_adjustment_slot"],
+          "isUnique": true
+        },
+        "credit_ledger_provider_effect_unique": {
+          "name": "credit_ledger_provider_effect_unique",
+          "columns": ["mode", "provider_event_hash"],
+          "isUnique": true
+        },
+        "credit_ledger_provider_effect_slot_unique": {
+          "name": "credit_ledger_provider_effect_slot_unique",
+          "columns": ["mode", "provider_effect_id", "root_adjustment_slot"],
+          "isUnique": true
+        },
+        "credit_ledger_wallet_version_unique": {
+          "name": "credit_ledger_wallet_version_unique",
+          "columns": ["wallet_id", "wallet_version_after"],
+          "isUnique": true
+        },
+        "credit_ledger_wallet_time_idx": {
+          "name": "credit_ledger_wallet_time_idx",
+          "columns": ["wallet_id", "occurred_at", "entry_id"],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "credit_ledger_wallet_scope_fk": {
+          "name": "credit_ledger_wallet_scope_fk",
+          "tableFrom": "credit_ledger",
+          "tableTo": "credit_wallets",
+          "columnsFrom": [
+            "wallet_id",
+            "workspace_id",
+            "mode",
+            "channel_connection_id",
+            "binding_epoch",
+            "privacy_epoch",
+            "financial_subject_ref"
+          ],
+          "columnsTo": [
+            "wallet_id",
+            "workspace_id",
+            "mode",
+            "channel_connection_id",
+            "binding_epoch",
+            "privacy_epoch",
+            "financial_subject_ref"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "credit_ledger_financial_intent_fk": {
+          "name": "credit_ledger_financial_intent_fk",
+          "tableFrom": "credit_ledger",
+          "tableTo": "billing_intents",
+          "columnsFrom": [
+            "source_intent_id",
+            "wallet_id",
+            "workspace_id",
+            "mode"
+          ],
+          "columnsTo": [
+            "intent_id",
+            "credit_wallet_id",
+            "workspace_id",
+            "mode"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "credit_ledger_reservation_scope_fk": {
+          "name": "credit_ledger_reservation_scope_fk",
+          "tableFrom": "credit_ledger",
+          "tableTo": "credit_reservations",
+          "columnsFrom": [
+            "reservation_id",
+            "wallet_id",
+            "workspace_id",
+            "mode",
+            "reservation_credit_count"
+          ],
+          "columnsTo": [
+            "reservation_id",
+            "wallet_id",
+            "workspace_id",
+            "mode",
+            "reserved_credit_count"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "credit_ledger_payment_scope_fk": {
+          "name": "credit_ledger_payment_scope_fk",
+          "tableFrom": "credit_ledger",
+          "tableTo": "payment_ledger",
+          "columnsFrom": [
+            "payment_ledger_id",
+            "workspace_id",
+            "mode",
+            "provider_payment_id"
+          ],
+          "columnsTo": ["id", "workspace_id", "mode", "mollie_payment_id"],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "credit_ledger_root_grant_wallet_fk": {
+          "name": "credit_ledger_root_grant_wallet_fk",
+          "tableFrom": "credit_ledger",
+          "tableTo": "credit_ledger",
+          "columnsFrom": [
+            "root_grant_entry_id",
+            "wallet_id",
+            "workspace_id",
+            "mode"
+          ],
+          "columnsTo": ["entry_id", "wallet_id", "workspace_id", "mode"],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "credit_ledger_entry_id": {
+          "name": "credit_ledger_entry_id",
+          "columns": ["entry_id"]
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraint": {
+        "credit_ledger_values_valid": {
+          "name": "credit_ledger_values_valid",
+          "value": "(`credit_ledger`.`balance_delta` <> 0 OR `credit_ledger`.`reserved_delta` <> 0) AND REGEXP_LIKE(`credit_ledger`.`event_key_hash`, '^[0-9a-f]{64}$', 'c') AND REGEXP_LIKE(`credit_ledger`.`evidence_hash`, '^[0-9a-f]{64}$', 'c') AND `credit_ledger`.`wallet_version_before` > 0 AND `credit_ledger`.`wallet_version_after` = `credit_ledger`.`wallet_version_before` + 1 AND `credit_ledger`.`balance_after` = `credit_ledger`.`balance_before` + `credit_ledger`.`balance_delta` AND `credit_ledger`.`reserved_after` = `credit_ledger`.`reserved_before` + `credit_ledger`.`reserved_delta` AND `credit_ledger`.`reserved_before` >= 0 AND `credit_ledger`.`reserved_after` >= 0 AND `credit_ledger`.`reserved_after` <= GREATEST(`credit_ledger`.`balance_after`, 0) AND `credit_ledger`.`occurred_at` <= `credit_ledger`.`created_at`"
+        },
+        "credit_ledger_ids_valid": {
+          "name": "credit_ledger_ids_valid",
+          "value": "REGEXP_LIKE(`credit_ledger`.`entry_id`, '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', 'c') AND REGEXP_LIKE(`credit_ledger`.`wallet_id`, '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', 'c') AND (`credit_ledger`.`previous_entry_id` IS NULL OR REGEXP_LIKE(`credit_ledger`.`previous_entry_id`, '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', 'c')) AND (`credit_ledger`.`reservation_id` IS NULL OR REGEXP_LIKE(`credit_ledger`.`reservation_id`, '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', 'c')) AND (`credit_ledger`.`root_grant_entry_id` IS NULL OR REGEXP_LIKE(`credit_ledger`.`root_grant_entry_id`, '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', 'c'))"
+        },
+        "credit_ledger_entry_shape": {
+          "name": "credit_ledger_entry_shape",
+          "value": "((`credit_ledger`.`entry_kind` = 'purchase_grant' AND `credit_ledger`.`balance_delta` = `credit_ledger`.`purchased_credit_count` AND `credit_ledger`.`reserved_delta` = 0 AND `credit_ledger`.`grant_payment_id` IS NOT NULL AND `credit_ledger`.`provider_payment_id` IS NOT NULL AND `credit_ledger`.`grant_payment_id` = `credit_ledger`.`provider_payment_id` AND `credit_ledger`.`source_intent_id` IS NOT NULL AND `credit_ledger`.`authorization_epoch` IS NOT NULL AND `credit_ledger`.`authorization_epoch` > 0 AND `credit_ledger`.`payment_ledger_id` IS NOT NULL AND `credit_ledger`.`offer_id` IS NOT NULL AND `credit_ledger`.`payment_amount` IS NOT NULL AND `credit_ledger`.`payment_amount` > 0 AND `credit_ledger`.`currency` IS NOT NULL AND `credit_ledger`.`currency` = 'EUR' AND `credit_ledger`.`purchased_credit_count` IS NOT NULL AND `credit_ledger`.`purchased_credit_count` > 0 AND `credit_ledger`.`provider_description` IS NOT NULL AND `credit_ledger`.`reservation_id` IS NULL AND `credit_ledger`.`reservation_credit_count` IS NULL AND `credit_ledger`.`reservation_terminal_slot` IS NULL AND `credit_ledger`.`root_grant_entry_id` IS NULL AND `credit_ledger`.`root_adjustment_slot` IS NULL AND `credit_ledger`.`provider_event_hash` IS NULL) OR (`credit_ledger`.`entry_kind` = 'reservation_hold' AND `credit_ledger`.`balance_delta` = 0 AND `credit_ledger`.`reservation_credit_count` IS NOT NULL AND `credit_ledger`.`reserved_delta` = `credit_ledger`.`reservation_credit_count` AND `credit_ledger`.`reservation_credit_count` > 0 AND `credit_ledger`.`reservation_id` IS NOT NULL AND `credit_ledger`.`reservation_terminal_slot` IS NULL AND `credit_ledger`.`source_intent_id` IS NULL AND `credit_ledger`.`authorization_epoch` IS NULL AND `credit_ledger`.`payment_ledger_id` IS NULL AND `credit_ledger`.`provider_payment_id` IS NULL AND `credit_ledger`.`offer_id` IS NULL AND `credit_ledger`.`payment_amount` IS NULL AND `credit_ledger`.`currency` IS NULL AND `credit_ledger`.`purchased_credit_count` IS NULL AND `credit_ledger`.`provider_description` IS NULL AND `credit_ledger`.`grant_payment_id` IS NULL AND `credit_ledger`.`root_grant_entry_id` IS NULL AND `credit_ledger`.`root_adjustment_slot` IS NULL AND `credit_ledger`.`provider_event_hash` IS NULL) OR (`credit_ledger`.`entry_kind` = 'generation_spend' AND `credit_ledger`.`reservation_credit_count` IS NOT NULL AND `credit_ledger`.`balance_delta` = -`credit_ledger`.`reservation_credit_count` AND `credit_ledger`.`reserved_delta` = -`credit_ledger`.`reservation_credit_count` AND `credit_ledger`.`reservation_credit_count` > 0 AND `credit_ledger`.`reservation_id` IS NOT NULL AND `credit_ledger`.`reservation_terminal_slot` = 1 AND `credit_ledger`.`source_intent_id` IS NULL AND `credit_ledger`.`authorization_epoch` IS NULL AND `credit_ledger`.`payment_ledger_id` IS NULL AND `credit_ledger`.`provider_payment_id` IS NULL AND `credit_ledger`.`offer_id` IS NULL AND `credit_ledger`.`payment_amount` IS NULL AND `credit_ledger`.`currency` IS NULL AND `credit_ledger`.`purchased_credit_count` IS NULL AND `credit_ledger`.`provider_description` IS NULL AND `credit_ledger`.`grant_payment_id` IS NULL AND `credit_ledger`.`root_grant_entry_id` IS NULL AND `credit_ledger`.`root_adjustment_slot` IS NULL AND `credit_ledger`.`provider_event_hash` IS NULL) OR (`credit_ledger`.`entry_kind` = 'reservation_release' AND `credit_ledger`.`reservation_credit_count` IS NOT NULL AND `credit_ledger`.`balance_delta` = 0 AND `credit_ledger`.`reserved_delta` = -`credit_ledger`.`reservation_credit_count` AND `credit_ledger`.`reservation_credit_count` > 0 AND `credit_ledger`.`reservation_id` IS NOT NULL AND `credit_ledger`.`reservation_terminal_slot` = 1 AND `credit_ledger`.`source_intent_id` IS NULL AND `credit_ledger`.`authorization_epoch` IS NULL AND `credit_ledger`.`payment_ledger_id` IS NULL AND `credit_ledger`.`provider_payment_id` IS NULL AND `credit_ledger`.`offer_id` IS NULL AND `credit_ledger`.`payment_amount` IS NULL AND `credit_ledger`.`currency` IS NULL AND `credit_ledger`.`purchased_credit_count` IS NULL AND `credit_ledger`.`provider_description` IS NULL AND `credit_ledger`.`grant_payment_id` IS NULL AND `credit_ledger`.`root_grant_entry_id` IS NULL AND `credit_ledger`.`root_adjustment_slot` IS NULL AND `credit_ledger`.`provider_event_hash` IS NULL) OR (`credit_ledger`.`entry_kind` IN ('refund_debit','chargeback_debit') AND `credit_ledger`.`purchased_credit_count` IS NOT NULL AND `credit_ledger`.`balance_delta` = -`credit_ledger`.`purchased_credit_count` AND `credit_ledger`.`reserved_delta` = 0 AND `credit_ledger`.`source_intent_id` IS NOT NULL AND `credit_ledger`.`authorization_epoch` IS NOT NULL AND `credit_ledger`.`authorization_epoch` > 0 AND `credit_ledger`.`payment_ledger_id` IS NOT NULL AND `credit_ledger`.`provider_payment_id` IS NOT NULL AND `credit_ledger`.`offer_id` IS NOT NULL AND `credit_ledger`.`payment_amount` IS NOT NULL AND `credit_ledger`.`payment_amount` > 0 AND `credit_ledger`.`currency` IS NOT NULL AND `credit_ledger`.`currency` = 'EUR' AND `credit_ledger`.`purchased_credit_count` > 0 AND `credit_ledger`.`provider_description` IS NOT NULL AND `credit_ledger`.`grant_payment_id` IS NULL AND `credit_ledger`.`reservation_id` IS NULL AND `credit_ledger`.`reservation_credit_count` IS NULL AND `credit_ledger`.`reservation_terminal_slot` IS NULL AND `credit_ledger`.`root_grant_entry_id` IS NOT NULL AND `credit_ledger`.`root_adjustment_slot` = 1 AND `credit_ledger`.`provider_event_hash` IS NOT NULL AND CHAR_LENGTH(`credit_ledger`.`provider_event_hash`) = 64) OR (`credit_ledger`.`entry_kind` = 'chargeback_restore' AND `credit_ledger`.`purchased_credit_count` IS NOT NULL AND `credit_ledger`.`balance_delta` = `credit_ledger`.`purchased_credit_count` AND `credit_ledger`.`reserved_delta` = 0 AND `credit_ledger`.`source_intent_id` IS NOT NULL AND `credit_ledger`.`authorization_epoch` IS NOT NULL AND `credit_ledger`.`authorization_epoch` > 0 AND `credit_ledger`.`payment_ledger_id` IS NOT NULL AND `credit_ledger`.`provider_payment_id` IS NOT NULL AND `credit_ledger`.`offer_id` IS NOT NULL AND `credit_ledger`.`payment_amount` IS NOT NULL AND `credit_ledger`.`payment_amount` > 0 AND `credit_ledger`.`currency` IS NOT NULL AND `credit_ledger`.`currency` = 'EUR' AND `credit_ledger`.`purchased_credit_count` > 0 AND `credit_ledger`.`provider_description` IS NOT NULL AND `credit_ledger`.`grant_payment_id` IS NULL AND `credit_ledger`.`reservation_id` IS NULL AND `credit_ledger`.`reservation_credit_count` IS NULL AND `credit_ledger`.`reservation_terminal_slot` IS NULL AND `credit_ledger`.`root_grant_entry_id` IS NOT NULL AND `credit_ledger`.`root_adjustment_slot` = 2 AND `credit_ledger`.`provider_event_hash` IS NOT NULL AND CHAR_LENGTH(`credit_ledger`.`provider_event_hash`) = 64)) IS TRUE"
+        },
+        "credit_ledger_required_fields_total": {
+          "name": "credit_ledger_required_fields_total",
+          "value": "(CASE WHEN `credit_ledger`.`entry_kind` = 'purchase_grant' THEN `credit_ledger`.`source_intent_id` IS NOT NULL AND `credit_ledger`.`authorization_epoch` IS NOT NULL AND `credit_ledger`.`payment_ledger_id` IS NOT NULL AND `credit_ledger`.`provider_payment_id` IS NOT NULL AND `credit_ledger`.`offer_id` IS NOT NULL AND `credit_ledger`.`payment_amount` IS NOT NULL AND `credit_ledger`.`currency` IS NOT NULL AND `credit_ledger`.`purchased_credit_count` IS NOT NULL AND `credit_ledger`.`provider_description` IS NOT NULL AND `credit_ledger`.`grant_payment_id` IS NOT NULL WHEN `credit_ledger`.`entry_kind` = 'reservation_hold' THEN `credit_ledger`.`reservation_id` IS NOT NULL AND `credit_ledger`.`reservation_credit_count` IS NOT NULL WHEN `credit_ledger`.`entry_kind` IN ('generation_spend','reservation_release') THEN `credit_ledger`.`reservation_id` IS NOT NULL AND `credit_ledger`.`reservation_credit_count` IS NOT NULL AND `credit_ledger`.`reservation_terminal_status` IS NOT NULL WHEN `credit_ledger`.`entry_kind` IN ('refund_debit','chargeback_debit','chargeback_restore') THEN `credit_ledger`.`source_intent_id` IS NOT NULL AND `credit_ledger`.`authorization_epoch` IS NOT NULL AND `credit_ledger`.`payment_ledger_id` IS NOT NULL AND `credit_ledger`.`provider_payment_id` IS NOT NULL AND `credit_ledger`.`offer_id` IS NOT NULL AND `credit_ledger`.`payment_amount` IS NOT NULL AND `credit_ledger`.`currency` IS NOT NULL AND `credit_ledger`.`purchased_credit_count` IS NOT NULL AND `credit_ledger`.`provider_description` IS NOT NULL AND `credit_ledger`.`root_grant_entry_id` IS NOT NULL AND `credit_ledger`.`provider_event_hash` IS NOT NULL AND `credit_ledger`.`provider_effect_id` IS NOT NULL AND `credit_ledger`.`provider_effect_type` IS NOT NULL AND `credit_ledger`.`provider_effect_status` IS NOT NULL AND `credit_ledger`.`provider_effect_amount` IS NOT NULL AND `credit_ledger`.`provider_effect_currency` IS NOT NULL ELSE false END) IS TRUE"
+        },
+        "credit_ledger_effect_shape": {
+          "name": "credit_ledger_effect_shape",
+          "value": "((`credit_ledger`.`entry_kind` NOT IN ('refund_debit','chargeback_debit','chargeback_restore') AND `credit_ledger`.`provider_event_hash` IS NULL AND `credit_ledger`.`provider_effect_id` IS NULL AND `credit_ledger`.`provider_effect_type` IS NULL AND `credit_ledger`.`provider_effect_status` IS NULL AND `credit_ledger`.`provider_effect_amount` IS NULL AND `credit_ledger`.`provider_effect_currency` IS NULL) OR (`credit_ledger`.`entry_kind` = 'refund_debit' AND `credit_ledger`.`provider_event_hash` IS NOT NULL AND `credit_ledger`.`provider_effect_id` IS NOT NULL AND REGEXP_LIKE(`credit_ledger`.`provider_event_hash`, '^[0-9a-f]{64}$', 'c') AND `credit_ledger`.`provider_effect_id` REGEXP '^[A-Za-z0-9_-]{1,64}$' AND `credit_ledger`.`provider_effect_type` = 'refund' AND `credit_ledger`.`provider_effect_status` = 'refunded' AND `credit_ledger`.`provider_effect_amount` = `credit_ledger`.`payment_amount` AND BINARY `credit_ledger`.`provider_effect_currency` = BINARY `credit_ledger`.`currency`) OR (`credit_ledger`.`entry_kind` = 'chargeback_debit' AND `credit_ledger`.`provider_event_hash` IS NOT NULL AND `credit_ledger`.`provider_effect_id` IS NOT NULL AND REGEXP_LIKE(`credit_ledger`.`provider_event_hash`, '^[0-9a-f]{64}$', 'c') AND `credit_ledger`.`provider_effect_id` REGEXP '^[A-Za-z0-9_-]{1,64}$' AND `credit_ledger`.`provider_effect_type` = 'chargeback' AND `credit_ledger`.`provider_effect_status` = 'active' AND `credit_ledger`.`provider_effect_amount` = `credit_ledger`.`payment_amount` AND BINARY `credit_ledger`.`provider_effect_currency` = BINARY `credit_ledger`.`currency`) OR (`credit_ledger`.`entry_kind` = 'chargeback_restore' AND `credit_ledger`.`provider_event_hash` IS NOT NULL AND `credit_ledger`.`provider_effect_id` IS NOT NULL AND REGEXP_LIKE(`credit_ledger`.`provider_event_hash`, '^[0-9a-f]{64}$', 'c') AND `credit_ledger`.`provider_effect_id` REGEXP '^[A-Za-z0-9_-]{1,64}$' AND `credit_ledger`.`provider_effect_type` = 'chargeback' AND `credit_ledger`.`provider_effect_status` = 'reversed' AND `credit_ledger`.`provider_effect_amount` = `credit_ledger`.`payment_amount` AND BINARY `credit_ledger`.`provider_effect_currency` = BINARY `credit_ledger`.`currency`)) IS TRUE"
+        },
+        "credit_ledger_provider_effect_evidence_shape": {
+          "name": "credit_ledger_provider_effect_evidence_shape",
+          "value": "(`credit_ledger`.`entry_kind` = 'refund_debit' AND `credit_ledger`.`provider_effect_evidence` IS NOT NULL AND JSON_TYPE(`credit_ledger`.`provider_effect_evidence`) = 'ARRAY' AND JSON_LENGTH(`credit_ledger`.`provider_effect_evidence`) > 0) OR (`credit_ledger`.`entry_kind` <> 'refund_debit' AND `credit_ledger`.`provider_effect_evidence` IS NULL)"
+        },
+        "credit_ledger_reservation_terminal_shape": {
+          "name": "credit_ledger_reservation_terminal_shape",
+          "value": "((`credit_ledger`.`entry_kind` = 'generation_spend' AND `credit_ledger`.`reservation_terminal_status` = 'committed') OR (`credit_ledger`.`entry_kind` = 'reservation_release' AND `credit_ledger`.`reservation_terminal_status` IN ('released','expired')) OR (`credit_ledger`.`entry_kind` NOT IN ('generation_spend','reservation_release') AND `credit_ledger`.`reservation_terminal_status` IS NULL)) IS TRUE"
+        },
+        "credit_ledger_chain_shape": {
+          "name": "credit_ledger_chain_shape",
+          "value": "(`credit_ledger`.`wallet_version_before` = 1 AND `credit_ledger`.`previous_entry_id` IS NULL) OR (`credit_ledger`.`wallet_version_before` > 1 AND `credit_ledger`.`previous_entry_id` IS NOT NULL)"
+        },
+        "credit_ledger_financial_bytes": {
+          "name": "credit_ledger_financial_bytes",
+          "value": "(`credit_ledger`.`currency` IS NULL OR BINARY `credit_ledger`.`currency` = BINARY 'EUR') AND (`credit_ledger`.`provider_effect_currency` IS NULL OR BINARY `credit_ledger`.`provider_effect_currency` = BINARY 'EUR')"
+        }
+      }
+    },
+    "credit_reservations": {
+      "name": "credit_reservations",
+      "columns": {
+        "reservation_id": {
+          "name": "reservation_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "wallet_id": {
+          "name": "wallet_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "workspace_id": {
+          "name": "workspace_id",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "mode": {
+          "name": "mode",
+          "type": "enum('test','live')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "channel_connection_id": {
+          "name": "channel_connection_id",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "binding_epoch": {
+          "name": "binding_epoch",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "privacy_epoch": {
+          "name": "privacy_epoch",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "financial_subject_ref": {
+          "name": "financial_subject_ref",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "reserved_credit_count": {
+          "name": "reserved_credit_count",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "generation_request_key_hash": {
+          "name": "generation_request_key_hash",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "owner_token_hash": {
+          "name": "owner_token_hash",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "status": {
+          "name": "status",
+          "type": "enum('initializing','reserved','committed','released','expired')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'initializing'"
+        },
+        "transport_state": {
+          "name": "transport_state",
+          "type": "enum('pretransport','transport_started','known_accepted','known_rejected','output_not_delivered')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'pretransport'"
+        },
+        "transport_started_at": {
+          "name": "transport_started_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "provider_accepted_at": {
+          "name": "provider_accepted_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "provider_rejected_at": {
+          "name": "provider_rejected_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "provider_rejected_status": {
+          "name": "provider_rejected_status",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "state_version": {
+          "name": "state_version",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 1
+        },
+        "owner_lease_until": {
+          "name": "owner_lease_until",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "resolution_due_at": {
+          "name": "resolution_due_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "committed_at": {
+          "name": "committed_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "released_at": {
+          "name": "released_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "hold_ledger_entry_id": {
+          "name": "hold_ledger_entry_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "terminal_ledger_entry_id": {
+          "name": "terminal_ledger_entry_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "terminal_evidence_hash": {
+          "name": "terminal_evidence_hash",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "operational_scrubbed_at": {
+          "name": "operational_scrubbed_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(now())"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "onUpdate": true,
+          "default": "(now())"
+        }
+      },
+      "indexes": {
+        "credit_reservations_generation_unique": {
+          "name": "credit_reservations_generation_unique",
+          "columns": [
+            "wallet_id",
+            "workspace_id",
+            "mode",
+            "channel_connection_id",
+            "binding_epoch",
+            "privacy_epoch",
+            "generation_request_key_hash"
+          ],
+          "isUnique": true
+        },
+        "credit_reservations_exact_scope_unique": {
+          "name": "credit_reservations_exact_scope_unique",
+          "columns": [
+            "reservation_id",
+            "wallet_id",
+            "workspace_id",
+            "mode",
+            "channel_connection_id",
+            "binding_epoch",
+            "privacy_epoch",
+            "financial_subject_ref",
+            "reserved_credit_count"
+          ],
+          "isUnique": true
+        },
+        "credit_reservations_ledger_scope_unique": {
+          "name": "credit_reservations_ledger_scope_unique",
+          "columns": [
+            "reservation_id",
+            "wallet_id",
+            "workspace_id",
+            "mode",
+            "reserved_credit_count"
+          ],
+          "isUnique": true
+        },
+        "credit_reservations_expiry_idx": {
+          "name": "credit_reservations_expiry_idx",
+          "columns": [
+            "workspace_id",
+            "mode",
+            "status",
+            "transport_state",
+            "expires_at"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "credit_reservations_wallet_scope_fk": {
+          "name": "credit_reservations_wallet_scope_fk",
+          "tableFrom": "credit_reservations",
+          "tableTo": "credit_wallets",
+          "columnsFrom": [
+            "wallet_id",
+            "workspace_id",
+            "mode",
+            "channel_connection_id",
+            "binding_epoch",
+            "privacy_epoch",
+            "financial_subject_ref"
+          ],
+          "columnsTo": [
+            "wallet_id",
+            "workspace_id",
+            "mode",
+            "channel_connection_id",
+            "binding_epoch",
+            "privacy_epoch",
+            "financial_subject_ref"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "credit_reservations_reservation_id": {
+          "name": "credit_reservations_reservation_id",
+          "columns": ["reservation_id"]
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraint": {
+        "credit_reservations_values_valid": {
+          "name": "credit_reservations_values_valid",
+          "value": "`credit_reservations`.`reserved_credit_count` > 0 AND `credit_reservations`.`state_version` > 0"
+        },
+        "credit_reservations_ids_valid": {
+          "name": "credit_reservations_ids_valid",
+          "value": "REGEXP_LIKE(`credit_reservations`.`reservation_id`, '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', 'c') AND REGEXP_LIKE(`credit_reservations`.`wallet_id`, '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', 'c') AND (`credit_reservations`.`hold_ledger_entry_id` IS NULL OR REGEXP_LIKE(`credit_reservations`.`hold_ledger_entry_id`, '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', 'c')) AND (`credit_reservations`.`terminal_ledger_entry_id` IS NULL OR REGEXP_LIKE(`credit_reservations`.`terminal_ledger_entry_id`, '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', 'c'))"
+        },
+        "credit_reservations_hashes_valid": {
+          "name": "credit_reservations_hashes_valid",
+          "value": "((`credit_reservations`.`operational_scrubbed_at` IS NULL AND `credit_reservations`.`generation_request_key_hash` IS NOT NULL AND `credit_reservations`.`owner_token_hash` IS NOT NULL AND REGEXP_LIKE(`credit_reservations`.`generation_request_key_hash`, '^[0-9a-f]{64}$', 'c') AND REGEXP_LIKE(`credit_reservations`.`owner_token_hash`, '^[0-9a-f]{64}$', 'c')) OR (`credit_reservations`.`operational_scrubbed_at` IS NOT NULL AND `credit_reservations`.`status` IN ('committed','released','expired') AND `credit_reservations`.`generation_request_key_hash` IS NULL AND `credit_reservations`.`owner_token_hash` IS NULL AND `credit_reservations`.`operational_scrubbed_at` >= `credit_reservations`.`resolution_due_at`)) IS TRUE"
+        },
+        "credit_reservations_terminal_state": {
+          "name": "credit_reservations_terminal_state",
+          "value": "((`credit_reservations`.`status` = 'initializing' AND `credit_reservations`.`transport_state` = 'pretransport' AND `credit_reservations`.`state_version` = 1 AND `credit_reservations`.`hold_ledger_entry_id` IS NULL AND `credit_reservations`.`committed_at` IS NULL AND `credit_reservations`.`released_at` IS NULL AND `credit_reservations`.`terminal_ledger_entry_id` IS NULL AND `credit_reservations`.`terminal_evidence_hash` IS NULL) OR (`credit_reservations`.`status` = 'reserved' AND `credit_reservations`.`state_version` = 2 AND `credit_reservations`.`hold_ledger_entry_id` IS NOT NULL AND `credit_reservations`.`committed_at` IS NULL AND `credit_reservations`.`released_at` IS NULL AND `credit_reservations`.`terminal_ledger_entry_id` IS NULL AND `credit_reservations`.`terminal_evidence_hash` IS NULL) OR (`credit_reservations`.`status` = 'committed' AND `credit_reservations`.`transport_state` = 'known_accepted' AND `credit_reservations`.`state_version` = 3 AND `credit_reservations`.`hold_ledger_entry_id` IS NOT NULL AND `credit_reservations`.`committed_at` IS NOT NULL AND `credit_reservations`.`released_at` IS NULL AND `credit_reservations`.`terminal_ledger_entry_id` IS NOT NULL AND `credit_reservations`.`terminal_evidence_hash` IS NOT NULL AND REGEXP_LIKE(`credit_reservations`.`terminal_evidence_hash`, '^[0-9a-f]{64}$', 'c')) OR (`credit_reservations`.`status` IN ('released','expired') AND `credit_reservations`.`transport_state` IN ('pretransport','known_rejected','output_not_delivered') AND `credit_reservations`.`state_version` = 3 AND `credit_reservations`.`hold_ledger_entry_id` IS NOT NULL AND `credit_reservations`.`released_at` IS NOT NULL AND `credit_reservations`.`committed_at` IS NULL AND `credit_reservations`.`terminal_ledger_entry_id` IS NOT NULL AND `credit_reservations`.`terminal_evidence_hash` IS NOT NULL AND REGEXP_LIKE(`credit_reservations`.`terminal_evidence_hash`, '^[0-9a-f]{64}$', 'c'))) IS TRUE"
+        },
+        "credit_reservations_transport_evidence": {
+          "name": "credit_reservations_transport_evidence",
+          "value": "((`credit_reservations`.`transport_state` = 'pretransport' AND `credit_reservations`.`transport_started_at` IS NULL AND `credit_reservations`.`provider_accepted_at` IS NULL AND `credit_reservations`.`provider_rejected_at` IS NULL AND `credit_reservations`.`provider_rejected_status` IS NULL) OR (`credit_reservations`.`transport_state` = 'transport_started' AND `credit_reservations`.`transport_started_at` IS NOT NULL AND `credit_reservations`.`provider_accepted_at` IS NULL AND `credit_reservations`.`provider_rejected_at` IS NULL AND `credit_reservations`.`provider_rejected_status` IS NULL) OR (`credit_reservations`.`transport_state` = 'known_accepted' AND `credit_reservations`.`transport_started_at` IS NOT NULL AND `credit_reservations`.`provider_accepted_at` IS NOT NULL AND `credit_reservations`.`provider_accepted_at` >= `credit_reservations`.`transport_started_at` AND `credit_reservations`.`provider_rejected_at` IS NULL AND `credit_reservations`.`provider_rejected_status` IS NULL) OR (`credit_reservations`.`transport_state` = 'known_rejected' AND `credit_reservations`.`transport_started_at` IS NOT NULL AND `credit_reservations`.`provider_accepted_at` IS NULL AND `credit_reservations`.`provider_rejected_at` IS NOT NULL AND `credit_reservations`.`provider_rejected_at` >= `credit_reservations`.`transport_started_at` AND `credit_reservations`.`provider_rejected_status` BETWEEN 400 AND 499 AND `credit_reservations`.`provider_rejected_status` NOT IN (408,429)) OR (`credit_reservations`.`transport_state` = 'output_not_delivered' AND `credit_reservations`.`transport_started_at` IS NOT NULL AND (`credit_reservations`.`provider_accepted_at` IS NULL OR `credit_reservations`.`provider_accepted_at` >= `credit_reservations`.`transport_started_at`) AND `credit_reservations`.`provider_rejected_at` IS NULL AND `credit_reservations`.`provider_rejected_status` IS NULL)) IS TRUE"
+        },
+        "credit_reservations_timestamp_order": {
+          "name": "credit_reservations_timestamp_order",
+          "value": "`credit_reservations`.`created_at` <= `credit_reservations`.`owner_lease_until` AND `credit_reservations`.`owner_lease_until` <= `credit_reservations`.`expires_at` AND `credit_reservations`.`expires_at` <= `credit_reservations`.`resolution_due_at` AND (`credit_reservations`.`transport_started_at` IS NULL OR (`credit_reservations`.`transport_started_at` >= `credit_reservations`.`created_at` AND `credit_reservations`.`transport_started_at` <= `credit_reservations`.`resolution_due_at`)) AND (`credit_reservations`.`provider_accepted_at` IS NULL OR `credit_reservations`.`provider_accepted_at` >= `credit_reservations`.`created_at`) AND (`credit_reservations`.`provider_rejected_at` IS NULL OR `credit_reservations`.`provider_rejected_at` >= `credit_reservations`.`created_at`) AND (`credit_reservations`.`committed_at` IS NULL OR `credit_reservations`.`committed_at` >= `credit_reservations`.`created_at`) AND (`credit_reservations`.`released_at` IS NULL OR `credit_reservations`.`released_at` >= `credit_reservations`.`created_at`)"
+        }
+      }
+    },
+    "credit_wallets": {
+      "name": "credit_wallets",
+      "columns": {
+        "wallet_id": {
+          "name": "wallet_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "workspace_id": {
+          "name": "workspace_id",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "mode": {
+          "name": "mode",
+          "type": "enum('test','live')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "channel_connection_id": {
+          "name": "channel_connection_id",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "binding_epoch": {
+          "name": "binding_epoch",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "privacy_epoch": {
+          "name": "privacy_epoch",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "current_user_key_hash": {
+          "name": "current_user_key_hash",
+          "type": "varchar(96)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "financial_subject_ref": {
+          "name": "financial_subject_ref",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "status": {
+          "name": "status",
+          "type": "enum('active','frozen','erased')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'active'"
+        },
+        "credit_balance": {
+          "name": "credit_balance",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "reserved_credits": {
+          "name": "reserved_credits",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "balance_version": {
+          "name": "balance_version",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 1
+        },
+        "last_ledger_entry_id": {
+          "name": "last_ledger_entry_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "refund_adjustment_entry_id": {
+          "name": "refund_adjustment_entry_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "privacy_erased_at": {
+          "name": "privacy_erased_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(now())"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "onUpdate": true,
+          "default": "(now())"
+        }
+      },
+      "indexes": {
+        "credit_wallets_financial_subject_unique": {
+          "name": "credit_wallets_financial_subject_unique",
+          "columns": ["workspace_id", "mode", "financial_subject_ref"],
+          "isUnique": true
+        },
+        "credit_wallets_active_subject_unique": {
+          "name": "credit_wallets_active_subject_unique",
+          "columns": [
+            "workspace_id",
+            "mode",
+            "channel_connection_id",
+            "binding_epoch",
+            "privacy_epoch",
+            "current_user_key_hash"
+          ],
+          "isUnique": true
+        },
+        "credit_wallets_exact_scope_unique": {
+          "name": "credit_wallets_exact_scope_unique",
+          "columns": [
+            "wallet_id",
+            "workspace_id",
+            "mode",
+            "channel_connection_id",
+            "binding_epoch",
+            "privacy_epoch",
+            "financial_subject_ref"
+          ],
+          "isUnique": true
+        },
+        "credit_wallets_subject_lookup_idx": {
+          "name": "credit_wallets_subject_lookup_idx",
+          "columns": [
+            "workspace_id",
+            "channel_connection_id",
+            "current_user_key_hash",
+            "status"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "credit_wallets_connection_workspace_fk": {
+          "name": "credit_wallets_connection_workspace_fk",
+          "tableFrom": "credit_wallets",
+          "tableTo": "channelConnections",
+          "columnsFrom": ["channel_connection_id", "workspace_id"],
+          "columnsTo": ["id", "workspaceId"],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "credit_wallets_privacy_subject_fk": {
+          "name": "credit_wallets_privacy_subject_fk",
+          "tableFrom": "credit_wallets",
+          "tableTo": "messenger_privacy_subjects",
+          "columnsFrom": [
+            "workspace_id",
+            "channel_connection_id",
+            "current_user_key_hash"
+          ],
+          "columnsTo": ["workspace_id", "channel_connection_id", "user_key"],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "credit_wallets_wallet_id": {
+          "name": "credit_wallets_wallet_id",
+          "columns": ["wallet_id"]
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraint": {
+        "credit_wallets_epochs_positive": {
+          "name": "credit_wallets_epochs_positive",
+          "value": "`credit_wallets`.`binding_epoch` > 0 AND `credit_wallets`.`privacy_epoch` > 0"
+        },
+        "credit_wallets_identity_hashes_valid": {
+          "name": "credit_wallets_identity_hashes_valid",
+          "value": "REGEXP_LIKE(`credit_wallets`.`financial_subject_ref`, '^[0-9a-f]{64}$', 'c') AND (`credit_wallets`.`current_user_key_hash` IS NULL OR REGEXP_LIKE(`credit_wallets`.`current_user_key_hash`, '^([0-9a-f]{64}|u2[.]k[1-9][0-9]{0,5}[.][0-9a-f]{64})$', 'c'))"
+        },
+        "credit_wallets_id_valid": {
+          "name": "credit_wallets_id_valid",
+          "value": "REGEXP_LIKE(`credit_wallets`.`wallet_id`, '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', 'c') AND (`credit_wallets`.`last_ledger_entry_id` IS NULL OR REGEXP_LIKE(`credit_wallets`.`last_ledger_entry_id`, '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', 'c'))"
+        },
+        "credit_wallets_counters_valid": {
+          "name": "credit_wallets_counters_valid",
+          "value": "`credit_wallets`.`reserved_credits` >= 0 AND `credit_wallets`.`reserved_credits` <= GREATEST(`credit_wallets`.`credit_balance`, 0) AND (`credit_wallets`.`status` <> 'active' OR `credit_wallets`.`credit_balance` >= 0) AND `credit_wallets`.`balance_version` > 0 AND ((`credit_wallets`.`balance_version` = 1 AND `credit_wallets`.`last_ledger_entry_id` IS NULL AND `credit_wallets`.`credit_balance` = 0 AND `credit_wallets`.`reserved_credits` = 0) OR (`credit_wallets`.`balance_version` > 1 AND `credit_wallets`.`last_ledger_entry_id` IS NOT NULL))"
+        },
+        "credit_wallets_erasure_shape": {
+          "name": "credit_wallets_erasure_shape",
+          "value": "(`credit_wallets`.`status` = 'erased' AND `credit_wallets`.`current_user_key_hash` IS NULL AND `credit_wallets`.`privacy_erased_at` IS NOT NULL AND `credit_wallets`.`privacy_erased_at` >= `credit_wallets`.`created_at` AND `credit_wallets`.`reserved_credits` = 0) OR (`credit_wallets`.`status` <> 'erased' AND `credit_wallets`.`current_user_key_hash` IS NOT NULL AND `credit_wallets`.`privacy_erased_at` IS NULL)"
+        }
+      }
+    },
     "dailyQuota": {
       "name": "dailyQuota",
       "columns": {
@@ -3838,6 +4979,55 @@
           "autoincrement": false,
           "default": 0
         },
+        "payment_effect_owner_kind": {
+          "name": "payment_effect_owner_kind",
+          "type": "enum('legacy_billing','credit_grant')",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "payment_effect_owner_ref": {
+          "name": "payment_effect_owner_ref",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "payment_effect_claimed_at": {
+          "name": "payment_effect_claimed_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "credit_purpose": {
+          "name": "credit_purpose",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "credit_intent_id": {
+          "name": "credit_intent_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "credit_wallet_id": {
+          "name": "credit_wallet_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "credit_metadata_hash": {
+          "name": "credit_metadata_hash",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "settlement_id": {
           "name": "settlement_id",
           "type": "varchar(64)",
@@ -3902,6 +5092,25 @@
           "columns": ["id", "workspace_id", "mode"],
           "isUnique": true
         },
+        "payment_ledger_exact_payment_scope_unique": {
+          "name": "payment_ledger_exact_payment_scope_unique",
+          "columns": ["id", "workspace_id", "mode", "mollie_payment_id"],
+          "isUnique": true
+        },
+        "payment_ledger_credit_intent_unique": {
+          "name": "payment_ledger_credit_intent_unique",
+          "columns": ["mode", "credit_intent_id"],
+          "isUnique": true
+        },
+        "payment_ledger_effect_owner_unique": {
+          "name": "payment_ledger_effect_owner_unique",
+          "columns": [
+            "mode",
+            "payment_effect_owner_kind",
+            "payment_effect_owner_ref"
+          ],
+          "isUnique": true
+        },
         "payment_ledger_invoice_unique": {
           "name": "payment_ledger_invoice_unique",
           "columns": ["invoice_number"],
@@ -3922,6 +5131,27 @@
           "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
+        },
+        "payment_ledger_credit_intent_scope_fk": {
+          "name": "payment_ledger_credit_intent_scope_fk",
+          "tableFrom": "payment_ledger",
+          "tableTo": "billing_intents",
+          "columnsFrom": [
+            "credit_intent_id",
+            "credit_wallet_id",
+            "workspace_id",
+            "mode",
+            "credit_metadata_hash"
+          ],
+          "columnsTo": [
+            "intent_id",
+            "credit_wallet_id",
+            "workspace_id",
+            "mode",
+            "credit_metadata_hash"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {
@@ -3931,7 +5161,16 @@
         }
       },
       "uniqueConstraints": {},
-      "checkConstraint": {}
+      "checkConstraint": {
+        "payment_ledger_credit_binding_shape": {
+          "name": "payment_ledger_credit_binding_shape",
+          "value": "((`payment_ledger`.`credit_purpose` IS NULL AND `payment_ledger`.`credit_intent_id` IS NULL AND `payment_ledger`.`credit_wallet_id` IS NULL AND `payment_ledger`.`credit_metadata_hash` IS NULL AND (`payment_ledger`.`payment_effect_owner_kind` IS NULL OR `payment_ledger`.`payment_effect_owner_kind` = 'legacy_billing')) OR (BINARY `payment_ledger`.`credit_purpose` = BINARY 'premium_image_credits' AND `payment_ledger`.`payment_effect_owner_kind` = 'credit_grant' AND BINARY `payment_ledger`.`payment_effect_owner_ref` = BINARY `payment_ledger`.`credit_intent_id` AND REGEXP_LIKE(`payment_ledger`.`credit_intent_id`, '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', 'c') AND REGEXP_LIKE(`payment_ledger`.`credit_wallet_id`, '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', 'c') AND REGEXP_LIKE(`payment_ledger`.`credit_metadata_hash`, '^[0-9a-f]{64}$', 'c'))) IS TRUE"
+        },
+        "payment_ledger_effect_owner_shape": {
+          "name": "payment_ledger_effect_owner_shape",
+          "value": "((`payment_ledger`.`payment_effect_owner_kind` IS NULL AND `payment_ledger`.`payment_effect_owner_ref` IS NULL AND `payment_ledger`.`payment_effect_claimed_at` IS NULL AND `payment_ledger`.`paid_effect_applied` IN (0,1)) OR (`payment_ledger`.`payment_effect_owner_kind` IS NOT NULL AND REGEXP_LIKE(`payment_ledger`.`payment_effect_owner_ref`, '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', 'c') AND ((`payment_ledger`.`paid_effect_applied` = 0 AND `payment_ledger`.`payment_effect_claimed_at` IS NULL) OR (`payment_ledger`.`paid_effect_applied` = 1 AND `payment_ledger`.`payment_effect_claimed_at` IS NOT NULL)))) IS TRUE"
+        }
+      }
     },
     "portalHandoffTokens": {
       "name": "portalHandoffTokens",
@@ -4076,42 +5315,9 @@
           "name": "portalHandoffTokens_workspace_status_idx",
           "columns": ["workspaceId", "status"],
           "isUnique": false
-        },
-        "portal_handoff_tokens_messenger_subject_idx": {
-          "name": "portal_handoff_tokens_messenger_subject_idx",
-          "columns": [
-            "workspaceId",
-            "messenger_channel_connection_id",
-            "messengerSenderUserKey",
-            "messenger_privacy_epoch"
-          ],
-          "isUnique": false
         }
       },
-      "foreignKeys": {
-        "portal_handoff_tokens_static_connection_fk": {
-          "name": "portal_handoff_tokens_static_connection_fk",
-          "tableFrom": "portalHandoffTokens",
-          "tableTo": "channelConnections",
-          "columnsFrom": ["messenger_channel_connection_id", "workspaceId"],
-          "columnsTo": ["id", "workspaceId"],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
-        },
-        "portal_handoff_tokens_static_subject_fk": {
-          "name": "portal_handoff_tokens_static_subject_fk",
-          "tableFrom": "portalHandoffTokens",
-          "tableTo": "messenger_privacy_subjects",
-          "columnsFrom": [
-            "workspaceId",
-            "messenger_channel_connection_id",
-            "messengerSenderUserKey"
-          ],
-          "columnsTo": ["workspace_id", "channel_connection_id", "user_key"],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
-        }
-      },
+      "foreignKeys": {},
       "compositePrimaryKeys": {
         "portalHandoffTokens_id": {
           "name": "portalHandoffTokens_id",
@@ -4119,12 +5325,7 @@
         }
       },
       "uniqueConstraints": {},
-      "checkConstraint": {
-        "portal_handoff_tokens_messenger_identity_scope": {
-          "name": "portal_handoff_tokens_messenger_identity_scope",
-          "value": "(`portalHandoffTokens`.`messengerSenderUserKey` IS NULL AND `portalHandoffTokens`.`facebookPageId` IS NULL AND `portalHandoffTokens`.`messenger_channel_connection_id` IS NULL AND `portalHandoffTokens`.`messenger_privacy_epoch` IS NULL) OR (`portalHandoffTokens`.`messengerSenderUserKey` IS NOT NULL AND `portalHandoffTokens`.`facebookPageId` IS NOT NULL AND `portalHandoffTokens`.`messenger_channel_connection_id` IS NOT NULL AND `portalHandoffTokens`.`messenger_privacy_epoch` > 0)"
-        }
-      }
+      "checkConstraint": {}
     },
     "usageStats": {
       "name": "usageStats",

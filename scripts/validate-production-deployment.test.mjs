@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { checkMetaCallbacks } from "./check-meta-callbacks.mjs";
+import { checkProductionDeployNoop } from "./check-production-deploy-noop.mjs";
 import {
   allowsStorageProxyFirstTrustedBootstrapRestore,
   checkLiveFlyDrift,
@@ -70,11 +71,13 @@ function createRepositoryFixture() {
     "apps/image-gen/storage-proxy/index.ts",
     ".github/workflows/build-production-artifacts.yml",
     ".github/workflows/cleanup-image-gen-schema-probes.yml",
+    ".github/workflows/cleanup-image-gen-runtime-principals.yml",
     ".github/workflows/deploy-production.yml",
     ".github/workflows/gateway-state-rebaseline.yml",
     ".github/workflows/image-gen-ci.yml",
     ".github/workflows/image-gen-migration-smoke.yml",
     ".github/workflows/image-gen-schema-transition.yml",
+    ".github/workflows/stage-image-gen-credit-runtime-principal.yml",
     ".github/workflows/main.yml",
     ".github/workflows/production-uptime.yml",
     ".github/workflows/recover-completed-production-deployment.yml",
@@ -104,7 +107,10 @@ function createRepositoryFixture() {
     if (settledPredecessor?.path) {
       const destination = path.join(root, settledPredecessor.path);
       fs.mkdirSync(path.dirname(destination), { recursive: true });
-      fs.copyFileSync(path.join(repoRoot, settledPredecessor.path), destination);
+      fs.copyFileSync(
+        path.join(repoRoot, settledPredecessor.path),
+        destination,
+      );
     }
   }
   return root;
@@ -135,7 +141,10 @@ function storageProxyLifecycleJqFilters(root) {
   );
   const extractFilter = (stepName, nextStepName) => {
     const stepStart = workflow.indexOf(`      - name: ${stepName}\n`);
-    const stepEnd = workflow.indexOf(`      - name: ${nextStepName}\n`, stepStart);
+    const stepEnd = workflow.indexOf(
+      `      - name: ${nextStepName}\n`,
+      stepStart,
+    );
     if (stepStart < 0 || stepEnd <= stepStart) {
       throw new Error(`Missing workflow step boundary for ${stepName}`);
     }
@@ -144,7 +153,9 @@ function storageProxyLifecycleJqFilters(root) {
       step.split("fly secrets list --app leaderbot-storage-proxy --json")
         .length - 1;
     if (commandCount !== 1) {
-      throw new Error(`Missing exact storage-proxy secret listing in ${stepName}`);
+      throw new Error(
+        `Missing exact storage-proxy secret listing in ${stepName}`,
+      );
     }
     const filter = step.match(/\| jq -e '([^'\r\n]+)' \\/u)?.[1];
     if (!filter) throw new Error(`Missing lifecycle jq filter in ${stepName}`);
@@ -1048,6 +1059,250 @@ describe("production deployment contract", () => {
     });
   });
 
+  it("keeps runtime-principal staging manual, exact, and non-deploying", () => {
+    const workflow = fs.readFileSync(
+      path.join(
+        repoRoot,
+        ".github/workflows/stage-image-gen-credit-runtime-principal.yml",
+      ),
+      "utf8",
+    );
+
+    expect(workflow).toContain("workflow_dispatch:");
+    expect(workflow).toContain('test "$GITHUB_REF" = "refs/heads/main"');
+    expect(workflow).toContain("environment: production");
+    expect(workflow).toContain("runtime_principal_pending");
+    expect(workflow).toContain("0018_credit_checkout_reservation");
+    expect(workflow).toContain("IMAGE_GEN_DATABASE_MIGRATION_URL");
+    expect(workflow).not.toContain(
+      "IMAGE_GEN_DATABASE_RUNTIME_PROVISIONER_URL",
+    );
+    expect(workflow).toContain("productionRuntimeWritableTableNames");
+    expect(workflow).toContain("creditWalletRoutineNames");
+    expect(workflow).toContain(
+      'runtime_verification_url="mysql://${runtime_principal}:${runtime_password}@127.0.0.1:13306/${RUNTIME_PRINCIPAL_DATABASE_NAME}"',
+    );
+    expect(workflow).toContain(
+      'runtime_database_url="mysql://${runtime_principal}:${runtime_password}@[${RUNTIME_PRINCIPAL_DATABASE_PRIVATE_IP}]:3306/${RUNTIME_PRINCIPAL_DATABASE_NAME}"',
+    );
+    expect(workflow).toContain(
+      'RUNTIME_DATABASE_URL="$runtime_verification_url"',
+    );
+    expect(workflow).toContain(
+      'flyctl secrets set --stage "DATABASE_URL=$runtime_database_url" --app leaderbot-fb-image-gen',
+    );
+    expect(workflow).toContain(
+      '--verify-reviewed-ci image-gen "$reviewed_image"',
+    );
+    expect(workflow).toContain(
+      'test "$actual_source_commit" = "$RUNTIME_PRINCIPAL_ARTIFACT_SOURCE_COMMIT"',
+    );
+    expect(workflow).toContain(
+      '--source-digest "$RUNTIME_PRINCIPAL_ARTIFACT_SOURCE_COMMIT"',
+    );
+    expect(workflow).not.toContain("flyctl deploy");
+    expect(workflow).not.toContain("fly deploy");
+  });
+
+  it("keeps the reviewed runtime artifact source distinct from its later manifest-review commit", () => {
+    const workflow = fs.readFileSync(
+      path.join(
+        repoRoot,
+        ".github/workflows/stage-image-gen-credit-runtime-principal.yml",
+      ),
+      "utf8",
+    );
+
+    expect(workflow).toContain(
+      'reviewed_source_commit="$(node scripts/validate-production-deployment.mjs --reviewed-source-commit image-gen "$reviewed_image")"',
+    );
+    expect(workflow).toContain('--arg manifestSourceCommit "$GITHUB_SHA"');
+    expect(workflow).toContain(
+      '--arg artifactSourceCommit "$RUNTIME_PRINCIPAL_ARTIFACT_SOURCE_COMMIT"',
+    );
+    expect(workflow).toContain(
+      "artifact:{image:$artifactImage,sourceCommit:$artifactSourceCommit}",
+    );
+    expect(workflow).not.toContain(
+      'reviewedSourceCommit\' deploy/production/apps.json)" = "$GITHUB_SHA"',
+    );
+  });
+
+  it("rejects a staged runtime whose image label is checked against the manifest commit instead of the reviewed artifact source", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/stage-image-gen-credit-runtime-principal.yml",
+      'test "$actual_source_commit" = "$RUNTIME_PRINCIPAL_ARTIFACT_SOURCE_COMMIT"',
+      'test "$actual_source_commit" = "$GITHUB_SHA"',
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must bind the staged runtime to its exact reviewed artifact source",
+    );
+  });
+
+  it("never stages the tunnel-local runtime principal URL", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/stage-image-gen-credit-runtime-principal.yml",
+      'runtime_database_url="mysql://${runtime_principal}:${runtime_password}@[${RUNTIME_PRINCIPAL_DATABASE_PRIVATE_IP}]:3306/${RUNTIME_PRINCIPAL_DATABASE_NAME}"',
+      'runtime_database_url="mysql://${runtime_principal}:${runtime_password}@127.0.0.1:13306/${RUNTIME_PRINCIPAL_DATABASE_NAME}"',
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must stage the Fly-reachable private database URL",
+    );
+  });
+
+  it("requires the reviewed trigger probe to run through runtime_verification_url before staging", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/stage-image-gen-credit-runtime-principal.yml",
+      'DATABASE_URL="$runtime_verification_url" \\\n            MOLLIE_MODE=test',
+      'DATABASE_URL="$runtime_database_url" \\\n            MOLLIE_MODE=test',
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must run the trigger probe through the tunnel-local replacement principal",
+    );
+  });
+
+  it("refuses a staging rerun while DATABASE_URL is already staged", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/stage-image-gen-credit-runtime-principal.yml",
+      'test "$database_url_status" = "Deployed"',
+      '[[ "$database_url_status" =~ ^(Deployed|Staged)$ ]]',
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must refuse staged or partial runtime credentials",
+    );
+  });
+
+  it("arms runtime-principal cleanup only after CREATE USER succeeds", () => {
+    const root = createRepositoryFixture();
+    const create =
+      "            await provisioner.query(`CREATE USER ${account} IDENTIFIED BY '${password}'`);";
+    const marker = `            fs.writeFileSync(process.env.CREATED_MARKER, \`${"${username}"}\\n\`, {
+              flag: "wx",
+              mode: 0o600,
+            });`;
+    replaceFixtureText(
+      root,
+      ".github/workflows/stage-image-gen-credit-runtime-principal.yml",
+      `${create}\n${marker}`,
+      `${marker}\n${create}`,
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must finish exact replacement-principal DML proof before credential staging begins",
+    );
+  });
+
+  it("requires an attempt-owned marker before principal cleanup", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/stage-image-gen-credit-runtime-principal.yml",
+      'test -f "$created_marker" && test "$stage_started" = 0',
+      'test "$stage_started" = 0',
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must clean up only a principal owned by this attempt",
+    );
+  });
+
+  it("requires every successor Machine to prove the staged principal before readiness", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/deploy-production.yml",
+      "EXPECTED_RUNTIME_PRINCIPAL_SHA256=$expected_principal_sha256 node $remote_probe",
+      "node $remote_probe",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must prove every successor Machine uses the exact staged runtime principal before readiness evidence",
+    );
+  });
+
+  it("derives deploy successor count from reviewed desiredScale", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/deploy-production.yml",
+      '.apps["image-gen"].desiredScale | to_entries | map(.value.count) | add',
+      '.apps["image-gen"].processGroups | map(.count) | add',
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must prove every successor Machine uses the exact staged runtime principal before readiness evidence",
+    );
+  });
+
+  it("keeps obsolete-principal cleanup behind completed cutover and lock evidence", () => {
+    const workflow = fs.readFileSync(
+      path.join(
+        repoRoot,
+        ".github/workflows/cleanup-image-gen-runtime-principals.yml",
+      ),
+      "utf8",
+    );
+
+    expect(workflow).toContain("environment: production-inspection");
+    expect(workflow).toContain("environment: production");
+    expect(workflow).toContain(
+      'databaseSchemaTransition.state\' deploy/production/apps.json)" = "complete"',
+    );
+    expect(workflow).toContain(
+      "$app.reviewedRollbackImages | index($bridge) | not",
+    );
+    expect(workflow).toContain("ACCOUNT LOCK");
+    expect(workflow).toContain("ACCOUNT UNLOCK");
+    expect(workflow).toContain("DROP USER");
+    expect(workflow).toContain("now - lockedAt < 86_400_000");
+    expect(workflow).toContain(
+      '.path == ".github/workflows/cleanup-image-gen-runtime-principals.yml"',
+    );
+    expect(workflow).toContain('.event == "workflow_dispatch"');
+    expect(workflow).not.toContain("MOLLIE_BILLING_ENABLED=true");
+    expect(workflow).not.toContain("MOLLIE_LIVE_BILLING_ENABLED=true");
+  });
+
+  it("rejects irreversible principal drop without its rollback window", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/cleanup-image-gen-runtime-principals.yml",
+      "now - lockedAt < 86_400_000",
+      "now - lockedAt < 0",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must preserve at least a 24-hour reviewed lock window",
+    );
+  });
+
+  it("derives cleanup successor count from reviewed desiredScale", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/cleanup-image-gen-runtime-principals.yml",
+      '.apps["image-gen"].desiredScale | to_entries | map(.value.count) | add',
+      '.apps["image-gen"].processGroups | map(.count) | add',
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must derive the exact successor count from reviewed desiredScale",
+    );
+  });
+
   it("requires the exact settled runtime predecessor during image-gen rotation", () => {
     const root = createRepositoryFixture();
     const manifestPath = path.join(root, "deploy/production/apps.json");
@@ -1097,8 +1352,7 @@ describe("production deployment contract", () => {
     const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
     const app = manifest.apps["image-gen"];
     const predecessor = app.reviewedSettledPredecessor;
-    const extraImage =
-      `registry.fly.io/${app.app}@sha256:${"c".repeat(64)}`;
+    const extraImage = `registry.fly.io/${app.app}@sha256:${"c".repeat(64)}`;
 
     app.reviewedRollbackImages.push(extraImage);
     app.reviewedRollbackConfigs[extraImage] = {
@@ -1116,15 +1370,21 @@ describe("production deployment contract", () => {
   });
 
   it.each([
-    ["artifact kind", (app, image) => {
-      app.reviewedRollbackArtifactKinds[image] = "migration-bridge";
-    }],
-    ["schema range", (app, image) => {
-      app.reviewedRollbackImageSchemaPhases[image] = [
-        "0015_base",
-        "0016_expand",
-      ];
-    }],
+    [
+      "artifact kind",
+      (app, image) => {
+        app.reviewedRollbackArtifactKinds[image] = "migration-bridge";
+      },
+    ],
+    [
+      "schema range",
+      (app, image) => {
+        app.reviewedRollbackImageSchemaPhases[image] = [
+          "0015_base",
+          "0016_expand",
+        ];
+      },
+    ],
   ])("rejects settled predecessor %s drift", (_label, mutate) => {
     const root = createRepositoryFixture();
     const manifestPath = path.join(root, "deploy/production/apps.json");
@@ -1731,12 +1991,7 @@ describe("production deployment contract", () => {
     ).toBe(false);
   });
 
-  it.each([
-    null,
-    438,
-    ["2026.8.27-dev.1787839287"],
-    "2026.8.27-dev.latest",
-  ])(
+  it.each([null, 438, ["2026.8.27-dev.1787839287"], "2026.8.27-dev.latest"])(
     "rejects malformed storage legacy flyctl metadata %j",
     (legacyFlyctlVersion) => {
       const root = createRepositoryFixture();
@@ -1797,10 +2052,7 @@ describe("production deployment contract", () => {
           persist-credentials: false`;
     const source = fs.readFileSync(workflowPath, "utf8");
     expect(source).toContain(checkoutStep);
-    const withoutReadinessCheckout = source.replace(
-      `${checkoutStep}\n\n`,
-      "",
-    );
+    const withoutReadinessCheckout = source.replace(`${checkoutStep}\n\n`, "");
     expect(withoutReadinessCheckout).not.toBe(source);
     const checkoutInHealthJob = withoutReadinessCheckout.replace(
       "\n  readiness:\n",
@@ -1829,7 +2081,10 @@ describe("production deployment contract", () => {
     expect(source).toContain(checkoutStep);
     const withoutCheckout = source.replace(`${checkoutStep}\n\n`, "");
     expect(withoutCheckout).not.toBe(source);
-    fs.writeFileSync(workflowPath, `${withoutCheckout.trimEnd()}\n\n${checkoutStep}\n`);
+    fs.writeFileSync(
+      workflowPath,
+      `${withoutCheckout.trimEnd()}\n\n${checkoutStep}\n`,
+    );
 
     expect(() => validateProductionRepository(root)).toThrow(
       "must check out the exact manifest without persisting credentials",
@@ -1869,7 +2124,7 @@ describe("production deployment contract", () => {
     replaceFixtureText(
       root,
       ".github/workflows/production-uptime.yml",
-      "          jq -e '.ok == true and .rateLimiter == \"shared_redis\"' \"$body\"\n",
+      '          jq -e \'.ok == true and .rateLimiter == "shared_redis"\' "$body"\n',
       "          jq -e '.ok == true' \"$body\"\n",
     );
 
@@ -2369,6 +2624,34 @@ describe("production deployment contract", () => {
     );
   });
 
+  it("requires the reversible billing-trigger probe in the migration bridge", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      "apps/image-gen/Dockerfile",
+      "COPY --from=build /app/dist/billing-trigger-runtime-preflight.cjs ./dist/billing-trigger-runtime-preflight.cjs",
+      "COPY --from=build /app/dist/billing-trigger-runtime-preflight.cjs ./dist/missing-billing-trigger-runtime-preflight.cjs",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "image-gen migration bridge must package and validate the deploy billing-trigger runtime probe",
+    );
+  });
+
+  it("requires the trusted bridge artifact to expose the deploy billing-trigger probe", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/build-production-artifacts.yml",
+      'docker run --rm "$ARTIFACT_IMAGE" test -s /app/dist/billing-trigger-runtime-preflight.cjs',
+      'docker run --rm "$ARTIFACT_IMAGE" true',
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must inspect the bridge billing-trigger runtime probe at the deploy extraction path",
+    );
+  });
+
   it("requires the billing trigger probe in the disposable MySQL lane", () => {
     const root = createRepositoryFixture();
     replaceFixtureText(
@@ -2380,6 +2663,24 @@ describe("production deployment contract", () => {
 
     expect(() => validateProductionRepository(root)).toThrow(
       "image-gen CI must run the billing trigger probe against disposable MySQL",
+    );
+  });
+
+  it.each([
+    "server/creditWalletSchema.mysql.test.ts",
+    "server/creditCheckoutReservationSchema.mysql.test.ts",
+    "server/creditPaymentFlow.mysql.test.ts",
+  ])("requires %s in the disposable MySQL lane", (testPath) => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/image-gen-ci.yml",
+      testPath,
+      `server/missing-${path.basename(testPath)}`,
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "image-gen CI must run every credit schema and payment-flow boundary against disposable MySQL",
     );
   });
 
@@ -2397,25 +2698,26 @@ describe("production deployment contract", () => {
     );
   });
 
-  it("keeps runtime artifacts on exact 0016 until writer fencing exists", () => {
+  it("keeps runtime artifacts on the exact supported 0018 phase", () => {
     const root = createRepositoryFixture();
     replaceFixtureText(
       root,
       ".github/workflows/build-production-artifacts.yml",
-      'kind="runtime"\n              schema_minimum="0016_expand"\n              schema_maximum="0016_expand"',
-      'kind="runtime"\n              schema_minimum="0016_expand"\n              schema_maximum="0017_contract"',
+      'kind="runtime"\n              schema_minimum="0018_credit_checkout_reservation"\n              schema_maximum="0018_credit_checkout_reservation"',
+      'kind="runtime"\n              schema_minimum="0018_credit_checkout_reservation"\n              schema_maximum="0017_contract"',
     );
 
     expect(() => validateProductionRepository(root)).toThrow(
-      "runtime artifacts must remain exactly 0016_expand",
+      "runtime artifacts must remain exactly 0018_credit_checkout_reservation",
     );
   });
 
-  it("rejects a Docker runtime that claims unsupported 0017 compatibility", () => {
+  it("rejects a Docker runtime that claims unsupported pre-0018 compatibility", () => {
     const root = createRepositoryFixture();
     const dockerfilePath = path.join(root, "apps/image-gen/Dockerfile");
     const dockerfile = fs.readFileSync(dockerfilePath, "utf8");
-    const marker = 'io.leaderbot.schema.maximum="0016_expand"';
+    const marker =
+      'io.leaderbot.schema.maximum="0018_credit_checkout_reservation"';
     const runtimeMarkerIndex = dockerfile.lastIndexOf(marker);
     expect(runtimeMarkerIndex).toBeGreaterThan(0);
     fs.writeFileSync(
@@ -2424,24 +2726,24 @@ describe("production deployment contract", () => {
     );
 
     expect(() => validateProductionRepository(root)).toThrow(
-      "runtime artifact must stay on the exact 0016_expand schema range",
+      "runtime artifact must stay on the exact 0018_credit_checkout_reservation schema range",
     );
   });
 
   it.each([
     ".github/workflows/image-gen-ci.yml",
     ".github/workflows/image-gen-migration-smoke.yml",
-  ])("keeps %s runtime label checks on exact 0016", (workflowPath) => {
+  ])("keeps %s runtime label checks on exact 0018", (workflowPath) => {
     const root = createRepositoryFixture();
     replaceFixtureText(
       root,
       workflowPath,
-      `io.leaderbot.schema.maximum" }}' "$image")" = "0016_expand"`,
+      `io.leaderbot.schema.maximum" }}' "$image")" = "0018_credit_checkout_reservation"`,
       `io.leaderbot.schema.maximum" }}' "$image")" = "0017_contract"`,
     );
 
     expect(() => validateProductionRepository(root)).toThrow(
-      `${workflowPath} must assert the exact 0016_expand runtime image range`,
+      `${workflowPath} must assert the exact 0018_credit_checkout_reservation runtime image range`,
     );
   });
 
@@ -2607,19 +2909,19 @@ describe("production deployment contract", () => {
     );
   });
 
-  it("uploads durable snapshot evidence before any live expand DDL", () => {
+  it("uploads durable snapshot evidence before any live credit DDL", () => {
     const root = createRepositoryFixture();
     const relativePath = ".github/workflows/image-gen-schema-transition.yml";
     const workflowPath = path.join(root, relativePath);
     const workflow = fs.readFileSync(workflowPath, "utf8");
     const uploadStart = workflow.indexOf(
-      "      - name: Upload immutable pre-expand recovery evidence before DDL",
+      "      - name: Upload immutable pre-credit recovery evidence before DDL",
     );
     const applyStart = workflow.indexOf(
-      "      - name: Apply only the reviewed 0016 expand migration",
+      "      - name: Apply only the reviewed 0017 and 0018 credit migrations",
     );
     const verifyStart = workflow.indexOf(
-      "      - name: Verify the exact 0016 expanded schema",
+      "      - name: Verify the exact 0018 credit schema",
     );
     expect(uploadStart).toBeGreaterThan(-1);
     expect(applyStart).toBeGreaterThan(uploadStart);
@@ -2631,7 +2933,7 @@ describe("production deployment contract", () => {
     );
 
     expect(() => validateProductionRepository(root)).toThrow(
-      "must durably upload verified snapshot evidence before any expand DDL",
+      "must durably upload verified snapshot evidence before any credit DDL",
     );
   });
 
@@ -3305,9 +3607,7 @@ describe("production deployment contract", () => {
         after,
       );
 
-      expect(() => validateProductionRepository(root)).toThrow(
-        expectedError,
-      );
+      expect(() => validateProductionRepository(root)).toThrow(expectedError);
     },
   );
 
@@ -3970,7 +4270,7 @@ describe("production deployment contract", () => {
     );
   });
 
-  it("verifies production artifacts with DML-only fixture users", () => {
+  it("refuses the pre-credit schema with an unprivileged runtime user", () => {
     const root = createRepositoryFixture();
     replaceFixtureText(
       root,
@@ -3980,7 +4280,7 @@ describe("production deployment contract", () => {
     );
 
     expect(() => validateProductionRepository(root)).toThrow(
-      "must verify the runtime with DML-only fixture credentials",
+      "must not verify a production artifact with privileged root credentials",
     );
   });
 
@@ -4127,7 +4427,7 @@ describe("production deployment contract", () => {
     );
   });
 
-  it("keeps the 0017 contract schema blocked in production", () => {
+  it("rejects the retired legacy 0017 contract schema", () => {
     const root = createRepositoryFixture();
     const manifestPath = path.join(root, "deploy/production/apps.json");
     const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
@@ -4148,7 +4448,7 @@ describe("production deployment contract", () => {
     fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 
     expect(() => validateProductionRepository(root)).toThrow(
-      "image-gen 0017 contract is production-blocked",
+      "image-gen legacy 0017 contract is retired and unsupported",
     );
   });
 
@@ -4207,6 +4507,34 @@ describe("production deployment contract", () => {
     );
   });
 
+  it("requires atomic paid-image spend admission before provider transport", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      "apps/image-gen/server/_core/imageService.ts",
+      "await admitMessengerProviderSpend({",
+      "await Promise.resolve({",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "imageService.ts must atomically admit priced paid-image attempts before provider transport",
+    );
+  });
+
+  it("pins the reviewed paid-image provider maximum in production config", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      "apps/image-gen/fly.toml",
+      '  MESSENGER_PAID_IMAGE_PROVIDER_MAX_COST_USD = "1.00"\n',
+      '  MESSENGER_PAID_IMAGE_PROVIDER_MAX_COST_USD = "0.50"\n',
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "apps/image-gen/fly.toml must set MESSENGER_PAID_IMAGE_PROVIDER_MAX_COST_USD=1.00",
+    );
+  });
+
   it("requires the trusted image storage public origin", () => {
     const root = createRepositoryFixture();
     replaceFixtureText(
@@ -4218,6 +4546,34 @@ describe("production deployment contract", () => {
 
     expect(() => validateProductionRepository(root)).toThrow(
       "apps/image-gen/fly.toml must set PUBLIC_BASE_URL=https://pub-7e5beae089c4457a89cb65cf300daf75.r2.dev",
+    );
+  });
+
+  it("requires a versioned paid-credit HMAC key label", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      "apps/image-gen/fly.toml",
+      '  CREDIT_CHECKOUT_HMAC_ACTIVE_KEY_ID = "k1"\n',
+      "",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "apps/image-gen/fly.toml must set a canonical CREDIT_CHECKOUT_HMAC_ACTIVE_KEY_ID",
+    );
+  });
+
+  it("rejects Test Mode paid-credit exposure without one exact hashed Messenger tester pin", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      "apps/image-gen/fly.toml",
+      '  MESSENGER_PAID_CREDITS_ENABLED = "false"\n  MOLLIE_CREDIT_CHECKOUT_ENABLED = "false"\n',
+      '  MESSENGER_PAID_CREDITS_ENABLED = "true"\n  MOLLIE_CREDIT_CHECKOUT_ENABLED = "true"\n',
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must pin Test Mode paid credits to one hashed Messenger user and exact Page binding",
     );
   });
 
@@ -4418,9 +4774,7 @@ describe("production deployment contract", () => {
         manifest.apps["image-gen"].reviewedRollbackImages[0],
         repoRoot,
       ),
-    ).toBe(
-      manifest.apps["image-gen"].reviewedRollbackImages[0],
-    );
+    ).toBe(manifest.apps["image-gen"].reviewedRollbackImages[0]);
 
     const root = createRepositoryFixture();
     const manifestPath = path.join(root, "deploy/production/apps.json");
@@ -4488,8 +4842,7 @@ describe("production deployment contract", () => {
         "utf8",
       ),
     );
-    const predecessor =
-      manifest.apps["image-gen"].reviewedSettledPredecessor;
+    const predecessor = manifest.apps["image-gen"].reviewedSettledPredecessor;
 
     expect(() =>
       getReviewedRestoreConfig(
@@ -4512,12 +4865,7 @@ describe("production deployment contract", () => {
     const image = app.databaseSchemaTransition.bridgeImage;
 
     expect(
-      getReviewedRestoreConfig(
-        "image-gen",
-        image,
-        "deploy-999-1",
-        repoRoot,
-      ),
+      getReviewedRestoreConfig("image-gen", image, "deploy-999-1", repoRoot),
     ).toBe(app.reviewedRollbackConfigs[image].path);
   });
 
@@ -4714,9 +5062,7 @@ describe("production deployment contract", () => {
     expect(reviewedImage).toBe(
       "registry.fly.io/leaderbot-storage-proxy@sha256:27dd75daaa30dac5a279fc097a57c14133efb419cbdbbd1fdefba26a21ffeace",
     );
-    expect(manifest.apps["storage-proxy"].reviewedArtifactKind).toBe(
-      "runtime",
-    );
+    expect(manifest.apps["storage-proxy"].reviewedArtifactKind).toBe("runtime");
     expect(manifest.apps["storage-proxy"].artifactTransition.state).toBe(
       "runtime_deployed",
     );
@@ -5250,9 +5596,8 @@ describe("production deployment contract", () => {
     const rollbackStep = workflow.slice(rollbackStepStart, rollbackStepEnd);
 
     expect(
-      workflow.split(
-        "fly secrets list --app leaderbot-storage-proxy --json",
-      ).length - 1,
+      workflow.split("fly secrets list --app leaderbot-storage-proxy --json")
+        .length - 1,
     ).toBe(2);
     expect(deployStep).toContain('.name == "R2_LIFECYCLE_ACCESS_KEY_ID"');
     expect(deployStep).toContain('.status == "Staged"');
@@ -5277,8 +5622,7 @@ describe("production deployment contract", () => {
       created_at: "2026-08-27T00:00:00Z",
       status,
     });
-    const accessKey = (status) =>
-      record("R2_LIFECYCLE_ACCESS_KEY_ID", status);
+    const accessKey = (status) => record("R2_LIFECYCLE_ACCESS_KEY_ID", status);
     const secretKey = (status) =>
       record("R2_LIFECYCLE_SECRET_ACCESS_KEY", status);
     const unrelatedObjectKey = record("R2_ACCESS_KEY_ID", "Deployed");
@@ -5447,8 +5791,8 @@ describe("production deployment contract", () => {
     replaceFixtureText(
       root,
       ".github/workflows/deploy-production.yml",
-      '            >/dev/null\n          args=(',
-      '            >/dev/null\n          fly secrets list --app leaderbot-storage-proxy --json\n          args=(',
+      "            >/dev/null\n          args=(",
+      "            >/dev/null\n          fly secrets list --app leaderbot-storage-proxy --json\n          args=(",
     );
 
     expect(() => validateProductionRepository(root)).toThrow(
@@ -5808,6 +6152,34 @@ describe("production deployment contract", () => {
     );
   });
 
+  it("requires credit migration smoke verification to use the exact runtime principal", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/image-gen-migration-smoke.yml",
+      "runtime_credit_smoke:runtime_credit_smoke@127.0.0.1:3306/test_image_gen",
+      "root:root@127.0.0.1:3306/test_image_gen",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "migration smoke CI must exercise only explicit staged modes",
+    );
+  });
+
+  it("keeps schema transition verification on the exact migration principal", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/image-gen-schema-transition.yml",
+      "LEADERBOT_PRODUCTION_MIGRATION_MODE=verify-credit-wallet-transition",
+      "LEADERBOT_PRODUCTION_MIGRATION_MODE=verify-credit-wallet",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must fingerprint the final credit schema with the migration principal",
+    );
+  });
+
   it("fails closed when migration change classification loses full history", () => {
     const root = createRepositoryFixture();
     replaceFixtureText(
@@ -5974,6 +6346,85 @@ describe("production deployment contract", () => {
     expect(result.blockingErrors).toContain(
       "detached Machine detected: detached-test-machine",
     );
+  });
+
+  it("recognizes an exact reviewed image and config as a deploy no-op", () => {
+    const manifest = JSON.parse(
+      fs.readFileSync(
+        path.join(repoRoot, "deploy/production/apps.json"),
+        "utf8",
+      ),
+    );
+    const image = manifest.apps["storage-proxy"].reviewedImage;
+    const result = checkProductionDeployNoop("storage-proxy", image, {
+      rootDir: repoRoot,
+      runFly: storageProxyFlyState(image),
+    });
+
+    expect(result.exact).toBe(true);
+    expect(result.drift).toEqual([]);
+  });
+
+  it("requires deployment when the reviewed config drifts despite the same image", () => {
+    const manifest = JSON.parse(
+      fs.readFileSync(
+        path.join(repoRoot, "deploy/production/apps.json"),
+        "utf8",
+      ),
+    );
+    const image = manifest.apps["storage-proxy"].reviewedImage;
+    const canonical = storageProxyFlyState(image);
+    const result = checkProductionDeployNoop("storage-proxy", image, {
+      rootDir: repoRoot,
+      runFly(args) {
+        const live = JSON.parse(canonical(args));
+        if (args.slice(0, 2).join(" ") === "config show") {
+          live.http_service.internal_port = 9999;
+        }
+        return JSON.stringify(live);
+      },
+    });
+
+    expect(result.exact).toBe(false);
+    expect(result.drift).toContain(
+      "http_service.internal_port: expected 8787, got 9999",
+    );
+  });
+
+  it("requires deployment when the live image does not match the reviewed image", () => {
+    const manifest = JSON.parse(
+      fs.readFileSync(
+        path.join(repoRoot, "deploy/production/apps.json"),
+        "utf8",
+      ),
+    );
+    const reviewedImage = manifest.apps["storage-proxy"].reviewedImage;
+    const mismatchedImage = `registry.fly.io/leaderbot-storage-proxy@sha256:${"f".repeat(64)}`;
+
+    const result = checkProductionDeployNoop("storage-proxy", reviewedImage, {
+      rootDir: repoRoot,
+      runFly: storageProxyFlyState(mismatchedImage),
+    });
+
+    expect(result.exact).toBe(false);
+    expect(result.drift.some((entry) => entry.includes("image"))).toBe(true);
+  });
+
+  it("gates every deploy job on the duplicate-deploy preflight output", () => {
+    const workflow = fs.readFileSync(
+      path.join(repoRoot, ".github/workflows/deploy-production.yml"),
+      "utf8",
+    );
+    expect(workflow).toContain("id: duplicate-deploy-check");
+    expect(workflow).toContain("scripts/check-production-deploy-noop.mjs \\");
+    expect(workflow).toContain(
+      "deploy_required: ${{ steps.duplicate-deploy-check.outputs.deploy_required }}",
+    );
+    expect(
+      workflow.match(
+        /if: inputs\.target == '(?:gateway|image-gen|storage-proxy)' && needs\.validate\.outputs\.deploy_required == 'true'/g,
+      ),
+    ).toHaveLength(3);
   });
 
   it("fails closed when the live gateway volume mount drifts", () => {
@@ -7889,9 +8340,7 @@ describe("settled production identity", () => {
         ),
         ...verificationOptions,
         fetchImpl: async () =>
-          jsonResponse(
-            canonicalDeploymentRun("image-gen", "32860967800", "1"),
-          ),
+          jsonResponse(canonicalDeploymentRun("image-gen", "32860967800", "1")),
       }),
     ).resolves.toMatchObject({
       identity: predecessor.identity,
@@ -7934,8 +8383,7 @@ describe("settled production identity", () => {
     const manifest = JSON.parse(
       fs.readFileSync(path.join(root, "deploy/production/apps.json"), "utf8"),
     );
-    const predecessor =
-      manifest.apps["image-gen"].reviewedSettledPredecessor;
+    const predecessor = manifest.apps["image-gen"].reviewedSettledPredecessor;
     fs.appendFileSync(path.join(root, predecessor.path), "\n");
 
     await expect(
@@ -8602,22 +9050,25 @@ describe("settled production identity", () => {
     ["null", null],
     ["an empty object", {}],
     ["the explicit rolling strategy", { strategy: "rolling" }],
-  ])("accepts %s as a canonical storage deploy representation", async (_label, deploy) => {
-    const root = createRepositoryFixture();
-    const manifestPath = path.join(root, "deploy/production/apps.json");
-    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-    const { legacyImage } = stageStorageProxyRuntime(manifest);
-    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  ])(
+    "accepts %s as a canonical storage deploy representation",
+    async (_label, deploy) => {
+      const root = createRepositoryFixture();
+      const manifestPath = path.join(root, "deploy/production/apps.json");
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+      const { legacyImage } = stageStorageProxyRuntime(manifest);
+      fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 
-    const result = await checkSettledLiveFlyDrift("storage-proxy", {
-      rootDir: root,
-      runFly: storageProxyLegacyBootstrapFlyState(legacyImage, ({ live }) => {
-        live.deploy = deploy;
-      }),
-    });
-    expect(result.blockingErrors).toEqual([]);
-    expect(result.reconcilableDrift).toEqual([]);
-  });
+      const result = await checkSettledLiveFlyDrift("storage-proxy", {
+        rootDir: root,
+        runFly: storageProxyLegacyBootstrapFlyState(legacyImage, ({ live }) => {
+          live.deploy = deploy;
+        }),
+      });
+      expect(result.blockingErrors).toEqual([]);
+      expect(result.reconcilableDrift).toEqual([]);
+    },
+  );
 
   it.each([
     [
@@ -8721,10 +9172,9 @@ describe("settled production identity", () => {
         rootDir: root,
         runFly: storageProxyLegacyBootstrapFlyState(legacyImage, mutate),
       });
-      expect([
-        ...result.blockingErrors,
-        ...result.reconcilableDrift,
-      ]).toEqual(expect.arrayContaining([expect.stringContaining(message)]));
+      expect([...result.blockingErrors, ...result.reconcilableDrift]).toEqual(
+        expect.arrayContaining([expect.stringContaining(message)]),
+      );
     },
   );
 

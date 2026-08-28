@@ -1,4 +1,5 @@
 import type { MollieConfig } from "./config";
+import { parseAmountMinor } from "./amounts";
 
 export type MollieAmount = {
   currency: string;
@@ -35,6 +36,7 @@ export type MolliePayment = {
   settlementAmount?: MollieAmount;
   description: string;
   method?: string | null;
+  sequenceType?: "oneoff" | "first" | "recurring";
   customerId?: string | null;
   mandateId?: string | null;
   subscriptionId?: string | null;
@@ -107,6 +109,15 @@ export class MollieApiError extends Error {
 
 type FetchLike = typeof fetch;
 
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const SHA256_PATTERN = /^[0-9a-f]{64}$/;
+const CREDIT_PAYMENT_RETURN_PATH = "/credits/checkout/return";
+const MOLLIE_LIST_PAGE_SIZE = 250;
+const PAYMENT_RECONCILIATION_MAX_PAGES = 4;
+const PAYMENT_RECONCILIATION_MAX_RESULTS =
+  MOLLIE_LIST_PAGE_SIZE * PAYMENT_RECONCILIATION_MAX_PAGES;
+
 export class MollieClient {
   private readonly apiBaseUrl: string;
 
@@ -115,7 +126,11 @@ export class MollieClient {
     private readonly fetchImpl: FetchLike = fetch,
     apiBaseUrl = "https://api.mollie.com/v2"
   ) {
-    this.apiBaseUrl = apiBaseUrl.replace(/\/$/, "");
+    const parsedApiBaseUrl = parseSecureUrl(apiBaseUrl, "Mollie API base URL");
+    if (parsedApiBaseUrl.search || parsedApiBaseUrl.hash) {
+      throw new Error("Mollie API base URL must not contain query or fragment");
+    }
+    this.apiBaseUrl = parsedApiBaseUrl.toString().replace(/\/$/, "");
   }
 
   async createCustomer(input: {
@@ -184,6 +199,37 @@ export class MollieClient {
     });
   }
 
+  async createCreditPayment(input: {
+    amount: MollieAmount;
+    description: string;
+    billingIntentId: string;
+    metadataHash: string;
+    redirectUrl: string;
+    webhookUrl: string;
+    idempotencyKey: string;
+  }): Promise<MolliePayment> {
+    assertCreditPaymentInput(this.config, input);
+    return this.request<MolliePayment>("/payments", {
+      method: "POST",
+      idempotencyKey: input.idempotencyKey,
+      body: {
+        amount: { currency: "EUR", value: input.amount.value },
+        sequenceType: "oneoff",
+        method: "bancontact",
+        locale: "nl_BE",
+        description: input.description,
+        redirectUrl: input.redirectUrl,
+        webhookUrl: input.webhookUrl,
+        metadata: {
+          billingIntentId: input.billingIntentId,
+          purpose: "premium_image_credits",
+          version: 1,
+          metadataHash: input.metadataHash,
+        },
+      },
+    });
+  }
+
   async getPayment(paymentId: string): Promise<MolliePayment> {
     assertMollieId(paymentId, "tr_");
     return this.request<MolliePayment>(
@@ -204,6 +250,18 @@ export class MollieClient {
     return this.requestAllPages<MolliePayment>(
       `/customers/${encodeURIComponent(customerId)}/payments?limit=250`,
       "payments"
+    );
+  }
+
+  async listPayments(): Promise<MolliePayment[]> {
+    return this.requestAllPages<MolliePayment>(
+      `/payments?limit=${MOLLIE_LIST_PAGE_SIZE}`,
+      "payments",
+      {
+        maxPages: PAYMENT_RECONCILIATION_MAX_PAGES,
+        maxResults: PAYMENT_RECONCILIATION_MAX_RESULTS,
+        validateNextUrl: assertProfilePaymentPaginationUrl,
+      }
     );
   }
 
@@ -311,39 +369,93 @@ export class MollieClient {
 
   private async requestAllPages<T>(
     initialPath: string,
-    embeddedKey: string
+    embeddedKey: string,
+    options?: Readonly<{
+      maxPages: number;
+      maxResults: number;
+      validateNextUrl?: (url: URL) => void;
+    }>
   ): Promise<T[]> {
     const items: T[] = [];
     const visited = new Set<string>();
+    const expectedPathname = new URL(`${this.apiBaseUrl}${initialPath}`)
+      .pathname;
     let path: string | null = initialPath;
+    let pageCount = 0;
 
     while (path) {
+      if (options && pageCount >= options.maxPages) {
+        throw new Error("Mollie pagination page limit exceeded");
+      }
       if (visited.has(path)) {
         throw new Error("Mollie pagination cycle detected");
       }
       visited.add(path);
+      pageCount += 1;
       const response: MollieList<T> = await this.request<MollieList<T>>(path, {
         method: "GET",
       });
-      items.push(...(response._embedded?.[embeddedKey] ?? []));
-      const nextHref = response._links?.next?.href;
-      path = nextHref ? this.resolvePaginationPath(nextHref, path) : null;
+      const pageItems = response._embedded?.[embeddedKey] ?? [];
+      if (!Array.isArray(pageItems)) {
+        throw new Error("Mollie returned an invalid paginated response");
+      }
+      if (options && items.length + pageItems.length > options.maxResults) {
+        throw new Error("Mollie pagination result limit exceeded");
+      }
+      items.push(...pageItems);
+      const nextLink: unknown = response._links?.next;
+      if (nextLink == null) {
+        path = null;
+        continue;
+      }
+      if (
+        typeof nextLink !== "object" ||
+        Array.isArray(nextLink) ||
+        typeof (nextLink as Record<string, unknown>).href !== "string"
+      ) {
+        throw new Error("Mollie returned an invalid pagination URL");
+      }
+      const nextHref = (nextLink as Record<string, string>).href;
+      if (!nextHref || nextHref !== nextHref.trim()) {
+        throw new Error("Mollie returned an invalid pagination URL");
+      }
+      path = this.resolvePaginationPath(
+        nextHref,
+        path,
+        expectedPathname,
+        options?.validateNextUrl
+      );
     }
 
     return items;
   }
 
-  private resolvePaginationPath(href: string, currentPath: string): string {
+  private resolvePaginationPath(
+    href: string,
+    currentPath: string,
+    expectedPathname: string,
+    validateNextUrl?: (url: URL) => void
+  ): string {
+    if (href.length > 2_048) {
+      throw new Error("Mollie returned an unexpected pagination URL");
+    }
     const apiBase = new URL(this.apiBaseUrl);
     const current = new URL(`${this.apiBaseUrl}${currentPath}`);
     const next = new URL(href, current);
     const basePath = apiBase.pathname.replace(/\/$/, "");
     if (
+      next.protocol !== "https:" ||
       next.origin !== apiBase.origin ||
-      (next.pathname !== basePath && !next.pathname.startsWith(`${basePath}/`))
+      next.username ||
+      next.password ||
+      next.hash ||
+      (next.pathname !== basePath &&
+        !next.pathname.startsWith(`${basePath}/`)) ||
+      next.pathname !== expectedPathname
     ) {
       throw new Error("Mollie returned an unexpected pagination URL");
     }
+    validateNextUrl?.(next);
     const relativePath = next.pathname.slice(basePath.length) || "/";
     return `${relativePath}${next.search}`;
   }
@@ -400,6 +512,102 @@ export class MollieClient {
       return null as T;
     }
     return (await response.json()) as T;
+  }
+}
+
+function assertProfilePaymentPaginationUrl(url: URL): void {
+  const limits = url.searchParams.getAll("limit");
+  const cursors = url.searchParams.getAll("from");
+  if (
+    limits.length !== 1 ||
+    limits[0] !== String(MOLLIE_LIST_PAGE_SIZE) ||
+    cursors.length !== 1 ||
+    !/^tr_[A-Za-z0-9][A-Za-z0-9_]{0,60}$/.test(cursors[0] ?? "") ||
+    [...url.searchParams.keys()].some(key => key !== "limit" && key !== "from")
+  ) {
+    throw new Error("Mollie returned an unexpected payment pagination query");
+  }
+
+  const encodedCursor = encodeURIComponent(cursors[0]);
+  if (
+    url.search !== `?from=${encodedCursor}&limit=${MOLLIE_LIST_PAGE_SIZE}` &&
+    url.search !== `?limit=${MOLLIE_LIST_PAGE_SIZE}&from=${encodedCursor}`
+  ) {
+    throw new Error("Mollie returned an unexpected payment pagination query");
+  }
+}
+
+function parseSecureUrl(value: string, name: string): URL {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error(`${name} must be a valid absolute URL`);
+  }
+  if (parsed.protocol !== "https:" || parsed.username || parsed.password) {
+    throw new Error(`${name} must be an HTTPS URL without credentials`);
+  }
+  return parsed;
+}
+
+function assertCreditPaymentInput(
+  config: MollieConfig,
+  input: {
+    amount: MollieAmount;
+    description: string;
+    billingIntentId: string;
+    metadataHash: string;
+    redirectUrl: string;
+    webhookUrl: string;
+    idempotencyKey: string;
+  }
+): void {
+  if (parseAmountMinor(input.amount) <= 0) {
+    throw new Error("invalid credit payment amount");
+  }
+  if (
+    typeof input.description !== "string" ||
+    input.description.length === 0 ||
+    input.description.length > 255 ||
+    input.description !== input.description.trim() ||
+    /[\u0000-\u001f\u007f]/.test(input.description)
+  ) {
+    throw new Error("invalid credit payment description");
+  }
+  if (!UUID_PATTERN.test(input.billingIntentId)) {
+    throw new Error("invalid credit payment billing intent ID");
+  }
+  if (!SHA256_PATTERN.test(input.metadataHash)) {
+    throw new Error("invalid credit payment metadata hash");
+  }
+  if (input.idempotencyKey !== `credit-payment:${input.billingIntentId}`) {
+    throw new Error("invalid credit payment idempotency key");
+  }
+
+  const redirectUrl = parseSecureUrl(
+    input.redirectUrl,
+    "credit payment return URL"
+  );
+  const appBaseUrl = parseSecureUrl(config.appBaseUrl, "APP_BASE_URL");
+  const expectedReturnUrl = new URL(
+    CREDIT_PAYMENT_RETURN_PATH,
+    appBaseUrl
+  ).toString();
+  if (
+    input.redirectUrl !== expectedReturnUrl ||
+    redirectUrl.search ||
+    redirectUrl.hash
+  ) {
+    throw new Error("invalid credit payment return URL");
+  }
+
+  const webhookUrl = parseSecureUrl(input.webhookUrl, "Mollie webhook URL");
+  if (
+    input.webhookUrl !== config.paymentWebhookUrl ||
+    webhookUrl.search ||
+    webhookUrl.hash
+  ) {
+    throw new Error("invalid credit payment webhook URL");
   }
 }
 

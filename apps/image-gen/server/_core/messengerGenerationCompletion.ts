@@ -28,15 +28,26 @@ import {
 const GENERATION_COMPLETION_SCOPE = "messenger-generation-completion";
 const GENERATION_COMPLETION_USER_INDEX_SCOPE =
   "messenger-generation-completion:user";
+const GENERATION_DELIVERY_RECEIPT_SCOPE =
+  "messenger-generation-completion:receipt";
+const GENERATION_DELIVERY_RECEIPT_REGISTRY_SCOPE =
+  "messenger-generation-completion:receipt-registry";
 const GENERATION_COMPLETION_TTL_SECONDS = 7 * 24 * 60 * 60;
 const GENERATION_OBJECT_INVENTORY_TTL_SECONDS = 31 * 24 * 60 * 60;
-const USER_INDEX_LOCK_TTL_SECONDS = 5;
-const USER_INDEX_LOCK_MAX_ATTEMPTS = 20;
+const GENERATION_DELIVERY_RECEIPT_RACE_TTL_SECONDS = 5 * 60;
+const MAX_DELIVERY_RECEIPT_MIDS = 100;
+const MAX_DELIVERY_RECEIPT_COMPLETIONS = 256;
+const MAX_DELIVERY_RECEIPT_SCOPES_PER_EPOCH = 64;
+const USER_INDEX_LOCK_TTL_SECONDS = 15;
+const USER_INDEX_LOCK_WAIT_MS = 5_000;
+const USER_INDEX_LOCK_INITIAL_BACKOFF_MS = 10;
+const USER_INDEX_LOCK_MAX_BACKOFF_MS = 125;
 
 export type MessengerGenerationQuotaAccountingMode =
   | "success_only_v1"
   | "legacy_pre_success_v1"
-  | "startpilot_attempt_committed_v1";
+  | "startpilot_attempt_committed_v1"
+  | "paid_credit_delivery_v1";
 
 export type MessengerGenerationCompletion = {
   reqId: string;
@@ -47,16 +58,26 @@ export type MessengerGenerationCompletion = {
    * Recovery consults the durable DB provider fence before deciding whether a
    * reserved attempt is safe or an actually started attempt is ambiguous.
    */
-  deliveryStatus?: "pending" | "transport_started" | "delivered";
+  deliveryStatus?:
+    "pending" | "transport_started" | "receipt_pending" | "delivered";
   deliveryStartedAt?: number;
+  messengerAcceptedAt?: number;
+  /** SHA-256 only; the raw Meta message ID is never persisted. */
+  messengerMessageIdHash?: string;
   deliveredAt?: number;
+  /** Written only by an exact scoped Meta delivery callback. */
+  deliveryProof?: "meta_delivery_receipt_v1";
+  receiptConfirmedAt?: number;
   /**
    * `success_only_v1` commits free quota after durable provider success.
    * `startpilot_attempt_committed_v1` commits paid usage atomically with the
    * provider-attempt transition. `legacy_pre_success_v1` is reserved for
    * explicitly identified pre-migration completions.
+   * `paid_credit_delivery_v1` identifies a paid hold that may commit only
+   * after this completion records exact durable Messenger delivery.
    */
   quotaAccountingMode?: MessengerGenerationQuotaAccountingMode;
+  paidCreditMode?: "test" | "live";
   /**
    * The exact originating free-quota scope, or null when the originating
    * policy deliberately bypassed free quota. Older completions omit it.
@@ -87,7 +108,10 @@ export type MessengerGenerationCompletionFence = Readonly<{
 }>;
 
 export type MessengerGenerationDeliveryStart =
-  "started" | "already_started" | "already_delivered";
+  "started" | "already_started" | "receipt_pending" | "already_delivered";
+
+export type MessengerGenerationDeliveryAcceptance =
+  "receipt_pending" | "delivered";
 
 const WRITE_COMPLETION_SCRIPT = `
 local erasedEpoch = tonumber(redis.call('get', KEYS[3]) or '0')
@@ -119,11 +143,56 @@ elseif ARGV[4] == 'delivery_start' then
   if decoded.deliveryStatus == 'delivered' then
     return {'already_delivered'}
   end
+  if decoded.deliveryStatus == 'receipt_pending' then
+    return {'receipt_pending'}
+  end
   if decoded.deliveryStatus == 'transport_started' then
     return {'already_started'}
   end
   decoded.deliveryStatus = 'transport_started'
   decoded.deliveryStartedAt = incoming.deliveryStartedAt
+  redis.call('set', KEYS[1], cjson.encode(decoded), 'PXAT', decoded.expiresAt)
+  ARGV[3] = tostring(decoded.expiresAt)
+elseif ARGV[4] == 'delivery_accept' then
+  if not existing then return {'missing'} end
+  local decoded = cjson.decode(existing)
+  local incoming = cjson.decode(ARGV[1])
+  if decoded.imageUrl ~= incoming.imageUrl then return {'conflict', existing} end
+  if decoded.messengerMessageIdHash ~= nil and decoded.messengerMessageIdHash ~= incoming.messengerMessageIdHash then
+    return {'conflict', existing}
+  end
+  if decoded.deliveryStatus == 'delivered' and decoded.deliveryProof == 'meta_delivery_receipt_v1' then
+    return {'already_delivered', existing}
+  end
+  if decoded.deliveryStatus ~= 'transport_started' and decoded.deliveryStatus ~= 'receipt_pending' then
+    return {'conflict', existing}
+  end
+  decoded.deliveryStatus = 'receipt_pending'
+  decoded.messengerAcceptedAt = decoded.messengerAcceptedAt or incoming.messengerAcceptedAt
+  decoded.messengerMessageIdHash = incoming.messengerMessageIdHash
+  redis.call('set', KEYS[1], cjson.encode(decoded), 'PXAT', decoded.expiresAt)
+  ARGV[3] = tostring(decoded.expiresAt)
+elseif ARGV[4] == 'receipt_confirm' then
+  if not existing then return {'missing'} end
+  local decoded = cjson.decode(existing)
+  local incoming = cjson.decode(ARGV[1])
+  if decoded.imageUrl ~= incoming.imageUrl
+    or decoded.messengerMessageIdHash ~= incoming.messengerMessageIdHash then
+    return {'conflict', existing}
+  end
+  if decoded.deliveryProof ~= nil and decoded.deliveryProof ~= 'meta_delivery_receipt_v1' then
+    return {'conflict', existing}
+  end
+  if decoded.deliveryStatus == 'delivered' and decoded.deliveryProof == 'meta_delivery_receipt_v1' then
+    return {'already_delivered', existing}
+  end
+  if decoded.deliveryStatus ~= 'receipt_pending' and decoded.deliveryStatus ~= 'delivered' then
+    return {'conflict', existing}
+  end
+  decoded.deliveryStatus = 'delivered'
+  decoded.deliveredAt = incoming.deliveredAt
+  decoded.deliveryProof = 'meta_delivery_receipt_v1'
+  decoded.receiptConfirmedAt = incoming.receiptConfirmedAt
   redis.call('set', KEYS[1], cjson.encode(decoded), 'PXAT', decoded.expiresAt)
   ARGV[3] = tostring(decoded.expiresAt)
 elseif ARGV[4] == 'delivery_retry' then
@@ -235,15 +304,20 @@ local erasedEpoch = tonumber(redis.call('get', KEYS[1]) or '0')
 local requestedEpoch = tonumber(ARGV[1])
 local indexedEpoch = tonumber(ARGV[2])
 local completionCount = tonumber(ARGV[3])
-if not requestedEpoch or not indexedEpoch or not completionCount then
+local deliveryStateKeyCount = tonumber(ARGV[4])
+if not requestedEpoch or not indexedEpoch or not completionCount or not deliveryStateKeyCount then
   return redis.error_reply('invalid completion epoch finalization')
+end
+if #KEYS ~= 5 + deliveryStateKeyCount then
+  return redis.error_reply('invalid completion delivery-state finalization')
 end
 if erasedEpoch < requestedEpoch or indexedEpoch > requestedEpoch then return 0 end
 for index = 1, completionCount do
-  redis.call('del', ARGV[index + 3])
+  redis.call('del', ARGV[index + 4])
 end
-redis.call('del', KEYS[3])
-redis.call('del', KEYS[4])
+for index = 3, #KEYS do
+  redis.call('del', KEYS[index])
+end
 redis.call('srem', KEYS[2], ARGV[2])
 return completionCount
 `;
@@ -280,6 +354,145 @@ end
 redis.call('del', KEYS[1])
 redis.call('srem', KEYS[2], KEYS[1])
 return 1
+`;
+
+const REMEMBER_DELIVERY_RECEIPT_SCRIPT = `
+local erasedEpoch = tonumber(redis.call('get', KEYS[2]) or '0')
+local incomingEpoch = tonumber(ARGV[2])
+local maxReceipts = tonumber(ARGV[4])
+if not incomingEpoch or incomingEpoch <= 0 or not maxReceipts then
+  return redis.error_reply('invalid delivery receipt scope')
+end
+if erasedEpoch >= incomingEpoch then return 'erased' end
+if redis.call('sismember', KEYS[1], ARGV[1]) == 1 then return 'exists' end
+if redis.call('scard', KEYS[1]) >= maxReceipts then return 'full' end
+redis.call('sadd', KEYS[1], ARGV[1])
+redis.call('pexpireat', KEYS[1], ARGV[3])
+redis.call('sadd', KEYS[3], ARGV[2])
+local registryTtl = redis.call('pttl', KEYS[3])
+if registryTtl < 0 then
+  redis.call('pexpireat', KEYS[3], ARGV[5])
+else
+  redis.call('pexpireat', KEYS[3], ARGV[5], 'GT')
+end
+return 'stored'
+`;
+
+const ACCEPT_DELIVERY_MESSAGE_SCRIPT = `
+local erasedEpoch = tonumber(redis.call('get', KEYS[4]) or '0')
+local incomingEpoch = tonumber(ARGV[3])
+if not incomingEpoch or incomingEpoch <= 0 then
+  return redis.error_reply('invalid delivery acceptance scope')
+end
+if erasedEpoch >= incomingEpoch then return {'erased'} end
+local existing = redis.call('get', KEYS[1])
+if not existing then return {'missing'} end
+local decoded = cjson.decode(existing)
+local incoming = cjson.decode(ARGV[1])
+if decoded.imageUrl ~= incoming.imageUrl then return {'conflict', existing} end
+if decoded.messengerMessageIdHash ~= nil and decoded.messengerMessageIdHash ~= ARGV[2] then
+  return {'conflict', existing}
+end
+local priorKey = redis.call('hget', KEYS[3], ARGV[2])
+if priorKey and priorKey ~= KEYS[1] then
+  if redis.call('exists', priorKey) == 1 then return {'claim_conflict'} end
+  redis.call('hdel', KEYS[3], ARGV[2])
+end
+local alreadyDelivered = decoded.deliveryStatus == 'delivered' and decoded.deliveryProof == 'meta_delivery_receipt_v1'
+if not alreadyDelivered and decoded.deliveryStatus ~= 'transport_started' and decoded.deliveryStatus ~= 'receipt_pending' then
+  return {'conflict', existing}
+end
+if redis.call('sismember', KEYS[5], ARGV[4]) == 0 then
+  if redis.call('scard', KEYS[5]) >= tonumber(ARGV[6]) then return {'scope_full'} end
+  redis.call('sadd', KEYS[5], ARGV[4])
+end
+local scopeRegistryTtl = redis.call('pttl', KEYS[5])
+if scopeRegistryTtl < 0 then
+  redis.call('pexpireat', KEYS[5], ARGV[5])
+else
+  redis.call('pexpireat', KEYS[5], ARGV[5], 'GT')
+end
+if alreadyDelivered then
+  redis.call('hset', KEYS[3], ARGV[2], KEYS[1])
+  redis.call('pexpireat', KEYS[3], decoded.expiresAt)
+  return {'delivered', existing}
+end
+decoded.deliveryStatus = 'receipt_pending'
+decoded.messengerAcceptedAt = decoded.messengerAcceptedAt or incoming.messengerAcceptedAt
+decoded.messengerMessageIdHash = ARGV[2]
+redis.call('hset', KEYS[3], ARGV[2], KEYS[1])
+local claimTtl = redis.call('pttl', KEYS[3])
+if claimTtl < 0 then
+  redis.call('pexpireat', KEYS[3], decoded.expiresAt)
+else
+  redis.call('pexpireat', KEYS[3], decoded.expiresAt, 'GT')
+end
+if redis.call('sismember', KEYS[2], ARGV[2]) == 1 then
+  redis.call('srem', KEYS[2], ARGV[2])
+  decoded.deliveryStatus = 'delivered'
+  decoded.deliveredAt = incoming.receiptConfirmedAt
+  decoded.deliveryProof = 'meta_delivery_receipt_v1'
+  decoded.receiptConfirmedAt = incoming.receiptConfirmedAt
+  redis.call('set', KEYS[1], cjson.encode(decoded), 'PXAT', decoded.expiresAt)
+  return {'delivered', cjson.encode(decoded)}
+end
+redis.call('set', KEYS[1], cjson.encode(decoded), 'PXAT', decoded.expiresAt)
+return {'receipt_pending', cjson.encode(decoded)}
+`;
+
+const CONFIRM_DELIVERY_MESSAGE_SCRIPT = `
+local erasedEpoch = tonumber(redis.call('get', KEYS[4]) or '0')
+local incomingEpoch = tonumber(ARGV[2])
+local maxReceipts = tonumber(ARGV[4])
+if not incomingEpoch or incomingEpoch <= 0 or not maxReceipts then
+  return redis.error_reply('invalid delivery receipt scope')
+end
+if erasedEpoch >= incomingEpoch then return {'erased'} end
+if redis.call('sismember', KEYS[5], ARGV[7]) == 0 then
+  if redis.call('scard', KEYS[5]) >= tonumber(ARGV[8]) then return {'scope_full'} end
+  redis.call('sadd', KEYS[5], ARGV[7])
+end
+local scopeRegistryTtl = redis.call('pttl', KEYS[5])
+if scopeRegistryTtl < 0 then
+  redis.call('pexpireat', KEYS[5], ARGV[3] + ARGV[6])
+else
+  redis.call('pexpireat', KEYS[5], ARGV[3] + ARGV[6], 'GT')
+end
+local completionKey = redis.call('hget', KEYS[2], ARGV[1])
+if completionKey then
+  local existing = redis.call('get', completionKey)
+  if existing then
+    local decoded = cjson.decode(existing)
+    if decoded.messengerMessageIdHash ~= ARGV[1] then return {'conflict'} end
+    if decoded.deliveryStatus == 'delivered' and decoded.deliveryProof == 'meta_delivery_receipt_v1' then
+      redis.call('srem', KEYS[1], ARGV[1])
+      return {'delivered', existing}
+    end
+    if decoded.deliveryStatus ~= 'receipt_pending' and decoded.deliveryStatus ~= 'delivered' then
+      return {'conflict'}
+    end
+    decoded.deliveryStatus = 'delivered'
+    decoded.deliveredAt = ARGV[3]
+    decoded.deliveryProof = 'meta_delivery_receipt_v1'
+    decoded.receiptConfirmedAt = ARGV[3]
+    redis.call('set', completionKey, cjson.encode(decoded), 'PXAT', decoded.expiresAt)
+    redis.call('srem', KEYS[1], ARGV[1])
+    return {'delivered', cjson.encode(decoded)}
+  end
+  redis.call('hdel', KEYS[2], ARGV[1])
+end
+if redis.call('sismember', KEYS[1], ARGV[1]) == 1 then return {'pending'} end
+if redis.call('scard', KEYS[1]) >= maxReceipts then return {'full'} end
+redis.call('sadd', KEYS[1], ARGV[1])
+redis.call('pexpireat', KEYS[1], ARGV[3] + ARGV[5])
+redis.call('sadd', KEYS[3], ARGV[2])
+local registryTtl = redis.call('pttl', KEYS[3])
+if registryTtl < 0 then
+  redis.call('pexpireat', KEYS[3], ARGV[3] + ARGV[6])
+else
+  redis.call('pexpireat', KEYS[3], ARGV[3] + ARGV[6], 'GT')
+end
+return {'pending'}
 `;
 
 export async function getMessengerGenerationCompletion(
@@ -451,6 +664,89 @@ function epochObjectIndexStorageId(
   return `${subjectTag(fence)}:epoch:${privacyEpoch}:objects`;
 }
 
+function epochReceiptStorageId(
+  fence: MessengerGenerationCompletionFence,
+  privacyEpoch = fence.privacyEpoch
+): string {
+  return receiptStorageIdForDigest(
+    fence,
+    deliveryReceiptScopeDigest(fence, privacyEpoch)
+  );
+}
+
+function epochMessageClaimStorageId(
+  fence: MessengerGenerationCompletionFence,
+  privacyEpoch = fence.privacyEpoch
+): string {
+  return messageClaimStorageIdForDigest(
+    fence,
+    deliveryReceiptScopeDigest(fence, privacyEpoch)
+  );
+}
+
+function epochReceiptScopeRegistryStorageId(
+  fence: MessengerGenerationCompletionFence,
+  privacyEpoch = fence.privacyEpoch
+): string {
+  return `${subjectTag(fence)}:epoch:${privacyEpoch}:receipt-scopes`;
+}
+
+function receiptStorageIdForDigest(
+  fence: MessengerGenerationCompletionFence,
+  scopeDigest: string
+): string {
+  return `${subjectTag(fence)}:receipt:${scopeDigest}`;
+}
+
+function messageClaimStorageIdForDigest(
+  fence: MessengerGenerationCompletionFence,
+  scopeDigest: string
+): string {
+  return `${subjectTag(fence)}:message-claim:${scopeDigest}`;
+}
+
+function deliveryReceiptScopeDigest(
+  fence: MessengerGenerationCompletionFence,
+  privacyEpoch = fence.privacyEpoch
+): string {
+  return createHash("sha256")
+    .update("leaderbot.messenger-delivery-scope.v1\0", "utf8")
+    .update(String(fence.workspaceId))
+    .update("\0")
+    .update(String(fence.channelConnectionId))
+    .update("\0")
+    .update(String(fence.bindingEpoch))
+    .update("\0")
+    .update(String(privacyEpoch))
+    .update("\0")
+    .update(fence.userKey)
+    .update("\0")
+    .update(fence.pageId)
+    .update("\0")
+    .update(fence.channel ?? "facebook_messenger")
+    .digest("hex");
+}
+
+function messengerMessageIdHash(
+  messageId: string,
+  fence: MessengerGenerationCompletionFence
+): string {
+  const normalized = messageId.trim();
+  if (
+    normalized.length < 1 ||
+    Buffer.byteLength(normalized, "ascii") > 1_024 ||
+    !/^[\x21-\x7e]+$/.test(normalized)
+  ) {
+    throw new Error("Invalid Messenger delivery message ID");
+  }
+  return createHash("sha256")
+    .update("leaderbot.messenger-delivery-message.v1\0", "utf8")
+    .update(deliveryReceiptScopeDigest(fence), "ascii")
+    .update("\0")
+    .update(normalized, "ascii")
+    .digest("hex");
+}
+
 function userIndexLockKey(subjectKey: string): string {
   return `lock:${GENERATION_COMPLETION_USER_INDEX_SCOPE}:${subjectKey}`;
 }
@@ -461,26 +757,31 @@ function wait(ms: number): Promise<void> {
   });
 }
 
-async function withUserIndexLock(
+async function withUserIndexLock<T>(
   subjectKey: string,
-  action: () => Promise<void>
-): Promise<void> {
+  action: () => Promise<T>
+): Promise<T> {
   const lockKey = userIndexLockKey(subjectKey);
   const token = randomUUID();
+  const deadline = Date.now() + USER_INDEX_LOCK_WAIT_MS;
+  let backoffMs = USER_INDEX_LOCK_INITIAL_BACKOFF_MS;
 
-  for (let attempt = 0; attempt < USER_INDEX_LOCK_MAX_ATTEMPTS; attempt += 1) {
+  while (Date.now() <= deadline) {
     if (
       await setEphemeralKeyIfAbsent(lockKey, token, USER_INDEX_LOCK_TTL_SECONDS)
     ) {
       try {
-        await action();
-        return;
+        return await action();
       } finally {
         await deleteEphemeralKeyIfValue(lockKey, token);
       }
     }
 
-    await wait(10);
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) break;
+    const jitterMs = Math.floor(Math.random() * 11);
+    await wait(Math.min(remainingMs, backoffMs + jitterMs));
+    backoffMs = Math.min(USER_INDEX_LOCK_MAX_BACKOFF_MS, backoffMs * 2);
   }
 
   throw new Error(
@@ -495,7 +796,8 @@ export async function markMessengerGenerationCompleted(
   now = Date.now(),
   fence?: MessengerGenerationCompletionFence,
   quotaAccountingMode: MessengerGenerationQuotaAccountingMode = "success_only_v1",
-  quotaIdentity?: MessengerImageQuotaIdentity | null
+  quotaIdentity?: MessengerImageQuotaIdentity | null,
+  paidCreditMode?: "test" | "live"
 ): Promise<void> {
   await writeMessengerGenerationCompletion(
     {
@@ -506,6 +808,7 @@ export async function markMessengerGenerationCompleted(
       successNoticeStatus: "pending",
       quotaAccountingMode,
       ...(quotaIdentity !== undefined ? { quotaIdentity } : {}),
+      ...(paidCreditMode !== undefined ? { paidCreditMode } : {}),
       userKey,
       ...fence,
       expiresAt: now + GENERATION_COMPLETION_TTL_SECONDS * 1_000,
@@ -545,11 +848,283 @@ export async function markMessengerGenerationDeliveryStarted(
   if (
     result !== "started" &&
     result !== "already_started" &&
+    result !== "receipt_pending" &&
     result !== "already_delivered"
   ) {
     throw new Error(`Messenger completion delivery start ${result}`);
   }
   return result;
+}
+
+/**
+ * Records Meta's accepted outbound message identity without treating the HTTP
+ * response as delivery. A receipt that raced ahead is consumed under the same
+ * subject lock and upgrades the completion to delivered exactly once.
+ */
+export async function markMessengerGenerationDeliveryAccepted(
+  reqId: string,
+  imageUrl: string,
+  messageId: string,
+  userKey: string,
+  now = Date.now(),
+  fence: MessengerGenerationCompletionFence
+): Promise<MessengerGenerationDeliveryAcceptance> {
+  if (userKey !== fence.userKey) {
+    throw new Error("Messenger delivery acceptance scope mismatch");
+  }
+  const messageIdHash = messengerMessageIdHash(messageId, fence);
+  if (isRedisEnabled()) {
+    return acceptMessengerDeliveryMessageRedis({
+      reqId,
+      imageUrl,
+      messageIdHash,
+      now,
+      fence,
+    });
+  }
+  return await withUserIndexLock(rootIndexStorageId(fence), async () => {
+    await registerDeliveryReceiptScopeNonRedis(fence);
+    const completions = await readIndexedCompletions(fence);
+    if (
+      completions.some(
+        completion =>
+          completion.reqId !== reqId &&
+          completion.messengerMessageIdHash === messageIdHash
+      )
+    ) {
+      throw new Error("Messenger delivery message claim conflict");
+    }
+    const result = await writeMessengerGenerationCompletion(
+      {
+        reqId,
+        imageUrl,
+        completedAt: now,
+        deliveryStatus: "receipt_pending",
+        messengerAcceptedAt: now,
+        messengerMessageIdHash: messageIdHash,
+        ...fence,
+        expiresAt: now + GENERATION_COMPLETION_TTL_SECONDS * 1_000,
+      },
+      fence,
+      "delivery_accept",
+      true
+    );
+    if (result === "already_delivered") return "delivered";
+    if (result !== "stored") {
+      throw new Error(`Messenger completion delivery acceptance ${result}`);
+    }
+    if (await consumePendingDeliveryReceipt(messageIdHash, fence)) {
+      await writeMessengerGenerationCompletion(
+        {
+          reqId,
+          imageUrl,
+          completedAt: now,
+          deliveryStatus: "delivered",
+          deliveredAt: now,
+          messengerMessageIdHash: messageIdHash,
+          deliveryProof: "meta_delivery_receipt_v1",
+          receiptConfirmedAt: now,
+          ...fence,
+          expiresAt: now + GENERATION_COMPLETION_TTL_SECONDS * 1_000,
+        },
+        fence,
+        "receipt_confirm",
+        true
+      );
+      return "delivered";
+    }
+    const current = await getMessengerGenerationCompletion(reqId, fence);
+    return current?.deliveryStatus === "delivered"
+      ? "delivered"
+      : "receipt_pending";
+  });
+}
+
+/**
+ * Applies delivery confirmations only inside the exact Page/user/privacy
+ * boundary supplied by durable webhook ingress. Unknown receipts are retained
+ * briefly as hashes solely to close the callback-before-response race.
+ */
+export async function confirmMessengerGenerationDeliveryReceipts(
+  messageIds: readonly string[],
+  fence: MessengerGenerationCompletionFence,
+  now = Date.now()
+): Promise<MessengerGenerationCompletion[]> {
+  if (messageIds.length < 1 || messageIds.length > MAX_DELIVERY_RECEIPT_MIDS) {
+    throw new Error("Invalid Messenger delivery receipt batch");
+  }
+  const hashes = Array.from(
+    new Set(
+      messageIds.map(messageId => messengerMessageIdHash(messageId, fence))
+    )
+  );
+  if (isRedisEnabled()) {
+    return confirmMessengerDeliveryMessagesRedis(hashes, fence, now);
+  }
+  return await withUserIndexLock(rootIndexStorageId(fence), async () => {
+    await assertMessengerPrivacySubject(fence);
+    await assertMessengerGenerationOwnership(fence);
+    const completions = await readIndexedCompletions(fence);
+    const byHash = new Map<string, MessengerGenerationCompletion>();
+    for (const completion of completions) {
+      if (
+        completion.messengerMessageIdHash &&
+        matchesFence(completion, fence) &&
+        (completion.deliveryStatus === "receipt_pending" ||
+          completion.deliveryStatus === "delivered")
+      ) {
+        if (byHash.has(completion.messengerMessageIdHash)) {
+          throw new Error("Messenger delivery receipt completion conflict");
+        }
+        byHash.set(completion.messengerMessageIdHash, completion);
+      }
+    }
+    const delivered: MessengerGenerationCompletion[] = [];
+    for (const hash of hashes) {
+      const completion = byHash.get(hash);
+      if (!completion) {
+        await rememberPendingDeliveryReceipt(hash, fence, now);
+        continue;
+      }
+      if (
+        completion.deliveryStatus === "delivered" &&
+        completion.deliveryProof === "meta_delivery_receipt_v1"
+      ) {
+        await forgetPendingDeliveryReceipt(hash, fence);
+        delivered.push(completion);
+        continue;
+      }
+      await writeMessengerGenerationCompletion(
+        {
+          reqId: completion.reqId,
+          imageUrl: completion.imageUrl,
+          completedAt: completion.completedAt,
+          deliveryStatus: "delivered",
+          deliveredAt: now,
+          messengerMessageIdHash: hash,
+          deliveryProof: "meta_delivery_receipt_v1",
+          receiptConfirmedAt: now,
+          ...fence,
+          expiresAt:
+            completion.expiresAt ??
+            now + GENERATION_COMPLETION_TTL_SECONDS * 1_000,
+        },
+        fence,
+        "receipt_confirm",
+        true
+      );
+      await forgetPendingDeliveryReceipt(hash, fence);
+      delivered.push({
+        ...completion,
+        deliveryStatus: "delivered",
+        deliveredAt: now,
+        messengerMessageIdHash: hash,
+        deliveryProof: "meta_delivery_receipt_v1",
+        receiptConfirmedAt: now,
+      });
+    }
+    return delivered;
+  });
+}
+
+async function acceptMessengerDeliveryMessageRedis(input: {
+  reqId: string;
+  imageUrl: string;
+  messageIdHash: string;
+  now: number;
+  fence: MessengerGenerationCompletionFence;
+}): Promise<MessengerGenerationDeliveryAcceptance> {
+  await assertMessengerPrivacySubject(input.fence);
+  await assertMessengerGenerationOwnership(input.fence);
+  const redis = await getRedisClient();
+  const completionKey = `${GENERATION_COMPLETION_SCOPE}:${completionStorageId(input.reqId, input.fence)}`;
+  const expiresAt = input.now + GENERATION_COMPLETION_TTL_SECONDS * 1_000;
+  const result = await redis.eval(
+    ACCEPT_DELIVERY_MESSAGE_SCRIPT,
+    5,
+    completionKey,
+    `${GENERATION_COMPLETION_USER_INDEX_SCOPE}:${epochReceiptStorageId(input.fence)}`,
+    `${GENERATION_COMPLETION_USER_INDEX_SCOPE}:${epochMessageClaimStorageId(input.fence)}`,
+    `${GENERATION_COMPLETION_USER_INDEX_SCOPE}:${tombstoneStorageId(input.fence)}`,
+    `${GENERATION_COMPLETION_USER_INDEX_SCOPE}:${epochReceiptScopeRegistryStorageId(input.fence)}`,
+    JSON.stringify({
+      reqId: input.reqId,
+      imageUrl: input.imageUrl,
+      messengerAcceptedAt: input.now,
+      receiptConfirmedAt: input.now,
+      expiresAt,
+    }),
+    input.messageIdHash,
+    input.fence.privacyEpoch,
+    deliveryReceiptScopeDigest(input.fence),
+    input.now + GENERATION_OBJECT_INVENTORY_TTL_SECONDS * 1_000,
+    MAX_DELIVERY_RECEIPT_SCOPES_PER_EPOCH
+  );
+  const code = Array.isArray(result) ? String(result[0]) : "unknown";
+  if (code === "delivered" || code === "receipt_pending") {
+    await assertMessengerPrivacySubject(input.fence);
+    await assertMessengerGenerationOwnership(input.fence);
+    return code;
+  }
+  if (code === "claim_conflict") {
+    throw new Error("Messenger delivery message claim conflict");
+  }
+  if (code === "erased") {
+    throw new Error("Messenger completion subject is erased");
+  }
+  throw new Error(`Messenger completion delivery acceptance ${code}`);
+}
+
+async function confirmMessengerDeliveryMessagesRedis(
+  messageIdHashes: readonly string[],
+  fence: MessengerGenerationCompletionFence,
+  now: number
+): Promise<MessengerGenerationCompletion[]> {
+  await assertMessengerPrivacySubject(fence);
+  await assertMessengerGenerationOwnership(fence);
+  const redis = await getRedisClient();
+  const delivered: MessengerGenerationCompletion[] = [];
+  for (const messageIdHash of messageIdHashes) {
+    const result = await redis.eval(
+      CONFIRM_DELIVERY_MESSAGE_SCRIPT,
+      5,
+      `${GENERATION_COMPLETION_USER_INDEX_SCOPE}:${epochReceiptStorageId(fence)}`,
+      `${GENERATION_COMPLETION_USER_INDEX_SCOPE}:${epochMessageClaimStorageId(fence)}`,
+      `${GENERATION_COMPLETION_USER_INDEX_SCOPE}:${epochRegistryStorageId(fence)}`,
+      `${GENERATION_COMPLETION_USER_INDEX_SCOPE}:${tombstoneStorageId(fence)}`,
+      `${GENERATION_COMPLETION_USER_INDEX_SCOPE}:${epochReceiptScopeRegistryStorageId(fence)}`,
+      messageIdHash,
+      fence.privacyEpoch,
+      now,
+      MAX_DELIVERY_RECEIPT_COMPLETIONS,
+      GENERATION_DELIVERY_RECEIPT_RACE_TTL_SECONDS * 1_000,
+      GENERATION_OBJECT_INVENTORY_TTL_SECONDS * 1_000,
+      deliveryReceiptScopeDigest(fence),
+      MAX_DELIVERY_RECEIPT_SCOPES_PER_EPOCH
+    );
+    const code = Array.isArray(result) ? String(result[0]) : "unknown";
+    if (code === "pending") continue;
+    if (code === "delivered" && Array.isArray(result) && result[1]) {
+      const completion = parseCompletion(String(result[1]));
+      if (
+        !completion ||
+        !matchesFence(completion, fence) ||
+        completion.deliveryProof !== "meta_delivery_receipt_v1" ||
+        completion.messengerMessageIdHash !== messageIdHash
+      ) {
+        throw new Error("Messenger delivery receipt completion conflict");
+      }
+      delivered.push(completion);
+      continue;
+    }
+    if (code === "erased") {
+      throw new Error("Messenger completion subject is erased");
+    }
+    throw new Error(`Messenger delivery receipt ${code}`);
+  }
+  await assertMessengerPrivacySubject(fence);
+  await assertMessengerGenerationOwnership(fence);
+  return delivered;
 }
 
 /** Re-opens delivery only when the transport is known not to have started. */
@@ -655,9 +1230,12 @@ function writeMessengerGenerationCompletion(
     | "create"
     | "deliver"
     | "delivery_start"
+    | "delivery_accept"
+    | "receipt_confirm"
     | "delivery_retry"
     | "quota"
-    | "notice"
+    | "notice",
+  userIndexLockHeld = false
 ): Promise<string> {
   return Promise.resolve().then(async () => {
     const completionObjectKey = fence
@@ -736,6 +1314,7 @@ function writeMessengerGenerationCompletion(
       }
       if (
         resultCode === "already_started" ||
+        resultCode === "receipt_pending" ||
         resultCode === "already_delivered" ||
         resultCode === "already_pending"
       ) {
@@ -773,6 +1352,8 @@ function writeMessengerGenerationCompletion(
       if (
         mode === "deliver" ||
         mode === "delivery_start" ||
+        mode === "delivery_accept" ||
+        mode === "receipt_confirm" ||
         mode === "delivery_retry" ||
         mode === "quota"
       ) {
@@ -808,6 +1389,9 @@ function writeMessengerGenerationCompletion(
         if (existing.deliveryStatus === "delivered") {
           return "already_delivered";
         }
+        if (existing.deliveryStatus === "receipt_pending") {
+          return "receipt_pending";
+        }
         if (existing.deliveryStatus === "transport_started") {
           return "already_started";
         }
@@ -815,6 +1399,60 @@ function writeMessengerGenerationCompletion(
           ...existing,
           deliveryStatus: "transport_started",
           deliveryStartedAt: completion.deliveryStartedAt,
+        };
+      } else if (mode === "delivery_accept") {
+        if (
+          existing.messengerMessageIdHash &&
+          existing.messengerMessageIdHash !== completion.messengerMessageIdHash
+        ) {
+          throw new Error("Messenger completion conflict");
+        }
+        if (
+          existing.deliveryStatus === "delivered" &&
+          existing.deliveryProof === "meta_delivery_receipt_v1"
+        ) {
+          return "already_delivered";
+        }
+        if (
+          existing.deliveryStatus !== "transport_started" &&
+          existing.deliveryStatus !== "receipt_pending"
+        ) {
+          throw new Error("Messenger completion conflict");
+        }
+        completion = {
+          ...existing,
+          deliveryStatus: "receipt_pending",
+          messengerAcceptedAt:
+            existing.messengerAcceptedAt ?? completion.messengerAcceptedAt,
+          messengerMessageIdHash: completion.messengerMessageIdHash,
+        };
+      } else if (mode === "receipt_confirm") {
+        if (
+          existing.messengerMessageIdHash !==
+            completion.messengerMessageIdHash ||
+          (existing.deliveryProof !== undefined &&
+            existing.deliveryProof !== "meta_delivery_receipt_v1")
+        ) {
+          throw new Error("Messenger completion conflict");
+        }
+        if (
+          existing.deliveryStatus === "delivered" &&
+          existing.deliveryProof === "meta_delivery_receipt_v1"
+        ) {
+          return "already_delivered";
+        }
+        if (
+          existing.deliveryStatus !== "receipt_pending" &&
+          existing.deliveryStatus !== "delivered"
+        ) {
+          throw new Error("Messenger completion conflict");
+        }
+        completion = {
+          ...existing,
+          deliveryStatus: "delivered",
+          deliveredAt: completion.deliveredAt,
+          deliveryProof: "meta_delivery_receipt_v1",
+          receiptConfirmedAt: completion.receiptConfirmedAt,
         };
       } else if (mode === "delivery_retry") {
         if (existing.deliveryStatus === "delivered") {
@@ -880,7 +1518,7 @@ function writeMessengerGenerationCompletion(
     const subjectKey = fence
       ? rootIndexStorageId(fence)
       : completionSubjectKey(userKey, fence);
-    await withUserIndexLock(subjectKey, async () => {
+    const updateUserIndex = async (): Promise<void> => {
       const currentIndex =
         (await Promise.resolve(
           readScopedState<string[]>(
@@ -897,13 +1535,231 @@ function writeMessengerGenerationCompletion(
           ttlSeconds
         )
       );
-    });
+    };
+    if (userIndexLockHeld) {
+      await updateUserIndex();
+    } else {
+      await withUserIndexLock(subjectKey, updateUserIndex);
+    }
     return mode === "delivery_start"
       ? "started"
       : mode === "delivery_retry"
         ? "retryable"
         : "stored";
   });
+}
+
+async function readIndexedCompletions(
+  fence: MessengerGenerationCompletionFence
+): Promise<MessengerGenerationCompletion[]> {
+  if (isRedisEnabled()) {
+    const redis = await getRedisClient();
+    const indexKey = `${GENERATION_COMPLETION_USER_INDEX_SCOPE}:${epochIndexStorageId(fence)}`;
+    const keys = await redis.smembers(indexKey);
+    const serialized = await Promise.all(keys.map(key => redis.get(key)));
+    const staleKeys: string[] = [];
+    const completions = serialized.flatMap((value, index) => {
+      if (!value) {
+        staleKeys.push(keys[index]);
+        return [];
+      }
+      const completion = parseCompletion(value);
+      if (!completion) {
+        // Preserve corrupt-but-present metadata in the privacy index. Receipt
+        // matching must ignore it, but delete-my-data can still delete the
+        // indexed key without needing to parse its value.
+        return [];
+      }
+      // The epoch index is shared by every Page/binding fence for this
+      // subject. A valid nonmatching completion must stay indexed so a later
+      // delete-my-data pass can still erase the older binding's metadata and
+      // object inventory; it is merely not a candidate for this receipt.
+      return matchesFence(completion, fence) ? [completion] : [];
+    });
+    if (staleKeys.length > 0) {
+      await Promise.all(staleKeys.map(key => redis.srem(indexKey, key)));
+    }
+    if (completions.length > MAX_DELIVERY_RECEIPT_COMPLETIONS) {
+      throw new Error("Messenger delivery receipt inventory exceeds limit");
+    }
+    return completions;
+  }
+
+  const storageIds =
+    (await Promise.resolve(
+      readScopedState<string[]>(
+        GENERATION_COMPLETION_USER_INDEX_SCOPE,
+        rootIndexStorageId(fence)
+      )
+    )) ?? [];
+  const completions = await Promise.all(
+    storageIds.map(storageId =>
+      Promise.resolve(
+        readScopedState<MessengerGenerationCompletion>(
+          GENERATION_COMPLETION_SCOPE,
+          storageId
+        )
+      )
+    )
+  );
+  const retainedIds: string[] = [];
+  const retained: MessengerGenerationCompletion[] = [];
+  completions.forEach((completion, index) => {
+    if (completion === null) return;
+    // The non-Redis root index is shared across bindings too. Prune only a
+    // genuinely missing entry; valid nonmatching completions remain reachable
+    // by privacy erasure while being excluded from this receipt scan.
+    retainedIds.push(storageIds[index]);
+    if (matchesFence(completion, fence)) retained.push(completion);
+  });
+  if (retainedIds.length !== storageIds.length) {
+    if (retainedIds.length === 0) {
+      await Promise.resolve(
+        deleteScopedState(
+          GENERATION_COMPLETION_USER_INDEX_SCOPE,
+          rootIndexStorageId(fence)
+        )
+      );
+    } else {
+      await Promise.resolve(
+        writeScopedState(
+          GENERATION_COMPLETION_USER_INDEX_SCOPE,
+          rootIndexStorageId(fence),
+          retainedIds,
+          GENERATION_COMPLETION_TTL_SECONDS
+        )
+      );
+    }
+  }
+  if (retained.length > MAX_DELIVERY_RECEIPT_COMPLETIONS) {
+    throw new Error("Messenger delivery receipt inventory exceeds limit");
+  }
+  return retained;
+}
+
+async function registerDeliveryReceiptScopeNonRedis(
+  fence: MessengerGenerationCompletionFence
+): Promise<void> {
+  const registryKey = epochReceiptScopeRegistryStorageId(fence);
+  const scopeDigest = deliveryReceiptScopeDigest(fence);
+  const current =
+    (await Promise.resolve(
+      readScopedState<string[]>(
+        GENERATION_DELIVERY_RECEIPT_REGISTRY_SCOPE,
+        registryKey
+      )
+    )) ?? [];
+  if (!current.includes(scopeDigest)) {
+    if (current.length >= MAX_DELIVERY_RECEIPT_SCOPES_PER_EPOCH) {
+      throw new Error(
+        "Messenger delivery receipt scope inventory exceeds limit"
+      );
+    }
+    current.push(scopeDigest);
+  }
+  await Promise.resolve(
+    writeScopedState(
+      GENERATION_DELIVERY_RECEIPT_REGISTRY_SCOPE,
+      registryKey,
+      current,
+      GENERATION_OBJECT_INVENTORY_TTL_SECONDS
+    )
+  );
+}
+
+async function rememberPendingDeliveryReceipt(
+  messageIdHash: string,
+  fence: MessengerGenerationCompletionFence,
+  now: number
+): Promise<void> {
+  if (isRedisEnabled()) {
+    const redis = await getRedisClient();
+    const result = String(
+      await redis.eval(
+        REMEMBER_DELIVERY_RECEIPT_SCRIPT,
+        3,
+        `${GENERATION_COMPLETION_USER_INDEX_SCOPE}:${epochReceiptStorageId(fence)}`,
+        `${GENERATION_COMPLETION_USER_INDEX_SCOPE}:${tombstoneStorageId(fence)}`,
+        `${GENERATION_COMPLETION_USER_INDEX_SCOPE}:${epochRegistryStorageId(fence)}`,
+        messageIdHash,
+        fence.privacyEpoch,
+        now + GENERATION_DELIVERY_RECEIPT_RACE_TTL_SECONDS * 1_000,
+        MAX_DELIVERY_RECEIPT_COMPLETIONS,
+        now + GENERATION_OBJECT_INVENTORY_TTL_SECONDS * 1_000
+      )
+    );
+    if (result === "stored" || result === "exists") return;
+    if (result === "erased") {
+      throw new Error("Messenger completion subject is erased");
+    }
+    throw new Error(`Messenger delivery receipt ${result}`);
+  }
+
+  await registerDeliveryReceiptScopeNonRedis(fence);
+  const key = epochReceiptStorageId(fence);
+  const current =
+    (await Promise.resolve(
+      readScopedState<string[]>(GENERATION_DELIVERY_RECEIPT_SCOPE, key)
+    )) ?? [];
+  if (!current.includes(messageIdHash)) {
+    if (current.length >= MAX_DELIVERY_RECEIPT_COMPLETIONS) {
+      throw new Error("Messenger delivery receipt inventory exceeds limit");
+    }
+    current.push(messageIdHash);
+  }
+  await Promise.resolve(
+    writeScopedState(
+      GENERATION_DELIVERY_RECEIPT_SCOPE,
+      key,
+      current,
+      GENERATION_DELIVERY_RECEIPT_RACE_TTL_SECONDS
+    )
+  );
+}
+
+async function consumePendingDeliveryReceipt(
+  messageIdHash: string,
+  fence: MessengerGenerationCompletionFence
+): Promise<boolean> {
+  if (isRedisEnabled()) {
+    const redis = await getRedisClient();
+    return (
+      (await redis.srem(
+        `${GENERATION_COMPLETION_USER_INDEX_SCOPE}:${epochReceiptStorageId(fence)}`,
+        messageIdHash
+      )) === 1
+    );
+  }
+
+  const key = epochReceiptStorageId(fence);
+  const current =
+    (await Promise.resolve(
+      readScopedState<string[]>(GENERATION_DELIVERY_RECEIPT_SCOPE, key)
+    )) ?? [];
+  if (!current.includes(messageIdHash)) return false;
+  const remaining = current.filter(value => value !== messageIdHash);
+  if (remaining.length === 0) {
+    await Promise.resolve(
+      deleteScopedState(GENERATION_DELIVERY_RECEIPT_SCOPE, key)
+    );
+  } else {
+    await Promise.resolve(
+      writeScopedState(
+        GENERATION_DELIVERY_RECEIPT_SCOPE,
+        key,
+        remaining,
+        GENERATION_DELIVERY_RECEIPT_RACE_TTL_SECONDS
+      )
+    );
+  }
+  return true;
+}
+
+async function forgetPendingDeliveryReceipt(
+  messageIdHash: string,
+  fence: MessengerGenerationCompletionFence
+): Promise<void> {
+  await consumePendingDeliveryReceipt(messageIdHash, fence);
 }
 
 async function indexCompletionObjectForPrivacyCleanup(
@@ -1038,6 +1894,7 @@ type EpochEraseSnapshot = Readonly<{
   completionKeys: string[];
   completions: CompletionEraseEntry[];
   objectKeys: string[];
+  deliveryStateKeys: string[];
 }>;
 
 type CompletionEraseSnapshot = Readonly<{
@@ -1070,6 +1927,20 @@ function parseIndexedPrivacyEpochs(
     if (epoch <= requestedEpoch) epochs.push(epoch);
   }
   return epochs.sort((left, right) => left - right);
+}
+
+function parseDeliveryReceiptScopeDigests(members: string[]): string[] {
+  if (members.length > MAX_DELIVERY_RECEIPT_SCOPES_PER_EPOCH) {
+    throw new Error("Messenger delivery receipt scope index exceeds limit");
+  }
+  const unique = new Set<string>();
+  for (const member of members) {
+    if (!/^[a-f0-9]{64}$/.test(member)) {
+      throw new Error("Invalid Messenger delivery receipt scope index");
+    }
+    unique.add(member);
+  }
+  return [...unique];
 }
 
 async function beginCompletionErasure(
@@ -1117,10 +1988,13 @@ async function beginCompletionErasure(
     indexedEpochs.map(async privacyEpoch => {
       const indexKey = `${GENERATION_COMPLETION_USER_INDEX_SCOPE}:${epochIndexStorageId(fence, privacyEpoch)}`;
       const objectIndexKey = `${GENERATION_COMPLETION_USER_INDEX_SCOPE}:${epochObjectIndexStorageId(fence, privacyEpoch)}`;
-      const [completionKeys, objectKeys] = await Promise.all([
-        redis.smembers(indexKey),
-        redis.smembers(objectIndexKey),
-      ]);
+      const receiptScopeRegistryKey = `${GENERATION_COMPLETION_USER_INDEX_SCOPE}:${epochReceiptScopeRegistryStorageId(fence, privacyEpoch)}`;
+      const [completionKeys, objectKeys, receiptScopeMembers] =
+        await Promise.all([
+          redis.smembers(indexKey),
+          redis.smembers(objectIndexKey),
+          redis.smembers(receiptScopeRegistryKey),
+        ]);
       const serialized = await Promise.all(
         completionKeys.map(key => redis.get(key))
       );
@@ -1131,11 +2005,21 @@ async function beginCompletionErasure(
           completions.push({ key: completionKeys[index], serialized: value });
         }
       }
+      const receiptScopeDigests = parseDeliveryReceiptScopeDigests([
+        ...receiptScopeMembers,
+        ...(receiptScopeMembers.length === 0
+          ? [deliveryReceiptScopeDigest(fence, privacyEpoch)]
+          : []),
+      ]);
       return {
         privacyEpoch,
         completionKeys,
         completions,
         objectKeys,
+        deliveryStateKeys: receiptScopeDigests.flatMap(scopeDigest => [
+          `${GENERATION_COMPLETION_USER_INDEX_SCOPE}:${receiptStorageIdForDigest(fence, scopeDigest)}`,
+          `${GENERATION_COMPLETION_USER_INDEX_SCOPE}:${messageClaimStorageIdForDigest(fence, scopeDigest)}`,
+        ]),
       };
     })
   );
@@ -1169,20 +2053,26 @@ async function finalizeCompletionErasure(
   );
 
   await Promise.all(
-    snapshot.epochs.map(epoch =>
-      redis.eval(
-        FINALIZE_EPOCH_ERASE_SCRIPT,
-        4,
+    snapshot.epochs.map(epoch => {
+      const keys = [
         `${GENERATION_COMPLETION_USER_INDEX_SCOPE}:${tombstoneStorageId(fence)}`,
         `${GENERATION_COMPLETION_USER_INDEX_SCOPE}:${epochRegistryStorageId(fence)}`,
         `${GENERATION_COMPLETION_USER_INDEX_SCOPE}:${epochIndexStorageId(fence, epoch.privacyEpoch)}`,
         `${GENERATION_COMPLETION_USER_INDEX_SCOPE}:${epochObjectIndexStorageId(fence, epoch.privacyEpoch)}`,
+        `${GENERATION_COMPLETION_USER_INDEX_SCOPE}:${epochReceiptScopeRegistryStorageId(fence, epoch.privacyEpoch)}`,
+        ...epoch.deliveryStateKeys,
+      ];
+      return redis.eval(
+        FINALIZE_EPOCH_ERASE_SCRIPT,
+        keys.length,
+        ...keys,
         String(fence.privacyEpoch),
         String(epoch.privacyEpoch),
         epoch.completionKeys.length,
+        epoch.deliveryStateKeys.length,
         ...epoch.completionKeys
-      )
-    )
+      );
+    })
   );
 }
 
@@ -1276,6 +2166,39 @@ async function deleteMessengerGenerationCompletionsForFence(
   await Promise.resolve(
     deleteScopedState(GENERATION_COMPLETION_USER_INDEX_SCOPE, subjectKey)
   );
+  if (keyFence) {
+    const receiptScopeRegistryKey =
+      epochReceiptScopeRegistryStorageId(keyFence);
+    const registeredScopes =
+      (await Promise.resolve(
+        readScopedState<string[]>(
+          GENERATION_DELIVERY_RECEIPT_REGISTRY_SCOPE,
+          receiptScopeRegistryKey
+        )
+      )) ?? [];
+    const receiptScopeDigests = parseDeliveryReceiptScopeDigests([
+      ...registeredScopes,
+      ...(registeredScopes.length === 0
+        ? [deliveryReceiptScopeDigest(keyFence)]
+        : []),
+    ]);
+    await Promise.all(
+      receiptScopeDigests.map(scopeDigest =>
+        Promise.resolve(
+          deleteScopedState(
+            GENERATION_DELIVERY_RECEIPT_SCOPE,
+            receiptStorageIdForDigest(keyFence, scopeDigest)
+          )
+        )
+      )
+    );
+    await Promise.resolve(
+      deleteScopedState(
+        GENERATION_DELIVERY_RECEIPT_REGISTRY_SCOPE,
+        receiptScopeRegistryKey
+      )
+    );
+  }
 }
 
 export async function deleteMessengerGenerationCompletionsForUser(

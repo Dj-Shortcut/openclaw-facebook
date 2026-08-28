@@ -1,16 +1,32 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MySqlDialect } from "drizzle-orm/mysql-core";
 
-const { databaseMock } = vi.hoisted(() => ({ databaseMock: vi.fn() }));
+import { billingNotificationReceipts } from "../../../drizzle/schema";
+
+const { databaseMock, configuredMode, recordPollMock } = vi.hoisted(() => ({
+  databaseMock: vi.fn(),
+  configuredMode: { value: "test" as "test" | "live" },
+  recordPollMock: vi.fn(async () => undefined),
+}));
 vi.mock("../../db", () => ({ getDatabaseOrThrow: databaseMock }));
-vi.mock("./config", () => ({ getConfiguredBillingMode: () => "test" }));
+vi.mock("./config", () => ({
+  getConfiguredBillingMode: () => configuredMode.value,
+}));
 vi.mock("./billingSchedulerStore", () => ({
-  recordBillingSchedulerPoll: vi.fn(async () => undefined),
+  recordBillingSchedulerPoll: recordPollMock,
 }));
 
-import { runBillingNotificationReceiverOnce } from "./billingNotificationReceiverWorker";
+import {
+  listWorkspaceBillingNotifications,
+  runBillingNotificationReceiverOnce,
+  runHistoricalBillingNotificationReceiverOnce,
+} from "./billingNotificationReceiverWorker";
 
 describe("billing notification receiver worker", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    configuredMode.value = "test";
+  });
 
   it("claims and materializes one tenant-scoped notification exactly once", async () => {
     const harness = createHarness([job(1, 42)]);
@@ -69,6 +85,104 @@ describe("billing notification receiver worker", () => {
     expect(harness.deadLetters).toEqual([1]);
     expect(harness.completed).toEqual([2]);
     expect(harness.aggregateDeadCounts).toEqual([1, 1]);
+  });
+
+  it("materializes a historical Test Mode manual review after a live cutover", async () => {
+    configuredMode.value = "live";
+    const review = {
+      ...job(1, 42),
+      mode: "test" as const,
+      audience: "operator" as const,
+      eventType: "manual_review",
+      reason: "credit_reservation_transport_ambiguous",
+    };
+    const harness = createHarness([review]);
+    databaseMock.mockResolvedValue(harness.database);
+
+    await expect(
+      runHistoricalBillingNotificationReceiverOnce(fixedNow)
+    ).resolves.toBe(true);
+
+    expect(recordPollMock).toHaveBeenCalledWith(
+      "test",
+      "notification_receiver",
+      fixedNow
+    );
+    expect(harness.inbox).toEqual([
+      expect.objectContaining({
+        receiptId: 101,
+        workspaceId: 42,
+        audience: "operator",
+        eventType: "manual_review",
+      }),
+    ]);
+  });
+
+  it("lists historical test and live notifications with immutable receipt mode", async () => {
+    let joinCondition: unknown;
+    let whereCondition: unknown;
+    const rows = [
+      {
+        id: 81,
+        mode: "test" as const,
+        eventType: "manual_review",
+        reason: "credit_reservation_transport_ambiguous",
+        occurredAt: new Date("2026-08-17T10:00:00.000Z"),
+        readAt: null,
+      },
+      {
+        id: 82,
+        mode: "live" as const,
+        eventType: "manual_review",
+        reason: "credit_reservation_transport_ambiguous",
+        occurredAt: new Date("2026-08-18T10:00:00.000Z"),
+        readAt: null,
+      },
+    ];
+    const select = vi.fn((selection: Record<string, unknown>) => ({
+      from: vi.fn(() => ({
+        innerJoin: vi.fn((_table: unknown, condition: unknown) => {
+          joinCondition = condition;
+          return {
+            where: vi.fn((condition: unknown) => {
+              whereCondition = condition;
+              return {
+                orderBy: vi.fn(() => ({
+                  limit: vi.fn(async () => rows),
+                })),
+              };
+            }),
+          };
+        }),
+      })),
+    }));
+    databaseMock.mockResolvedValue({ select });
+
+    await expect(
+      listWorkspaceBillingNotifications({
+        workspaceId: 42,
+        audience: "operator",
+      })
+    ).resolves.toEqual(rows);
+
+    expect(select.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({ mode: billingNotificationReceipts.mode })
+    );
+    const dialect = new MySqlDialect();
+    const joinedScope = dialect.sqlToQuery(joinCondition as never);
+    expect(joinedScope.sql).toContain(
+      "`billing_notification_receipts`.`id` = `billing_notification_inbox`.`receipt_id`"
+    );
+    expect(joinedScope.sql).toContain(
+      "`billing_notification_receipts`.`workspace_id` = `billing_notification_inbox`.`workspace_id`"
+    );
+    expect(joinedScope.sql).toContain(
+      "`billing_notification_receipts`.`audience` = `billing_notification_inbox`.`audience`"
+    );
+    expect(dialect.sqlToQuery(whereCondition as never).params).toEqual([
+      42,
+      "operator",
+    ]);
   });
 });
 
