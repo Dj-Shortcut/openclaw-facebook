@@ -625,6 +625,28 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
+      - name: Grant the exact credit procedure definer table privileges
+        timeout-minutes: 5
+        env:
+          DATABASE_MIGRATION_URL: ${{ secrets.IMAGE_GEN_DATABASE_MIGRATION_URL }}
+          DATABASE_PROVISIONER_URL: ${{ secrets.IMAGE_GEN_DATABASE_PROVISIONER_URL }}
+        run: |
+          set -euo pipefail
+          test -n "$DATABASE_MIGRATION_URL"
+          test -n "$DATABASE_PROVISIONER_URL"
+          echo "::add-mask::$DATABASE_MIGRATION_URL"
+          echo "::add-mask::$DATABASE_PROVISIONER_URL"
+          database_name="$(jq -er '.apps["image-gen"].databaseRecovery.databaseName' deploy/production/apps.json)"
+          # This is JavaScript source; the template expression is evaluated by Node.
+          # shellcheck disable=SC2016
+          EXPECTED_DATABASE_NAME="$database_name" node -e 'const urls=[new URL(process.env.DATABASE_MIGRATION_URL),new URL(process.env.DATABASE_PROVISIONER_URL)];for(const u of urls){if(!new Set(["mysql:","mysql2:"]).has(u.protocol)||u.hostname!=="127.0.0.1"||u.port!=="13306"||!u.username||!u.password||u.pathname!==`/${process.env.EXPECTED_DATABASE_NAME}`)process.exit(1)}if(urls[0].username===urls[1].username)process.exit(1)'
+          output="$(docker run --rm --network host \
+            --env "DATABASE_MIGRATION_URL=$DATABASE_MIGRATION_URL" \
+            --env "DATABASE_PROVISIONER_URL=$DATABASE_PROVISIONER_URL" \
+            --entrypoint node \
+            "$BRIDGE_IMAGE" dist/credit-migration-definer-grants.cjs)"
+          test "$output" = "Credit migration definer grants verified."
+
       - name: Apply only the reviewed 0017 and 0018 credit migrations
         if: env.OBSERVED_SCHEMA_PHASE != '0018_credit_checkout_reservation'
         timeout-minutes: 12

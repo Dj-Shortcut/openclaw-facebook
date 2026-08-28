@@ -83,6 +83,7 @@ jobs:
           pnpm run db:rehearse-0016
           pnpm run db:rehearse-0017
           pnpm run db:rehearse-0018
+          pnpm run build:docker
           pnpm run db:test-production-migrator
           pnpm run db:generate-production-contract
           git diff --exit-code -- drizzle/production-schema-contract.json

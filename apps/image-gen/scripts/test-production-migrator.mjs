@@ -1,21 +1,27 @@
 /* global process, URL */
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import mysql from "mysql2/promise";
 import { runProductionLegacyBridge } from "./bridge-production-0007-to-0014.mjs";
 import { assertBillingTriggerRuntimePreflight } from "./billing-trigger-runtime-preflight.mjs";
+import { grantCreditMigrationDefinerPrivileges } from "./credit-migration-definer-grants.mjs";
 import {
   cleanupMigrationConnection,
   combineMigrationErrors,
   assert0017PreDdlStatementOrder,
+  assertVerifiedPhase,
   bridgeArtifactPrivilegeProfileForState,
   assertProductionSchemaContractManifest,
   loadAndVerifyMigrationManifest,
   migrationLockName,
+  productionDatabasePrivilegeProfiles,
   productionMigrationOptionsForMode,
   productionSchemaPhases,
   runProductionMigrations as runProductionMigrationStage,
+  schemaCapturePlanForPrivilege,
   transitionInspectionPhase,
 } from "./migrate-production.mjs";
 import {
@@ -25,8 +31,10 @@ import {
 import {
   normalizeShowCreate,
   normalizeSqlOutsideQuotedValues,
+  assertCreditProvisionerGrantScope,
   assertCreditWalletBinlogFormat,
   assertCreditWalletMigrationGrantScope,
+  assertCreditWalletMigrationRoutineOwnership,
   assertCreditWalletRuntimeGrantScope,
   assertExpandMigrationGrantScope,
   assertProductionInspectionGrantScope,
@@ -44,8 +52,11 @@ import {
   sha256,
 } from "./production-schema-contract.mjs";
 
+const execFileAsync = promisify(execFile);
+
 await testCleanupContracts();
 testStagedRolloutContracts();
+testCreditMigrationRoutineOwnershipContracts();
 testSchemaDigestContracts();
 await testContractManifestBinding();
 
@@ -98,6 +109,7 @@ const creditPrivilegeDatabase =
   "leaderbot_production_migrator_credit_privilege";
 const bridgeArtifactDatabase = "leaderbot_production_migrator_bridge_artifact";
 const creditMigrationUser = "leaderbot_credit_migration_test";
+const creditProvisionerUser = "lb_credit_provisioner_test";
 const creditRuntimeUser = "leaderbot_credit_runtime_test";
 const bridgeLegacyUser = "lb_bridge_legacy_runtime_test";
 const bridgeCreditUser = "lb_bridge_credit_runtime_test";
@@ -141,6 +153,7 @@ const admin = await mysql.createConnection({
 
 try {
   await admin.query(`DROP USER IF EXISTS \`${creditMigrationUser}\`@'%'`);
+  await admin.query(`DROP USER IF EXISTS \`${creditProvisionerUser}\`@'%'`);
   await admin.query(`DROP USER IF EXISTS \`${creditRuntimeUser}\`@'%'`);
   await admin.query(`DROP USER IF EXISTS \`${bridgeLegacyUser}\`@'%'`);
   await admin.query(`DROP USER IF EXISTS \`${bridgeCreditUser}\`@'%'`);
@@ -809,6 +822,7 @@ try {
   );
 } finally {
   await admin.query(`DROP USER IF EXISTS \`${creditMigrationUser}\`@'%'`);
+  await admin.query(`DROP USER IF EXISTS \`${creditProvisionerUser}\`@'%'`);
   await admin.query(`DROP USER IF EXISTS \`${creditRuntimeUser}\`@'%'`);
   await admin.query(`DROP USER IF EXISTS \`${bridgeLegacyUser}\`@'%'`);
   await admin.query(`DROP USER IF EXISTS \`${bridgeCreditUser}\`@'%'`);
@@ -1072,6 +1086,7 @@ async function testCreditWalletLeastPrivilegeProfiles(migrationPlan) {
     applyMigrationPrefix(connection, migrationPlan.through0016)
   );
   await admin.query(`CREATE USER \`${creditMigrationUser}\`@'%'`);
+  await admin.query(`CREATE USER \`${creditProvisionerUser}\`@'%'`);
   const [[triggerRuntime]] = await admin.query(
     "SELECT @@GLOBAL.log_bin AS logBin, @@GLOBAL.log_bin_trust_function_creators AS trustFunctionCreators"
   );
@@ -1082,9 +1097,181 @@ async function testCreditWalletLeastPrivilegeProfiles(migrationPlan) {
     await admin.query(`GRANT SUPER ON *.* TO \`${creditMigrationUser}\`@'%'`);
   }
   const migrationPrivileges =
-    "CREATE, CREATE TEMPORARY TABLES, ALTER, INDEX, REFERENCES, SELECT, INSERT, UPDATE, TRIGGER";
+    "CREATE, CREATE TEMPORARY TABLES, ALTER, INDEX, REFERENCES, SELECT, INSERT, UPDATE, TRIGGER, CREATE ROUTINE, ALTER ROUTINE";
   await admin.query(
     `GRANT ${migrationPrivileges} ON \`${creditPrivilegeDatabase}\`.* TO \`${creditMigrationUser}\`@'%'`
+  );
+  await admin.query(
+    `GRANT CREATE USER ON *.* TO \`${creditProvisionerUser}\`@'%'`
+  );
+  await admin.query(
+    `GRANT SELECT ON \`mysql\`.\`user\` TO \`${creditProvisionerUser}\`@'%'`
+  );
+  await admin.query(
+    `GRANT SELECT, EXECUTE ON \`${creditPrivilegeDatabase}\`.* TO \`${creditProvisionerUser}\`@'%' WITH GRANT OPTION`
+  );
+  for (const tableName of productionRuntimeWritableTableNames) {
+    await admin.query(
+      `GRANT INSERT, UPDATE, DELETE ON \`${creditPrivilegeDatabase}\`.\`${tableName}\` TO \`${creditProvisionerUser}\`@'%' WITH GRANT OPTION`
+    );
+  }
+  await admin.query(
+    `GRANT CREATE, DELETE ON \`${creditPrivilegeDatabase}\`.\`credit_wallets\` TO \`${creditProvisionerUser}\`@'%' WITH GRANT OPTION`
+  );
+
+  const migrationConnection = await mysql.createConnection(
+    databaseUrlForUser(creditPrivilegeDatabase, creditMigrationUser)
+  );
+  const provisionerConnection = await mysql.createConnection(
+    databaseUrlForUser(creditPrivilegeDatabase, creditProvisionerUser)
+  );
+  try {
+    await expectFailure(
+      grantCreditMigrationDefinerPrivileges({
+        migration: migrationConnection,
+        provisioner: migrationConnection,
+      }),
+      "credit definer grant rejects one shared database account",
+      "credit migration database identity is invalid"
+    );
+    const wrongDatabaseProvisioner = await mysql.createConnection(
+      databaseUrlForUser("mysql", creditProvisionerUser)
+    );
+    try {
+      await expectFailure(
+        grantCreditMigrationDefinerPrivileges({
+          migration: migrationConnection,
+          provisioner: wrongDatabaseProvisioner,
+        }),
+        "credit definer grant rejects a provisioner on another database",
+        "credit migration database identity is invalid"
+      );
+    } finally {
+      await wrongDatabaseProvisioner.end();
+    }
+    const excessiveProvisioner = await mysql.createConnection(
+      databaseUrl(creditPrivilegeDatabase)
+    );
+    try {
+      await expectFailure(
+        grantCreditMigrationDefinerPrivileges({
+          migration: migrationConnection,
+          provisioner: excessiveProvisioner,
+        }),
+        "credit definer grant rejects an excessive administrative account",
+        "credit provisioner privilege boundary mismatch"
+      );
+    } finally {
+      await excessiveProvisioner.end();
+    }
+    await grantCreditMigrationDefinerPrivileges({
+      migration: migrationConnection,
+      provisioner: provisionerConnection,
+    });
+  } finally {
+    await migrationConnection.end();
+    await provisionerConnection.end();
+  }
+
+  const runnerResult = await execFileAsync(
+    process.execPath,
+    ["scripts/run-credit-migration-definer-grants.mjs"],
+    {
+      cwd: appDirectory,
+      env: {
+        ...process.env,
+        DATABASE_MIGRATION_URL: databaseUrlForUser(
+          creditPrivilegeDatabase,
+          creditMigrationUser
+        ),
+        DATABASE_PROVISIONER_URL: databaseUrlForUser(
+          creditPrivilegeDatabase,
+          creditProvisionerUser
+        ),
+      },
+    }
+  );
+  assert(
+    runnerResult.stdout === "Credit migration definer grants verified.\n" &&
+      runnerResult.stderr === "",
+    "credit definer grant runner emits only its fixed success marker"
+  );
+  await admin.query(
+    `REVOKE DELETE ON \`${creditPrivilegeDatabase}\`.\`billing_intents\` FROM \`${creditMigrationUser}\`@'%'`
+  );
+  await admin.query(
+    `REVOKE CREATE, DELETE ON \`${creditPrivilegeDatabase}\`.\`credit_wallets\` FROM \`${creditMigrationUser}\`@'%'`
+  );
+  const bundledRunnerPath = path.join(
+    appDirectory,
+    "dist/credit-migration-definer-grants.cjs"
+  );
+  await fs.access(bundledRunnerPath);
+  const bundledRunnerResult = await execFileAsync(
+    process.execPath,
+    [bundledRunnerPath],
+    {
+      cwd: appDirectory,
+      env: {
+        ...process.env,
+        DATABASE_MIGRATION_URL: databaseUrlForUser(
+          creditPrivilegeDatabase,
+          creditMigrationUser
+        ),
+        DATABASE_PROVISIONER_URL: databaseUrlForUser(
+          creditPrivilegeDatabase,
+          creditProvisionerUser
+        ),
+      },
+    }
+  );
+  assert(
+    bundledRunnerResult.stdout ===
+      "Credit migration definer grants verified.\n" &&
+      bundledRunnerResult.stderr === "",
+    "bundled credit definer grant runner executes against the exact MySQL fixture"
+  );
+  const bundledGrantVerification = await mysql.createConnection(
+    databaseUrlForUser(creditPrivilegeDatabase, creditMigrationUser)
+  );
+  try {
+    await assertProductionMigrationRuntime(
+      bundledGrantVerification,
+      "credit-expand"
+    );
+  } finally {
+    await bundledGrantVerification.end();
+  }
+  let bundledFailure;
+  try {
+    await execFileAsync(process.execPath, [bundledRunnerPath], {
+      cwd: appDirectory,
+      env: {
+        ...process.env,
+        DATABASE_MIGRATION_URL: "",
+        DATABASE_PROVISIONER_URL: "",
+      },
+    });
+  } catch (error) {
+    bundledFailure = error;
+  }
+  assert(
+    bundledFailure?.code === 1 &&
+      bundledFailure.stdout === "" &&
+      bundledFailure.stderr ===
+        "Credit migration definer grants failed closed.\n",
+    "bundled credit definer grant runner emits only its fixed failure marker"
+  );
+  const [[futureWalletTable]] = await admin.query(
+    "SELECT COUNT(*) AS count FROM information_schema.TABLES WHERE TABLE_SCHEMA=? AND TABLE_NAME='credit_wallets'",
+    [creditPrivilegeDatabase]
+  );
+  assert(
+    Number(futureWalletTable.count) === 0,
+    "credit wallet CREATE+DELETE is granted before the future table exists"
+  );
+  await admin.query(
+    `REVOKE CREATE ROUTINE, ALTER ROUTINE ON \`${creditPrivilegeDatabase}\`.* FROM \`${creditMigrationUser}\`@'%'`
   );
   await expectFailure(
     runProductionMigrationStage({
@@ -1156,16 +1343,16 @@ async function testCreditWalletLeastPrivilegeProfiles(migrationPlan) {
     createWalletStatementIndexes.length === 1,
     "0017 contains one exact transitional wallet helper"
   );
-  const migrationConnection = await mysql.createConnection(
+  const partialMigrationConnection = await mysql.createConnection(
     databaseUrlForUser(creditPrivilegeDatabase, creditMigrationUser)
   );
   try {
-    await configureProductionSchemaSession(migrationConnection);
+    await configureProductionSchemaSession(partialMigrationConnection);
     await applyStatements(
-      migrationConnection,
+      partialMigrationConnection,
       migration0017Statements.slice(0, createWalletStatementIndexes[0] + 1)
     );
-    const [automaticRoutineGrants] = await migrationConnection.query(
+    const [automaticRoutineGrants] = await partialMigrationConnection.query(
       "SHOW GRANTS FOR CURRENT_USER()"
     );
     const serializedRoutineGrants = automaticRoutineGrants
@@ -1180,7 +1367,7 @@ async function testCreditWalletLeastPrivilegeProfiles(migrationPlan) {
       "0017 helper creation grants the same principal exact routine privileges"
     );
   } finally {
-    await migrationConnection.end();
+    await partialMigrationConnection.end();
   }
   const applied = await runProductionMigrationStage({
     databaseUrl: databaseUrlForUser(
@@ -1286,6 +1473,38 @@ async function testCreditWalletLeastPrivilegeProfiles(migrationPlan) {
         Number(procedureEffect.intentCount) === 1,
       "combined runtime procedure result is durably bound"
     );
+    const [[capabilityExpiry]] = await runtimeConnection.query(
+      "SELECT UNIX_TIMESTAMP(`checkout_capability_expires_at`) AS expiresAt FROM `billing_intents` WHERE `intent_id`=?",
+      [intentId]
+    );
+    await runtimeConnection.query("SET timestamp=?", [
+      Number(capabilityExpiry.expiresAt) + 1,
+    ]);
+    const [expiryRows] = await runtimeConnection.query(
+      "CALL `credit_expire_pristine_checkout`(?, 'test', ?, 1, 1, ?, ?, ?, ?)",
+      [
+        procedureScope.workspaceId,
+        procedureScope.channelConnectionId,
+        procedureScope.userKey,
+        walletId,
+        financialSubjectRef,
+        intentId,
+      ]
+    );
+    assert(
+      expiryRows[0]?.[0]?.result === "applied",
+      "combined runtime executes pristine expiry through the exact definer DELETE grants"
+    );
+    const [[expiredEffect]] = await runtimeConnection.query(
+      "SELECT (SELECT COUNT(*) FROM `credit_wallets` WHERE `wallet_id`=?) AS walletCount,(SELECT COUNT(*) FROM `billing_intents` WHERE `intent_id`=?) AS intentCount",
+      [walletId, intentId]
+    );
+    assert(
+      Number(expiredEffect.walletCount) === 0 &&
+        Number(expiredEffect.intentCount) === 0,
+      "least-privilege pristine expiry deletes only the empty wallet and intent"
+    );
+    await runtimeConnection.query("SET timestamp=DEFAULT");
   } finally {
     await runtimeConnection.end();
   }
@@ -1880,6 +2099,61 @@ function testStagedRolloutContracts() {
   );
   assert(
     JSON.stringify(
+      productionMigrationOptionsForMode("inspect-credit-wallet-transition")
+    ) ===
+      JSON.stringify({
+        verifyOnly: true,
+        target: "expand",
+        inspectCreditWalletTransition: true,
+        privilegeProfile: "credit-expand-pregrant",
+      }),
+    "credit transition inspection remains non-mutating before recovery evidence"
+  );
+  assert(
+    productionDatabasePrivilegeProfiles.includes("credit-expand-pregrant"),
+    "credit pregrant inspection is an executable migration privilege profile"
+  );
+  for (const phase of [
+    "0016_expand",
+    "0017_credit_wallet_expand",
+    "0018_credit_checkout_reservation",
+  ]) {
+    assertVerifiedPhase("expand", phase, false, true);
+  }
+  expectSynchronousFailure(
+    () => assertVerifiedPhase("expand", "0015_base", false, true),
+    "credit transition inspection rejects a stable pre-0016 schema",
+    "credit transition inspection refused"
+  );
+  const pregrantCapturePlan = schemaCapturePlanForPrivilege(
+    {
+      tables: {},
+      views: {},
+      triggers: { credit_valid: {}, unrelated_trigger: {} },
+      routines: { credit_valid: {}, unrelated_routine: {} },
+    },
+    "credit-expand-pregrant"
+  );
+  assert(
+    JSON.stringify(pregrantCapturePlan.schemaCaptureOptions) ===
+      JSON.stringify({
+        includePrivilegedObjects: true,
+        privilegedObjectNamePrefix: "credit_",
+      }) &&
+      Object.hasOwn(pregrantCapturePlan.contract.triggers, "credit_valid") &&
+      !Object.hasOwn(
+        pregrantCapturePlan.contract.triggers,
+        "unrelated_trigger"
+      ) &&
+      Object.hasOwn(pregrantCapturePlan.contract.routines, "credit_valid") &&
+      !Object.hasOwn(
+        pregrantCapturePlan.contract.routines,
+        "unrelated_routine"
+      ),
+    "credit pregrant inspection captures only exact partial credit routines and triggers"
+  );
+  assert(
+    JSON.stringify(
       productionMigrationOptionsForMode("apply-empty-credit-wallet-bootstrap")
     ) ===
       JSON.stringify({
@@ -1980,6 +2254,59 @@ function testStagedRolloutContracts() {
       productionMigrationOptionsForMode("verify-contract") === null,
     "legacy and production contract apply modes fail closed"
   );
+}
+
+function testCreditMigrationRoutineOwnershipContracts() {
+  const routineGrant =
+    "GRANT EXECUTE ON PROCEDURE `leaderbot`.`credit_create_wallet` TO `credit_migrator`@`%`";
+  const valid = {
+    automaticSpPrivileges: 1,
+    currentUser: "credit_migrator@%",
+    databaseName: "leaderbot",
+    grants: [routineGrant],
+    routines: [{ name: "credit_create_wallet", definer: "credit_migrator@%" }],
+  };
+  assertCreditWalletMigrationRoutineOwnership(valid);
+  for (const [label, overrides, expected] of [
+    [
+      "automatic routine privileges disabled",
+      { automaticSpPrivileges: 0 },
+      "requires automatic stored-routine privileges",
+    ],
+    [
+      "wrong routine definer",
+      {
+        routines: [
+          { name: "credit_create_wallet", definer: "other_migrator@%" },
+        ],
+      },
+      "routine definer boundary mismatch",
+    ],
+    [
+      "missing creator grant",
+      { grants: [] },
+      "lacks creator execute privilege",
+    ],
+    [
+      "creator ALTER without EXECUTE",
+      {
+        grants: [
+          "GRANT ALTER ROUTINE ON PROCEDURE `leaderbot`.`credit_create_wallet` TO `credit_migrator`@`%`",
+        ],
+      },
+      "lacks creator execute privilege",
+    ],
+  ]) {
+    expectSynchronousFailure(
+      () =>
+        assertCreditWalletMigrationRoutineOwnership({
+          ...valid,
+          ...overrides,
+        }),
+      `credit migration rejects ${label}`,
+      expected
+    );
+  }
 }
 
 function testSchemaDigestContracts() {
@@ -2178,14 +2505,49 @@ function testSchemaDigestContracts() {
   );
   const creditMigrationGrant =
     "GRANT CREATE, CREATE TEMPORARY TABLES, ALTER, INDEX, REFERENCES, SELECT, INSERT, UPDATE, TRIGGER, CREATE ROUTINE, ALTER ROUTINE ON `leaderbot`.* TO `credit_migrator`@`%`";
+  const creditMigrationTableGrants = [
+    "GRANT DELETE ON `leaderbot`.`billing_intents` TO `credit_migrator`@`%`",
+    "GRANT CREATE, DELETE ON `leaderbot`.`credit_wallets` TO `credit_migrator`@`%`",
+  ];
   assertCreditWalletMigrationGrantScope(
-    ["GRANT USAGE ON *.* TO `credit_migrator`@`%`", creditMigrationGrant],
+    [creditMigrationGrant],
+    "leaderbot",
+    false,
+    true
+  );
+  assertCreditWalletMigrationGrantScope(
+    [creditMigrationGrant, creditMigrationTableGrants[0]],
+    "leaderbot",
+    false,
+    true
+  );
+  expectSynchronousFailure(
+    () =>
+      assertCreditWalletMigrationGrantScope(
+        [
+          creditMigrationGrant,
+          "REVOKE DELETE ON `leaderbot`.`billing_intents` FROM `credit_migrator`@`%`",
+        ],
+        "leaderbot",
+        false,
+        true
+      ),
+    "credit pregrant inspection rejects a partial revoke",
+    "contains revoke"
+  );
+  assertCreditWalletMigrationGrantScope(
+    [
+      "GRANT USAGE ON *.* TO `credit_migrator`@`%`",
+      creditMigrationGrant,
+      ...creditMigrationTableGrants,
+    ],
     "leaderbot"
   );
   assertCreditWalletMigrationGrantScope(
     [
       "GRANT USAGE ON *.* TO `credit_migrator`@`%`",
       creditMigrationGrant,
+      ...creditMigrationTableGrants,
       "GRANT ALTER ROUTINE, EXECUTE ON PROCEDURE `leaderbot`.`credit_create_wallet` TO `credit_migrator`@`%`",
     ],
     "leaderbot"
@@ -2195,6 +2557,7 @@ function testSchemaDigestContracts() {
       assertCreditWalletMigrationGrantScope(
         [
           creditMigrationGrant,
+          ...creditMigrationTableGrants,
           "GRANT ALTER ROUTINE, EXECUTE ON PROCEDURE `leaderbot`.`credit_unreviewed_helper` TO `credit_migrator`@`%`",
         ],
         "leaderbot"
@@ -2207,6 +2570,7 @@ function testSchemaDigestContracts() {
       "GRANT USAGE ON *.* TO `credit_migrator`@`%`",
       "GRANT SUPER ON *.* TO `credit_migrator`@`%`",
       creditMigrationGrant,
+      ...creditMigrationTableGrants,
     ],
     "leaderbot",
     true
@@ -2214,7 +2578,7 @@ function testSchemaDigestContracts() {
   expectSynchronousFailure(
     () =>
       assertCreditWalletMigrationGrantScope(
-        [creditMigrationGrant],
+        [creditMigrationGrant, ...creditMigrationTableGrants],
         "leaderbot",
         true
       ),
@@ -2226,6 +2590,7 @@ function testSchemaDigestContracts() {
       assertCreditWalletMigrationGrantScope(
         [
           creditMigrationGrant,
+          ...creditMigrationTableGrants,
           "REVOKE CREATE ROUTINE ON `leaderbot`.* FROM `credit_migrator`@`%`",
         ],
         "leaderbot"
@@ -2238,6 +2603,7 @@ function testSchemaDigestContracts() {
       assertCreditWalletMigrationGrantScope(
         [
           creditMigrationGrant,
+          ...creditMigrationTableGrants,
           "REVOKE ALTER ROUTINE ON `leaderbot`.* FROM `credit_migrator`@`%`",
         ],
         "leaderbot"
@@ -2248,12 +2614,155 @@ function testSchemaDigestContracts() {
   expectSynchronousFailure(
     () =>
       assertCreditWalletMigrationGrantScope(
-        [creditMigrationGrant.replace("`leaderbot`", "`otherdb`")],
+        [
+          creditMigrationGrant.replace("`leaderbot`", "`otherdb`"),
+          ...creditMigrationTableGrants,
+        ],
         "leaderbot"
       ),
     "credit migration wrong schema",
     "credit wallet migration principal privilege boundary mismatch"
   );
+  for (const [label, grants, expected] of [
+    [
+      "missing billing intent delete",
+      [creditMigrationGrant, creditMigrationTableGrants[1]],
+      "billing_intents:missing DELETE",
+    ],
+    [
+      "missing future wallet create",
+      [
+        creditMigrationGrant,
+        creditMigrationTableGrants[0],
+        "GRANT DELETE ON `leaderbot`.`credit_wallets` TO `credit_migrator`@`%`",
+      ],
+      "credit_wallets:missing CREATE",
+    ],
+    [
+      "schema delete",
+      [
+        creditMigrationGrant.replace(
+          "SELECT, INSERT",
+          "SELECT, INSERT, DELETE"
+        ),
+        ...creditMigrationTableGrants,
+      ],
+      "excessive DELETE",
+    ],
+    [
+      "unreviewed table delete",
+      [
+        creditMigrationGrant,
+        ...creditMigrationTableGrants,
+        "GRANT DELETE ON `leaderbot`.`credit_ledger` TO `credit_migrator`@`%`",
+      ],
+      "credit wallet migration principal privilege boundary mismatch",
+    ],
+    [
+      "grant option",
+      [
+        creditMigrationGrant,
+        creditMigrationTableGrants[0],
+        `${creditMigrationTableGrants[1]} WITH GRANT OPTION`,
+      ],
+      "credit wallet migration principal privilege boundary mismatch",
+    ],
+    [
+      "backtick-confusable table",
+      [
+        creditMigrationGrant,
+        ...creditMigrationTableGrants,
+        "GRANT DELETE ON `leaderbot`.`billing``_intents` TO `credit_migrator`@`%`",
+      ],
+      "credit wallet migration principal privilege boundary mismatch",
+    ],
+    [
+      "backtick-confusable routine",
+      [
+        creditMigrationGrant,
+        ...creditMigrationTableGrants,
+        "GRANT EXECUTE ON PROCEDURE `leaderbot`.`credit_create``_wallet` TO `credit_migrator`@`%`",
+      ],
+      "credit wallet migration principal privilege boundary mismatch",
+    ],
+  ]) {
+    expectSynchronousFailure(
+      () => assertCreditWalletMigrationGrantScope(grants, "leaderbot"),
+      `credit migration rejects ${label}`,
+      expected
+    );
+  }
+  const creditProvisionerGrants = [
+    "GRANT CREATE USER ON *.* TO `credit_provisioner`@`%`",
+    "GRANT SELECT ON `mysql`.`user` TO `credit_provisioner`@`%`",
+    "GRANT SELECT, EXECUTE ON `leaderbot`.* TO `credit_provisioner`@`%` WITH GRANT OPTION",
+    ...productionRuntimeWritableTableNames.map(
+      tableName =>
+        `GRANT INSERT, UPDATE, DELETE ON \`leaderbot\`.\`${tableName}\` TO \`credit_provisioner\`@\`%\` WITH GRANT OPTION`
+    ),
+    "GRANT DELETE, CREATE ON `leaderbot`.`credit_wallets` TO `credit_provisioner`@`%` WITH GRANT OPTION",
+  ];
+  assertCreditProvisionerGrantScope(creditProvisionerGrants, "leaderbot");
+  for (const [label, grants] of [
+    [
+      "global all",
+      [...creditProvisionerGrants, "GRANT ALL PRIVILEGES ON *.* TO `root`@`%`"],
+    ],
+    [
+      "global super",
+      [
+        ...creditProvisionerGrants,
+        "GRANT SUPER ON *.* TO `credit_provisioner`@`%`",
+      ],
+    ],
+    [
+      "schema delete",
+      [
+        ...creditProvisionerGrants,
+        "GRANT DELETE ON `leaderbot`.* TO `credit_provisioner`@`%` WITH GRANT OPTION",
+      ],
+    ],
+    [
+      "missing table delegation",
+      creditProvisionerGrants.filter(
+        grant => !grant.includes("`billing_intents`")
+      ),
+    ],
+    [
+      "backtick-confusable table delegation",
+      [
+        ...creditProvisionerGrants,
+        "GRANT INSERT, UPDATE, DELETE ON `leaderbot`.`billing``_intents` TO `credit_provisioner`@`%` WITH GRANT OPTION",
+      ],
+    ],
+    [
+      "backtick-confusable database delegation",
+      [
+        ...creditProvisionerGrants,
+        "GRANT INSERT, UPDATE, DELETE ON `leader``bot`.`billing_intents` TO `credit_provisioner`@`%` WITH GRANT OPTION",
+      ],
+    ],
+    [
+      "quoted wildcard object",
+      [
+        ...creditProvisionerGrants,
+        "GRANT SELECT, EXECUTE ON `leaderbot`.`*` TO `credit_provisioner`@`%` WITH GRANT OPTION",
+      ],
+    ],
+    [
+      "quoted wildcard database",
+      [
+        ...creditProvisionerGrants,
+        "GRANT SELECT ON `*`.* TO `credit_provisioner`@`%` WITH GRANT OPTION",
+      ],
+    ],
+  ]) {
+    expectSynchronousFailure(
+      () => assertCreditProvisionerGrantScope(grants, "leaderbot"),
+      `credit provisioner rejects ${label}`,
+      "credit provisioner privilege boundary mismatch"
+    );
+  }
   const creditRuntimeGrants = [
     "GRANT USAGE ON *.* TO `credit_runtime`@`%`",
     "GRANT SELECT ON `leaderbot`.* TO `credit_runtime`@`%`",

@@ -213,7 +213,7 @@ jobs:
         timeout-minutes: 5
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_DATABASE_MIGRATION_TOKEN }}
-          DATABASE_PROVISIONER_URL: ${{ secrets.IMAGE_GEN_DATABASE_MIGRATION_URL }}
+          DATABASE_PROVISIONER_URL: ${{ secrets.IMAGE_GEN_DATABASE_PROVISIONER_URL }}
         run: |
           set -euo pipefail
           test -n "$FLY_API_TOKEN"
@@ -238,7 +238,7 @@ jobs:
       - name: Create, verify, and stage the least-privilege runtime principal
         timeout-minutes: 10
         env:
-          DATABASE_PROVISIONER_URL: ${{ secrets.IMAGE_GEN_DATABASE_MIGRATION_URL }}
+          DATABASE_PROVISIONER_URL: ${{ secrets.IMAGE_GEN_DATABASE_PROVISIONER_URL }}
           IMAGE_GEN_FLY_TOKEN: ${{ secrets.FLY_IMAGE_GEN_DEPLOY_TOKEN }}
         run: |
           set -euo pipefail
@@ -265,14 +265,23 @@ jobs:
             status="$?"
             if test -f "$created_marker" && test "$stage_started" = 0; then
               test "$(cat "$created_marker")" = "$runtime_principal" || exit "$status"
-              DATABASE_PROVISIONER_URL="$DATABASE_PROVISIONER_URL" RUNTIME_PRINCIPAL="$runtime_principal" node --input-type=module <<'NODE' || true
+              DATABASE_PROVISIONER_URL="$DATABASE_PROVISIONER_URL" RUNTIME_DATABASE_NAME="$RUNTIME_PRINCIPAL_DATABASE_NAME" RUNTIME_PRINCIPAL="$runtime_principal" node --input-type=module <<'NODE' || true
           import mysql from "./apps/image-gen/node_modules/mysql2/promise.js";
+          import { assertCreditProvisionerGrantScope } from "./apps/image-gen/scripts/production-schema-contract.mjs";
           const username = process.env.RUNTIME_PRINCIPAL;
+          const databaseName = process.env.RUNTIME_DATABASE_NAME;
           const provisionerUrl = process.env.DATABASE_PROVISIONER_URL;
-          if (!/^[a-z0-9_]{1,32}$/.test(username ?? "")) process.exit(1);
+          if (!/^[a-z0-9_]{1,32}$/.test(username ?? "") || !/^[a-z][a-z0-9_]*$/.test(databaseName ?? "")) process.exit(1);
           let connection;
           try {
             connection = await mysql.createConnection(provisionerUrl);
+            const [provisionerGrantRows] = await connection.query(
+              "SHOW GRANTS FOR CURRENT_USER()"
+            );
+            assertCreditProvisionerGrantScope(
+              provisionerGrantRows.flatMap(row => Object.values(row).map(String)),
+              databaseName
+            );
             await connection.query(`DROP USER IF EXISTS '${username}'@'%'`);
           } catch {
             process.exitCode = 1;
@@ -291,6 +300,7 @@ jobs:
           import fs from "node:fs";
           import mysql from "./apps/image-gen/node_modules/mysql2/promise.js";
           import {
+            assertCreditProvisionerGrantScope,
             assertProductionMigrationRuntime,
             creditWalletRoutineNames,
             productionRuntimeWritableTableNames,
@@ -312,6 +322,13 @@ jobs:
           let runtime;
           try {
             provisioner = await mysql.createConnection(provisionerUrl);
+            const [provisionerGrantRows] = await provisioner.query(
+              "SHOW GRANTS FOR CURRENT_USER()"
+            );
+            assertCreditProvisionerGrantScope(
+              provisionerGrantRows.flatMap(row => Object.values(row).map(String)),
+              databaseName
+            );
             const schema = identifier(databaseName);
             const account = `'${username}'@'%'`;
             await provisioner.query(`CREATE USER ${account} IDENTIFIED BY '${password}'`);

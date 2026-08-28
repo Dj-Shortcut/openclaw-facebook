@@ -330,7 +330,7 @@ jobs:
         timeout-minutes: 5
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_DATABASE_MIGRATION_TOKEN }}
-          DATABASE_PROVISIONER_URL: ${{ secrets.IMAGE_GEN_DATABASE_MIGRATION_URL }}
+          DATABASE_PROVISIONER_URL: ${{ secrets.IMAGE_GEN_DATABASE_PROVISIONER_URL }}
         run: |
           set -euo pipefail
           echo "::add-mask::$DATABASE_PROVISIONER_URL"
@@ -351,7 +351,7 @@ jobs:
       - name: Lock, unlock, or drop only the exact obsolete broad principal
         timeout-minutes: 5
         env:
-          DATABASE_PROVISIONER_URL: ${{ secrets.IMAGE_GEN_DATABASE_MIGRATION_URL }}
+          DATABASE_PROVISIONER_URL: ${{ secrets.IMAGE_GEN_DATABASE_PROVISIONER_URL }}
           CLEANUP_OPERATION: ${{ inputs.operation }}
           OBSOLETE_PRINCIPAL: ${{ inputs.obsolete_principal }}
           EXPECTED_RUNTIME_PRINCIPAL_SHA256: ${{ inputs.expected_runtime_principal_sha256 }}
@@ -365,6 +365,7 @@ jobs:
           import { createHash } from "node:crypto";
           import fs from "node:fs";
           import mysql from "./apps/image-gen/node_modules/mysql2/promise.js";
+          import { assertCreditProvisionerGrantScope } from "./apps/image-gen/scripts/production-schema-contract.mjs";
 
           const operation = process.env.CLEANUP_OPERATION;
           const obsolete = process.env.OBSOLETE_PRINCIPAL;
@@ -375,6 +376,13 @@ jobs:
           if (obsoleteSha256 === currentSha256) process.exit(1);
           const connection = await mysql.createConnection(process.env.DATABASE_PROVISIONER_URL);
           try {
+            const [provisionerGrantRows] = await connection.query(
+              "SHOW GRANTS FOR CURRENT_USER()"
+            );
+            assertCreditProvisionerGrantScope(
+              provisionerGrantRows.flatMap(row => Object.values(row).map(String)),
+              databaseName
+            );
             const [accounts] = await connection.query("SELECT `User` AS user,`Host` AS host,`account_locked` AS accountLocked FROM `mysql`.`user` WHERE `User`=? AND `Host`='%'", [obsolete]);
             if (accounts.length !== 1) process.exit(1);
             const [grantRows] = await connection.query(`SHOW GRANTS FOR '${obsolete}'@'%'`);

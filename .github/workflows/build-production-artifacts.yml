@@ -324,7 +324,9 @@ jobs:
           test "$(docker image inspect --format '{{json .Config.Entrypoint}}' "$ARTIFACT_BASE_IMAGE")" = "$(docker image inspect --format '{{json .Config.Entrypoint}}' "$ARTIFACT_IMAGE")"
           docker run --rm --entrypoint node "$ARTIFACT_IMAGE" --check /app/dist/index.cjs
           docker run --rm "$ARTIFACT_IMAGE" test -s /app/dist/billing-trigger-runtime-preflight.cjs
+          docker run --rm "$ARTIFACT_IMAGE" test -s /app/dist/credit-migration-definer-grants.cjs
           docker run --rm --entrypoint node "$ARTIFACT_IMAGE" --check /app/dist/billing-trigger-runtime-preflight.cjs
+          docker run --rm --entrypoint node "$ARTIFACT_IMAGE" --check /app/dist/credit-migration-definer-grants.cjs
           docker run --rm --network host \
             --env DATABASE_URL=mysql://runtime_expand:runtime_expand@127.0.0.1:3306/leaderbot_artifact_expand \
             --env LEADERBOT_PRODUCTION_MIGRATION_MODE=verify-artifact \

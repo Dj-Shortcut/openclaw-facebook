@@ -10,6 +10,10 @@ const TRUSTED_ARTIFACT_WORKFLOW_PATH =
   ".github/workflows/build-production-artifacts.yml";
 const SCHEMA_TRANSITION_WORKFLOW_PATH =
   ".github/workflows/image-gen-schema-transition.yml";
+const CREDIT_MIGRATION_DEFINER_GRANT_PATH =
+  "apps/image-gen/scripts/credit-migration-definer-grants.mjs";
+const CREDIT_MIGRATION_DEFINER_GRANT_RUNNER_PATH =
+  "apps/image-gen/scripts/run-credit-migration-definer-grants.mjs";
 const RUNTIME_PRINCIPAL_STAGING_WORKFLOW_PATH =
   ".github/workflows/stage-image-gen-credit-runtime-principal.yml";
 const RUNTIME_PRINCIPAL_CLEANUP_WORKFLOW_PATH =
@@ -3580,6 +3584,7 @@ function validateImageGenMigrationCi(rootDir) {
     fail("image-gen CI must use the exact reviewed MySQL service digest");
   }
   for (const required of [
+    "pnpm run build:docker",
     "pnpm run db:test-production-migrator",
     "pnpm run db:rehearse-0017",
     "pnpm run db:rehearse-0018",
@@ -3599,6 +3604,15 @@ function validateImageGenMigrationCi(rootDir) {
     if (!migrationCi.includes(required)) {
       fail("migration smoke CI must exercise only explicit staged modes");
     }
+  }
+  if (
+    migrationCi.indexOf("pnpm run build:docker") < 0 ||
+    migrationCi.indexOf("pnpm run build:docker") >
+      migrationCi.indexOf("pnpm run db:test-production-migrator")
+  ) {
+    fail(
+      "migration smoke CI must build the exact definer-grant bundle before its MySQL integration test",
+    );
   }
   const exactRuntimeMinimum = `io.leaderbot.schema.minimum" }}' "$image")" = "0018_credit_checkout_reservation"`;
   const exactRuntimeMaximum = `io.leaderbot.schema.maximum" }}' "$image")" = "0018_credit_checkout_reservation"`;
@@ -3962,8 +3976,28 @@ function validateSchemaTransitionWorkflow(rootDir) {
       "must use a dedicated migration principal instead of the app runtime principal",
     ],
     [
+      "IMAGE_GEN_DATABASE_PROVISIONER_URL",
+      "must use the separate protected provisioner for exact object grants",
+    ],
+    [
+      "credit-migration-definer-grants.cjs",
+      "must grant and verify the exact credit definer object privileges before inspection",
+    ],
+    [
       'u.hostname!=="127.0.0.1"||u.port!=="13306"',
       "must restrict the migration principal URL to the local protected tunnel",
+    ],
+    [
+      "new URL(process.env.DATABASE_PROVISIONER_URL)",
+      "must validate the provisioner URL before exposing it to the bridge",
+    ],
+    [
+      "if(urls[0].username===urls[1].username)process.exit(1)",
+      "must reject reuse of the migration URL account as provisioner",
+    ],
+    [
+      "--entrypoint node",
+      "must bypass the application entrypoint when using the protected provisioner",
     ],
     [
       "u.pathname!==`/${process.env.EXPECTED_DATABASE_NAME}`",
@@ -4154,6 +4188,18 @@ function validateSchemaTransitionWorkflow(rootDir) {
     }
   }
   if (
+    occurrenceCount(workflow, 'u.hostname!=="127.0.0.1"||u.port!=="13306"') !==
+      2 ||
+    occurrenceCount(
+      workflow,
+      "u.pathname!==`/${process.env.EXPECTED_DATABASE_NAME}`",
+    ) !== 2
+  ) {
+    fail(
+      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must restrict the migration principal URL to the local protected tunnel and reviewed database`,
+    );
+  }
+  if (
     occurrenceCount(
       workflow,
       '.state|IN("started","stopped","suspended","created","failed")',
@@ -4302,6 +4348,12 @@ function validateSchemaTransitionWorkflow(rootDir) {
   const recoveryUploadIndex = workflow.indexOf(
     "Upload immutable pre-credit recovery evidence before DDL",
   );
+  const definerGrantIndex = workflow.indexOf(
+    "Grant the exact credit procedure definer table privileges",
+  );
+  const schemaInspectionIndex = workflow.indexOf(
+    "Inspect the exact live schema phase without changing it",
+  );
   const applyExpandIndex = workflow.indexOf(
     "LEADERBOT_PRODUCTION_MIGRATION_MODE=apply-credit-wallet-expand",
   );
@@ -4315,12 +4367,17 @@ function validateSchemaTransitionWorkflow(rootDir) {
     strictBridgeIndex < 0 ||
     settledBridgeIndex <= strictBridgeIndex ||
     recoveryUploadIndex < 0 ||
+    definerGrantIndex < 0 ||
+    schemaInspectionIndex < 0 ||
+    schemaInspectionIndex >= snapshotCreateIndex ||
+    definerGrantIndex <= recoveryUploadIndex ||
     applyExpandIndex < 0 ||
+    applyExpandIndex <= definerGrantIndex ||
     recoveryUploadIndex > applyExpandIndex ||
     settledBridgeIndex > applyExpandIndex
   ) {
     fail(
-      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must durably upload verified snapshot evidence before any credit DDL`,
+      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must inspect first and durably upload verified snapshot evidence before grant mutation or credit DDL`,
     );
   }
   const probeStepIndex = workflow.indexOf(
@@ -4382,6 +4439,119 @@ function validateSchemaTransitionWorkflow(rootDir) {
   }
 }
 
+function validateCreditMigrationDefinerGrant(rootDir) {
+  const grantPath = path.join(rootDir, CREDIT_MIGRATION_DEFINER_GRANT_PATH);
+  if (!fs.existsSync(grantPath)) {
+    fail(`Missing ${CREDIT_MIGRATION_DEFINER_GRANT_PATH}`);
+  }
+  const source = fs.readFileSync(grantPath, "utf8");
+  if (
+    /GRANT\s+(?:CREATE,\s*)?DELETE\s+ON\s+[^\n;]+\.\*/i.test(source) ||
+    /WITH\s+GRANT\s+OPTION/i.test(source) ||
+    /console\.|process\.(?:stdout|stderr)/.test(source)
+  ) {
+    fail(
+      `${CREDIT_MIGRATION_DEFINER_GRANT_PATH} must not broaden DELETE, delegate grants, or log database identities`,
+    );
+  }
+  for (const [needle, message] of [
+    [
+      "SHOW GRANTS FOR CURRENT_USER()",
+      "must inspect the provisioner's effective privileges before mutation",
+    ],
+    [
+      "assertCreditProvisionerGrantScope",
+      "must enforce the exact protected provisioner privilege ceiling",
+    ],
+    [
+      "SELECT CURRENT_USER() AS account,DATABASE() AS databaseName",
+      "must derive both database identities from authenticated sessions",
+    ],
+    [
+      "provisionerIdentity?.databaseName !== databaseName",
+      "must bind the provisioner and migration account to one database",
+    ],
+    [
+      'provisioner.escapeId("billing_intents")',
+      "must scope DELETE to the existing billing intent table",
+    ],
+    [
+      'provisioner.escapeId("credit_wallets")',
+      "must scope future-table CREATE and DELETE to the credit wallet table",
+    ],
+    [
+      "GRANT CREATE, DELETE ON ${schema}",
+      "must use MySQL future-table grant semantics without schema DELETE",
+    ],
+    [
+      'assertProductionMigrationRuntime(migration, "credit-expand")',
+      "must verify the exact effective migration boundary after granting",
+    ],
+  ]) {
+    if (!source.includes(needle)) {
+      fail(`${CREDIT_MIGRATION_DEFINER_GRANT_PATH} ${message}`);
+    }
+  }
+  const runnerPath = path.join(
+    rootDir,
+    CREDIT_MIGRATION_DEFINER_GRANT_RUNNER_PATH,
+  );
+  if (!fs.existsSync(runnerPath)) {
+    fail(`Missing ${CREDIT_MIGRATION_DEFINER_GRANT_RUNNER_PATH}`);
+  }
+  const runner = fs.readFileSync(runnerPath, "utf8");
+  for (const [needle, message] of [
+    [
+      'from "./credit-migration-definer-grants.mjs"',
+      "must invoke the reviewed grant helper",
+    ],
+    ["DATABASE_MIGRATION_URL", "must require the isolated migration URL"],
+    [
+      "DATABASE_PROVISIONER_URL",
+      "must require the separately protected provisioner URL",
+    ],
+    [
+      "Credit migration definer grants verified.",
+      "must emit only the fixed success marker",
+    ],
+    [
+      "Credit migration definer grants failed closed.",
+      "must emit only the fixed failure marker",
+    ],
+  ]) {
+    if (!runner.includes(needle)) {
+      fail(`${CREDIT_MIGRATION_DEFINER_GRANT_RUNNER_PATH} ${message}`);
+    }
+  }
+  if (/console\.|String\(error|error\.message|error\.stack/.test(runner)) {
+    fail(
+      `${CREDIT_MIGRATION_DEFINER_GRANT_RUNNER_PATH} must not serialize database failures or identities`,
+    );
+  }
+  const packageSource = fs.readFileSync(
+    path.join(rootDir, "apps/image-gen/package.json"),
+    "utf8",
+  );
+  const dockerfile = fs.readFileSync(
+    path.join(rootDir, "apps/image-gen/Dockerfile"),
+    "utf8",
+  );
+  if (
+    !packageSource.includes("run-credit-migration-definer-grants.mjs") ||
+    !packageSource.includes("dist/credit-migration-definer-grants.cjs") ||
+    !dockerfile.includes(
+      "COPY --from=build /app/dist/credit-migration-definer-grants.cjs ./dist/credit-migration-definer-grants.cjs",
+    ) ||
+    !dockerfile.includes(
+      "node --check /app/dist/credit-migration-definer-grants.cjs",
+    )
+  ) {
+    fail(
+      "image-gen migration bridge must bundle and syntax-check the exact definer grant runner",
+    );
+  }
+}
+
 function validateRuntimePrincipalStagingWorkflow(rootDir) {
   const workflowPath = path.join(
     rootDir,
@@ -4440,8 +4610,12 @@ function validateRuntimePrincipalStagingWorkflow(rootDir) {
       "must retain the reviewed runtime artifact source independently from the later manifest commit",
     ],
     [
-      "IMAGE_GEN_DATABASE_MIGRATION_URL",
-      "must reuse the protected production migration credential to provision the runtime principal",
+      "IMAGE_GEN_DATABASE_PROVISIONER_URL",
+      "must use the separate protected provisioner to create the runtime principal",
+    ],
+    [
+      "assertCreditProvisionerGrantScope",
+      "must prove the provisioner's exact effective privileges before account mutation",
     ],
     [
       'u.port!=="13306"',
@@ -4572,6 +4746,11 @@ function validateRuntimePrincipalStagingWorkflow(rootDir) {
     if (!workflow.includes(needle)) {
       fail(`${RUNTIME_PRINCIPAL_STAGING_WORKFLOW_PATH} ${message}`);
     }
+  }
+  if (workflow.includes("IMAGE_GEN_DATABASE_MIGRATION_URL")) {
+    fail(
+      `${RUNTIME_PRINCIPAL_STAGING_WORKFLOW_PATH} must never use the migration principal as a provisioner`,
+    );
   }
   if (
     workflow.includes("IMAGE_GEN_DATABASE_RUNTIME_PROVISIONER_URL") ||
@@ -4718,10 +4897,23 @@ function validateRuntimePrincipalCleanupWorkflow(rootDir) {
       "obsoletePrincipalSha256",
       "must retain metadata-only obsolete-principal evidence",
     ],
+    [
+      "IMAGE_GEN_DATABASE_PROVISIONER_URL",
+      "must use the separate protected provisioner for principal cleanup",
+    ],
+    [
+      "assertCreditProvisionerGrantScope",
+      "must prove the provisioner's exact effective privileges before cleanup mutation",
+    ],
   ]) {
     if (!workflow.includes(needle)) {
       fail(`${RUNTIME_PRINCIPAL_CLEANUP_WORKFLOW_PATH} ${message}`);
     }
+  }
+  if (workflow.includes("IMAGE_GEN_DATABASE_MIGRATION_URL")) {
+    fail(
+      `${RUNTIME_PRINCIPAL_CLEANUP_WORKFLOW_PATH} must never use the migration principal as a provisioner`,
+    );
   }
   const successorProofIndex = workflow.indexOf(
     "      - name: Reprove every successor Machine before database mutation",
@@ -6295,6 +6487,46 @@ export function validateProductionRepository(rootDir = process.cwd()) {
       "must keep automatic recovery outside the database privilege boundary",
     ],
     [
+      "IMAGE_GEN_DATABASE_PROVISIONER_URL",
+      "must document the separate protected database provisioner",
+    ],
+    [
+      "used only\n  inside reviewer-gated `production` jobs",
+      "must restrict the provisioner to reviewer-gated production jobs",
+    ],
+    [
+      "not root, and has no `ALL`, `SUPER`, or schema-wide DML or DDL grant",
+      "must document the provisioner's explicit privilege ceiling",
+    ],
+    [
+      "grants are global `CREATE USER` without grant option, table-level `SELECT` on",
+      "must document the provisioner's exact account-admin and mysql.user boundary",
+    ],
+    [
+      "schema-level `SELECT, EXECUTE WITH GRANT\nOPTION`",
+      "must document the provisioner's exact schema delegation boundary",
+    ],
+    [
+      "table-level `INSERT, UPDATE, DELETE WITH GRANT OPTION` only on the 41",
+      "must document the provisioner's exact runtime-table delegation boundary",
+    ],
+    [
+      "`@@GLOBAL.automatic_sp_privileges=1`",
+      "must document automatic creator privileges required by credit routines",
+    ],
+    [
+      "revoke `DELETE` on\n`billing_intents` and `CREATE, DELETE` on `credit_wallets`",
+      "must document exact grant cleanup when the credit transition is abandoned",
+    ],
+    [
+      "table-level exactly `CREATE, DELETE` on",
+      "must document the future credit-wallet table grant without schema DELETE",
+    ],
+    [
+      "discover the migration account through\n`CURRENT_USER()`",
+      "must document authenticated migration-account discovery",
+    ],
+    [
       "persistent trigger definer: table-level `SELECT, TRIGGER` on",
       "must document the exact persistent trigger-definer privilege boundary",
     ],
@@ -6439,6 +6671,27 @@ export function validateProductionRepository(rootDir = process.cwd()) {
       "FLY_PRODUCTION_READONLY_TOKEN may exist only in the three trusted production-inspection preflights",
     );
   }
+  const provisionerSecretHolders = fs
+    .readdirSync(workflowDir)
+    .filter((file) => file.endsWith(".yml") || file.endsWith(".yaml"))
+    .filter((file) =>
+      fs
+        .readFileSync(path.join(workflowDir, file), "utf8")
+        .includes("IMAGE_GEN_DATABASE_PROVISIONER_URL"),
+    )
+    .sort();
+  if (
+    JSON.stringify(provisionerSecretHolders) !==
+    JSON.stringify([
+      "cleanup-image-gen-runtime-principals.yml",
+      "image-gen-schema-transition.yml",
+      "stage-image-gen-credit-runtime-principal.yml",
+    ])
+  ) {
+    fail(
+      "IMAGE_GEN_DATABASE_PROVISIONER_URL may exist only in the three protected image-gen database workflows",
+    );
+  }
   for (const [target, script] of [
     ["gateway", "production:drift:gateway"],
     ["image-gen", "production:drift:image-gen"],
@@ -6468,6 +6721,7 @@ export function validateProductionRepository(rootDir = process.cwd()) {
   validateStorageProxySafety(rootDir);
   validateImageGenMigrationCi(rootDir);
   validateTrustedArtifactWorkflow(rootDir);
+  validateCreditMigrationDefinerGrant(rootDir);
   validateSchemaTransitionWorkflow(rootDir);
   validateRuntimePrincipalStagingWorkflow(rootDir);
   validateRuntimePrincipalCleanupWorkflow(rootDir);

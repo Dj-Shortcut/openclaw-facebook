@@ -90,6 +90,9 @@ these environment secrets:
   `leaderbot-portal-mysql`;
 - `IMAGE_GEN_DATABASE_MIGRATION_URL`: `127.0.0.1:13306` URL for the dedicated
   expand principal;
+- `IMAGE_GEN_DATABASE_PROVISIONER_URL`: `127.0.0.1:13306` URL for the separate
+  protected database provisioner that alone creates, grants, locks, unlocks,
+  and drops reviewed MySQL principals;
 - `META_APP_ID` and `META_APP_SECRET`: used only to read and verify webhook
   subscriptions; values are never printed.
 
@@ -167,22 +170,76 @@ inspection environment contains only its read-only Fly token. Verify that
 timer, no administrator bypass, and only its narrowly scoped database migration
 token. Treat any drift as a release blocker.
 
-Use three exact MySQL principals for the production schema, with no global or
-grant-option privileges:
+During the reviewed `0016_expand -> 0018_credit_checkout_reservation`
+transition, keep four execution roles separate from a fifth protected
+provisioner. Except for the conditional `SUPER` case below, the first four may
+not have a global privilege or `WITH GRANT OPTION`:
 
-- runtime: exactly `SELECT, INSERT, UPDATE, DELETE`;
-- expand migration: exactly `CREATE TEMPORARY TABLES, ALTER, INDEX, REFERENCES,
-SELECT, INSERT, UPDATE`;
-- persistent trigger definer: table-level `SELECT, TRIGGER` on
-  `billing_outbox` and table-level `SELECT, UPDATE, TRIGGER` on
-  `billing_scheduler_tenants`, with no rights on any other table.
+- temporary pre-migration 0016 runtime: schema-level exactly `SELECT, INSERT,
+UPDATE, DELETE`;
+- 0017/0018 credit migration and credit-object definer: schema-level exactly
+  `CREATE, CREATE TEMPORARY TABLES, ALTER, INDEX, REFERENCES, SELECT, INSERT,
+UPDATE, TRIGGER, CREATE ROUTINE, ALTER ROUTINE`, table-level exactly `DELETE`
+  on `billing_intents`, and table-level exactly `CREATE, DELETE` on
+  `credit_wallets`; the table-level `CREATE` permits MySQL to record the exact
+  future-table grant before 0017 creates that table and does not permit schema
+  DELETE;
+- final 0018 credit runtime: schema-level `SELECT`, table-level `INSERT, UPDATE,
+DELETE` only on the 41 entries in `productionRuntimeWritableTableNames`, and
+  `EXECUTE` only on the 17 entries in `creditWalletRoutineNames`; it has no
+  direct DML on `credit_wallets`, `credit_reservations`, or `credit_ledger`;
+- persistent trigger definer: table-level `SELECT, TRIGGER` on `billing_outbox`
+  and table-level `SELECT, UPDATE, TRIGGER` on
+  `billing_scheduler_tenants`, with no rights on any other table; this role
+  remains limited to the legacy billing triggers during the transition.
+- protected provisioner: account-administration and grant authority used only
+  inside reviewer-gated `production` jobs; it is never available to the app,
+  production inspection, automatic recovery, or no-review cleanup. Its exact
+  grants are global `CREATE USER` without grant option, table-level `SELECT` on
+  `mysql.user` without grant option, schema-level `SELECT, EXECUTE WITH GRANT
+OPTION`, table-level `INSERT, UPDATE, DELETE WITH GRANT OPTION` only on the 41
+  entries in `productionRuntimeWritableTableNames`, and table-level `CREATE,
+DELETE WITH GRANT OPTION` only on `credit_wallets`. It has no other grant, is
+  not root, and has no `ALL`, `SUPER`, or schema-wide DML or DDL grant. The
+  schema-wide `EXECUTE` delegation is required because this credential exists
+  before the 17 reviewed credit procedures do; the staging workflow still
+  grants the runtime only their exact names.
 
-After creating or rotating the runtime or expand principal, run its matching
-protected inspection mode; the migrator rejects missing and excessive grants.
-Inspect the trigger-definer grants privately with the database administrator,
-then require the automatic runtime trigger probe below. Bootstrap/contract DDL
-credentials are not application or 0016-expand credentials and stay outside
-these workflows. No MySQL principal is provisioned to automatic no-review
+MySQL may additionally expose creator grants of `ALTER ROUTINE` and `EXECUTE`
+to the credit migration principal only for those 17 procedures and the
+transitional `credit_create_wallet` until 0018 drops it. Global `SUPER` is
+required and accepted only when binary logging is enabled and
+`log_bin_trust_function_creators` is disabled; otherwise it is excessive.
+After creating or rotating a runtime or migration principal, run its exact
+phase-matched protected inspection; missing or excessive grants fail closed.
+The credit migration additionally requires
+`@@GLOBAL.automatic_sp_privileges=1`. Every already-created credit procedure
+must name the authenticated migration account from `CURRENT_USER()` as its
+definer and retain an exact procedure-level creator `EXECUTE` grant before the
+transition may resume. Schema-level `ALTER ROUTINE` remains part of the exact
+migration-principal contract; MySQL need not duplicate it per procedure.
+The protected workflow first performs a non-mutating migration-principal and
+schema-phase inspection, then creates, restores, validates, and durably uploads
+the exact pre-credit recovery evidence. This pregrant inspection accepts an
+absent or incomplete subset of only the two reviewed definer table grants so a
+connection loss between their two statements remains resumable; it rejects any
+revoke or unreviewed privilege. Only after the recovery evidence exists does it
+open the separate provisioner connection, prove every effective provisioner
+grant matches the exact ceiling above, discover the migration account through
+`CURRENT_USER()`, and idempotently complete the two exact definer table grants.
+A second strict migration-principal inspection runs before credit DDL.
+The workflow never passes the provisioner connection to the migrator or
+application and does not log either database account identity. The
+runtime-principal staging and cleanup workflows use this same separately
+protected provisioner secret; they never reuse the migration principal for
+account administration.
+If the credit transition is abandoned or rolled back without retaining the
+credit routines, use a separate reviewed cleanup to revoke `DELETE` on
+`billing_intents` and `CREATE, DELETE` on `credit_wallets` from the migration
+account. Do not widen that cleanup to schema-level DELETE.
+Inspect the separate legacy trigger-definer grants privately and require the
+automatic runtime trigger probe below. Bootstrap/contract DDL credentials stay
+outside these workflows. No MySQL principal is provisioned to automatic no-review
 application recovery.
 
 The trigger definer is a non-runtime executor for the three contract-pinned
@@ -190,9 +247,10 @@ billing triggers. Its complete privilege set is table-level `SELECT, TRIGGER`
 on `billing_outbox` plus table-level `SELECT, UPDATE, TRIGGER` on
 `billing_scheduler_tenants`. It has no rights on any other table and does not
 have `INSERT`, `DELETE`, DDL, a schema/global privilege or grant option. Never
-add `TRIGGER` to the application runtime principal. Keep the expand principal
-separate so its temporary migration rights can be removed without disabling an
-already installed trigger.
+add `TRIGGER` to either application runtime. Keep the separate legacy
+billing-trigger definer and credit migration/credit-object definer on their
+exact contract-pinned grants; change either definer only through a reviewed
+migration and reprobe.
 
 Before an image-gen rollout, the protected deployment extracts the reviewed
 probe from the candidate image, uploads it to one exact started app Machine,
@@ -223,17 +281,19 @@ table-level `SELECT, UPDATE, TRIGGER` on `billing_scheduler_tenants`, without
 rights on any other table, schema/global privileges or grant option. Using a
 separately authenticated administrator with the required definer authority,
 recreate all three exact checked-in triggers with that account as their
-explicit definer in one reviewed maintenance transition. Keep the runtime
-account at exactly `SELECT, INSERT, UPDATE, DELETE`; do not reuse the expand
-principal as the persistent definer. MySQL account locking blocks login but
-does not disable execution of stored objects that name the locked account as
-definer.
+explicit definer in one reviewed maintenance transition. Keep the
+pre-migration runtime at its exact legacy grants only until the final 0018
+runtime principal is staged and proven; do not reuse the credit migration
+principal as an application runtime or as the separate legacy billing-trigger
+definer. MySQL account locking blocks login but does not disable execution of
+stored objects that name the locked account as definer.
 
 After the transition, privately prove that all three triggers name exactly that
 one locked account and that its only effective object grants are the two exact
 table-level sets above. Do not print the account name, grant output or
-connection URL. Run the normal runtime/expand schema inspection and the runtime
-trigger probe before another deploy, and retain the evidence as metadata only.
+connection URL. Run the phase-matched runtime (`runtime` or `credit-runtime`)
+and migration (`credit-expand`) schema inspections plus the runtime trigger
+probe before another deploy, and retain the evidence as metadata only.
 That schema inspection deliberately omits privileged trigger metadata, while
 bootstrap inspection requires each trigger definer to equal the connected
 bootstrap principal. It therefore cannot certify this locked, separate

@@ -68,6 +68,14 @@ export const creditWalletTableNames = Object.freeze([
   "credit_reservations",
   "credit_ledger",
 ]);
+export const creditWalletMigrationTablePrivileges = Object.freeze({
+  billing_intents: Object.freeze(["DELETE"]),
+  credit_wallets: Object.freeze(["CREATE", "DELETE"]),
+});
+const creditWalletMigrationRoutineNames = Object.freeze([
+  ...creditWalletRoutineNames,
+  "credit_create_wallet",
+]);
 export const productionSchemaSqlMode =
   "ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION";
 
@@ -100,6 +108,7 @@ export async function assertProductionMigrationRuntime(
       "runtime",
       "credit-runtime",
       "expand",
+      "credit-expand-pregrant",
       "credit-expand",
       "bootstrap",
       "credit-bootstrap",
@@ -109,7 +118,7 @@ export async function assertProductionMigrationRuntime(
   }
   await configureProductionSchemaSession(connection);
   const [[runtime]] = await connection.query(
-    "SELECT VERSION() AS version,DATABASE() AS databaseName,@@SESSION.sql_mode AS sqlMode,@@SESSION.time_zone AS timeZone,@@SESSION.transaction_isolation AS transactionIsolation,@@SESSION.foreign_key_checks AS foreignKeyChecks,@@SESSION.default_storage_engine AS defaultStorageEngine,@@GLOBAL.innodb_default_row_format AS innodbDefaultRowFormat,@@GLOBAL.innodb_page_size AS innodbPageSize,@@GLOBAL.innodb_force_recovery AS innodbForceRecovery,@@GLOBAL.innodb_read_only AS innodbReadOnly,@@GLOBAL.read_only AS readOnly,@@GLOBAL.super_read_only AS superReadOnly,@@GLOBAL.disabled_storage_engines AS disabledStorageEngines,@@SESSION.innodb_strict_mode AS innodbStrictMode,@@lower_case_table_names AS lowerCaseTableNames,@@SESSION.explicit_defaults_for_timestamp AS explicitTimestampDefaults,@@SESSION.auto_increment_increment AS autoIncrementIncrement,@@SESSION.auto_increment_offset AS autoIncrementOffset,@@SESSION.information_schema_stats_expiry AS informationSchemaStatsExpiry,@@SESSION.sql_quote_show_create AS sqlQuoteShowCreate,@@SESSION.show_create_table_verbosity AS showCreateTableVerbosity,@@SESSION.sql_safe_updates AS sqlSafeUpdates,@@SESSION.unique_checks AS uniqueChecks,@@SESSION.transaction_read_only AS transactionReadOnly,(ABS(@@SESSION.timestamp-UNIX_TIMESTAMP()) <= 1) AS timestampIsDefault,@@SESSION.insert_id AS insertId,(@@SESSION.sql_select_limit = 18446744073709551615) AS sqlSelectLimitIsDefault,@@SESSION.sql_big_selects AS sqlBigSelects,@@GLOBAL.log_bin AS logBin,@@GLOBAL.log_bin_trust_function_creators AS logBinTrustFunctionCreators,@@GLOBAL.binlog_format AS binlogFormat"
+    "SELECT VERSION() AS version,DATABASE() AS databaseName,CURRENT_USER() AS currentUser,@@SESSION.sql_mode AS sqlMode,@@SESSION.time_zone AS timeZone,@@SESSION.transaction_isolation AS transactionIsolation,@@SESSION.foreign_key_checks AS foreignKeyChecks,@@SESSION.default_storage_engine AS defaultStorageEngine,@@GLOBAL.innodb_default_row_format AS innodbDefaultRowFormat,@@GLOBAL.innodb_page_size AS innodbPageSize,@@GLOBAL.innodb_force_recovery AS innodbForceRecovery,@@GLOBAL.innodb_read_only AS innodbReadOnly,@@GLOBAL.read_only AS readOnly,@@GLOBAL.super_read_only AS superReadOnly,@@GLOBAL.disabled_storage_engines AS disabledStorageEngines,@@SESSION.innodb_strict_mode AS innodbStrictMode,@@lower_case_table_names AS lowerCaseTableNames,@@SESSION.explicit_defaults_for_timestamp AS explicitTimestampDefaults,@@SESSION.auto_increment_increment AS autoIncrementIncrement,@@SESSION.auto_increment_offset AS autoIncrementOffset,@@SESSION.information_schema_stats_expiry AS informationSchemaStatsExpiry,@@SESSION.sql_quote_show_create AS sqlQuoteShowCreate,@@SESSION.show_create_table_verbosity AS showCreateTableVerbosity,@@SESSION.sql_safe_updates AS sqlSafeUpdates,@@SESSION.unique_checks AS uniqueChecks,@@SESSION.transaction_read_only AS transactionReadOnly,(ABS(@@SESSION.timestamp-UNIX_TIMESTAMP()) <= 1) AS timestampIsDefault,@@SESSION.insert_id AS insertId,(@@SESSION.sql_select_limit = 18446744073709551615) AS sqlSelectLimitIsDefault,@@SESSION.sql_big_selects AS sqlBigSelects,@@GLOBAL.log_bin AS logBin,@@GLOBAL.log_bin_trust_function_creators AS logBinTrustFunctionCreators,@@GLOBAL.binlog_format AS binlogFormat,@@GLOBAL.automatic_sp_privileges AS automaticSpPrivileges"
   );
   const [[schema]] = await connection.query(
     "SELECT DEFAULT_CHARACTER_SET_NAME AS characterSet,DEFAULT_COLLATION_NAME AS collationName,DEFAULT_ENCRYPTION AS defaultEncryption,(SELECT EXISTS(SELECT 1 FROM information_schema.SCHEMATA_EXTENSIONS se WHERE se.SCHEMA_NAME=DATABASE() AND UPPER(COALESCE(se.OPTIONS,'')) LIKE '%READ ONLY=1%')) AS schemaReadOnly FROM information_schema.SCHEMATA WHERE SCHEMA_NAME=DATABASE()"
@@ -125,13 +134,28 @@ export async function assertProductionMigrationRuntime(
   } else if (privilegeProfile === "expand") {
     assertExpandMigrationGrantScope(grants, runtime.databaseName);
     await assertCheckConstraintsEnforced(connection);
-  } else if (privilegeProfile === "credit-expand") {
+  } else if (
+    privilegeProfile === "credit-expand" ||
+    privilegeProfile === "credit-expand-pregrant"
+  ) {
     assertCreditWalletMigrationGrantScope(
       grants,
       runtime.databaseName,
       Number(runtime.logBin) === 1 &&
-        Number(runtime.logBinTrustFunctionCreators) !== 1
+        Number(runtime.logBinTrustFunctionCreators) !== 1,
+      privilegeProfile === "credit-expand-pregrant"
     );
+    const [existingCreditRoutines] = await connection.query(
+      `SELECT ROUTINE_NAME AS name,DEFINER AS definer FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA=DATABASE() AND ROUTINE_TYPE='PROCEDURE' AND ROUTINE_NAME IN (${creditWalletMigrationRoutineNames.map(() => "?").join(",")}) ORDER BY ROUTINE_NAME`,
+      creditWalletMigrationRoutineNames
+    );
+    assertCreditWalletMigrationRoutineOwnership({
+      automaticSpPrivileges: runtime.automaticSpPrivileges,
+      currentUser: runtime.currentUser,
+      databaseName: runtime.databaseName,
+      grants,
+      routines: existingCreditRoutines,
+    });
     assertCreditWalletBinlogFormat(runtime);
     await assertCheckConstraintsEnforced(connection);
   } else {
@@ -166,6 +190,61 @@ async function currentUserGrants(connection) {
   return rows.flatMap(row => Object.values(row)).map(String);
 }
 
+function decodeGrantIdentifier(value) {
+  const token = String(value).trim();
+  if (token === "*") return { value: token, wildcard: true };
+  const quoted = /^`((?:``|[^`])*)`$/.exec(token);
+  if (quoted) {
+    return { value: quoted[1].replaceAll("``", "`"), wildcard: false };
+  }
+  return /^[A-Za-z0-9_$]+$/.test(token)
+    ? { value: token, wildcard: false }
+    : null;
+}
+
+function splitGrantScope(value) {
+  let quoted = false;
+  let separator = -1;
+  for (let index = 0; index < value.length; index += 1) {
+    if (value[index] === "`") {
+      if (quoted && value[index + 1] === "`") {
+        index += 1;
+      } else {
+        quoted = !quoted;
+      }
+      continue;
+    }
+    if (value[index] === "." && !quoted) {
+      if (separator >= 0) return null;
+      separator = index;
+    }
+  }
+  if (quoted || separator <= 0 || separator === value.length - 1) return null;
+  return [value.slice(0, separator), value.slice(separator + 1)];
+}
+
+function parseGrantScope(rawScope) {
+  let value = String(rawScope).trim();
+  let kind = "object";
+  const procedure = /^PROCEDURE\s+(.+)$/i.exec(value);
+  if (procedure) {
+    kind = "procedure";
+    value = procedure[1];
+  }
+  const components = splitGrantScope(value);
+  if (!components) return null;
+  const database = decodeGrantIdentifier(components[0]);
+  const object = decodeGrantIdentifier(components[1]);
+  if (database === null || object === null) return null;
+  return {
+    databaseName: database.value,
+    databaseWildcard: database.wildcard,
+    kind,
+    objectName: object.value,
+    objectWildcard: object.wildcard,
+  };
+}
+
 function scopedPrivileges(grants, databaseName) {
   const schemaPrivileges = new Set();
   const revokedSchemaPrivileges = new Set();
@@ -180,15 +259,23 @@ function scopedPrivileges(grants, databaseName) {
     const privileges = parsed[2]
       .split(",")
       .map(value => value.trim().toUpperCase());
-    const scope = parsed[3].replaceAll("`", "");
+    const scope = parseGrantScope(parsed[3]);
     if (
-      scope === "*.*" &&
+      scope?.kind === "object" &&
+      scope.databaseWildcard &&
+      scope.objectWildcard &&
       privileges.length === 1 &&
       privileges[0] === "USAGE"
     ) {
       continue;
     }
-    if (scope !== `${databaseName}.*` || /\bWITH GRANT OPTION\b/i.test(grant)) {
+    if (
+      scope?.kind !== "object" ||
+      scope.databaseWildcard ||
+      scope.databaseName !== databaseName ||
+      !scope.objectWildcard ||
+      /\bWITH GRANT OPTION\b/i.test(grant)
+    ) {
       unexpected.push(grant);
       continue;
     }
@@ -257,7 +344,7 @@ export function assertCreditWalletRuntimeGrantScope(grants, databaseName) {
     const privileges = parsed[2]
       .split(",")
       .map(value => value.trim().toUpperCase());
-    const rawScope = parsed[3].replaceAll("`", "");
+    const scope = parseGrantScope(parsed[3]);
     if (
       privileges.length === 0 ||
       privileges.some(privilege =>
@@ -270,18 +357,18 @@ export function assertCreditWalletRuntimeGrantScope(grants, databaseName) {
     }
     if (
       operation === "GRANT" &&
-      rawScope === "*.*" &&
+      scope?.kind === "object" &&
+      scope.databaseWildcard &&
+      scope.objectWildcard &&
       privileges.length === 1 &&
       privileges[0] === "USAGE"
     ) {
       continue;
     }
-    const procedure = /^PROCEDURE\s+([^\.]+)\.(.+)$/i.exec(rawScope);
-    if (procedure) {
-      const [, schemaName, routineName] = procedure;
+    if (scope?.kind === "procedure") {
       if (
-        schemaName !== databaseName ||
-        !expectedRoutines.has(routineName) ||
+        scope.databaseName !== databaseName ||
+        !expectedRoutines.has(scope.objectName) ||
         privileges.length !== 1 ||
         privileges[0] !== "EXECUTE"
       ) {
@@ -289,12 +376,17 @@ export function assertCreditWalletRuntimeGrantScope(grants, databaseName) {
         continue;
       }
       (operation === "REVOKE" ? revokedRoutines : grantedRoutines).add(
-        routineName
+        scope.objectName
       );
       continue;
     }
 
-    if (rawScope === `${databaseName}.*`) {
+    if (
+      scope?.kind === "object" &&
+      !scope.databaseWildcard &&
+      scope.databaseName === databaseName &&
+      scope.objectWildcard
+    ) {
       if (privileges.some(privilege => privilege !== "SELECT")) {
         unexpected.push(grant);
         continue;
@@ -305,11 +397,10 @@ export function assertCreditWalletRuntimeGrantScope(grants, databaseName) {
       continue;
     }
 
-    const table = /^([^\.]+)\.(.+)$/.exec(rawScope);
     if (
-      !table ||
-      table[1] !== databaseName ||
-      !expectedTables.has(table[2]) ||
+      scope?.kind !== "object" ||
+      scope.databaseName !== databaseName ||
+      !expectedTables.has(scope.objectName) ||
       privileges.some(
         privilege => !new Set(["INSERT", "UPDATE", "DELETE"]).has(privilege)
       )
@@ -319,9 +410,9 @@ export function assertCreditWalletRuntimeGrantScope(grants, databaseName) {
     }
     const target =
       operation === "REVOKE" ? revokedTablePrivileges : grantedTablePrivileges;
-    const tablePrivileges = target.get(table[2]) ?? new Set();
+    const tablePrivileges = target.get(scope.objectName) ?? new Set();
     for (const privilege of privileges) tablePrivileges.add(privilege);
-    target.set(table[2], tablePrivileges);
+    target.set(scope.objectName, tablePrivileges);
   }
 
   for (const privilege of revokedSchemaPrivileges) {
@@ -405,27 +496,31 @@ export function assertExpandMigrationGrantScope(grants, databaseName) {
 export function assertCreditWalletMigrationGrantScope(
   grants,
   databaseName,
-  requireSuper = false
+  requireSuper = false,
+  allowIncompleteDefinerTablePrivileges = false
 ) {
   const schemaGrants = [];
+  const grantedTablePrivileges = new Map();
+  const revokedTablePrivileges = new Map();
   let globalSuper = false;
   let revokedGlobalSuper = false;
-  const expectedRoutines = new Set([
-    ...creditWalletRoutineNames,
-    // MySQL 8.4 automatically grants the creator ALTER ROUTINE and EXECUTE
-    // on this 0017-only helper until 0018 drops it. Accept only that exact
-    // transitional procedure so the same least-privilege principal can resume.
-    "credit_create_wallet",
-  ]);
+  const expectedTablePrivileges = new Map(
+    Object.entries(creditWalletMigrationTablePrivileges).map(
+      ([tableName, privileges]) => [tableName, new Set(privileges)]
+    )
+  );
+  const expectedRoutines = new Set(creditWalletMigrationRoutineNames);
   for (const grant of grants) {
     const parsed = /^(GRANT|REVOKE) (.+) ON (.+) (?:TO|FROM) /i.exec(grant);
     const privileges = parsed?.[2]
       ?.split(",")
       .map(value => value.trim().toUpperCase());
-    const scope = parsed?.[3]?.replaceAll("`", "");
+    const scope = parsed ? parseGrantScope(parsed[3]) : null;
     if (
       parsed &&
-      scope === "*.*" &&
+      scope?.kind === "object" &&
+      scope.databaseWildcard &&
+      scope.objectWildcard &&
       privileges.length === 1 &&
       privileges[0] === "SUPER" &&
       !/\bWITH GRANT OPTION\b/i.test(grant)
@@ -434,18 +529,37 @@ export function assertCreditWalletMigrationGrantScope(
       else globalSuper = true;
       continue;
     }
-    const procedure = /^PROCEDURE\s+([^\.]+)\.(.+)$/i.exec(scope ?? "");
-    if (procedure) {
+    if (scope?.kind === "procedure") {
       const allowedRoutinePrivilege =
         parsed[1].toUpperCase() === "GRANT" &&
-        procedure[1] === databaseName &&
-        expectedRoutines.has(procedure[2]) &&
+        scope.databaseName === databaseName &&
+        expectedRoutines.has(scope.objectName) &&
         privileges.length > 0 &&
         privileges.every(privilege =>
           new Set(["ALTER ROUTINE", "EXECUTE"]).has(privilege)
         ) &&
         !/\bWITH GRANT OPTION\b/i.test(grant);
       if (!allowedRoutinePrivilege) schemaGrants.push(grant);
+      continue;
+    }
+    if (
+      parsed &&
+      scope?.kind === "object" &&
+      scope.databaseName === databaseName &&
+      expectedTablePrivileges.has(scope.objectName) &&
+      privileges.length > 0 &&
+      privileges.every(privilege =>
+        expectedTablePrivileges.get(scope.objectName).has(privilege)
+      ) &&
+      !/\bWITH GRANT OPTION\b/i.test(grant)
+    ) {
+      const target =
+        parsed[1].toUpperCase() === "REVOKE"
+          ? revokedTablePrivileges
+          : grantedTablePrivileges;
+      const tablePrivileges = target.get(scope.objectName) ?? new Set();
+      for (const privilege of privileges) tablePrivileges.add(privilege);
+      target.set(scope.objectName, tablePrivileges);
       continue;
     }
     schemaGrants.push(grant);
@@ -468,6 +582,41 @@ export function assertCreditWalletMigrationGrantScope(
     ],
     "credit wallet migration principal"
   );
+  const tablePrivilegeMismatches = [];
+  for (const [tableName, required] of expectedTablePrivileges) {
+    const revoked = revokedTablePrivileges.get(tableName) ?? new Set();
+    const effective = new Set(grantedTablePrivileges.get(tableName) ?? []);
+    for (const privilege of revoked) effective.delete(privilege);
+    const missing = [...required].filter(
+      privilege => !effective.has(privilege)
+    );
+    const excessive = [...effective].filter(
+      privilege => !required.has(privilege)
+    );
+    if (
+      revoked.size > 0 ||
+      excessive.length > 0 ||
+      (!allowIncompleteDefinerTablePrivileges && missing.length > 0)
+    ) {
+      tablePrivilegeMismatches.push(
+        `${tableName}:` +
+          [
+            ...(revoked.size > 0 ? ["contains revoke"] : []),
+            ...(!allowIncompleteDefinerTablePrivileges && missing.length > 0
+              ? [`missing ${missing.join("+")}`]
+              : []),
+            ...(excessive.length > 0
+              ? [`excessive ${excessive.join("+")}`]
+              : []),
+          ].join("+")
+      );
+    }
+  }
+  if (tablePrivilegeMismatches.length > 0) {
+    throw new Error(
+      `credit wallet migration principal table privilege boundary mismatch; ${tablePrivilegeMismatches.join(",")}`
+    );
+  }
   const hasSuper = globalSuper && !revokedGlobalSuper;
   if (requireSuper && !hasSuper) {
     throw new Error(
@@ -478,6 +627,168 @@ export function assertCreditWalletMigrationGrantScope(
     throw new Error(
       "credit wallet migration principal has excessive global SUPER"
     );
+  }
+}
+
+export function assertCreditProvisionerGrantScope(grants, databaseName) {
+  const expectedTablePrivileges = new Map(
+    productionRuntimeWritableTableNames.map(tableName => [
+      tableName,
+      new Set(["INSERT", "UPDATE", "DELETE"]),
+    ])
+  );
+  expectedTablePrivileges.set("credit_wallets", new Set(["CREATE", "DELETE"]));
+  const observedTables = new Set();
+  let hasCreateUser = false;
+  let hasSchemaDelegation = false;
+  let hasMysqlUserRead = false;
+  const unexpected = [];
+
+  for (const rawGrant of grants) {
+    const grant = String(rawGrant);
+    const parsed = /^GRANT (.+) ON (.+) TO /i.exec(grant);
+    const hasGrantOption = /\bWITH GRANT OPTION\b/i.test(grant);
+    if (!parsed) {
+      unexpected.push(grant);
+      continue;
+    }
+    const privileges = new Set(
+      parsed[1].split(",").map(value => value.trim().toUpperCase())
+    );
+    const scope = parseGrantScope(parsed[2]);
+    if (
+      scope?.kind === "object" &&
+      scope.databaseWildcard &&
+      scope.objectWildcard &&
+      privileges.size === 1 &&
+      privileges.has("USAGE") &&
+      !hasGrantOption
+    ) {
+      continue;
+    }
+    if (
+      scope?.kind === "object" &&
+      scope.databaseWildcard &&
+      scope.objectWildcard &&
+      privileges.size === 1 &&
+      privileges.has("CREATE USER") &&
+      !hasGrantOption
+    ) {
+      hasCreateUser = true;
+      continue;
+    }
+    if (
+      scope?.kind === "object" &&
+      !scope.databaseWildcard &&
+      scope.databaseName === "mysql" &&
+      !scope.objectWildcard &&
+      scope.objectName === "user" &&
+      privileges.size === 1 &&
+      privileges.has("SELECT") &&
+      !hasGrantOption
+    ) {
+      hasMysqlUserRead = true;
+      continue;
+    }
+    if (
+      scope?.kind === "object" &&
+      !scope.databaseWildcard &&
+      scope.databaseName === databaseName &&
+      scope.objectWildcard &&
+      privileges.size === 2 &&
+      privileges.has("SELECT") &&
+      privileges.has("EXECUTE") &&
+      hasGrantOption
+    ) {
+      hasSchemaDelegation = true;
+      continue;
+    }
+    const expected =
+      scope?.kind === "object" && scope.databaseName === databaseName
+        ? expectedTablePrivileges.get(scope.objectName)
+        : undefined;
+    if (
+      scope?.kind === "object" &&
+      expected &&
+      privileges.size === expected.size &&
+      [...privileges].every(privilege => expected.has(privilege)) &&
+      hasGrantOption
+    ) {
+      observedTables.add(scope.objectName);
+      continue;
+    }
+    unexpected.push(grant);
+  }
+
+  const missingTables = [...expectedTablePrivileges.keys()].filter(
+    tableName => !observedTables.has(tableName)
+  );
+  if (
+    !hasCreateUser ||
+    !hasSchemaDelegation ||
+    !hasMysqlUserRead ||
+    missingTables.length > 0 ||
+    unexpected.length > 0
+  ) {
+    throw new Error("credit provisioner privilege boundary mismatch");
+  }
+}
+
+export function assertCreditWalletMigrationRoutineOwnership({
+  automaticSpPrivileges,
+  currentUser,
+  databaseName,
+  grants,
+  routines,
+}) {
+  if (Number(automaticSpPrivileges) !== 1) {
+    throw new Error(
+      "credit wallet migration requires automatic stored-routine privileges"
+    );
+  }
+  const expectedRoutines = new Set(creditWalletMigrationRoutineNames);
+  const effectivePrivileges = new Map();
+  for (const grant of grants) {
+    const parsed = /^(GRANT|REVOKE) (.+) ON (.+) (?:TO|FROM) /i.exec(grant);
+    if (!parsed) continue;
+    const scope = parseGrantScope(parsed[3]);
+    if (
+      scope?.kind !== "procedure" ||
+      scope.databaseWildcard ||
+      scope.objectWildcard ||
+      scope.databaseName !== databaseName ||
+      !expectedRoutines.has(scope.objectName)
+    ) {
+      continue;
+    }
+    const privileges = effectivePrivileges.get(scope.objectName) ?? new Set();
+    for (const privilege of parsed[2]
+      .split(",")
+      .map(value => value.trim().toUpperCase())) {
+      if (parsed[1].toUpperCase() === "REVOKE") privileges.delete(privilege);
+      else privileges.add(privilege);
+    }
+    effectivePrivileges.set(scope.objectName, privileges);
+  }
+  for (const routine of routines) {
+    if (
+      !expectedRoutines.has(routine.name) ||
+      String(routine.definer) !== String(currentUser)
+    ) {
+      throw new Error(
+        "credit wallet migration routine definer boundary mismatch"
+      );
+    }
+    const privileges = effectivePrivileges.get(routine.name) ?? new Set();
+    // Schema-level ALTER ROUTINE is already enforced by
+    // assertCreditWalletMigrationGrantScope. With automatic_sp_privileges,
+    // MySQL adds only the creator privilege that is not already effective, so
+    // the per-procedure grant may legitimately contain EXECUTE alone.
+    if (!privileges.has("EXECUTE")) {
+      throw new Error(
+        `credit wallet migration routine ${routine.name} lacks creator execute privilege`
+      );
+    }
   }
 }
 
@@ -503,8 +814,13 @@ export function assertTriggerGrantScope(grants, databaseName, requireSuper) {
       const privileges = revoke[1]
         .split(",")
         .map(value => value.trim().toUpperCase());
-      const scope = revoke[2].replaceAll("`", "");
-      if (scope === "*.*" || scope === `${databaseName}.*`) {
+      const scope = parseGrantScope(revoke[2]);
+      if (
+        scope?.kind === "object" &&
+        scope.objectWildcard &&
+        (scope.databaseWildcard ||
+          (!scope.databaseWildcard && scope.databaseName === databaseName))
+      ) {
         for (const privilege of required) {
           if (
             privileges.includes("ALL PRIVILEGES") ||
@@ -521,9 +837,16 @@ export function assertTriggerGrantScope(grants, databaseName, requireSuper) {
     const privileges = match[1]
       .split(",")
       .map(value => value.trim().toUpperCase());
-    const scope = match[2].replaceAll("`", "");
-    const global = scope === "*.*";
-    const currentSchema = scope === `${databaseName}.*`;
+    const scope = parseGrantScope(match[2]);
+    const global =
+      scope?.kind === "object" &&
+      scope.databaseWildcard &&
+      scope.objectWildcard;
+    const currentSchema =
+      scope?.kind === "object" &&
+      !scope.databaseWildcard &&
+      scope.databaseName === databaseName &&
+      scope.objectWildcard;
     const all = privileges.includes("ALL PRIVILEGES");
     if (global || currentSchema) {
       for (const privilege of required) {

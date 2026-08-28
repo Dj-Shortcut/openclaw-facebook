@@ -64,6 +64,8 @@ function createRepositoryFixture() {
     "apps/image-gen/fly.toml",
     "apps/image-gen/Dockerfile",
     "apps/image-gen/package.json",
+    "apps/image-gen/scripts/credit-migration-definer-grants.mjs",
+    "apps/image-gen/scripts/run-credit-migration-definer-grants.mjs",
     "apps/image-gen/scripts/run-production-migrations.mjs",
     "apps/image-gen/server/_core/imageService.ts",
     "apps/image-gen/storage-proxy/Dockerfile",
@@ -189,8 +191,18 @@ function lifecycleJqFilterAccepts(filter, metadata) {
 
 function stageImageGenBridge(manifest, sourceCommit = "a".repeat(40)) {
   const app = manifest.apps["image-gen"];
-  const legacyImage = app.databaseSchemaTransition.legacyBaseImage;
+  const legacyImage = `registry.fly.io/${app.app}@sha256:${"a".repeat(64)}`;
   const bridgeImage = `registry.fly.io/${app.app}@sha256:${"b".repeat(64)}`;
+  app.databaseSchemaTransition = {
+    from: "0015_base",
+    to: "0016_expand",
+    state: "bridge_reviewed",
+    legacyBaseImage: legacyImage,
+    bridgeImage,
+    bridgeSourceCommit: sourceCommit,
+    bridgePredicateType:
+      "https://leaderbot.live/attestations/migration-bridge/v1",
+  };
   app.databaseSchemaPhase = "0015_base";
   app.deploymentEnabled = true;
   app.reviewedImage = bridgeImage;
@@ -212,10 +224,61 @@ function stageImageGenBridge(manifest, sourceCommit = "a".repeat(40)) {
   app.reviewedRollbackImageSchemaPhases = {
     [legacyImage]: ["0015_base"],
   };
-  app.databaseSchemaTransition.state = "bridge_reviewed";
-  app.databaseSchemaTransition.bridgeImage = bridgeImage;
-  app.databaseSchemaTransition.bridgeSourceCommit = sourceCommit;
   return { app, bridgeImage, legacyImage, sourceCommit };
+}
+
+function stageImageGenReviewedRuntime(manifest, sourceCommit = "c".repeat(40)) {
+  const app = manifest.apps["image-gen"];
+  const predecessor = structuredClone(app.reviewedSettledPredecessor);
+  const predecessorSourceCommit = app.reviewedSourceCommit;
+  const {
+    bridgeImage,
+    legacyImage,
+    sourceCommit: bridgeSourceCommit,
+  } = stageImageGenBridge(manifest);
+  const runtimeImage = `registry.fly.io/${app.app}@sha256:${"d".repeat(64)}`;
+  const predecessorImage = predecessor.image;
+
+  app.databaseSchemaPhase = "0016_expand";
+  app.deploymentEnabled = true;
+  app.reviewedImage = runtimeImage;
+  app.reviewedArtifactKind = "runtime";
+  app.reviewedSourceCommit = sourceCommit;
+  app.reviewedSettledPredecessor = predecessor;
+  app.reviewedRollbackImages = [bridgeImage, predecessorImage];
+  app.reviewedRollbackConfigs = {
+    [bridgeImage]: {
+      path: predecessor.path,
+      sha256: predecessor.sha256,
+    },
+    [predecessorImage]: {
+      path: predecessor.path,
+      sha256: predecessor.sha256,
+    },
+  };
+  app.reviewedRollbackArtifactKinds = {
+    [bridgeImage]: "migration-bridge",
+    [predecessorImage]: "runtime",
+  };
+  app.reviewedRollbackSourceCommits = {
+    [bridgeImage]: bridgeSourceCommit,
+    [predecessorImage]: predecessorSourceCommit,
+  };
+  app.reviewedImageSchemaPhases = ["0016_expand"];
+  app.reviewedRollbackImageSchemaPhases = {
+    [bridgeImage]: ["0015_base", "0016_expand"],
+    [predecessorImage]: ["0016_expand"],
+  };
+  app.databaseSchemaTransition.state = "runtime_reviewed";
+
+  return {
+    app,
+    bridgeImage,
+    legacyImage,
+    predecessor,
+    runtimeImage,
+    sourceCommit,
+  };
 }
 
 function stageStorageProxyRuntime(manifest, sourceCommit = "b".repeat(40)) {
@@ -1059,6 +1122,32 @@ describe("production deployment contract", () => {
     });
   });
 
+  it("keeps the checked-in 0016-to-0018 transition blocked until its bridge is attested", () => {
+    const manifest = JSON.parse(
+      fs.readFileSync(
+        path.join(repoRoot, "deploy/production/apps.json"),
+        "utf8",
+      ),
+    );
+    const app = manifest.apps["image-gen"];
+
+    expect(app.databaseSchemaPhase).toBe("0016_expand");
+    expect(app.databaseSchemaTransition).toMatchObject({
+      from: "0016_expand",
+      to: "0018_credit_checkout_reservation",
+      state: "awaiting_attested_bridge",
+      bridgeImage: null,
+      bridgeSourceCommit: null,
+    });
+    expect(app.deploymentEnabled).toBe(false);
+    expect(app.reviewedImage).toBe(
+      app.databaseSchemaTransition.legacyBaseImage,
+    );
+    expect(app.reviewedRollbackImages).toEqual([
+      app.databaseSchemaTransition.legacyBaseImage,
+    ]);
+  });
+
   it("keeps runtime-principal staging manual, exact, and non-deploying", () => {
     const workflow = fs.readFileSync(
       path.join(
@@ -1073,7 +1162,8 @@ describe("production deployment contract", () => {
     expect(workflow).toContain("environment: production");
     expect(workflow).toContain("runtime_principal_pending");
     expect(workflow).toContain("0018_credit_checkout_reservation");
-    expect(workflow).toContain("IMAGE_GEN_DATABASE_MIGRATION_URL");
+    expect(workflow).toContain("IMAGE_GEN_DATABASE_PROVISIONER_URL");
+    expect(workflow).not.toContain("IMAGE_GEN_DATABASE_MIGRATION_URL");
     expect(workflow).not.toContain(
       "IMAGE_GEN_DATABASE_RUNTIME_PROVISIONER_URL",
     );
@@ -1102,6 +1192,20 @@ describe("production deployment contract", () => {
     );
     expect(workflow).not.toContain("flyctl deploy");
     expect(workflow).not.toContain("fly deploy");
+  });
+
+  it("rejects reuse of the migration credential for runtime-principal staging", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/stage-image-gen-credit-runtime-principal.yml",
+      "secrets.IMAGE_GEN_DATABASE_PROVISIONER_URL",
+      "secrets.IMAGE_GEN_DATABASE_MIGRATION_URL",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      ".github/workflows/stage-image-gen-credit-runtime-principal.yml must never use the migration principal as a provisioner",
+    );
   });
 
   it("keeps the reviewed runtime artifact source distinct from its later manifest-review commit", () => {
@@ -1275,6 +1379,20 @@ describe("production deployment contract", () => {
     expect(workflow).not.toContain("MOLLIE_LIVE_BILLING_ENABLED=true");
   });
 
+  it("rejects reuse of the migration credential for runtime-principal cleanup", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/cleanup-image-gen-runtime-principals.yml",
+      "secrets.IMAGE_GEN_DATABASE_PROVISIONER_URL",
+      "secrets.IMAGE_GEN_DATABASE_MIGRATION_URL",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      ".github/workflows/cleanup-image-gen-runtime-principals.yml must never use the migration principal as a provisioner",
+    );
+  });
+
   it("rejects irreversible principal drop without its rollback window", () => {
     const root = createRepositoryFixture();
     replaceFixtureText(
@@ -1307,7 +1425,7 @@ describe("production deployment contract", () => {
     const root = createRepositoryFixture();
     const manifestPath = path.join(root, "deploy/production/apps.json");
     const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-    const app = manifest.apps["image-gen"];
+    const { app } = stageImageGenReviewedRuntime(manifest);
     const predecessorImage = app.reviewedSettledPredecessor.image;
 
     app.reviewedRollbackImages = app.reviewedRollbackImages.filter(
@@ -1328,7 +1446,7 @@ describe("production deployment contract", () => {
     const root = createRepositoryFixture();
     const manifestPath = path.join(root, "deploy/production/apps.json");
     const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-    const app = manifest.apps["image-gen"];
+    const { app } = stageImageGenReviewedRuntime(manifest);
     const predecessorImage = app.reviewedSettledPredecessor.image;
 
     delete app.reviewedSettledPredecessor;
@@ -1350,7 +1468,7 @@ describe("production deployment contract", () => {
     const root = createRepositoryFixture();
     const manifestPath = path.join(root, "deploy/production/apps.json");
     const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-    const app = manifest.apps["image-gen"];
+    const { app } = stageImageGenReviewedRuntime(manifest);
     const predecessor = app.reviewedSettledPredecessor;
     const extraImage = `registry.fly.io/${app.app}@sha256:${"c".repeat(64)}`;
 
@@ -1389,7 +1507,7 @@ describe("production deployment contract", () => {
     const root = createRepositoryFixture();
     const manifestPath = path.join(root, "deploy/production/apps.json");
     const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-    const app = manifest.apps["image-gen"];
+    const { app } = stageImageGenReviewedRuntime(manifest);
     mutate(app, app.reviewedSettledPredecessor.image);
     fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 
@@ -2909,6 +3027,62 @@ describe("production deployment contract", () => {
     );
   });
 
+  it("rejects schema-wide DELETE in the credit definer grant helper", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      "apps/image-gen/scripts/credit-migration-definer-grants.mjs",
+      '${schema}.${provisioner.escapeId("credit_wallets")}',
+      "${schema}.*",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must not broaden DELETE, delegate grants, or log database identities",
+    );
+  });
+
+  it("requires exact provisioner privilege inspection before definer grants", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      "apps/image-gen/scripts/credit-migration-definer-grants.mjs",
+      "SHOW GRANTS FOR CURRENT_USER()",
+      "SELECT CURRENT_USER()",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must inspect the provisioner's effective privileges before mutation",
+    );
+  });
+
+  it("pins the fixed-output definer grant runner in the bridge", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      "apps/image-gen/scripts/run-credit-migration-definer-grants.mjs",
+      "Credit migration definer grants verified.",
+      "Dynamic database success",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must emit only the fixed success marker",
+    );
+  });
+
+  it("validates the protected provisioner URL before the bridge receives it", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/image-gen-schema-transition.yml",
+      "new URL(process.env.DATABASE_PROVISIONER_URL)",
+      "new URL(process.env.DATABASE_MIGRATION_URL)",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must validate the provisioner URL before exposing it to the bridge",
+    );
+  });
+
   it("uploads durable snapshot evidence before any live credit DDL", () => {
     const root = createRepositoryFixture();
     const relativePath = ".github/workflows/image-gen-schema-transition.yml";
@@ -2933,7 +3107,34 @@ describe("production deployment contract", () => {
     );
 
     expect(() => validateProductionRepository(root)).toThrow(
-      "must durably upload verified snapshot evidence before any credit DDL",
+      "must inspect first and durably upload verified snapshot evidence before grant mutation or credit DDL",
+    );
+  });
+
+  it("rejects definer grants before durable recovery evidence", () => {
+    const root = createRepositoryFixture();
+    const relativePath = ".github/workflows/image-gen-schema-transition.yml";
+    const workflowPath = path.join(root, relativePath);
+    const workflow = fs.readFileSync(workflowPath, "utf8");
+    const grantStart = workflow.indexOf(
+      "      - name: Grant the exact credit procedure definer table privileges",
+    );
+    const applyStart = workflow.indexOf(
+      "      - name: Apply only the reviewed 0017 and 0018 credit migrations",
+    );
+    const inspectionStart = workflow.indexOf(
+      "      - name: Inspect the exact live schema phase without changing it",
+    );
+    expect(grantStart).toBeGreaterThan(inspectionStart);
+    expect(applyStart).toBeGreaterThan(grantStart);
+    const grantStep = workflow.slice(grantStart, applyStart);
+    fs.writeFileSync(
+      workflowPath,
+      `${workflow.slice(0, inspectionStart)}${grantStep}${workflow.slice(inspectionStart, grantStart)}${workflow.slice(applyStart)}`,
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must inspect first and durably upload verified snapshot evidence before grant mutation or credit DDL",
     );
   });
 
@@ -4801,16 +5002,13 @@ describe("production deployment contract", () => {
   });
 
   it("resolves only the hash-reviewed rollback config for an allowlisted image", () => {
-    const manifest = JSON.parse(
-      fs.readFileSync(
-        path.join(repoRoot, "deploy/production/apps.json"),
-        "utf8",
-      ),
-    );
-    const app = manifest.apps["image-gen"];
-    const image = app.databaseSchemaTransition.bridgeImage;
+    const root = createRepositoryFixture();
+    const manifestPath = path.join(root, "deploy/production/apps.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    const { app, legacyImage: image } = stageImageGenBridge(manifest);
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 
-    expect(getReviewedRollbackConfig("image-gen", image, repoRoot)).toBe(
+    expect(getReviewedRollbackConfig("image-gen", image, root)).toBe(
       app.reviewedRollbackConfigs[image].path,
     );
   });
@@ -4855,17 +5053,14 @@ describe("production deployment contract", () => {
   });
 
   it("keeps the reviewed rollback config path for an older image", () => {
-    const manifest = JSON.parse(
-      fs.readFileSync(
-        path.join(repoRoot, "deploy/production/apps.json"),
-        "utf8",
-      ),
-    );
-    const app = manifest.apps["image-gen"];
-    const image = app.databaseSchemaTransition.bridgeImage;
+    const root = createRepositoryFixture();
+    const manifestPath = path.join(root, "deploy/production/apps.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    const { app, legacyImage: image } = stageImageGenBridge(manifest);
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 
     expect(
-      getReviewedRestoreConfig("image-gen", image, "deploy-999-1", repoRoot),
+      getReviewedRestoreConfig("image-gen", image, "deploy-999-1", root),
     ).toBe(app.reviewedRollbackConfigs[image].path);
   });
 
@@ -5134,15 +5329,21 @@ describe("production deployment contract", () => {
     );
   });
 
-  it("blocks the gateway while keeping reviewed image-gen and storage runtimes enabled", () => {
-    expect(() => validateDeploymentEnabled("gateway", repoRoot)).toThrow(
+  it("blocks the gateway while keeping a reviewed image-gen bridge and storage runtime enabled", () => {
+    const root = createRepositoryFixture();
+    const manifestPath = path.join(root, "deploy/production/apps.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    stageImageGenBridge(manifest);
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    expect(() => validateDeploymentEnabled("gateway", root)).toThrow(
       "gateway production deployment is blocked",
     );
     expect(
-      validateDeploymentEnabled("image-gen", repoRoot).reviewedArtifactKind,
-    ).toBe("runtime");
+      validateDeploymentEnabled("image-gen", root).reviewedArtifactKind,
+    ).toBe("migration-bridge");
     expect(
-      validateDeploymentEnabled("storage-proxy", repoRoot).reviewedArtifactKind,
+      validateDeploymentEnabled("storage-proxy", root).reviewedArtifactKind,
     ).toBe("runtime");
   });
 
@@ -6159,6 +6360,20 @@ describe("production deployment contract", () => {
       ".github/workflows/image-gen-migration-smoke.yml",
       "runtime_credit_smoke:runtime_credit_smoke@127.0.0.1:3306/test_image_gen",
       "root:root@127.0.0.1:3306/test_image_gen",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "migration smoke CI must exercise only explicit staged modes",
+    );
+  });
+
+  it("builds the production definer-grant bundle before its MySQL smoke test", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/image-gen-migration-smoke.yml",
+      "          pnpm run build:docker\n",
+      "",
     );
 
     expect(() => validateProductionRepository(root)).toThrow(
@@ -8079,9 +8294,10 @@ describe("release-command recovery selector", () => {
 
   it("accepts an empty release-command inventory for a config-only predecessor", () => {
     const root = createRepositoryFixture();
-    const manifest = JSON.parse(
-      fs.readFileSync(path.join(root, "deploy/production/apps.json"), "utf8"),
-    );
+    const manifestPath = path.join(root, "deploy/production/apps.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    stageImageGenReviewedRuntime(manifest);
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
     const predecessor = manifest.apps["image-gen"].reviewedSettledPredecessor;
 
     expect(
@@ -8096,9 +8312,10 @@ describe("release-command recovery selector", () => {
 
   it("selects an exact release-command Machine for a config-only predecessor", () => {
     const root = createRepositoryFixture();
-    const manifest = JSON.parse(
-      fs.readFileSync(path.join(root, "deploy/production/apps.json"), "utf8"),
-    );
+    const manifestPath = path.join(root, "deploy/production/apps.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    stageImageGenReviewedRuntime(manifest);
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
     const predecessor = manifest.apps["image-gen"].reviewedSettledPredecessor;
     const prior = imageGenReleaseCommandMachine(
       predecessor.image,
