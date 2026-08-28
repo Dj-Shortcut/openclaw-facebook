@@ -1122,7 +1122,7 @@ describe("production deployment contract", () => {
     });
   });
 
-  it("keeps the checked-in 0016-to-0018 transition blocked until its bridge is attested", () => {
+  it("records the attested 0016-to-0018 bridge before its protected deploy", () => {
     const manifest = JSON.parse(
       fs.readFileSync(
         path.join(repoRoot, "deploy/production/apps.json"),
@@ -1135,13 +1135,16 @@ describe("production deployment contract", () => {
     expect(app.databaseSchemaTransition).toMatchObject({
       from: "0016_expand",
       to: "0018_credit_checkout_reservation",
-      state: "awaiting_attested_bridge",
-      bridgeImage: null,
-      bridgeSourceCommit: null,
+      state: "bridge_reviewed",
+      bridgeImage:
+        "registry.fly.io/leaderbot-fb-image-gen@sha256:dc40601684b2f9f7b3698914c5acb887ea7103631873a316930414e55ef10a03",
+      bridgeSourceCommit: "ab7a7e97003bd65fb31b8e57c718d6329b163d9f",
     });
-    expect(app.deploymentEnabled).toBe(false);
-    expect(app.reviewedImage).toBe(
-      app.databaseSchemaTransition.legacyBaseImage,
+    expect(app.deploymentEnabled).toBe(true);
+    expect(app.reviewedArtifactKind).toBe("migration-bridge");
+    expect(app.reviewedImage).toBe(app.databaseSchemaTransition.bridgeImage);
+    expect(app.reviewedSourceCommit).toBe(
+      app.databaseSchemaTransition.bridgeSourceCommit,
     );
     expect(app.reviewedRollbackImages).toEqual([
       app.databaseSchemaTransition.legacyBaseImage,
@@ -4560,8 +4563,12 @@ describe("production deployment contract", () => {
       getReviewedArtifactSchemaSupport("image-gen", image, repoRoot),
     ).toEqual({
       minimum: "0016_expand",
-      maximum: "0016_expand",
-      phases: ["0016_expand"],
+      maximum: "0018_credit_checkout_reservation",
+      phases: [
+        "0016_expand",
+        "0017_credit_wallet_expand",
+        "0018_credit_checkout_reservation",
+      ],
     });
   });
 
