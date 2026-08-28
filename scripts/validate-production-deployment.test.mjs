@@ -3069,6 +3069,20 @@ describe("production deployment contract", () => {
     );
   });
 
+  it("pins redacted definer grant failure categories", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      "apps/image-gen/scripts/run-credit-migration-definer-grants.mjs",
+      "migration_connection_failed",
+      "database connection failed",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must classify migration connection failure without serializing it",
+    );
+  });
+
   it("validates the protected provisioner URL before the bridge receives it", () => {
     const root = createRepositoryFixture();
     replaceFixtureText(
@@ -6378,6 +6392,20 @@ describe("production deployment contract", () => {
 
     expect(() => validateProductionRepository(root)).toThrow(
       "migration smoke CI must exercise only explicit staged modes",
+    );
+  });
+
+  it("rejects building the production definer-grant bundle after its MySQL smoke test", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/image-gen-migration-smoke.yml",
+      "          pnpm run build:docker\n          pnpm run db:test-production-migrator\n",
+      "          pnpm run db:test-production-migrator\n          pnpm run build:docker\n",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "migration smoke CI must build the exact definer-grant bundle before its MySQL integration test",
     );
   });
 

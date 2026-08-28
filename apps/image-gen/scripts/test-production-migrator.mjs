@@ -1259,8 +1259,36 @@ async function testCreditWalletLeastPrivilegeProfiles(migrationPlan) {
     bundledFailure?.code === 1 &&
       bundledFailure.stdout === "" &&
       bundledFailure.stderr ===
-        "Credit migration definer grants failed closed.\n",
-    "bundled credit definer grant runner emits only its fixed failure marker"
+        "Credit migration definer grants failed closed. Reason: configuration_invalid.\n",
+    "bundled credit definer grant runner classifies missing configuration without serializing it"
+  );
+  let bundledConnectionFailure;
+  try {
+    await execFileAsync(process.execPath, [bundledRunnerPath], {
+      cwd: appDirectory,
+      env: {
+        ...process.env,
+        DATABASE_MIGRATION_URL:
+          "mysql://sensitive_migration_user:sensitive_password@127.0.0.1:1/sensitive_database",
+        DATABASE_PROVISIONER_URL: databaseUrlForUser(
+          creditPrivilegeDatabase,
+          creditProvisionerUser
+        ),
+      },
+    });
+  } catch (error) {
+    bundledConnectionFailure = error;
+  }
+  assert(
+    bundledConnectionFailure?.code === 1 &&
+      bundledConnectionFailure.stdout === "" &&
+      bundledConnectionFailure.stderr ===
+        "Credit migration definer grants failed closed. Reason: migration_connection_failed.\n" &&
+      !bundledConnectionFailure.stderr.includes("sensitive_migration_user") &&
+      !bundledConnectionFailure.stderr.includes("sensitive_password") &&
+      !bundledConnectionFailure.stderr.includes("sensitive_database") &&
+      !bundledConnectionFailure.stderr.includes("127.0.0.1"),
+    "bundled credit definer grant runner redacts dynamic MySQL connection failures"
   );
   const [[futureWalletTable]] = await admin.query(
     "SELECT COUNT(*) AS count FROM information_schema.TABLES WHERE TABLE_SCHEMA=? AND TABLE_NAME='credit_wallets'",
@@ -2775,6 +2803,10 @@ function testSchemaDigestContracts() {
         `GRANT EXECUTE ON PROCEDURE \`leaderbot\`.\`${name}\` TO \`credit_runtime\`@\`%\``
     ),
   ];
+  assert(
+    creditWalletRoutineNames.length === 17,
+    "credit runtime routine inventory contains exactly seventeen routines"
+  );
   assert(
     productionRuntimeWritableTableNames.length === 41 &&
       new Set(productionRuntimeWritableTableNames).size === 41 &&

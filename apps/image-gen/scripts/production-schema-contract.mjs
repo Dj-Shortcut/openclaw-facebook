@@ -637,7 +637,13 @@ export function assertCreditProvisionerGrantScope(grants, databaseName) {
       new Set(["INSERT", "UPDATE", "DELETE"]),
     ])
   );
-  expectedTablePrivileges.set("credit_wallets", new Set(["CREATE", "DELETE"]));
+  for (const [tableName, privileges] of Object.entries(
+    creditWalletMigrationTablePrivileges
+  )) {
+    const expected = expectedTablePrivileges.get(tableName) ?? new Set();
+    for (const privilege of privileges) expected.add(privilege);
+    expectedTablePrivileges.set(tableName, expected);
+  }
   const observedTables = new Set();
   let hasCreateUser = false;
   let hasSchemaDelegation = false;

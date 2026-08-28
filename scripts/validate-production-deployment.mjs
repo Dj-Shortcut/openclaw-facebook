@@ -4516,7 +4516,23 @@ function validateCreditMigrationDefinerGrant(rootDir) {
     ],
     [
       "Credit migration definer grants failed closed.",
-      "must emit only the fixed failure marker",
+      "must retain the fixed failure marker",
+    ],
+    [
+      "configuration_invalid",
+      "must classify invalid configuration without serializing it",
+    ],
+    [
+      "migration_connection_failed",
+      "must classify migration connection failure without serializing it",
+    ],
+    [
+      "provisioner_connection_failed",
+      "must classify provisioner connection failure without serializing it",
+    ],
+    [
+      "grant_verification_failed",
+      "must classify grant verification failure without serializing it",
     ],
   ]) {
     if (!runner.includes(needle)) {
