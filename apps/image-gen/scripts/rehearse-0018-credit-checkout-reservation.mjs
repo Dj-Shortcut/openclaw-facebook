@@ -30,17 +30,20 @@ const expectedRoutines = [
   "credit_consume_checkout_capability",
   "credit_create_reservation_hold",
   "credit_erase_wallet",
+  "credit_expire_pristine_checkout",
   "credit_expire_reservation",
+  "credit_freeze_wallet_for_review",
   "credit_grant_purchase",
   "credit_mark_reservation_provider_accepted",
   "credit_mark_reservation_transport_started",
+  "credit_release_rejected_reservation",
   "credit_release_reservation",
   "credit_reserve_checkout_intent",
   "credit_scrub_terminal_reservation",
 ].sort();
 assert(
-  statements0018.length === 2,
-  "0018 must contain two reviewed statements"
+  statements0018.length === 5,
+  "0018 must contain five reviewed statements"
 );
 assert(
   statements0018[0] === "DROP PROCEDURE IF EXISTS `credit_create_wallet`;",
@@ -51,6 +54,20 @@ assert(
     "CREATE PROCEDURE `credit_reserve_checkout_intent`"
   ) && statements0018[1].includes("SQL SECURITY DEFINER"),
   "0018 must install the narrow definer routine"
+);
+assert(
+  statements0018[2] ===
+    "DROP PROCEDURE IF EXISTS `credit_expire_pristine_checkout`;" &&
+    statements0018[3].includes(
+      "CREATE PROCEDURE `credit_expire_pristine_checkout`"
+    ) &&
+    statements0018[3].includes("SQL SECURITY DEFINER"),
+  "0018 must install the pristine checkout retention routine"
+);
+assert(
+  statements0018[4] ===
+    "CREATE INDEX `billing_intents_credit_capability_expiry_idx` ON `billing_intents` (`kind`,`status`,`checkout_capability_expires_at`,`intent_id`);",
+  "0018 must install the bounded pristine checkout discovery index"
 );
 
 const databases = {
@@ -96,7 +113,7 @@ try {
   });
 
   console.log(
-    `0018 checkout reservation rehearsal passed on ${String(server.version)} with ${String(server.pageSize)} byte pages: fresh and exact 0017 upgrade, 14 routines, atomic wallet+intent reservation.`
+    `0018 checkout reservation rehearsal passed on ${String(server.version)} with ${String(server.pageSize)} byte pages: fresh and exact 0017 upgrade, ${String(expectedRoutines.length)} routines, atomic wallet+intent reservation.`
   );
 } finally {
   for (const database of Object.values(databases)) {
@@ -112,7 +129,7 @@ async function verify(connection, label) {
   const names = routines.map(row => row.ROUTINE_NAME ?? row.routine_name);
   assert(
     JSON.stringify(names.sort()) === JSON.stringify(expectedRoutines),
-    `${label} must expose the exact reviewed 12-procedure inventory`
+    `${label} must expose the exact reviewed ${String(expectedRoutines.length)}-procedure inventory`
   );
   const suffix = `${label}-${Date.now()}`;
   const [workspace] = await connection.query(

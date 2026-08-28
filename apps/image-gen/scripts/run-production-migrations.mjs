@@ -17,7 +17,11 @@ const artifactKindPath = path.resolve(
 let artifactKind = "";
 const legacyArtifactBoundMode =
   migrationMode === "verify-artifact" || migrationMode === "apply-expand";
-if (legacyArtifactBoundMode || migrationMode === "apply-credit-wallet-expand") {
+const artifactBoundMode =
+  legacyArtifactBoundMode ||
+  migrationMode === "apply-credit-wallet-expand" ||
+  migrationMode === "verify-credit-wallet-transition";
+if (artifactBoundMode) {
   try {
     artifactKind = fs.readFileSync(artifactKindPath, "utf8").trim();
   } catch {

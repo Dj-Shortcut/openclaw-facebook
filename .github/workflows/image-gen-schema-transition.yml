@@ -643,7 +643,7 @@ jobs:
         run: |
           docker run --rm --network host \
             --env "DATABASE_URL=$DATABASE_MIGRATION_URL" \
-            --env LEADERBOT_PRODUCTION_MIGRATION_MODE=verify-credit-wallet \
+            --env LEADERBOT_PRODUCTION_MIGRATION_MODE=verify-credit-wallet-transition \
             "$BRIDGE_IMAGE" node dist/migrate-production.cjs
 
       - name: Record metadata-only successful transition

@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import mysql from "mysql2/promise";
 import {
   assertExactSchemaState,
+  configureProductionSchemaSession,
   assertProductionMigrationRuntime,
   assertPreparedStatementCapacity,
   captureMigrationHistory,
@@ -19,7 +20,9 @@ import { resolveProductionMigrationPlan } from "./production-migration-plan.mjs"
 
 const creditWallet0017RoutineNames = Object.freeze([
   ...creditWalletRoutineNames.filter(
-    name => name !== "credit_reserve_checkout_intent"
+    name =>
+      name !== "credit_reserve_checkout_intent" &&
+      name !== "credit_expire_pristine_checkout"
   ),
   "credit_create_wallet",
 ]);
@@ -223,7 +226,10 @@ export function assertProductionSchemaContractManifest(contract, migrations) {
   }
   const routines0018 = Object.keys(contract.final0018.routines).sort();
   const expected0018Routines = [...creditWalletRoutineNames].sort();
-  const unchangedSections = ["tables", "views", "triggers"].every(
+  // 0018 adds the checkout-capability expiry index to billing_intents. Its
+  // exact DDL is pinned by assertPartial0018Contract and the final captured
+  // fingerprint below; only views and triggers remain unchanged from 0017.
+  const unchangedSections = ["views", "triggers"].every(
     section =>
       canonicalJson(contract.final0018[section]) ===
       canonicalJson(contract.final0017[section])
@@ -247,7 +253,7 @@ export function assertProductionSchemaContractManifest(contract, migrations) {
 
 export function assertPartial0017Contract(partial) {
   if (
-    partial?.statementCount !== 51 ||
+    partial?.statementCount !== 53 ||
     !Array.isArray(partial.statementSha256) ||
     partial.statementSha256.length !== partial.statementCount ||
     partial.statementSha256.some(hash => !/^[a-f0-9]{64}$/.test(hash)) ||
@@ -361,18 +367,18 @@ export function assert0017PreDdlStatementOrder(statements) {
 
 export function assertPartial0018Contract(partial) {
   if (
-    partial?.statementCount !== 2 ||
+    partial?.statementCount !== 5 ||
     !Array.isArray(partial.statementSha256) ||
-    partial.statementSha256.length !== 2 ||
+    partial.statementSha256.length !== partial.statementCount ||
     partial.statementSha256.some(hash => !/^[a-f0-9]{64}$/.test(hash)) ||
     !Array.isArray(partial.boundaries) ||
-    partial.boundaries.length !== 3 ||
+    partial.boundaries.length !== partial.statementCount + 1 ||
     !Array.isArray(partial.states) ||
-    partial.states.length !== 3
+    partial.states.length !== partial.statementCount + 1
   ) {
     throw new Error("production 0018 partial schema contract is unsupported");
   }
-  for (let boundary = 0; boundary <= 2; boundary += 1) {
+  for (let boundary = 0; boundary <= partial.statementCount; boundary += 1) {
     const state = partial.states[boundary];
     const entry = partial.boundaries[boundary];
     if (
@@ -398,11 +404,18 @@ export function assert0018StatementHashes(partial, sql) {
     .map(statement => statement.trim())
     .filter(Boolean);
   if (
-    statements.length !== 2 ||
+    statements.length !== 5 ||
     statements[0] !== "DROP PROCEDURE IF EXISTS `credit_create_wallet`;" ||
     !/^CREATE PROCEDURE `credit_reserve_checkout_intent`(?:\s|\()/i.test(
       statements[1]
     ) ||
+    statements[2] !==
+      "DROP PROCEDURE IF EXISTS `credit_expire_pristine_checkout`;" ||
+    !/^CREATE PROCEDURE `credit_expire_pristine_checkout`(?:\s|\()/i.test(
+      statements[3]
+    ) ||
+    statements[4] !==
+      "CREATE INDEX `billing_intents_credit_capability_expiry_idx` ON `billing_intents` (`kind`,`status`,`checkout_capability_expires_at`,`intent_id`);" ||
     statements.some(
       (statement, index) =>
         crypto.createHash("sha256").update(statement).digest("hex") !==
@@ -708,7 +721,11 @@ async function resume0018(
   schemaCaptureOptions
 ) {
   const statements = await readMigrationStatements(migration);
-  if (nextStatement < 0 || nextStatement > 2) {
+  if (
+    statements.length !== contract.partial0018CreditCheckout.statementCount ||
+    nextStatement < 0 ||
+    nextStatement > statements.length
+  ) {
     throw new Error("0018 statement contract is unsupported");
   }
   assert0018StatementHashes(
@@ -784,6 +801,15 @@ const productionMigrationModes = Object.freeze({
 });
 
 export function productionMigrationOptionsForMode(mode, artifactKind = "") {
+  if (mode === "verify-credit-wallet-transition") {
+    return artifactKind === "migration-bridge"
+      ? {
+          verifyOnly: true,
+          target: "credit-wallet",
+          privilegeProfile: "credit-expand",
+        }
+      : null;
+  }
   if (mode === "apply-expand") {
     return artifactKind === "migration-bridge"
       ? {
@@ -807,7 +833,8 @@ export function productionMigrationOptionsForMode(mode, artifactKind = "") {
       return {
         verifyOnly: true,
         target: "compatible",
-        privilegeProfile: "runtime",
+        bridgeArtifactVerification: true,
+        privilegeProfile: "phase-bound-runtime",
       };
     }
     if (artifactKind === "runtime") {
@@ -832,6 +859,15 @@ function stableSchemaPhase(state) {
     return "0017_credit_wallet_expand";
   }
   if (state.kind === "complete") return "0018_credit_checkout_reservation";
+  return null;
+}
+
+export function bridgeArtifactPrivilegeProfileForState(state) {
+  const phase = stableSchemaPhase(state);
+  if (phase === "0016_expand") return "runtime";
+  if (phase === "0018_credit_checkout_reservation") {
+    return "credit-runtime";
+  }
   return null;
 }
 
@@ -871,7 +907,22 @@ function assertMigrationTarget(target, verifyOnly) {
   }
 }
 
-function assertVerifiedPhase(target, phase) {
+function assertVerifiedPhase(
+  target,
+  phase,
+  bridgeArtifactVerification = false
+) {
+  if (bridgeArtifactVerification) {
+    if (
+      phase !== "0016_expand" &&
+      phase !== "0018_credit_checkout_reservation"
+    ) {
+      throw new Error(
+        `schema is at ${phase ?? "an interrupted migration"}; bridge artifact verification refused`
+      );
+    }
+    return;
+  }
   const accepted =
     (target === "compatible" &&
       (phase === "0015_base" || phase === "0016_expand")) ||
@@ -883,6 +934,31 @@ function assertVerifiedPhase(target, phase) {
       `schema is at ${phase ?? "an interrupted migration"}; ${target} verification refused`
     );
   }
+}
+
+function schemaCapturePlanForPrivilege(fullContract, privilegeProfile) {
+  const includePrivilegedObjects = new Set([
+    "bootstrap",
+    "credit-bootstrap",
+    "credit-expand",
+  ]).has(privilegeProfile);
+  const privilegedObjectNamePrefix =
+    privilegeProfile === "credit-expand" ? "credit_" : "";
+  const schemaCaptureOptions = {
+    includePrivilegedObjects,
+    privilegedObjectNamePrefix,
+  };
+  return {
+    contract: includePrivilegedObjects
+      ? privilegedObjectNamePrefix
+        ? contractWithPrivilegedObjectFilter(
+            fullContract,
+            privilegedObjectNamePrefix
+          )
+        : fullContract
+      : contractWithPrivilegedObjectFilter(fullContract),
+    schemaCaptureOptions,
+  };
 }
 
 function contractWithPrivilegedObjectFilter(contract, namePrefix = null) {
@@ -994,6 +1070,11 @@ export async function runProductionMigrations(options = {}) {
       "credit-wallet-transition inspection must be expand and verify-only"
     );
   }
+  const bridgeArtifactVerification =
+    options.bridgeArtifactVerification ?? false;
+  if (typeof bridgeArtifactVerification !== "boolean") {
+    throw new Error("bridge artifact verification option must be boolean");
+  }
   const privilegeProfile = options.privilegeProfile ?? "bootstrap";
   if (
     !new Set([
@@ -1004,9 +1085,26 @@ export async function runProductionMigrations(options = {}) {
       "credit-expand",
       "bootstrap",
       "credit-bootstrap",
+      "phase-bound-runtime",
     ]).has(privilegeProfile)
   ) {
     throw new Error("production database privilege profile is unsupported");
+  }
+  if (
+    privilegeProfile === "phase-bound-runtime" &&
+    (!verifyOnly || !bridgeArtifactVerification || target !== "compatible")
+  ) {
+    throw new Error(
+      "phase-bound runtime privileges require bridge artifact verification"
+    );
+  }
+  if (
+    bridgeArtifactVerification &&
+    privilegeProfile !== "phase-bound-runtime"
+  ) {
+    throw new Error(
+      "bridge artifact verification requires phase-bound runtime privileges"
+    );
   }
   const lockTimeoutSeconds = options.lockTimeoutSeconds ?? 30;
   if (
@@ -1018,25 +1116,10 @@ export async function runProductionMigrations(options = {}) {
   }
   const { migrationPlan, productionContract: fullContract } =
     await loadAndVerifyMigrationManifest();
-  const includePrivilegedObjects = new Set([
-    "bootstrap",
-    "credit-bootstrap",
-    "credit-expand",
-  ]).has(privilegeProfile);
-  const privilegedObjectNamePrefix =
-    privilegeProfile === "credit-expand" ? "credit_" : "";
-  const schemaCaptureOptions = {
-    includePrivilegedObjects,
-    privilegedObjectNamePrefix,
-  };
-  const contract = includePrivilegedObjects
-    ? privilegedObjectNamePrefix
-      ? contractWithPrivilegedObjectFilter(
-          fullContract,
-          privilegedObjectNamePrefix
-        )
-      : fullContract
-    : contractWithPrivilegedObjectFilter(fullContract);
+  let { contract, schemaCaptureOptions } = schemaCapturePlanForPrivilege(
+    fullContract,
+    privilegeProfile === "phase-bound-runtime" ? "runtime" : privilegeProfile
+  );
   const connection = await mysql.createConnection(databaseUrl);
   let lockName;
   let lockHeld = false;
@@ -1044,21 +1127,69 @@ export async function runProductionMigrations(options = {}) {
   let operationError;
   const startedAt = Date.now();
   try {
-    const runtime = await assertProductionMigrationRuntime(
-      connection,
-      privilegeProfile
-    );
-    lockName = migrationLockName(runtime.databaseName);
-    const [[lock]] = await connection.query(
-      "SELECT GET_LOCK(?,?) AS acquired",
-      [lockName, lockTimeoutSeconds]
-    );
-    if (Number(lock.acquired) !== 1) {
-      throw new Error("migration singleton lock is unavailable");
+    let runtime;
+    let beforeState;
+    if (privilegeProfile === "phase-bound-runtime") {
+      // The bridge deliberately supports two fully stable schemas with two
+      // different least-privilege runtime principals. Determine that phase
+      // using only schema/history reads while holding the migration lock; do
+      // not try one principal and fall back to the other.
+      await configureProductionSchemaSession(connection);
+      const [[identity]] = await connection.query(
+        "SELECT DATABASE() AS databaseName"
+      );
+      if (!identity.databaseName) {
+        throw new Error("migration database must be selected");
+      }
+      lockName = migrationLockName(identity.databaseName);
+      const [[lock]] = await connection.query(
+        "SELECT GET_LOCK(?,?) AS acquired",
+        [lockName, lockTimeoutSeconds]
+      );
+      if (Number(lock.acquired) !== 1) {
+        throw new Error("migration singleton lock is unavailable");
+      }
+      lockHeld = true;
+      beforeState = await inspectBeforeState(
+        connection,
+        contract,
+        migrationPlan,
+        schemaCaptureOptions
+      );
+      const resolvedPrivilegeProfile =
+        bridgeArtifactPrivilegeProfileForState(beforeState);
+      if (!resolvedPrivilegeProfile) {
+        throw new Error(
+          "release verification requires an exact stable bridge schema phase"
+        );
+      }
+      runtime = await assertProductionMigrationRuntime(
+        connection,
+        resolvedPrivilegeProfile
+      );
+      ({ contract, schemaCaptureOptions } = schemaCapturePlanForPrivilege(
+        fullContract,
+        resolvedPrivilegeProfile
+      ));
+    } else {
+      runtime = await assertProductionMigrationRuntime(
+        connection,
+        privilegeProfile
+      );
     }
-    lockHeld = true;
+    lockName = migrationLockName(runtime.databaseName);
+    if (!lockHeld) {
+      const [[lock]] = await connection.query(
+        "SELECT GET_LOCK(?,?) AS acquired",
+        [lockName, lockTimeoutSeconds]
+      );
+      if (Number(lock.acquired) !== 1) {
+        throw new Error("migration singleton lock is unavailable");
+      }
+      lockHeld = true;
+    }
 
-    let beforeState = await inspectBeforeState(
+    beforeState ??= await inspectBeforeState(
       connection,
       contract,
       migrationPlan,
@@ -1090,7 +1221,11 @@ export async function runProductionMigrations(options = {}) {
         );
       }
       if (initialStablePhase) {
-        assertVerifiedPhase(target, initialStablePhase);
+        assertVerifiedPhase(
+          target,
+          initialStablePhase,
+          bridgeArtifactVerification
+        );
         result = {
           appliedCount:
             initialStablePhase === "0015_base"

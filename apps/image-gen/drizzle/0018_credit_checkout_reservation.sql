@@ -131,4 +131,146 @@ credit_reserve_checkout_intent_body: BEGIN
 		NULL,NULL,NULL,0,p_authorization_epoch,NULL,NULL,v_now,v_now);
 	COMMIT;
 	SELECT 'applied' AS `result`,p_intent_id AS `intent_id`,p_wallet_id AS `wallet_id`;
-END;
+END;--> statement-breakpoint
+DROP PROCEDURE IF EXISTS `credit_expire_pristine_checkout`;--> statement-breakpoint
+CREATE PROCEDURE `credit_expire_pristine_checkout`(
+	IN p_workspace_id int, IN p_mode varchar(8), IN p_channel_connection_id int,
+	IN p_binding_epoch int, IN p_privacy_epoch int, IN p_user_key varchar(96),
+	IN p_wallet_id varchar(36), IN p_financial_subject_ref varchar(64),
+	IN p_intent_id varchar(36)
+)
+SQL SECURITY DEFINER
+credit_expire_pristine_checkout_body: BEGIN
+	DECLARE v_count int DEFAULT 0;
+	DECLARE v_any_wallet int DEFAULT 0;
+	DECLARE v_wallet_count int DEFAULT 0;
+	DECLARE v_any_intent int DEFAULT 0;
+	DECLARE v_intent_count int DEFAULT 0;
+	DECLARE v_evidence_count int DEFAULT 0;
+	DECLARE EXIT HANDLER FOR SQLEXCEPTION BEGIN ROLLBACK; RESIGNAL; END;
+
+	IF NOT (
+		p_workspace_id>0 AND p_mode IN ('test','live') AND p_channel_connection_id>0
+		AND p_binding_epoch>0 AND p_privacy_epoch>0
+		AND REGEXP_LIKE(p_user_key,'^([0-9a-f]{64}|u2[.]k[1-9][0-9]{0,5}[.][0-9a-f]{64})$','c')
+		AND REGEXP_LIKE(p_wallet_id,'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$','c')
+		AND REGEXP_LIKE(p_financial_subject_ref,'^[0-9a-f]{64}$','c')
+		AND REGEXP_LIKE(p_intent_id,'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$','c')
+	) IS TRUE THEN
+		SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='pristine credit checkout expiry input is invalid';
+	END IF;
+
+	START TRANSACTION;
+	/* Canonical order: control -> connection -> privacy -> wallet -> intent -> scheduler -> provider/evidence. */
+	SELECT COUNT(*) INTO v_count FROM `billing_execution_controls`
+	WHERE `workspace_id`=p_workspace_id AND `mode`=p_mode FOR UPDATE;
+	SELECT COUNT(*) INTO v_count FROM `channelConnections`
+	WHERE `workspaceId`=p_workspace_id AND `id`=p_channel_connection_id FOR UPDATE;
+	SELECT COUNT(*) INTO v_count FROM `messenger_privacy_subjects`
+	WHERE `workspace_id`=p_workspace_id AND `channel_connection_id`=p_channel_connection_id
+		AND BINARY `user_key`=BINARY p_user_key FOR UPDATE;
+
+	SELECT COUNT(*) INTO v_any_wallet FROM `credit_wallets`
+	WHERE BINARY `wallet_id`=BINARY p_wallet_id FOR UPDATE;
+	SELECT COUNT(*) INTO v_wallet_count FROM `credit_wallets`
+	WHERE BINARY `wallet_id`=BINARY p_wallet_id AND `workspace_id`=p_workspace_id AND `mode`=p_mode
+		AND `channel_connection_id`=p_channel_connection_id AND `binding_epoch`=p_binding_epoch
+		AND `privacy_epoch`=p_privacy_epoch AND BINARY `current_user_key_hash`=BINARY p_user_key
+		AND BINARY `financial_subject_ref`=BINARY p_financial_subject_ref
+		AND `status`='active' AND `credit_balance`=0 AND `reserved_credits`=0
+		AND `balance_version`=1 AND `last_ledger_entry_id` IS NULL AND `privacy_erased_at` IS NULL FOR UPDATE;
+
+	SELECT COUNT(*) INTO v_any_intent FROM `billing_intents`
+	WHERE BINARY `intent_id`=BINARY p_intent_id FOR UPDATE;
+	SELECT COUNT(*) INTO v_intent_count FROM `billing_intents`
+	WHERE BINARY `intent_id`=BINARY p_intent_id AND `workspace_id`=p_workspace_id AND `mode`=p_mode
+		AND `kind`='credit_purchase' AND `status`='created'
+		AND BINARY `credit_wallet_id`=BINARY p_wallet_id
+		AND `messenger_channel_connection_id`=p_channel_connection_id
+		AND `messenger_binding_epoch`=p_binding_epoch AND `messenger_privacy_epoch`=p_privacy_epoch
+		AND BINARY `messenger_sender_user_key`=BINARY p_user_key
+		AND BINARY `credit_financial_subject_ref`=BINARY p_financial_subject_ref
+		AND `checkout_capability_expires_at`<CURRENT_TIMESTAMP
+		AND `checkout_capability_consumed_at` IS NULL
+		AND `checkout_capability_session_nonce_hash` IS NULL
+		AND `mollie_payment_id` IS NULL AND `url_exposed_at` IS NULL AND `paid_at` IS NULL
+		AND `credit_identity_erased_at` IS NULL FOR UPDATE;
+
+	IF v_any_intent=0 AND v_any_wallet=0 THEN
+		COMMIT;
+		SELECT 'already_applied' AS `result`,p_intent_id AS `intent_id`;
+		LEAVE credit_expire_pristine_checkout_body;
+	END IF;
+	IF v_intent_count<>1 OR v_wallet_count<>1 THEN
+		COMMIT;
+		SELECT 'skipped' AS `result`,p_intent_id AS `intent_id`;
+		LEAVE credit_expire_pristine_checkout_body;
+	END IF;
+
+	SELECT COUNT(*) INTO v_count FROM `billing_scheduler_tenants`
+	WHERE `workspace_id`=p_workspace_id AND `mode`=p_mode AND `kind`='outbox' FOR UPDATE;
+	SELECT
+		(SELECT COUNT(*) FROM `billing_intents` other_intent
+			WHERE other_intent.`workspace_id`=p_workspace_id AND other_intent.`mode`=p_mode
+				AND BINARY other_intent.`credit_wallet_id`=BINARY p_wallet_id
+				AND BINARY other_intent.`intent_id`<>BINARY p_intent_id)
+		+ (SELECT COUNT(*) FROM `billing_provider_operations` operation
+			WHERE operation.`workspace_id`=p_workspace_id AND operation.`mode`=p_mode
+				AND (BINARY operation.`intent_id`=BINARY p_intent_id
+					OR BINARY operation.`operation_key`=BINARY p_intent_id))
+		+ (SELECT COUNT(*) FROM `billing_webhook_routes` route
+			WHERE route.`workspace_id`=p_workspace_id AND route.`mode`=p_mode
+				AND BINARY route.`intent_id`=BINARY p_intent_id)
+		+ (SELECT COUNT(*) FROM `payment_ledger` payment
+			WHERE payment.`workspace_id`=p_workspace_id AND payment.`mode`=p_mode
+				AND (BINARY payment.`credit_intent_id`=BINARY p_intent_id
+					OR BINARY payment.`payment_effect_owner_ref`=BINARY p_intent_id
+					OR BINARY payment.`credit_wallet_id`=BINARY p_wallet_id))
+		+ (SELECT COUNT(*) FROM `credit_reservations` reservation
+			WHERE reservation.`workspace_id`=p_workspace_id AND reservation.`mode`=p_mode
+				AND BINARY reservation.`wallet_id`=BINARY p_wallet_id)
+		+ (SELECT COUNT(*) FROM `credit_ledger` entry
+			WHERE entry.`workspace_id`=p_workspace_id AND entry.`mode`=p_mode
+				AND (BINARY entry.`wallet_id`=BINARY p_wallet_id
+					OR BINARY entry.`source_intent_id`=BINARY p_intent_id))
+		+ (SELECT COUNT(*) FROM `billing_subscriptions` subscription
+			WHERE subscription.`workspace_id`=p_workspace_id AND subscription.`mode`=p_mode
+				AND BINARY subscription.`source_intent_id`=BINARY p_intent_id)
+		+ (SELECT COUNT(*) FROM `workspace_entitlements` entitlement
+			WHERE entitlement.`workspace_id`=p_workspace_id AND entitlement.`mode`=p_mode
+				AND BINARY entitlement.`source_intent_id`=BINARY p_intent_id)
+		+ (SELECT COUNT(*) FROM `workspace_entitlement_usage` usage_row
+			WHERE usage_row.`workspace_id`=p_workspace_id AND usage_row.`mode`=p_mode
+				AND BINARY usage_row.`source_intent_id`=BINARY p_intent_id)
+		+ (SELECT COUNT(*) FROM `billing_outbox` outbox
+			WHERE outbox.`workspace_id`=p_workspace_id AND outbox.`mode`=p_mode
+				AND (JSON_SEARCH(outbox.`payload`,'one',p_intent_id) IS NOT NULL
+					OR JSON_SEARCH(outbox.`payload`,'one',p_wallet_id) IS NOT NULL))
+	INTO v_evidence_count;
+	IF v_evidence_count<>0 THEN
+		COMMIT;
+		SELECT 'skipped' AS `result`,p_intent_id AS `intent_id`;
+		LEAVE credit_expire_pristine_checkout_body;
+	END IF;
+
+	DELETE FROM `billing_intents`
+	WHERE BINARY `intent_id`=BINARY p_intent_id AND `workspace_id`=p_workspace_id AND `mode`=p_mode
+		AND `kind`='credit_purchase' AND `status`='created'
+		AND BINARY `credit_wallet_id`=BINARY p_wallet_id
+		AND `checkout_capability_expires_at`<CURRENT_TIMESTAMP
+		AND `checkout_capability_consumed_at` IS NULL
+		AND `checkout_capability_session_nonce_hash` IS NULL
+		AND `mollie_payment_id` IS NULL AND `url_exposed_at` IS NULL AND `paid_at` IS NULL;
+	IF ROW_COUNT()<>1 THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='pristine credit checkout expiry lost its intent fence'; END IF;
+	DELETE FROM `credit_wallets`
+	WHERE BINARY `wallet_id`=BINARY p_wallet_id AND `workspace_id`=p_workspace_id AND `mode`=p_mode
+		AND `channel_connection_id`=p_channel_connection_id AND `binding_epoch`=p_binding_epoch
+		AND `privacy_epoch`=p_privacy_epoch AND BINARY `current_user_key_hash`=BINARY p_user_key
+		AND BINARY `financial_subject_ref`=BINARY p_financial_subject_ref
+		AND `status`='active' AND `credit_balance`=0 AND `reserved_credits`=0
+		AND `balance_version`=1 AND `last_ledger_entry_id` IS NULL AND `privacy_erased_at` IS NULL;
+	IF ROW_COUNT()<>1 THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='pristine credit checkout expiry lost its wallet fence'; END IF;
+	COMMIT;
+	SELECT 'applied' AS `result`,p_intent_id AS `intent_id`;
+END;--> statement-breakpoint
+CREATE INDEX `billing_intents_credit_capability_expiry_idx` ON `billing_intents` (`kind`,`status`,`checkout_capability_expires_at`,`intent_id`);

@@ -331,6 +331,64 @@ describe("customerless credit checkout provider store", () => {
     expect(harness.updates).toEqual([]);
   });
 
+  it.each(["before", "after"] as const)(
+    "reclaims an exact succeeded payment after a crash %s checkout exposure",
+    async crashBoundary => {
+      const harness = createHarness({
+        intent: intent(
+          crashBoundary === "after"
+            ? {
+                status: "open",
+                molliePaymentId: PAYMENT_ID,
+                urlExposedAt: new Date("2026-08-28T07:59:45.000Z"),
+              }
+            : { status: "creating_payment" }
+        ),
+        operation: providerOperation({
+          state: "succeeded",
+          providerResourceId: PAYMENT_ID,
+          leaseUntil: new Date("2026-08-28T07:59:59.000Z"),
+        }),
+      });
+      getDatabaseOrThrowMock.mockResolvedValue(harness.database);
+
+      await expect(claimCreditPaymentCreation(scope, NOW)).resolves.toEqual({
+        claimed: true,
+        operationId: OPERATION_ID,
+        leaseToken: expect.any(String),
+        recoveryPaymentId: PAYMENT_ID,
+      });
+      expect(harness.inserts).toEqual([]);
+      expect(harness.updates).toEqual([
+        {
+          table: billingProviderOperations,
+          value: expect.objectContaining({
+            leaseToken: expect.any(String),
+            leaseUntil: new Date("2026-08-28T08:01:00.000Z"),
+          }),
+        },
+      ]);
+    }
+  );
+
+  it("never steals an unexpired succeeded-payment recovery lease", async () => {
+    const harness = createHarness({
+      intent: intent({ status: "creating_payment" }),
+      operation: providerOperation({
+        state: "succeeded",
+        providerResourceId: PAYMENT_ID,
+        leaseUntil: new Date("2026-08-28T08:00:01.000Z"),
+      }),
+    });
+    getDatabaseOrThrowMock.mockResolvedValue(harness.database);
+
+    await expect(claimCreditPaymentCreation(scope, NOW)).resolves.toEqual({
+      claimed: false,
+    });
+    expect(harness.inserts).toEqual([]);
+    expect(harness.updates).toEqual([]);
+  });
+
   it("rejects an intent whose immutable offer metadata does not match", async () => {
     const harness = createHarness({
       intent: intent({ creditMetadataHash: "9".repeat(64) }),

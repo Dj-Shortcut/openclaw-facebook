@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 
-import { and, eq, gt, inArray, isNull, or, sql } from "drizzle-orm";
+import { and, eq, gt, inArray, isNull, lte, or, sql } from "drizzle-orm";
 
 import {
   billingExecutionControls,
@@ -116,7 +116,12 @@ export async function claimCreditPaymentCreation(
   now = new Date()
 ): Promise<
   | Readonly<{ claimed: false }>
-  | Readonly<{ claimed: true; operationId: string; leaseToken: string }>
+  | Readonly<{
+      claimed: true;
+      operationId: string;
+      leaseToken: string;
+      recoveryPaymentId?: string;
+    }>
 > {
   const offer = requireScope(input);
   const database = await getDatabaseOrThrow();
@@ -124,10 +129,7 @@ export async function claimCreditPaymentCreation(
     const boundary = await lockCreditProviderBoundary(tx, input);
     if (
       !isActiveBoundary(boundary, input, offer) ||
-      boundary.intent?.status !== "created" ||
-      boundary.intent.molliePaymentId !== null ||
-      boundary.intent.urlExposedAt !== null ||
-      !boundary.intent.checkoutCapabilityConsumedAt ||
+      !boundary.intent?.checkoutCapabilityConsumedAt ||
       !boundary.intent.checkoutCapabilityExpiresAt ||
       boundary.intent.checkoutCapabilityExpiresAt.getTime() < now.getTime()
     ) {
@@ -140,6 +142,51 @@ export async function claimCreditPaymentCreation(
     const leaseToken = randomUUID();
     if (existing) {
       if (
+        isRecoverableSucceededPayment(
+          existing,
+          boundary.intent,
+          input,
+          credentialGenerationId,
+          idempotencyKeyHash
+        ) &&
+        existing.leaseUntil.getTime() <= now.getTime()
+      ) {
+        const recoveryPaymentId = existing.providerResourceId;
+        const recovered = await tx
+          .update(billingProviderOperations)
+          .set({
+            leaseToken,
+            leaseUntil: new Date(now.getTime() + PROVIDER_LEASE_MS),
+            resolutionDueAt: new Date(now.getTime() + PROVIDER_RESOLUTION_MS),
+          })
+          .where(
+            and(
+              exactProviderOperationPredicate({
+                ...input,
+                operationId: existing.operationId,
+              }),
+              eq(billingProviderOperations.state, "succeeded"),
+              eq(
+                billingProviderOperations.providerResourceId,
+                recoveryPaymentId
+              ),
+              eq(billingProviderOperations.leaseToken, existing.leaseToken),
+              lte(billingProviderOperations.leaseUntil, now),
+              isNull(billingProviderOperations.providerCustomerId)
+            )
+          );
+        if (affectedRows(recovered) !== 1) return { claimed: false };
+        return {
+          claimed: true,
+          operationId: existing.operationId,
+          leaseToken,
+          recoveryPaymentId,
+        };
+      }
+      if (
+        boundary.intent.status !== "created" ||
+        boundary.intent.molliePaymentId !== null ||
+        boundary.intent.urlExposedAt !== null ||
         existing.state !== "known_failed" ||
         existing.firstStartedAt !== null ||
         !isExactProviderOperation(
@@ -176,6 +223,14 @@ export async function claimCreditPaymentCreation(
       };
     }
 
+    if (
+      boundary.intent.status !== "created" ||
+      boundary.intent.molliePaymentId !== null ||
+      boundary.intent.urlExposedAt !== null
+    ) {
+      return { claimed: false };
+    }
+
     const operationId = randomUUID();
     await tx.insert(billingProviderOperations).values({
       operationId,
@@ -201,6 +256,37 @@ export async function claimCreditPaymentCreation(
     }
     return { claimed: true, operationId, leaseToken };
   });
+}
+
+function isRecoverableSucceededPayment(
+  operation: LockedProviderOperation,
+  intent: typeof billingIntents.$inferSelect,
+  input: CreditCheckoutProviderScope,
+  credentialGenerationId: string,
+  idempotencyKeyHash: string
+): operation is LockedProviderOperation &
+  Readonly<{ providerResourceId: string }> {
+  if (
+    operation.state !== "succeeded" ||
+    !operation.providerResourceId ||
+    !PAYMENT_ID_PATTERN.test(operation.providerResourceId) ||
+    !isExactProviderOperation(
+      operation,
+      input,
+      credentialGenerationId,
+      idempotencyKeyHash
+    )
+  ) {
+    return false;
+  }
+  return (
+    (intent.status === "creating_payment" &&
+      intent.molliePaymentId === null &&
+      intent.urlExposedAt === null) ||
+    (intent.status === "open" &&
+      intent.molliePaymentId === operation.providerResourceId &&
+      intent.urlExposedAt !== null)
+  );
 }
 
 export async function markCreditPaymentTransportStarted(

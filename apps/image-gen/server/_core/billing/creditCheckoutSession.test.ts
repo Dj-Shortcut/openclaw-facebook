@@ -93,6 +93,8 @@ describe("credit checkout browser sessions", () => {
       imageQuality: "medium",
       expires: false,
       automaticRenewal: false,
+      refundPolicyId: "premium_image_credit_refund",
+      refundPolicyVersion: 1,
     });
     expect(JSON.stringify(result)).not.toContain(CAPABILITY.toUrlFragment());
     expect(deps.consume).toHaveBeenCalledWith(

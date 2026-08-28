@@ -9,6 +9,7 @@ import {
   cleanupMigrationConnection,
   combineMigrationErrors,
   assert0017PreDdlStatementOrder,
+  bridgeArtifactPrivilegeProfileForState,
   assertProductionSchemaContractManifest,
   loadAndVerifyMigrationManifest,
   migrationLockName,
@@ -35,6 +36,7 @@ import {
   assertTriggerGrantScope,
   canonicalRoutineTuple,
   canonicalTriggerTuple,
+  configureProductionSchemaSession,
   creditWalletRoutineNames,
   creditWalletTableNames,
   productionRuntimeWritableTableNames,
@@ -94,8 +96,11 @@ const creditBoundaryDatabase = "leaderbot_production_migrator_credit_boundary";
 const creditFreshDatabase = "leaderbot_production_migrator_credit_fresh";
 const creditPrivilegeDatabase =
   "leaderbot_production_migrator_credit_privilege";
+const bridgeArtifactDatabase = "leaderbot_production_migrator_bridge_artifact";
 const creditMigrationUser = "leaderbot_credit_migration_test";
 const creditRuntimeUser = "leaderbot_credit_runtime_test";
+const bridgeLegacyUser = "lb_bridge_legacy_runtime_test";
+const bridgeCreditUser = "lb_bridge_credit_runtime_test";
 const databases = [
   "leaderbot_production_migrator_concurrency",
   "leaderbot_production_migrator_upgrade",
@@ -125,6 +130,7 @@ const databases = [
   creditBoundaryDatabase,
   creditFreshDatabase,
   creditPrivilegeDatabase,
+  bridgeArtifactDatabase,
 ];
 const admin = await mysql.createConnection({
   host: adminUrl.hostname,
@@ -136,6 +142,8 @@ const admin = await mysql.createConnection({
 try {
   await admin.query(`DROP USER IF EXISTS \`${creditMigrationUser}\`@'%'`);
   await admin.query(`DROP USER IF EXISTS \`${creditRuntimeUser}\`@'%'`);
+  await admin.query(`DROP USER IF EXISTS \`${bridgeLegacyUser}\`@'%'`);
+  await admin.query(`DROP USER IF EXISTS \`${bridgeCreditUser}\`@'%'`);
   for (const database of databases) {
     await admin.query(`DROP DATABASE IF EXISTS \`${database}\``);
     await admin.query(
@@ -499,6 +507,7 @@ try {
     migrationPlan,
     migration0018Statements,
   });
+  await testBridgeArtifactDualPhaseVerification(migrationPlan);
   const freshCredit = await runProductionMigrationStage({
     databaseUrl: databaseUrl(creditFreshDatabase),
     target: "credit-wallet",
@@ -801,6 +810,8 @@ try {
 } finally {
   await admin.query(`DROP USER IF EXISTS \`${creditMigrationUser}\`@'%'`);
   await admin.query(`DROP USER IF EXISTS \`${creditRuntimeUser}\`@'%'`);
+  await admin.query(`DROP USER IF EXISTS \`${bridgeLegacyUser}\`@'%'`);
+  await admin.query(`DROP USER IF EXISTS \`${bridgeCreditUser}\`@'%'`);
   for (const database of databases) {
     await admin.query(`DROP DATABASE IF EXISTS \`${database}\``);
   }
@@ -839,8 +850,8 @@ async function testEvery0017StatementBoundary({
   migration0017Statements,
 }) {
   assert(
-    migration0017Statements.length === 51,
-    "0017 exposes the exact 51-statement migration contract"
+    migration0017Statements.length === 53,
+    "0017 exposes the exact 53-statement migration contract"
   );
   for (
     let boundary = 0;
@@ -878,10 +889,14 @@ async function testEvery0018StatementBoundary({
   migration0018Statements,
 }) {
   assert(
-    migration0018Statements.length === 2,
-    "0018 exposes the exact two-statement migration contract"
+    migration0018Statements.length === 5,
+    "0018 exposes the exact five-statement migration contract"
   );
-  for (let boundary = 0; boundary <= 2; boundary += 1) {
+  for (
+    let boundary = 0;
+    boundary <= migration0018Statements.length;
+    boundary += 1
+  ) {
     await admin.query(`DROP DATABASE IF EXISTS \`${creditBoundaryDatabase}\``);
     await admin.query(
       `CREATE DATABASE \`${creditBoundaryDatabase}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci`
@@ -906,6 +921,116 @@ async function testEvery0018StatementBoundary({
     );
   }
   await assertExactCreditWalletObjects(creditBoundaryDatabase);
+}
+
+async function testBridgeArtifactDualPhaseVerification(migrationPlan) {
+  const bridgeOptions = productionMigrationOptionsForMode(
+    "verify-artifact",
+    "migration-bridge"
+  );
+  if (!bridgeOptions) {
+    throw new Error("bridge artifact verification options are unavailable");
+  }
+  await withDatabase(bridgeArtifactDatabase, connection =>
+    applyMigrationPrefix(connection, migrationPlan.through0016)
+  );
+  await admin.query(`CREATE USER \`${bridgeLegacyUser}\`@'%'`);
+  await admin.query(
+    `GRANT SELECT, INSERT, UPDATE, DELETE ON \`${bridgeArtifactDatabase}\`.* TO \`${bridgeLegacyUser}\`@'%'`
+  );
+
+  const legacyVerified = await runProductionMigrationStage({
+    ...bridgeOptions,
+    databaseUrl: databaseUrlForUser(bridgeArtifactDatabase, bridgeLegacyUser),
+  });
+  assert(
+    legacyVerified.schemaPhase === "0016_expand" &&
+      legacyVerified.appliedCount === migrationPlan.through0016.length,
+    "bridge artifact accepts only the legacy runtime profile on stable 0016"
+  );
+
+  const migration0017Statements = await readMigrationStatements(
+    migrationPlan.creditWallet0017
+  );
+  await withDatabase(bridgeArtifactDatabase, connection =>
+    applyStatements(connection, migration0017Statements.slice(0, 3))
+  );
+  await expectFailure(
+    runProductionMigrationStage({
+      ...bridgeOptions,
+      databaseUrl: databaseUrlForUser(bridgeArtifactDatabase, bridgeLegacyUser),
+    }),
+    "bridge artifact rejects interrupted 0017 before principal selection",
+    "exact stable bridge schema phase"
+  );
+
+  await withDatabase(bridgeArtifactDatabase, async connection => {
+    await applyStatements(connection, migration0017Statements.slice(3));
+    await connection.query(
+      "INSERT INTO `__drizzle_migrations` (`hash`,`created_at`) VALUES (?,?)",
+      [
+        migrationPlan.creditWallet0017.sha256,
+        migrationPlan.creditWallet0017.when,
+      ]
+    );
+    const migration0018Statements = await readMigrationStatements(
+      migrationPlan.creditCheckout0018
+    );
+    await applyStatements(connection, migration0018Statements.slice(0, 1));
+  });
+  await expectFailure(
+    runProductionMigrationStage({
+      ...bridgeOptions,
+      databaseUrl: databaseUrlForUser(bridgeArtifactDatabase, bridgeLegacyUser),
+    }),
+    "bridge artifact rejects interrupted 0018 before principal selection",
+    "exact stable bridge schema phase"
+  );
+
+  await withDatabase(bridgeArtifactDatabase, async connection => {
+    const migration0018Statements = await readMigrationStatements(
+      migrationPlan.creditCheckout0018
+    );
+    await applyStatements(connection, migration0018Statements.slice(1));
+    await connection.query(
+      "INSERT INTO `__drizzle_migrations` (`hash`,`created_at`) VALUES (?,?)",
+      [
+        migrationPlan.creditCheckout0018.sha256,
+        migrationPlan.creditCheckout0018.when,
+      ]
+    );
+  });
+  await admin.query(`CREATE USER \`${bridgeCreditUser}\`@'%'`);
+  await admin.query(
+    `GRANT SELECT ON \`${bridgeArtifactDatabase}\`.* TO \`${bridgeCreditUser}\`@'%'`
+  );
+  for (const tableName of productionRuntimeWritableTableNames) {
+    await admin.query(
+      `GRANT INSERT, UPDATE, DELETE ON \`${bridgeArtifactDatabase}\`.\`${tableName}\` TO \`${bridgeCreditUser}\`@'%'`
+    );
+  }
+  for (const routine of creditWalletRoutineNames) {
+    await admin.query(
+      `GRANT EXECUTE ON PROCEDURE \`${bridgeArtifactDatabase}\`.\`${routine}\` TO \`${bridgeCreditUser}\`@'%'`
+    );
+  }
+  const creditVerified = await runProductionMigrationStage({
+    ...bridgeOptions,
+    databaseUrl: databaseUrlForUser(bridgeArtifactDatabase, bridgeCreditUser),
+  });
+  assert(
+    creditVerified.schemaPhase === "0018_credit_checkout_reservation" &&
+      creditVerified.appliedCount === migrationPlan.through0018.length,
+    "bridge artifact accepts the exact credit runtime profile on stable 0018"
+  );
+  await expectFailure(
+    runProductionMigrationStage({
+      ...bridgeOptions,
+      databaseUrl: databaseUrlForUser(bridgeArtifactDatabase, bridgeLegacyUser),
+    }),
+    "bridge artifact rejects the legacy runtime profile on stable 0018",
+    "credit runtime privilege boundary mismatch"
+  );
 }
 
 async function assertExactCreditWalletObjects(database) {
@@ -986,6 +1111,77 @@ async function testCreditWalletLeastPrivilegeProfiles(migrationPlan) {
   await admin.query(
     `GRANT CREATE ROUTINE ON \`${creditPrivilegeDatabase}\`.* TO \`${creditMigrationUser}\`@'%'`
   );
+  await expectFailure(
+    runProductionMigrationStage({
+      databaseUrl: databaseUrlForUser(
+        creditPrivilegeDatabase,
+        creditMigrationUser
+      ),
+      target: "credit-wallet",
+      verifyOnly: false,
+      privilegeProfile: "credit-expand",
+    }),
+    "credit migration principal without ALTER ROUTINE",
+    "missing ALTER ROUTINE"
+  );
+  await withDatabase(creditPrivilegeDatabase, async connection => {
+    const [[creditObjects]] = await connection.query(
+      "SELECT COUNT(*) AS count FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN ('credit_ledger','credit_reservations','credit_wallets')"
+    );
+    assert(
+      Number(creditObjects.count) === 0,
+      "credit privilege refusal for ALTER ROUTINE occurs before permanent 0017 DDL"
+    );
+  });
+  await admin.query(
+    `GRANT ALTER ROUTINE ON \`${creditPrivilegeDatabase}\`.* TO \`${creditMigrationUser}\`@'%'`
+  );
+  const [[routinePrivilegeRuntime]] = await admin.query(
+    "SELECT @@GLOBAL.automatic_sp_privileges AS automaticSpPrivileges"
+  );
+  assert(
+    Number(routinePrivilegeRuntime.automaticSpPrivileges) === 1,
+    "MySQL 8.4 rehearsal enables automatic stored-routine privileges"
+  );
+  const migration0017Statements = await readMigrationStatements(
+    migrationPlan.creditWallet0017
+  );
+  const createWalletStatementIndexes = migration0017Statements.flatMap(
+    (statement, index) =>
+      statement.startsWith("CREATE PROCEDURE `credit_create_wallet`(")
+        ? [index]
+        : []
+  );
+  assert(
+    createWalletStatementIndexes.length === 1,
+    "0017 contains one exact transitional wallet helper"
+  );
+  const migrationConnection = await mysql.createConnection(
+    databaseUrlForUser(creditPrivilegeDatabase, creditMigrationUser)
+  );
+  try {
+    await configureProductionSchemaSession(migrationConnection);
+    await applyStatements(
+      migrationConnection,
+      migration0017Statements.slice(0, createWalletStatementIndexes[0] + 1)
+    );
+    const [automaticRoutineGrants] = await migrationConnection.query(
+      "SHOW GRANTS FOR CURRENT_USER()"
+    );
+    const serializedRoutineGrants = automaticRoutineGrants
+      .flatMap(row => Object.values(row))
+      .map(String)
+      .join("\n")
+      .replaceAll("`", "");
+    assert(
+      serializedRoutineGrants.includes(
+        `PROCEDURE ${creditPrivilegeDatabase}.credit_create_wallet`
+      ) && serializedRoutineGrants.includes("EXECUTE"),
+      "0017 helper creation grants the same principal exact routine privileges"
+    );
+  } finally {
+    await migrationConnection.end();
+  }
   const applied = await runProductionMigrationStage({
     databaseUrl: databaseUrlForUser(
       creditPrivilegeDatabase,
@@ -997,7 +1193,7 @@ async function testCreditWalletLeastPrivilegeProfiles(migrationPlan) {
   });
   assert(
     applied.appliedCount === migrationPlan.through0018.length,
-    "least-privilege credit migration applies 0018"
+    "least-privilege credit migration resumes after 0017 helper creation and applies 0018"
   );
 
   await admin.query(`CREATE USER \`${creditRuntimeUser}\`@'%'`);
@@ -1664,6 +1860,20 @@ function testStagedRolloutContracts() {
     "credit-wallet runtime verification uses exact procedure rights"
   );
   assert(
+    JSON.stringify(
+      productionMigrationOptionsForMode(
+        "verify-credit-wallet-transition",
+        "migration-bridge"
+      )
+    ) ===
+      JSON.stringify({
+        verifyOnly: true,
+        target: "credit-wallet",
+        privilegeProfile: "credit-expand",
+      }),
+    "credit-wallet transition verification retains the exact migration principal"
+  );
+  assert(
     productionMigrationOptionsForMode("inspect-expand-transition")
       ?.privilegeProfile === "expand",
     "schema-transition inspection retains the exact expand principal"
@@ -1698,10 +1908,34 @@ function testStagedRolloutContracts() {
       JSON.stringify({
         verifyOnly: true,
         target: "compatible",
-        privilegeProfile: "runtime",
+        bridgeArtifactVerification: true,
+        privilegeProfile: "phase-bound-runtime",
       }),
-    "migration bridge verifies both base and expand schemas"
+    "migration bridge resolves the exact runtime principal from the stable phase"
   );
+  assert(
+    bridgeArtifactPrivilegeProfileForState({
+      kind: "resume-0017",
+      nextStatement: 0,
+    }) === "runtime",
+    "stable 0016 bridge verification requires the legacy runtime principal"
+  );
+  assert(
+    bridgeArtifactPrivilegeProfileForState({ kind: "complete" }) ===
+      "credit-runtime",
+    "stable 0018 bridge verification requires the credit runtime principal"
+  );
+  for (const state of [
+    { kind: "resume-0016", phase: 0 },
+    { kind: "resume-0017", nextStatement: 1 },
+    { kind: "resume-0018", nextStatement: 0 },
+    { kind: "resume-0018", nextStatement: 1 },
+  ]) {
+    assert(
+      bridgeArtifactPrivilegeProfileForState(state) === null,
+      "bridge verification refuses legacy and interrupted states"
+    );
+  }
   assert(
     JSON.stringify(
       productionMigrationOptionsForMode("verify-artifact", "runtime")
@@ -1731,6 +1965,12 @@ function testStagedRolloutContracts() {
       productionMigrationOptionsForMode("apply-expand", "runtime") === null &&
       productionMigrationOptionsForMode(
         "apply-credit-wallet-expand",
+        "runtime"
+      ) === null &&
+      productionMigrationOptionsForMode("verify-credit-wallet-transition") ===
+        null &&
+      productionMigrationOptionsForMode(
+        "verify-credit-wallet-transition",
         "runtime"
       ) === null &&
       productionMigrationOptionsForMode("verify-artifact") === null &&
@@ -1937,10 +2177,30 @@ function testSchemaDigestContracts() {
     "leaderbot"
   );
   const creditMigrationGrant =
-    "GRANT CREATE, CREATE TEMPORARY TABLES, ALTER, INDEX, REFERENCES, SELECT, INSERT, UPDATE, TRIGGER, CREATE ROUTINE ON `leaderbot`.* TO `credit_migrator`@`%`";
+    "GRANT CREATE, CREATE TEMPORARY TABLES, ALTER, INDEX, REFERENCES, SELECT, INSERT, UPDATE, TRIGGER, CREATE ROUTINE, ALTER ROUTINE ON `leaderbot`.* TO `credit_migrator`@`%`";
   assertCreditWalletMigrationGrantScope(
     ["GRANT USAGE ON *.* TO `credit_migrator`@`%`", creditMigrationGrant],
     "leaderbot"
+  );
+  assertCreditWalletMigrationGrantScope(
+    [
+      "GRANT USAGE ON *.* TO `credit_migrator`@`%`",
+      creditMigrationGrant,
+      "GRANT ALTER ROUTINE, EXECUTE ON PROCEDURE `leaderbot`.`credit_create_wallet` TO `credit_migrator`@`%`",
+    ],
+    "leaderbot"
+  );
+  expectSynchronousFailure(
+    () =>
+      assertCreditWalletMigrationGrantScope(
+        [
+          creditMigrationGrant,
+          "GRANT ALTER ROUTINE, EXECUTE ON PROCEDURE `leaderbot`.`credit_unreviewed_helper` TO `credit_migrator`@`%`",
+        ],
+        "leaderbot"
+      ),
+    "credit migration rejects an unreviewed transitional routine grant",
+    "credit wallet migration principal privilege boundary mismatch"
   );
   assertCreditWalletMigrationGrantScope(
     [
@@ -1972,6 +2232,18 @@ function testSchemaDigestContracts() {
       ),
     "credit migration partial CREATE ROUTINE revoke",
     "missing CREATE ROUTINE"
+  );
+  expectSynchronousFailure(
+    () =>
+      assertCreditWalletMigrationGrantScope(
+        [
+          creditMigrationGrant,
+          "REVOKE ALTER ROUTINE ON `leaderbot`.* FROM `credit_migrator`@`%`",
+        ],
+        "leaderbot"
+      ),
+    "credit migration partial ALTER ROUTINE revoke",
+    "missing ALTER ROUTINE"
   );
   expectSynchronousFailure(
     () =>

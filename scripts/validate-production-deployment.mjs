@@ -10,6 +10,10 @@ const TRUSTED_ARTIFACT_WORKFLOW_PATH =
   ".github/workflows/build-production-artifacts.yml";
 const SCHEMA_TRANSITION_WORKFLOW_PATH =
   ".github/workflows/image-gen-schema-transition.yml";
+const RUNTIME_PRINCIPAL_STAGING_WORKFLOW_PATH =
+  ".github/workflows/stage-image-gen-credit-runtime-principal.yml";
+const RUNTIME_PRINCIPAL_CLEANUP_WORKFLOW_PATH =
+  ".github/workflows/cleanup-image-gen-runtime-principals.yml";
 const SCHEMA_PROBE_CLEANUP_WORKFLOW_PATH =
   ".github/workflows/cleanup-image-gen-schema-probes.yml";
 const GATEWAY_STATE_REBASELINE_WORKFLOW_PATH =
@@ -51,6 +55,8 @@ const VERIFIED_FLYCTL_WORKFLOW_JOBS = Object.freeze({
     "deploy-storage-proxy",
   ],
   [SCHEMA_TRANSITION_WORKFLOW_PATH]: ["preflight", "expand"],
+  [RUNTIME_PRINCIPAL_STAGING_WORKFLOW_PATH]: ["stage"],
+  [RUNTIME_PRINCIPAL_CLEANUP_WORKFLOW_PATH]: ["preflight", "mutate"],
   [PRODUCTION_RECONCILIATION_WORKFLOW_PATH]: [
     "recover-gateway",
     "recover-image-gen",
@@ -89,6 +95,7 @@ const IMAGE_GEN_TRANSITION_STATES = Object.freeze([
   "bridge_reviewed",
   "expand_pending",
   "runtime_build_pending",
+  "runtime_principal_pending",
   "runtime_reviewed",
   "complete",
 ]);
@@ -2732,6 +2739,12 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
   const remoteUploadIndex = billingTriggerProbeStep?.indexOf(
     "timeout --signal=TERM 30s flyctl ssh sftp put",
   );
+  const restrictedStagingEvidenceIndex = billingTriggerProbeStep?.indexOf(
+    "Restricted runtime trigger preflight is bound to protected staging evidence.",
+  );
+  const bridgeMachineSelectionIndex = billingTriggerProbeStep?.indexOf(
+    'probe_machine_id="$(jq -er',
+  );
   if (
     !billingTriggerProbeStep ||
     billingTriggerProbeIndex < 0 ||
@@ -2769,12 +2782,67 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
     !billingTriggerProbeStep.includes(
       'remote_probe="/tmp/leaderbot-billing-trigger-preflight-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.cjs"',
     ) ||
+    !billingTriggerProbeStep.includes(
+      'transition_target" = "0018_credit_checkout_reservation"',
+    ) ||
+    !billingTriggerProbeStep.includes(
+      ".databaseSchemaTransition.runtimePrincipalSha256",
+    ) ||
+    restrictedStagingEvidenceIndex === undefined ||
+    bridgeMachineSelectionIndex === undefined ||
+    restrictedStagingEvidenceIndex < 0 ||
+    bridgeMachineSelectionIndex < 0 ||
+    restrictedStagingEvidenceIndex >= bridgeMachineSelectionIndex ||
     !billingTriggerProbeStep.includes('docker rm -f "$probe_container"') ||
     !billingTriggerProbeStep.includes("trap cleanup_probe EXIT") ||
     !billingTriggerProbeStep.includes('--command "test ! -e $remote_probe"')
   ) {
     fail(
       `${PRODUCTION_WORKFLOW_PATH} must run the exact bounded, reversible billing-trigger probe before image-gen rollout`,
+    );
+  }
+  const [runtimePrincipalCutoverStep] = namedWorkflowStepBodies(
+    workflow,
+    "Prove every image-gen Machine uses the staged runtime principal",
+  );
+  const runtimePrincipalCutoverIndex = workflow.indexOf(
+    "      - name: Prove every image-gen Machine uses the staged runtime principal",
+  );
+  const smokeImageGenIndex = workflow.indexOf(
+    "      - name: Smoke-test image-gen",
+  );
+  if (
+    !runtimePrincipalCutoverStep ||
+    runtimePrincipalCutoverIndex <= imageGenDeployIndex ||
+    smokeImageGenIndex <= runtimePrincipalCutoverIndex ||
+    namedWorkflowStepTimeout(
+      workflow,
+      "Prove every image-gen Machine uses the staged runtime principal",
+    ) !== 12 ||
+    !runtimePrincipalCutoverStep.includes(
+      ".databaseSchemaTransition.runtimePrincipalSha256",
+    ) ||
+    !runtimePrincipalCutoverStep.includes(
+      ".config.env.LEADERBOT_DEPLOYMENT_IDENTITY == $identity",
+    ) ||
+    !runtimePrincipalCutoverStep.includes(
+      '.apps["image-gen"].desiredScale | to_entries | map(.value.count) | add',
+    ) ||
+    runtimePrincipalCutoverStep.includes('.apps["image-gen"].processGroups') ||
+    !runtimePrincipalCutoverStep.includes(
+      '.config.metadata.fly_process_group == "app" or .config.metadata.fly_process_group == "worker"',
+    ) ||
+    !runtimePrincipalCutoverStep.includes(
+      "EXPECTED_RUNTIME_PRINCIPAL_SHA256=$expected_principal_sha256 node $remote_probe",
+    ) ||
+    !runtimePrincipalCutoverStep.includes(
+      'test "$probe_output" = "Billing trigger runtime preflight passed."',
+    ) ||
+    !runtimePrincipalCutoverStep.includes("runtime-principal-cutover.json") ||
+    !runtimePrincipalCutoverStep.includes("healthAndReadinessPending:true")
+  ) {
+    fail(
+      `${PRODUCTION_WORKFLOW_PATH} must prove every successor Machine uses the exact staged runtime principal before readiness evidence`,
     );
   }
   const [imageGenStartupDiagnosticStep] = namedWorkflowStepBodies(
@@ -3518,6 +3586,13 @@ function validateImageGenMigrationCi(rootDir) {
     "LEADERBOT_PRODUCTION_MIGRATION_MODE: verify-credit-wallet",
     "LEADERBOT_PRODUCTION_MIGRATION_MODE=apply-empty-credit-wallet-bootstrap",
     "LEADERBOT_PRODUCTION_MIGRATION_MODE=verify-credit-wallet",
+    "runtime_credit_smoke:runtime_credit_smoke@127.0.0.1:3306/test_image_gen",
+    "runtime_credit_container:runtime_credit_container@127.0.0.1:3306/test_image_gen_container",
+    "productionRuntimeWritableTableNames",
+    "creditWalletRoutineNames",
+    "GRANT SELECT ON ${database}.* TO ${account}",
+    "GRANT INSERT, UPDATE, DELETE ON ${database}.",
+    "GRANT EXECUTE ON PROCEDURE ${database}.",
     "io.leaderbot.schema.minimum",
     "io.leaderbot.schema.maximum",
   ]) {
@@ -3670,6 +3745,14 @@ function validateTrustedArtifactWorkflow(rootDir) {
       "must give the expand-schema verification principal only runtime DML grants",
     ],
     [
+      "CREATE USER 'runtime_legacy_credit'@'%' IDENTIFIED BY 'runtime_legacy_credit'",
+      "must create an isolated legacy-principal negative fixture for 0018",
+    ],
+    [
+      "GRANT SELECT, INSERT, UPDATE, DELETE ON leaderbot_artifact_credit_checkout.* TO 'runtime_legacy_credit'@'%'",
+      "must keep the legacy 0018 negative fixture to exact runtime DML grants",
+    ],
+    [
       "CREATE USER 'runtime_credit'@'%' IDENTIFIED BY 'runtime_credit'",
       "must create the final credit-schema verification principal",
     ],
@@ -3682,8 +3765,16 @@ function validateTrustedArtifactWorkflow(rootDir) {
       "must derive exact executable routines from the production runtime contract",
     ],
     [
-      "DATABASE_URL=mysql://runtime_${phase}:runtime_${phase}@127.0.0.1:3306/leaderbot_artifact_${phase}",
-      "must verify the bridge with DML-only fixture credentials",
+      "DATABASE_URL=mysql://runtime_expand:runtime_expand@127.0.0.1:3306/leaderbot_artifact_expand",
+      "must verify the bridge with the legacy 0016 runtime principal",
+    ],
+    [
+      "DATABASE_URL=mysql://runtime_credit:runtime_credit@127.0.0.1:3306/leaderbot_artifact_credit_checkout",
+      "must verify the bridge with the exact 0018 credit runtime principal",
+    ],
+    [
+      "DATABASE_URL=mysql://runtime_legacy_credit:runtime_legacy_credit@127.0.0.1:3306/leaderbot_artifact_credit_checkout",
+      "must prove the bridge rejects legacy runtime rights on 0018",
     ],
     [
       "DATABASE_URL=mysql://runtime_expand:runtime_expand@127.0.0.1:3306/leaderbot_artifact_expand",
@@ -3734,9 +3825,11 @@ function validateTrustedArtifactWorkflow(rootDir) {
     );
   }
   if (
-    occurrenceCount(workflow, "GRANT ") !== 5 ||
+    occurrenceCount(workflow, "GRANT ") !== 6 ||
     occurrenceCount(workflow, "CREATE USER 'runtime_base'@'%'") !== 1 ||
     occurrenceCount(workflow, "CREATE USER 'runtime_expand'@'%'") !== 1 ||
+    occurrenceCount(workflow, "CREATE USER 'runtime_legacy_credit'@'%'") !==
+      1 ||
     occurrenceCount(workflow, "CREATE USER 'runtime_credit'@'%'") !== 1 ||
     occurrenceCount(
       workflow,
@@ -3745,6 +3838,10 @@ function validateTrustedArtifactWorkflow(rootDir) {
     occurrenceCount(
       workflow,
       "GRANT SELECT, INSERT, UPDATE, DELETE ON leaderbot_artifact_expand.* TO 'runtime_expand'@'%'",
+    ) !== 1 ||
+    occurrenceCount(
+      workflow,
+      "GRANT SELECT, INSERT, UPDATE, DELETE ON leaderbot_artifact_credit_checkout.* TO 'runtime_legacy_credit'@'%'",
     ) !== 1 ||
     occurrenceCount(workflow, "GRANT SELECT ON ${database}.* TO ${account}") !==
       1 ||
@@ -4036,8 +4133,8 @@ function validateSchemaTransitionWorkflow(rootDir) {
       "must apply only 0017 and 0018 from the live bridge",
     ],
     [
-      "LEADERBOT_PRODUCTION_MIGRATION_MODE=verify-credit-wallet",
-      "must fingerprint the final credit schema",
+      "LEADERBOT_PRODUCTION_MIGRATION_MODE=verify-credit-wallet-transition",
+      "must fingerprint the final credit schema with the migration principal",
     ],
     [
       "docker logout registry.fly.io",
@@ -4070,9 +4167,13 @@ function validateSchemaTransitionWorkflow(rootDir) {
   }
   if (
     workflow.includes("LEADERBOT_PRODUCTION_MIGRATION_MODE=apply-expand") ||
-    workflow.includes("LEADERBOT_PRODUCTION_MIGRATION_MODE=verify-expand-transition")
+    workflow.includes(
+      "LEADERBOT_PRODUCTION_MIGRATION_MODE=verify-expand-transition",
+    )
   ) {
-    fail(`${SCHEMA_TRANSITION_WORKFLOW_PATH} must not rerun the completed 0016 transition`);
+    fail(
+      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must not rerun the completed 0016 transition`,
+    );
   }
   if (/\b(?:fly|flyctl) config show[^\n]*--json/.test(workflow)) {
     fail(
@@ -4270,6 +4371,342 @@ function validateSchemaTransitionWorkflow(rootDir) {
         `${FRESH_SNAPSHOT_SELECTOR_PATH} must fail closed unless exactly one fresh completed snapshot with a digest exists`,
       );
     }
+  }
+}
+
+function validateRuntimePrincipalStagingWorkflow(rootDir) {
+  const workflowPath = path.join(
+    rootDir,
+    RUNTIME_PRINCIPAL_STAGING_WORKFLOW_PATH,
+  );
+  if (!fs.existsSync(workflowPath)) {
+    fail(`Missing ${RUNTIME_PRINCIPAL_STAGING_WORKFLOW_PATH}`);
+  }
+  const workflow = fs.readFileSync(workflowPath, "utf8");
+  assertNoDirectGithubExpressionsInRunBlocks(
+    workflow,
+    RUNTIME_PRINCIPAL_STAGING_WORKFLOW_PATH,
+  );
+  for (const [needle, message] of [
+    ["workflow_dispatch:", "must be manually dispatched"],
+    ['test "$GITHUB_REF" = "refs/heads/main"', "must require main"],
+    [
+      "environment: production",
+      "must use the protected production environment",
+    ],
+    ["needs: preflight", "must complete its source preflight before approval"],
+    [
+      "group: production-deploy-image-gen",
+      "must serialize with image-gen deployment work",
+    ],
+    [
+      "cancel-in-progress: false",
+      "must never cancel an in-flight principal stage",
+    ],
+    [
+      'databaseSchemaTransition.state\' deploy/production/apps.json)" = "runtime_principal_pending"',
+      "must require the frozen runtime-principal manifest state",
+    ],
+    [
+      'databaseSchemaPhase\' deploy/production/apps.json)" = "0018_credit_checkout_reservation"',
+      "must require the final 0018 schema",
+    ],
+    [
+      'deploymentEnabled\' deploy/production/apps.json)" = "false"',
+      "must refuse staging while deploys are enabled",
+    ],
+    [
+      'reviewedSourceCommit\' deploy/production/apps.json)" = "$GITHUB_SHA"',
+      "must bind the reviewed runtime source to the exact main SHA",
+    ],
+    [
+      '--verify-source-ci "$GITHUB_SHA"',
+      "must require green CI for the exact main SHA",
+    ],
+    [
+      "IMAGE_GEN_DATABASE_MIGRATION_URL",
+      "must reuse the protected production migration credential to provision the runtime principal",
+    ],
+    [
+      'u.port!=="13306"',
+      "must restrict the provisioner secret to its isolated local tunnel",
+    ],
+    [
+      'flyctl proxy 13306:3306 "$RUNTIME_PRINCIPAL_DATABASE_PRIVATE_IP"',
+      "must bind the provisioner to the one reviewed database Machine",
+    ],
+    [
+      "openssl rand -hex 48",
+      "must generate a strong runtime password without repository material",
+    ],
+    [
+      'runtime_principal="lbcr_${GITHUB_SHA:0:12}_${GITHUB_RUN_ID}"',
+      "must make the replacement principal version-bound and unique",
+    ],
+    [
+      "Refuse an existing staged runtime credential",
+      "must refuse a rerun before database mutation",
+    ],
+    [
+      'select(.name == "DATABASE_URL")',
+      "must inspect only the exact runtime credential",
+    ],
+    [
+      'test "$database_url_status" = "Deployed"',
+      "must refuse staged or partial runtime credentials",
+    ],
+    [
+      'echo "::add-mask::$runtime_password"',
+      "must mask the generated password",
+    ],
+    [
+      'echo "::add-mask::$runtime_database_url"',
+      "must mask the staged runtime URL",
+    ],
+    [
+      'runtime_verification_url="mysql://${runtime_principal}:${runtime_password}@127.0.0.1:13306/${RUNTIME_PRINCIPAL_DATABASE_NAME}"',
+      "must verify the new principal only through the isolated local tunnel",
+    ],
+    [
+      'runtime_database_url="mysql://${runtime_principal}:${runtime_password}@[${RUNTIME_PRINCIPAL_DATABASE_PRIVATE_IP}]:3306/${RUNTIME_PRINCIPAL_DATABASE_NAME}"',
+      "must stage the Fly-reachable private database URL",
+    ],
+    [
+      'RUNTIME_DATABASE_URL="$runtime_verification_url"',
+      "must keep tunnel verification separate from the staged runtime URL",
+    ],
+    [
+      "productionRuntimeWritableTableNames",
+      "must derive writable-table grants from the canonical schema contract",
+    ],
+    [
+      "creditWalletRoutineNames",
+      "must derive routine grants from the canonical schema contract",
+    ],
+    [
+      'assertProductionMigrationRuntime(runtime, "credit-runtime")',
+      "must verify the exact replacement principal before staging",
+    ],
+    [
+      'docker cp "$probe_container:/app/dist/billing-trigger-runtime-preflight.cjs"',
+      "must extract the trigger probe from the exact reviewed runtime",
+    ],
+    [
+      String.raw`DATABASE_URL="$runtime_verification_url" \
+            MOLLIE_MODE=test`,
+      "must run the trigger probe through the tunnel-local replacement principal",
+    ],
+    [
+      'EXPECTED_RUNTIME_PRINCIPAL_SHA256="$principal_fingerprint"',
+      "must bind the trigger probe to the replacement principal fingerprint",
+    ],
+    [
+      'node "$RUNTIME_PRINCIPAL_TRIGGER_PROBE"',
+      "must execute the exact reviewed trigger probe before staging",
+    ],
+    [
+      'flyctl secrets set --stage "DATABASE_URL=$runtime_database_url" --app leaderbot-fb-image-gen',
+      "must stage only the runtime URL without a deployment or restart",
+    ],
+    [
+      "Runtime principal staging outcome is ambiguous; the new principal was retained",
+      "must retain the new principal after an ambiguous stage result",
+    ],
+    [
+      "DROP USER IF EXISTS '${username}'@'%'",
+      "must clean up a new principal only before staging begins",
+    ],
+    [
+      'created_marker="$RUNNER_TEMP/leaderbot-runtime-principal/created-by-this-attempt"',
+      "must track principal ownership per staging attempt",
+    ],
+    [
+      'test -f "$created_marker" && test "$stage_started" = 0',
+      "must clean up only a principal owned by this attempt",
+    ],
+    [
+      'test "$(cat "$created_marker")" = "$runtime_principal"',
+      "must bind cleanup ownership to the exact generated principal",
+    ],
+    [
+      "fs.writeFileSync(process.env.CREATED_MARKER",
+      "must arm cleanup only after the principal exists",
+    ],
+    [
+      "image-gen-runtime-principal-stage-",
+      "must retain metadata-only staging evidence",
+    ],
+  ]) {
+    if (!workflow.includes(needle)) {
+      fail(`${RUNTIME_PRINCIPAL_STAGING_WORKFLOW_PATH} ${message}`);
+    }
+  }
+  if (
+    workflow.includes("IMAGE_GEN_DATABASE_RUNTIME_PROVISIONER_URL") ||
+    workflow.includes("flyctl deploy") ||
+    workflow.includes("fly deploy") ||
+    workflow.includes("flyctl machine restart") ||
+    workflow.includes("flyctl machine start") ||
+    workflow.includes("flyctl secrets deploy")
+  ) {
+    fail(
+      `${RUNTIME_PRINCIPAL_STAGING_WORKFLOW_PATH} must stage credentials without deployment or machine mutation`,
+    );
+  }
+  if (workflow.includes('RUNTIME_DATABASE_URL="$runtime_database_url"')) {
+    fail(
+      `${RUNTIME_PRINCIPAL_STAGING_WORKFLOW_PATH} must never stage or verify a tunnel-local URL as the production runtime URL`,
+    );
+  }
+  const triggerProbeIndex = workflow.indexOf(
+    'node "$RUNTIME_PRINCIPAL_TRIGGER_PROBE"',
+  );
+  const rerunGuardIndex = workflow.indexOf(
+    "      - name: Refuse an existing staged runtime credential",
+  );
+  const principalMutationIndex = workflow.indexOf(
+    "      - name: Create, verify, and stage the least-privilege runtime principal",
+  );
+  const createPrincipalIndex = workflow.indexOf(
+    "await provisioner.query(`CREATE USER ${account} IDENTIFIED BY '${password}'`);",
+  );
+  const armCleanupIndex = workflow.indexOf(
+    "fs.writeFileSync(process.env.CREATED_MARKER",
+  );
+  const stageStartIndex = workflow.indexOf("          stage_started=1");
+  const secretStageIndex = workflow.indexOf(
+    'flyctl secrets set --stage "DATABASE_URL=$runtime_database_url"',
+  );
+  if (
+    rerunGuardIndex < 0 ||
+    principalMutationIndex <= rerunGuardIndex ||
+    createPrincipalIndex < 0 ||
+    armCleanupIndex <= createPrincipalIndex ||
+    triggerProbeIndex <= armCleanupIndex ||
+    stageStartIndex <= triggerProbeIndex ||
+    secretStageIndex <= stageStartIndex
+  ) {
+    fail(
+      `${RUNTIME_PRINCIPAL_STAGING_WORKFLOW_PATH} must finish exact replacement-principal DML proof before credential staging begins`,
+    );
+  }
+}
+
+function validateRuntimePrincipalCleanupWorkflow(rootDir) {
+  const workflowPath = path.join(
+    rootDir,
+    RUNTIME_PRINCIPAL_CLEANUP_WORKFLOW_PATH,
+  );
+  if (!fs.existsSync(workflowPath)) {
+    fail(`Missing ${RUNTIME_PRINCIPAL_CLEANUP_WORKFLOW_PATH}`);
+  }
+  const workflow = fs.readFileSync(workflowPath, "utf8");
+  assertNoDirectGithubExpressionsInRunBlocks(
+    workflow,
+    RUNTIME_PRINCIPAL_CLEANUP_WORKFLOW_PATH,
+  );
+  for (const [needle, message] of [
+    ["workflow_dispatch:", "must be manually dispatched"],
+    ['test "$GITHUB_REF" = "refs/heads/main"', "must require protected main"],
+    ["environment: production-inspection", "must preflight without mutation"],
+    ["environment: production", "must require protected production approval"],
+    ["needs: preflight", "must finish read-only proof before approval"],
+    [
+      "group: production-deploy-image-gen",
+      "must serialize with image-gen rollout",
+    ],
+    ["cancel-in-progress: false", "must never cancel a principal transition"],
+    [
+      'databaseSchemaTransition.state\' deploy/production/apps.json)" = "complete"',
+      "must wait for the reviewed completed cutover",
+    ],
+    [
+      ".databaseSchemaTransition.runtimePrincipalSha256",
+      "must bind the reviewed restricted principal fingerprint",
+    ],
+    [
+      "$app.reviewedRollbackImages | index($bridge) | not",
+      "must retire the bridge rollback before obsolete-principal cleanup",
+    ],
+    [
+      '--verify-settled-baseline image-gen "$EXPECTED_DEPLOYMENT_IDENTITY"',
+      "must bind cleanup to the settled successor deployment",
+    ],
+    [
+      '--expected-deployment-identity "$EXPECTED_DEPLOYMENT_IDENTITY"',
+      "must reject mixed or stale successor Machines",
+    ],
+    [
+      '.apps["image-gen"].desiredScale | to_entries | map(.value.count) | add',
+      "must derive the exact successor count from reviewed desiredScale",
+    ],
+    [
+      "EXPECTED_RUNTIME_PRINCIPAL_SHA256=$EXPECTED_RUNTIME_PRINCIPAL_SHA256 node /app/dist/billing-trigger-runtime-preflight.cjs",
+      "must reprove the exact principal and DML boundary on every Machine",
+    ],
+    [
+      'test "$output" = "Billing trigger runtime preflight passed."',
+      "must require exact redacted proof output",
+    ],
+    [
+      "https://leaderbot-fb-image-gen.fly.dev/healthz",
+      "must reprove liveness before mutation",
+    ],
+    [
+      "https://leaderbot-fb-image-gen.fly.dev/readyz",
+      "must reprove readiness before mutation",
+    ],
+    ["ACCOUNT LOCK", "must preserve a recoverable rollback window"],
+    ["ACCOUNT UNLOCK", "must provide protected rollback recovery"],
+    ["DROP USER", "must provide explicit irreversible cleanup"],
+    [
+      'accounts[0].accountLocked !== "Y"',
+      "must drop only an already locked principal",
+    ],
+    [
+      "now - lockedAt < 86_400_000",
+      "must preserve at least a 24-hour reviewed lock window",
+    ],
+    [
+      "image-gen-obsolete-principal-lock-",
+      "must bind drop to protected lock evidence",
+    ],
+    [
+      '.path == ".github/workflows/cleanup-image-gen-runtime-principals.yml"',
+      "must accept lock evidence only from the protected cleanup workflow",
+    ],
+    [
+      '.event == "workflow_dispatch"',
+      "must accept lock evidence only from a protected manual dispatch",
+    ],
+    [
+      "obsoletePrincipalSha256",
+      "must retain metadata-only obsolete-principal evidence",
+    ],
+  ]) {
+    if (!workflow.includes(needle)) {
+      fail(`${RUNTIME_PRINCIPAL_CLEANUP_WORKFLOW_PATH} ${message}`);
+    }
+  }
+  const successorProofIndex = workflow.indexOf(
+    "      - name: Reprove every successor Machine before database mutation",
+  );
+  const databaseMutationIndex = workflow.indexOf(
+    "      - name: Lock, unlock, or drop only the exact obsolete broad principal",
+  );
+  if (
+    successorProofIndex < 0 ||
+    databaseMutationIndex <= successorProofIndex ||
+    workflow.includes('.apps["image-gen"].processGroups') ||
+    workflow.includes("flyctl deploy") ||
+    workflow.includes("fly deploy") ||
+    workflow.includes("flyctl secrets set") ||
+    workflow.includes("MOLLIE_BILLING_ENABLED=true") ||
+    workflow.includes("MOLLIE_LIVE_BILLING_ENABLED=true")
+  ) {
+    fail(
+      `${RUNTIME_PRINCIPAL_CLEANUP_WORKFLOW_PATH} must prove the settled healthy successor before isolated account mutation and must not deploy or enable billing`,
+    );
   }
 }
 
@@ -5464,21 +5901,25 @@ function validateImageGenSchemaTransition(app) {
     typeof transition !== "object" ||
     Array.isArray(transition)
   ) {
-    fail("image-gen must declare its reviewed database schema transition state");
+    fail(
+      "image-gen must declare its reviewed database schema transition state",
+    );
   }
   const transitionKey = `${transition.from}->${transition.to}`;
   const transitionPhases =
     transitionKey === "0015_base->0016_expand"
       ? ["0015_base", "0016_expand"]
-      : transitionKey ===
-          "0016_expand->0018_credit_checkout_reservation"
+      : transitionKey === "0016_expand->0018_credit_checkout_reservation"
         ? [
             "0016_expand",
             "0017_credit_wallet_expand",
             "0018_credit_checkout_reservation",
           ]
         : null;
-  if (!transitionPhases || !IMAGE_GEN_TRANSITION_STATES.includes(transition.state)) {
+  if (
+    !transitionPhases ||
+    !IMAGE_GEN_TRANSITION_STATES.includes(transition.state)
+  ) {
     fail("image-gen has an unsupported database schema transition");
   }
   const baseArtifactKind =
@@ -5583,6 +6024,58 @@ function validateImageGenSchemaTransition(app) {
     ) {
       fail(
         "image-gen runtime_build_pending must stay frozen on the bridge after expand",
+      );
+    }
+    return;
+  }
+
+  if (transition.state === "runtime_principal_pending") {
+    if (
+      app.databaseSchemaPhase !== transition.to ||
+      app.deploymentEnabled !== false ||
+      app.reviewedArtifactKind !== "runtime" ||
+      !isReviewedSourceCommit(app.reviewedSourceCommit) ||
+      !sameStringSet(app.reviewedRollbackImages, [transition.bridgeImage]) ||
+      app.reviewedRollbackArtifactKinds[transition.bridgeImage] !==
+        "migration-bridge"
+    ) {
+      fail(
+        "image-gen runtime-principal staging must remain deploy-blocked on the exact final-schema runtime and bridge rollback",
+      );
+    }
+    return;
+  }
+
+  const isFinalCreditTransition =
+    transition.to === "0018_credit_checkout_reservation";
+  if (
+    isFinalCreditTransition &&
+    !/^[a-f0-9]{64}$/.test(transition.runtimePrincipalSha256 ?? "")
+  ) {
+    fail(
+      "image-gen final credit runtime must bind the reviewed staged-principal fingerprint",
+    );
+  }
+
+  if (isFinalCreditTransition && transition.state === "complete") {
+    const runtimeRollbacks = app.reviewedRollbackImages ?? [];
+    if (
+      app.databaseSchemaPhase !== transition.to ||
+      app.deploymentEnabled !== true ||
+      app.reviewedArtifactKind !== "runtime" ||
+      !isReviewedSourceCommit(app.reviewedSourceCommit) ||
+      runtimeRollbacks.length === 0 ||
+      runtimeRollbacks.includes(transition.bridgeImage) ||
+      runtimeRollbacks.some(
+        (image) =>
+          app.reviewedRollbackArtifactKinds[image] !== "runtime" ||
+          !isReviewedSourceCommit(app.reviewedRollbackSourceCommits[image]) ||
+          JSON.stringify(app.reviewedRollbackImageSchemaPhases[image]) !==
+            JSON.stringify([transition.to]),
+      )
+    ) {
+      fail(
+        "image-gen completed credit-runtime cutover must retain only exact final-schema runtime rollbacks",
       );
     }
     return;
@@ -5901,10 +6394,14 @@ export function validateProductionRepository(rootDir = process.cwd()) {
     .sort();
   if (
     JSON.stringify(inspectionSecretHolders) !==
-    JSON.stringify(["deploy-production.yml", "image-gen-schema-transition.yml"])
+    JSON.stringify([
+      "cleanup-image-gen-runtime-principals.yml",
+      "deploy-production.yml",
+      "image-gen-schema-transition.yml",
+    ])
   ) {
     fail(
-      "FLY_PRODUCTION_READONLY_TOKEN may exist only in the two trusted production-inspection preflights",
+      "FLY_PRODUCTION_READONLY_TOKEN may exist only in the three trusted production-inspection preflights",
     );
   }
   for (const [target, script] of [
@@ -5937,6 +6434,8 @@ export function validateProductionRepository(rootDir = process.cwd()) {
   validateImageGenMigrationCi(rootDir);
   validateTrustedArtifactWorkflow(rootDir);
   validateSchemaTransitionWorkflow(rootDir);
+  validateRuntimePrincipalStagingWorkflow(rootDir);
+  validateRuntimePrincipalCleanupWorkflow(rootDir);
   validateSchemaProbeCleanupWorkflow(rootDir);
   validateProductionCompletionRecoveryWorkflow(rootDir);
   validateProductionReconciliationWorkflow(rootDir);

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
 
 import {
   assertBillingTriggerRuntimePreflight,
@@ -37,6 +38,9 @@ function successfulConnection(options = {}) {
   };
   let sentinelReadCount = 0;
   const queryImplementation = async statement => {
+    if (statement === "SELECT CURRENT_USER() AS currentUser") {
+      return [[{ currentUser: "runtime@%" }]];
+    }
     if (statement === "SELECT DATABASE() AS databaseName") {
       return [[{ databaseName: "leaderbot" }]];
     }
@@ -105,6 +109,36 @@ function successfulConnection(options = {}) {
 }
 
 describe("billing trigger runtime preflight", () => {
+  it("binds the preflight to the expected runtime principal without exposing it", async () => {
+    const connection = successfulConnection();
+    const expectedPrincipalSha256 = createHash("sha256")
+      .update("runtime")
+      .digest("hex");
+
+    await expect(
+      assertBillingTriggerRuntimePreflight(connection, "test", {
+        expectedPrincipalSha256,
+      })
+    ).resolves.toBeUndefined();
+    expect(connection.query).toHaveBeenCalledWith(
+      "SELECT CURRENT_USER() AS currentUser"
+    );
+  });
+
+  it("fails before grant or DML checks when the runtime principal differs", async () => {
+    const connection = successfulConnection();
+
+    await expect(
+      assertBillingTriggerRuntimePreflight(connection, "test", {
+        expectedPrincipalSha256: "a".repeat(64),
+      })
+    ).rejects.toMatchObject({ stage: "principal_identity" });
+    expect(connection.beginTransaction).not.toHaveBeenCalled();
+    expect(connection.query).not.toHaveBeenCalledWith(
+      "SHOW GRANTS FOR CURRENT_USER()"
+    );
+  });
+
   it("exercises all three triggers and always verifies the rollback", async () => {
     const connection = successfulConnection();
 

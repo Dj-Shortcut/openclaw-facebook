@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   disableSchedulerTenant: vi.fn(),
   listOperatorNotifications: vi.fn(),
   acknowledgeOperatorNotification: vi.fn(),
+  resolveCreditReservationTransport: vi.fn(),
 }));
 
 vi.mock("./billingProfileStore", () => ({
@@ -28,6 +29,11 @@ vi.mock("./billingSchedulerStore", () => ({
 vi.mock("./billingNotificationInboxStore", () => ({
   listOperatorBillingNotifications: mocks.listOperatorNotifications,
   acknowledgeOperatorBillingNotification: mocks.acknowledgeOperatorNotification,
+}));
+
+vi.mock("./creditReservationOperatorResolution", () => ({
+  resolveAmbiguousPaidCreditReservation:
+    mocks.resolveCreditReservationTransport,
 }));
 
 vi.mock("./config", () => ({
@@ -124,6 +130,11 @@ describe("platform operator billing incidents", () => {
     mocks.acknowledgeOperatorNotification.mockResolvedValue({
       acknowledgedAt: new Date("2026-08-24T12:00:00.000Z"),
     });
+    mocks.resolveCreditReservationTransport.mockResolvedValue({
+      result: "applied",
+      reservationId: "11111111-1111-8111-8111-111111111111",
+      decision: "provider_rejected",
+    });
   });
 
   it("lists and acknowledges only through the global-admin tenant scope", async () => {
@@ -167,5 +178,73 @@ describe("platform operator billing incidents", () => {
 
     expect(mocks.listOperatorNotifications).not.toHaveBeenCalled();
     expect(mocks.acknowledgeOperatorNotification).not.toHaveBeenCalled();
+  });
+
+  it("resolves one reviewed transport without accepting hidden user scope", async () => {
+    const caller = createCaller();
+    const input = {
+      requestId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      workspaceId: 42,
+      reservationId: "11111111-1111-8111-8111-111111111111",
+      walletId: "22222222-2222-8222-8222-222222222222",
+      decision: "provider_rejected" as const,
+      providerStatus: 400,
+      evidenceReference: "openai-response:case-400",
+    };
+
+    await expect(
+      caller.resolveCreditReservationTransport(input)
+    ).resolves.toMatchObject({ result: "applied" });
+    expect(mocks.resolveCreditReservationTransport).toHaveBeenCalledWith({
+      ...input,
+      actorUserId: admin.id,
+    });
+
+    const unsafeCaller = caller.resolveCreditReservationTransport as (
+      value: Record<string, unknown>
+    ) => Promise<unknown>;
+    await expect(
+      unsafeCaller({
+        ...input,
+        userKey: `u2.k1.${"a".repeat(64)}`,
+        ownerTokenHash: "b".repeat(64),
+      })
+    ).rejects.toThrow();
+  });
+
+  it.each([408, 429])(
+    "keeps an ambiguous provider %s response held before store access",
+    async providerStatus => {
+      await expect(
+        createCaller().resolveCreditReservationTransport({
+          requestId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          workspaceId: 42,
+          reservationId: "11111111-1111-8111-8111-111111111111",
+          walletId: "22222222-2222-8222-8222-222222222222",
+          decision: "provider_rejected",
+          providerStatus,
+          evidenceReference: `openai-response:case-${providerStatus}`,
+        })
+      ).rejects.toThrow();
+      expect(mocks.resolveCreditReservationTransport).not.toHaveBeenCalled();
+    }
+  );
+
+  it("forbids a non-admin before resolving a reviewed transport", async () => {
+    await expect(
+      createCaller({
+        ...admin,
+        role: "user",
+      }).resolveCreditReservationTransport({
+        requestId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        workspaceId: 42,
+        reservationId: "11111111-1111-8111-8111-111111111111",
+        walletId: "22222222-2222-8222-8222-222222222222",
+        decision: "provider_accepted",
+        providerStatus: 200,
+        evidenceReference: "openai-response:case-200",
+      })
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(mocks.resolveCreditReservationTransport).not.toHaveBeenCalled();
   });
 });

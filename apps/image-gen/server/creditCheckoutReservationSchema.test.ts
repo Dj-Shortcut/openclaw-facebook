@@ -20,8 +20,8 @@ describe("0018 credit checkout reservation migration", () => {
     .map(value => value.trim())
     .filter(Boolean);
 
-  it("atomically replaces the standalone wallet routine with one narrow reservation routine", () => {
-    expect(statements).toHaveLength(2);
+  it("adds the narrow reservation and pristine-checkout cleanup boundary", () => {
+    expect(statements).toHaveLength(5);
     expect(statements[0]).toBe(
       "DROP PROCEDURE IF EXISTS `credit_create_wallet`;"
     );
@@ -33,6 +33,18 @@ describe("0018 credit checkout reservation migration", () => {
     expect(statements[1]).toContain("ROLLBACK; RESIGNAL");
     expect(statements[1]).toContain("'credit_purchase'");
     expect(statements[1]).toContain("'EUR','oneoff',JSON_OBJECT()");
+    expect(statements[2]).toBe(
+      "DROP PROCEDURE IF EXISTS `credit_expire_pristine_checkout`;"
+    );
+    expect(statements[3]).toContain(
+      "CREATE PROCEDURE `credit_expire_pristine_checkout`"
+    );
+    expect(statements[3]).toContain("SQL SECURITY DEFINER");
+    expect(statements[3]).toContain("START TRANSACTION");
+    expect(statements[3]).toContain("ROLLBACK; RESIGNAL");
+    expect(statements[4]).toBe(
+      "CREATE INDEX `billing_intents_credit_capability_expiry_idx` ON `billing_intents` (`kind`,`status`,`checkout_capability_expires_at`,`intent_id`);"
+    );
     expect(sql).not.toContain("CREATE PROCEDURE `credit_create_wallet`");
   });
 
@@ -69,7 +81,7 @@ describe("0018 credit checkout reservation migration", () => {
     );
   });
 
-  it("links an identical schema snapshot and journal entry", () => {
+  it("links the exact final schema snapshot and journal entry", () => {
     const previous = JSON.parse(
       fs.readFileSync(
         path.resolve(process.cwd(), "drizzle/meta/0017_snapshot.json"),
@@ -80,7 +92,19 @@ describe("0018 credit checkout reservation migration", () => {
     const journal = JSON.parse(fs.readFileSync(journalPath, "utf8"));
     expect(snapshot.prevId).toBe(previous.id);
     expect(snapshot.id).not.toBe(previous.id);
-    expect(snapshot.tables).toEqual(previous.tables);
+    const expectedTables = structuredClone(previous.tables);
+    expectedTables.billing_intents.indexes.billing_intents_credit_capability_expiry_idx =
+      {
+        name: "billing_intents_credit_capability_expiry_idx",
+        columns: [
+          "kind",
+          "status",
+          "checkout_capability_expires_at",
+          "intent_id",
+        ],
+        isUnique: false,
+      };
+    expect(snapshot.tables).toEqual(expectedTables);
     expect(snapshot.enums).toEqual(previous.enums);
     expect(snapshot.schemas).toEqual(previous.schemas);
     expect(journal.entries.at(-1)).toMatchObject({

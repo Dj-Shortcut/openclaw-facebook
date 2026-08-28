@@ -190,6 +190,45 @@ describe("classic Mollie payment webhook", () => {
     expect(mocks.applyMolliePaymentSnapshot).not.toHaveBeenCalled();
   });
 
+  it("acknowledges an early exact credit webhook without binding it to the legacy path", async () => {
+    const payment = providerPayment({
+      id: "tr_creditearly",
+      amount: { currency: "EUR", value: "4.99" },
+      description: "Leaderbot - 8 premium beeldcredits",
+      customerId: undefined,
+      method: "bancontact",
+      sequenceType: "oneoff",
+      metadata: {
+        billingIntentId: "11111111-1111-8111-8111-111111111111",
+        purpose: "premium_image_credits",
+        version: 1,
+        metadataHash: "a".repeat(64),
+      },
+    });
+    mocks.applyCreditPaymentWebhookSnapshot.mockResolvedValueOnce("unknown");
+    const getPayment = vi.fn().mockResolvedValue(payment);
+
+    const response = await postWebhook({
+      body: "id=tr_creditearly",
+      contentType: "application/x-www-form-urlencoded",
+      createClient: () => ({ getPayment }) as unknown as MollieClient,
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toBe("OK");
+    expect(mocks.applyCreditPaymentWebhookSnapshot).toHaveBeenCalledWith({
+      webhookPaymentId: "tr_creditearly",
+      expectedMode: "test",
+      payment,
+    });
+    expect(mocks.resolveMollieWebhookWorkspace).not.toHaveBeenCalled();
+    expect(mocks.applyMolliePaymentSnapshot).not.toHaveBeenCalled();
+    expect(mocks.safeLog).toHaveBeenCalledWith(
+      "mollie_payment_webhook_processed",
+      { result: "unknown" }
+    );
+  });
+
   it("does not acknowledge a retryable credit grant failure", async () => {
     const payment = providerPayment({
       id: "tr_creditretry",

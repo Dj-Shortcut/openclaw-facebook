@@ -12,6 +12,8 @@ import {
 import {
   PREMIUM_IMAGE_CREDIT_OFFER_ID,
   PREMIUM_IMAGE_CREDIT_OFFER_VERSION,
+  PREMIUM_IMAGE_CREDIT_REFUND_POLICY_ID,
+  PREMIUM_IMAGE_CREDIT_REFUND_POLICY_VERSION,
   getCreditOffer,
 } from "./creditCatalog";
 import {
@@ -43,6 +45,8 @@ export type CreditCheckoutPublicOffer = Readonly<{
   imageQuality: "medium";
   expires: false;
   automaticRenewal: false;
+  refundPolicyId: typeof PREMIUM_IMAGE_CREDIT_REFUND_POLICY_ID;
+  refundPolicyVersion: typeof PREMIUM_IMAGE_CREDIT_REFUND_POLICY_VERSION;
 }>;
 
 export type ClaimedCreditCheckoutSession = Readonly<{
@@ -172,6 +176,8 @@ function publicOffer(mode: "test" | "live"): CreditCheckoutPublicOffer {
     imageQuality: offer.providerPolicy.imageQuality,
     expires: offer.validity.expires,
     automaticRenewal: offer.paymentTerms.automaticRenewal,
+    refundPolicyId: offer.refundPolicyId,
+    refundPolicyVersion: offer.refundPolicyVersion,
   });
 }
 

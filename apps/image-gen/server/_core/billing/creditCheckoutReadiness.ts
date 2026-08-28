@@ -12,6 +12,7 @@ import {
 } from "../../../drizzle/schema";
 import { getDatabaseOrThrow } from "../../db";
 import type { MollieMode } from "./config";
+import { assertCreditRuntimePrivilegeReadiness } from "./creditRuntimePrivilegeReadiness";
 
 type CreditControlRow = Readonly<{
   workspaceId: number;
@@ -75,6 +76,7 @@ export async function assertCreditCheckoutDatabaseReadiness(input: {
     throw new Error("Credit checkout workspace is not configured");
   }
   const database = await getDatabaseOrThrow();
+  await assertCreditRuntimePrivilegeReadiness(database.$client.promise());
   await Promise.all([
     database
       .select({

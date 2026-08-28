@@ -37,7 +37,7 @@ const triggerNames = Array.from(
 
 describe("0017 direct Messenger purchased-credit schema", () => {
   it("locks the compact payment prerequisite before any credit DDL", () => {
-    expect(statements).toHaveLength(51);
+    expect(statements).toHaveLength(53);
     expect(statements[0]).toMatch(
       /^CREATE TEMPORARY TABLE `credit_0017_legacy_effect_preflight`/
     );
@@ -139,20 +139,22 @@ describe("0017 direct Messenger purchased-credit schema", () => {
       "credit_create_wallet",
       "credit_erase_wallet",
       "credit_expire_reservation",
+      "credit_freeze_wallet_for_review",
       "credit_grant_purchase",
       "credit_mark_reservation_provider_accepted",
       "credit_mark_reservation_transport_started",
+      "credit_release_rejected_reservation",
       "credit_release_reservation",
       "credit_scrub_terminal_reservation",
     ]);
     expect(triggerNames).toHaveLength(14);
-    expect(migration.match(/SQL SECURITY DEFINER/g)).toHaveLength(14);
+    expect(migration.match(/SQL SECURITY DEFINER/g)).toHaveLength(16);
     expect(
       migration.match(
         /DECLARE EXIT HANDLER FOR SQLEXCEPTION BEGIN ROLLBACK; RESIGNAL; END/g
       )
-    ).toHaveLength(14);
-    expect(migration.match(/START TRANSACTION;/g)).toHaveLength(14);
+    ).toHaveLength(15);
+    expect(migration.match(/START TRANSACTION;/g)).toHaveLength(15);
     expect(migration).not.toMatch(
       /CREATE PROCEDURE `credit_(?:configure|set_execution|start_checkout|resolve_checkout)/
     );
@@ -197,9 +199,9 @@ describe("0017 direct Messenger purchased-credit schema", () => {
     }
   });
 
-  it("never releases or expires a reservation after provider transport starts", () => {
+  it("releases a started reservation only after a proven non-retryable 4xx", () => {
     expect(migration).toContain(
-      "`transport_state` enum('pretransport','transport_started','known_accepted') NOT NULL DEFAULT 'pretransport'"
+      "`transport_state` enum('pretransport','transport_started','known_accepted','known_rejected') NOT NULL DEFAULT 'pretransport'"
     );
     expect(migration).toContain(
       "v_status<>'reserved' OR v_transport<>'pretransport'"
@@ -213,6 +215,10 @@ describe("0017 direct Messenger purchased-credit schema", () => {
     expect(migration).toContain(
       "CREATE PROCEDURE `credit_mark_reservation_provider_accepted`"
     );
+    expect(migration).toContain(
+      "CREATE PROCEDURE `credit_release_rejected_reservation`"
+    );
+    expect(migration).toContain("p_rejection_status NOT BETWEEN 400 AND 499");
   });
 
   it("keeps legacy payment ownership compatible and credit ownership exact", () => {
@@ -232,7 +238,12 @@ describe("0017 direct Messenger purchased-credit schema", () => {
   });
 
   it("normalizes provider effects and keeps chargebacks frozen", () => {
-    expect(migration).toContain("JSON_TABLE(payment.`refunds`,'$[*]'");
+    expect(migration).toContain(
+      "JSON_TABLE(NEW.`provider_effect_evidence`,'$[*]'"
+    );
+    expect(migration).toContain(
+      "BINARY CAST(payment.`refunds` AS CHAR)=BINARY CAST(NEW.`provider_effect_evidence` AS CHAR)"
+    );
     expect(migration).toContain("JSON_TABLE(payment.`chargebacks`,'$[*]'");
     expect(migration).toContain(
       "CONSTRAINT `credit_ledger_provider_effect_unique` UNIQUE(`mode`,`provider_event_hash`)"

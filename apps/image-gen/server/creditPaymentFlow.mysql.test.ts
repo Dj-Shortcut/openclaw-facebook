@@ -26,18 +26,24 @@ import {
   createDeterministicCreditGrantEntryId,
 } from "./_core/billing/creditPaymentWebhook";
 import {
+  finishCreditPaymentAdjustment,
   finishCreditPaymentGrant,
   isCreditPaymentGrantComplete,
   persistCreditPaymentWebhookSnapshot,
+  resolveCreditGrantFailure,
 } from "./_core/billing/creditPaymentWebhookStore";
 import {
+  applyCreditChargebackDebit,
+  applyCreditChargebackRestore,
+  applyCreditRefundDebit,
   createCreditReservationHold,
   eraseCreditWalletsForPrivacySubject,
   grantCreditPurchase,
 } from "./_core/billing/creditWalletStore";
 import type { MollieConfig } from "./_core/billing/config";
 import { confirmCreditCheckoutPayment } from "./_core/billing/creditCheckoutPaymentService";
-import type { MolliePayment } from "./_core/billing/mollieClient";
+import type { MollieClient, MolliePayment } from "./_core/billing/mollieClient";
+import { handleMollieWebhook } from "./_core/billing/webhookRoutes";
 import { beginMessengerPrivacyErasure } from "./_core/messengerPrivacySubject";
 
 const suite = describe.runIf(
@@ -55,10 +61,13 @@ const EXPECTED_CREDIT_ROUTINES = [
   "credit_consume_checkout_capability",
   "credit_create_reservation_hold",
   "credit_erase_wallet",
+  "credit_expire_pristine_checkout",
   "credit_expire_reservation",
+  "credit_freeze_wallet_for_review",
   "credit_grant_purchase",
   "credit_mark_reservation_provider_accepted",
   "credit_mark_reservation_transport_started",
+  "credit_release_rejected_reservation",
   "credit_release_reservation",
   "credit_reserve_checkout_intent",
   "credit_scrub_terminal_reservation",
@@ -95,6 +104,7 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
   beforeAll(async () => {
     for (const name of [
       "APP_BASE_URL",
+      "BILLING_SUPPORT_EMAIL",
       "BILLING_NOTIFICATION_PLANE_ENABLED",
       "CREDIT_CHECKOUT_HMAC_SECRET",
       "MESSENGER_PAID_CREDITS_ENABLED",
@@ -103,12 +113,15 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
       "MOLLIE_CREDIT_CHECKOUT_ENABLED",
       "MOLLIE_CREDIT_WORKSPACE_ID",
       "MOLLIE_CREDENTIAL_GENERATION_ID",
+      "MOLLIE_API_KEY",
       "MOLLIE_LIVE_BILLING_ENABLED",
       "MOLLIE_MODE",
+      "MOLLIE_PAYMENT_WEBHOOK_URL",
     ]) {
       originalEnvironment.set(name, process.env[name]);
     }
     process.env.APP_BASE_URL = "https://app.leaderbot.live";
+    process.env.BILLING_SUPPORT_EMAIL = "support@example.invalid";
     process.env.BILLING_NOTIFICATION_PLANE_ENABLED = "true";
     process.env.CREDIT_CHECKOUT_HMAC_SECRET = TEST_CHECKOUT_SECRET;
     process.env.MESSENGER_PAID_CREDITS_ENABLED = "true";
@@ -116,8 +129,11 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
     process.env.MOLLIE_BILLING_ENABLED = "false";
     process.env.MOLLIE_CREDIT_CHECKOUT_ENABLED = "true";
     process.env.MOLLIE_CREDENTIAL_GENERATION_ID = "credit-mysql-test-v1";
+    process.env.MOLLIE_API_KEY = "test_notarealkey";
     process.env.MOLLIE_LIVE_BILLING_ENABLED = "false";
     process.env.MOLLIE_MODE = "test";
+    process.env.MOLLIE_PAYMENT_WEBHOOK_URL =
+      "https://app.leaderbot.live/api/webhooks/mollie/payments";
 
     connection = await mysql.createConnection(process.env.DATABASE_URL!);
     await connection.query("SET SESSION sql_require_primary_key=ON");
@@ -237,6 +253,8 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
       imageQuality: "medium",
       expires: false,
       automaticRenewal: false,
+      refundPolicyId: "premium_image_credit_refund",
+      refundPolicyVersion: 1,
     });
     await expect(
       claimCreditCheckoutBrowserSession({
@@ -468,6 +486,10 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
           providerCalls.push(creationPayment);
           return creationPayment;
         },
+        getPayment: async paymentId =>
+          paymentId === creationPayment.id
+            ? creationPayment
+            : Promise.reject(new Error("unexpected payment recovery")),
         getHostedCheckoutUrl: payment => payment._links?.checkout?.href ?? "",
       }),
       claim: claimCreditPaymentCreation,
@@ -588,6 +610,637 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
       wallets: Number(otherUser.wallets),
       balance: Number(otherUser.balance),
     }).toEqual({ wallets: 1, balance: 0 });
+  });
+
+  it("keeps an early webhook customerless after finalize and recovers exposure without another POST", async () => {
+    const owner = await createOwnerScope();
+    const fixture = await reserveAndConsumeCheckout(owner, "checkout-recovery");
+    const operation = await claimTransport(fixture);
+    await expect(
+      finalizeCreditPaymentProviderOperation({
+        ...operation,
+        outcome: { kind: "known_succeeded", paymentId: fixture.paymentId },
+      })
+    ).resolves.toMatchObject({ recorded: true, authorized: true });
+
+    const providerPayment = molliePayment(fixture, "open");
+    const earlyWebhookGets: string[] = [];
+    await expect(
+      handleMollieWebhook(
+        { id: fixture.paymentId },
+        {
+          createClient: () =>
+            ({
+              getPayment: async paymentId => {
+                earlyWebhookGets.push(paymentId);
+                return providerPayment;
+              },
+            }) as unknown as MollieClient,
+        }
+      )
+    ).resolves.toBe("unknown");
+    expect(earlyWebhookGets).toEqual([fixture.paymentId]);
+
+    const [[earlyState]] = await connection.query<RowDataPacket[]>(
+      `SELECT intent.\`status\` AS intentStatus,intent.\`mollie_payment_id\` AS paymentId,
+        (intent.\`url_exposed_at\` IS NOT NULL) AS exposed,
+        operation.\`state\` AS operationState,
+        operation.\`provider_resource_id\` AS providerResourceId,
+        (SELECT COUNT(*) FROM \`billing_webhook_routes\` route
+          WHERE route.\`mode\`='test' AND BINARY route.\`mollie_payment_id\`=BINARY ?) AS routeCount
+       FROM \`billing_intents\` intent
+       JOIN \`billing_provider_operations\` operation
+         ON operation.\`workspace_id\`=intent.\`workspace_id\`
+        AND operation.\`mode\`=intent.\`mode\`
+        AND BINARY operation.\`intent_id\`=BINARY intent.\`intent_id\`
+       WHERE intent.\`workspace_id\`=? AND BINARY intent.\`intent_id\`=BINARY ?`,
+      [fixture.paymentId, owner.workspaceId, fixture.providerScope.intentId]
+    );
+    expect({
+      intentStatus: earlyState.intentStatus,
+      paymentId: earlyState.paymentId,
+      exposed: Number(earlyState.exposed),
+      operationState: earlyState.operationState,
+      providerResourceId: earlyState.providerResourceId,
+      routeCount: Number(earlyState.routeCount),
+    }).toEqual({
+      intentStatus: "creating_payment",
+      paymentId: null,
+      exposed: 0,
+      operationState: "succeeded",
+      providerResourceId: fixture.paymentId,
+      routeCount: 0,
+    });
+
+    const providerGets: string[] = [];
+    const providerPosts: unknown[] = [];
+    const mollieConfig = {
+      apiKey: "test_not-a-real-key",
+      mode: "test",
+      paymentWebhookUrl:
+        "https://app.leaderbot.live/api/webhooks/mollie/payments",
+      appBaseUrl: "https://app.leaderbot.live",
+      billingSupportEmail: "support@example.invalid",
+      liveBillingEnabled: false,
+    } satisfies MollieConfig;
+    const firstRecoveryAt = new Date(Date.now() + 61_000);
+    const recover = (recoveryNow: Date) =>
+      confirmCreditCheckoutPayment(fixture.session, {
+        mollieConfig: () => mollieConfig,
+        pilotConfig: () => ({
+          checkoutEnabled: true,
+          paidCreditsEnabled: true,
+          workspaceId: owner.workspaceId,
+          mode: "test",
+        }),
+        createClient: () => ({
+          createCreditPayment: async input => {
+            providerPosts.push(input);
+            throw new Error("recovery attempted a second payment creation");
+          },
+          getPayment: async paymentId => {
+            providerGets.push(paymentId);
+            return providerPayment;
+          },
+          getHostedCheckoutUrl: payment => payment._links?.checkout?.href ?? "",
+        }),
+        claim: scope => claimCreditPaymentCreation(scope, recoveryNow),
+        markTransportStarted: markCreditPaymentTransportStarted,
+        finalize: finalizeCreditPaymentProviderOperation,
+        expose: exposeCreditPaymentCheckout,
+      });
+
+    await expect(recover(firstRecoveryAt)).resolves.toEqual({
+      checkoutUrl: providerPayment._links?.checkout?.href,
+    });
+    const secondRecoveryAt = new Date(firstRecoveryAt.getTime() + 61_000);
+    await expect(recover(secondRecoveryAt)).resolves.toEqual({
+      checkoutUrl: providerPayment._links?.checkout?.href,
+    });
+
+    expect(providerPosts).toEqual([]);
+    expect(providerGets).toEqual([fixture.paymentId, fixture.paymentId]);
+    const [[state]] = await connection.query<RowDataPacket[]>(
+      `SELECT intent.\`status\` AS intentStatus,intent.\`mollie_payment_id\` AS paymentId,
+        (intent.\`url_exposed_at\` IS NOT NULL) AS exposed,
+        operation.\`state\` AS operationState,
+        (SELECT COUNT(*) FROM \`billing_webhook_routes\` route
+          WHERE route.\`mode\`='test' AND BINARY route.\`mollie_payment_id\`=BINARY ?) AS routeCount
+       FROM \`billing_intents\` intent
+       JOIN \`billing_provider_operations\` operation
+         ON operation.\`workspace_id\`=intent.\`workspace_id\`
+        AND operation.\`mode\`=intent.\`mode\`
+        AND BINARY operation.\`intent_id\`=BINARY intent.\`intent_id\`
+       WHERE intent.\`workspace_id\`=? AND BINARY intent.\`intent_id\`=BINARY ?`,
+      [fixture.paymentId, owner.workspaceId, fixture.providerScope.intentId]
+    );
+    expect({
+      intentStatus: state.intentStatus,
+      paymentId: state.paymentId,
+      exposed: Number(state.exposed),
+      operationState: state.operationState,
+      routeCount: Number(state.routeCount),
+    }).toEqual({
+      intentStatus: "open",
+      paymentId: fixture.paymentId,
+      exposed: 1,
+      operationState: "succeeded",
+      routeCount: 1,
+    });
+  });
+
+  it("applies one exact provider-confirmed full refund through the webhook runtime exactly once", async () => {
+    const owner = await createOwnerScope();
+    const fixture = await reserveAndConsumeCheckout(owner, "full-refund");
+    await openCheckout(fixture);
+    const paid = molliePayment(fixture, "paid");
+
+    await expect(
+      applyCreditPaymentWebhookSnapshot({
+        webhookPaymentId: fixture.paymentId,
+        expectedMode: "test",
+        payment: paid,
+      })
+    ).resolves.toBe("processed");
+    expect(await walletState(fixture.providerScope.walletId)).toMatchObject({
+      status: "active",
+      balance: 8,
+      reserved: 0,
+    });
+
+    const failedRefund: MolliePayment = {
+      ...paid,
+      amountRefunded: { currency: "EUR", value: "0.00" },
+      _embedded: {
+        refunds: [
+          {
+            id: `re_${randomUUID().replaceAll("-", "")}`,
+            status: "failed",
+            amount: { currency: "EUR", value: "4.99" },
+          },
+        ],
+        chargebacks: [],
+      },
+    };
+    await expect(
+      applyCreditPaymentWebhookSnapshot({
+        webhookPaymentId: fixture.paymentId,
+        expectedMode: "test",
+        payment: failedRefund,
+      })
+    ).resolves.toBe("duplicate");
+
+    const pendingRefund: MolliePayment = {
+      ...paid,
+      amountRefunded: { currency: "EUR", value: "0.00" },
+      _embedded: {
+        refunds: [
+          {
+            id: `re_${randomUUID().replaceAll("-", "")}`,
+            status: "pending",
+            amount: { currency: "EUR", value: "4.99" },
+          },
+        ],
+        chargebacks: [],
+      },
+    };
+    await expect(
+      applyCreditPaymentWebhookSnapshot({
+        webhookPaymentId: fixture.paymentId,
+        expectedMode: "test",
+        payment: pendingRefund,
+      })
+    ).resolves.toBe("processed");
+
+    const [[beforeCompletedRefund]] = await connection.query<RowDataPacket[]>(
+      `SELECT
+        (SELECT \`status\` FROM \`credit_wallets\`
+          WHERE BINARY \`wallet_id\`=BINARY ?) AS walletStatus,
+        (SELECT \`credit_balance\` FROM \`credit_wallets\`
+          WHERE BINARY \`wallet_id\`=BINARY ?) AS balance,
+        (SELECT COUNT(*) FROM \`credit_ledger\`
+          WHERE BINARY \`wallet_id\`=BINARY ? AND \`entry_kind\`='refund_debit') AS refundDebits,
+        (SELECT COUNT(*) FROM \`billing_outbox\`
+          WHERE \`workspace_id\`=? AND \`mode\`='test' AND \`event_type\`='manual_review'
+            AND JSON_UNQUOTE(JSON_EXTRACT(\`payload\`,'$.intentId'))=?) AS manualReviews,
+        (SELECT COUNT(*) FROM \`webhook_deliveries\`
+          WHERE \`workspace_id\`=? AND \`mode\`='test' AND BINARY \`mollie_resource_id\`=BINARY ?
+            AND \`processing_result\`='credit_refund_pending' AND \`processed_at\` IS NOT NULL) AS pendingRefundDeliveries`,
+      [
+        fixture.providerScope.walletId,
+        fixture.providerScope.walletId,
+        fixture.providerScope.walletId,
+        owner.workspaceId,
+        fixture.providerScope.intentId,
+        owner.workspaceId,
+        fixture.paymentId,
+      ]
+    );
+    expect({
+      walletStatus: beforeCompletedRefund.walletStatus,
+      balance: Number(beforeCompletedRefund.balance),
+      refundDebits: Number(beforeCompletedRefund.refundDebits),
+      manualReviews: Number(beforeCompletedRefund.manualReviews),
+      pendingRefundDeliveries: Number(
+        beforeCompletedRefund.pendingRefundDeliveries
+      ),
+    }).toEqual({
+      walletStatus: "active",
+      balance: 8,
+      refundDebits: 0,
+      manualReviews: 0,
+      pendingRefundDeliveries: 1,
+    });
+
+    const refundId = `re_${randomUUID().replaceAll("-", "")}`;
+    const refundedPayment: MolliePayment = {
+      ...paid,
+      amountRefunded: { currency: "EUR", value: "4.99" },
+      _embedded: {
+        refunds: [
+          {
+            id: refundId,
+            status: "refunded",
+            amount: { currency: "EUR", value: "4.99" },
+            createdAt: "2026-08-28T10:00:00.000Z",
+          },
+        ],
+        chargebacks: [],
+      },
+    };
+    let observedPendingBeforeDebit = false;
+
+    await expect(
+      applyCreditPaymentWebhookSnapshot(
+        {
+          webhookPaymentId: fixture.paymentId,
+          expectedMode: "test",
+          payment: refundedPayment,
+        },
+        {
+          persist: persistCreditPaymentWebhookSnapshot,
+          grant: grantCreditPurchase,
+          finish: finishCreditPaymentGrant,
+          resolveGrantFailure: resolveCreditGrantFailure,
+          refundDebit: async input => {
+            const [[before]] = await connection.query<RowDataPacket[]>(
+              `SELECT
+                (SELECT COUNT(*) FROM \`webhook_deliveries\`
+                  WHERE \`workspace_id\`=? AND \`mode\`='test' AND BINARY \`mollie_resource_id\`=BINARY ?
+                    AND \`processing_result\`='credit_adjustment_pending' AND \`processed_at\` IS NULL) AS pendingDeliveries,
+                (SELECT COUNT(*) FROM \`credit_ledger\`
+                  WHERE BINARY \`wallet_id\`=BINARY ? AND \`entry_kind\`='refund_debit') AS refundDebits,
+                (SELECT \`credit_balance\` FROM \`credit_wallets\`
+                  WHERE BINARY \`wallet_id\`=BINARY ?) AS balance`,
+              [
+                owner.workspaceId,
+                fixture.paymentId,
+                fixture.providerScope.walletId,
+                fixture.providerScope.walletId,
+              ]
+            );
+            expect({
+              pendingDeliveries: Number(before.pendingDeliveries),
+              refundDebits: Number(before.refundDebits),
+              balance: Number(before.balance),
+            }).toEqual({ pendingDeliveries: 1, refundDebits: 0, balance: 8 });
+            observedPendingBeforeDebit = true;
+
+            const outcome = await applyCreditRefundDebit(input);
+            const [[afterRoutine]] = await connection.query<RowDataPacket[]>(
+              `SELECT
+                (SELECT COUNT(*) FROM \`webhook_deliveries\`
+                  WHERE \`workspace_id\`=? AND \`mode\`='test' AND BINARY \`mollie_resource_id\`=BINARY ?
+                    AND \`processing_result\`='credit_adjustment_pending' AND \`processed_at\` IS NULL) AS pendingDeliveries,
+                (SELECT COUNT(*) FROM \`credit_ledger\`
+                  WHERE BINARY \`wallet_id\`=BINARY ? AND \`entry_kind\`='refund_debit') AS refundDebits,
+                (SELECT \`credit_balance\` FROM \`credit_wallets\`
+                  WHERE BINARY \`wallet_id\`=BINARY ?) AS balance`,
+              [
+                owner.workspaceId,
+                fixture.paymentId,
+                fixture.providerScope.walletId,
+                fixture.providerScope.walletId,
+              ]
+            );
+            expect({
+              pendingDeliveries: Number(afterRoutine.pendingDeliveries),
+              refundDebits: Number(afterRoutine.refundDebits),
+              balance: Number(afterRoutine.balance),
+            }).toEqual({ pendingDeliveries: 1, refundDebits: 1, balance: 0 });
+            return outcome;
+          },
+          chargebackDebit: applyCreditChargebackDebit,
+          chargebackRestore: applyCreditChargebackRestore,
+          finishAdjustment: finishCreditPaymentAdjustment,
+        }
+      )
+    ).resolves.toBe("processed");
+    expect(observedPendingBeforeDebit).toBe(true);
+
+    const [[completed]] = await connection.query<RowDataPacket[]>(
+      `SELECT
+        (SELECT \`status\` FROM \`credit_wallets\`
+          WHERE BINARY \`wallet_id\`=BINARY ?) AS walletStatus,
+        (SELECT \`credit_balance\` FROM \`credit_wallets\`
+          WHERE BINARY \`wallet_id\`=BINARY ?) AS balance,
+        (SELECT COUNT(*) FROM \`credit_ledger\`
+          WHERE BINARY \`wallet_id\`=BINARY ? AND \`entry_kind\`='refund_debit') AS refundDebits,
+        (SELECT COALESCE(SUM(\`balance_delta\`),0) FROM \`credit_ledger\`
+          WHERE BINARY \`wallet_id\`=BINARY ? AND \`entry_kind\`='refund_debit') AS refundDelta,
+        (SELECT COUNT(*) FROM \`credit_ledger\`
+          WHERE BINARY \`wallet_id\`=BINARY ? AND \`entry_kind\`='refund_debit'
+            AND JSON_LENGTH(\`provider_effect_evidence\`)=1
+            AND JSON_UNQUOTE(JSON_EXTRACT(\`provider_effect_evidence\`,'$[0].id'))=?) AS exactEvidence,
+        (SELECT COUNT(*) FROM \`webhook_deliveries\`
+          WHERE \`workspace_id\`=? AND \`mode\`='test' AND BINARY \`mollie_resource_id\`=BINARY ?
+            AND \`processing_result\`='credit_refund_debited' AND \`processed_at\` IS NOT NULL) AS completedDeliveries,
+        (SELECT COUNT(*) FROM \`webhook_deliveries\`
+          WHERE \`workspace_id\`=? AND \`mode\`='test' AND BINARY \`mollie_resource_id\`=BINARY ?
+            AND \`processing_result\`='credit_adjustment_pending' AND \`processed_at\` IS NULL) AS pendingDeliveries`,
+      [
+        fixture.providerScope.walletId,
+        fixture.providerScope.walletId,
+        fixture.providerScope.walletId,
+        fixture.providerScope.walletId,
+        fixture.providerScope.walletId,
+        refundId,
+        owner.workspaceId,
+        fixture.paymentId,
+        owner.workspaceId,
+        fixture.paymentId,
+      ]
+    );
+    expect({
+      walletStatus: completed.walletStatus,
+      balance: Number(completed.balance),
+      refundDebits: Number(completed.refundDebits),
+      refundDelta: Number(completed.refundDelta),
+      exactEvidence: Number(completed.exactEvidence),
+      completedDeliveries: Number(completed.completedDeliveries),
+      pendingDeliveries: Number(completed.pendingDeliveries),
+    }).toEqual({
+      walletStatus: "active",
+      balance: 0,
+      refundDebits: 1,
+      refundDelta: -8,
+      exactEvidence: 1,
+      completedDeliveries: 1,
+      pendingDeliveries: 0,
+    });
+
+    await expect(
+      applyCreditPaymentWebhookSnapshot({
+        webhookPaymentId: fixture.paymentId,
+        expectedMode: "test",
+        payment: refundedPayment,
+      })
+    ).resolves.toBe("duplicate");
+    const [[replayed]] = await connection.query<RowDataPacket[]>(
+      `SELECT
+        (SELECT \`credit_balance\` FROM \`credit_wallets\`
+          WHERE BINARY \`wallet_id\`=BINARY ?) AS balance,
+        (SELECT COUNT(*) FROM \`credit_ledger\`
+          WHERE BINARY \`wallet_id\`=BINARY ? AND \`entry_kind\`='refund_debit') AS refundDebits,
+        (SELECT COUNT(*) FROM \`webhook_deliveries\`
+          WHERE \`workspace_id\`=? AND \`mode\`='test' AND BINARY \`mollie_resource_id\`=BINARY ?
+            AND \`processing_result\`='credit_refund_debited' AND \`processed_at\` IS NOT NULL) AS completedDeliveries`,
+      [
+        fixture.providerScope.walletId,
+        fixture.providerScope.walletId,
+        owner.workspaceId,
+        fixture.paymentId,
+      ]
+    );
+    expect({
+      balance: Number(replayed.balance),
+      refundDebits: Number(replayed.refundDebits),
+      completedDeliveries: Number(replayed.completedDeliveries),
+    }).toEqual({ balance: 0, refundDebits: 1, completedDeliveries: 1 });
+
+    const laterRefundSnapshot: MolliePayment = {
+      ...refundedPayment,
+      _embedded: {
+        refunds: [
+          ...refundedPayment._embedded!.refunds!,
+          {
+            id: `re_${randomUUID().replaceAll("-", "")}`,
+            status: "failed",
+            amount: { currency: "EUR", value: "1.00" },
+          },
+        ],
+        chargebacks: [],
+      },
+    };
+    await expect(
+      applyCreditPaymentWebhookSnapshot({
+        webhookPaymentId: fixture.paymentId,
+        expectedMode: "test",
+        payment: laterRefundSnapshot,
+      })
+    ).resolves.toBe("duplicate");
+    const [[laterReplay]] = await connection.query<RowDataPacket[]>(
+      `SELECT
+        (SELECT COUNT(*) FROM \`credit_ledger\`
+          WHERE BINARY \`wallet_id\`=BINARY ? AND \`entry_kind\`='refund_debit') AS refundDebits,
+        (SELECT COUNT(*) FROM \`billing_outbox\`
+          WHERE \`workspace_id\`=? AND \`mode\`='test' AND \`event_type\`='manual_review'
+            AND JSON_UNQUOTE(JSON_EXTRACT(\`payload\`,'$.intentId'))=?) AS manualReviews`,
+      [
+        fixture.providerScope.walletId,
+        owner.workspaceId,
+        fixture.providerScope.intentId,
+      ]
+    );
+    expect({
+      refundDebits: Number(laterReplay.refundDebits),
+      manualReviews: Number(laterReplay.manualReviews),
+    }).toEqual({ refundDebits: 1, manualReviews: 0 });
+
+    const partialOwner = await createOwnerScope();
+    const partialFixture = await reserveAndConsumeCheckout(
+      partialOwner,
+      "partial-refund"
+    );
+    await openCheckout(partialFixture);
+    const partialPaid = molliePayment(partialFixture, "paid");
+    await expect(
+      applyCreditPaymentWebhookSnapshot({
+        webhookPaymentId: partialFixture.paymentId,
+        expectedMode: "test",
+        payment: partialPaid,
+      })
+    ).resolves.toBe("processed");
+    const partialRefund: MolliePayment = {
+      ...partialPaid,
+      amountRefunded: { currency: "EUR", value: "2.00" },
+      _embedded: {
+        refunds: [
+          {
+            id: `re_${randomUUID().replaceAll("-", "")}`,
+            status: "refunded",
+            amount: { currency: "EUR", value: "2.00" },
+          },
+        ],
+        chargebacks: [],
+      },
+    };
+    await expect(
+      applyCreditPaymentWebhookSnapshot({
+        webhookPaymentId: partialFixture.paymentId,
+        expectedMode: "test",
+        payment: partialRefund,
+      })
+    ).resolves.toBe("mismatch");
+    const [[partialReview]] = await connection.query<RowDataPacket[]>(
+      `SELECT
+        (SELECT \`status\` FROM \`credit_wallets\`
+          WHERE BINARY \`wallet_id\`=BINARY ?) AS walletStatus,
+        (SELECT \`credit_balance\` FROM \`credit_wallets\`
+          WHERE BINARY \`wallet_id\`=BINARY ?) AS balance,
+        (SELECT COUNT(*) FROM \`credit_ledger\`
+          WHERE BINARY \`wallet_id\`=BINARY ? AND \`entry_kind\`='refund_debit') AS refundDebits,
+        (SELECT COUNT(*) FROM \`billing_outbox\`
+          WHERE \`workspace_id\`=? AND \`mode\`='test' AND \`event_type\`='manual_review'
+            AND JSON_UNQUOTE(JSON_EXTRACT(\`payload\`,'$.intentId'))=?) AS manualReviews,
+        (SELECT COUNT(*) FROM \`webhook_deliveries\`
+          WHERE \`workspace_id\`=? AND \`mode\`='test' AND BINARY \`mollie_resource_id\`=BINARY ?
+            AND \`processing_result\`='credit_payment_manual_review' AND \`processed_at\` IS NOT NULL) AS completedDeliveries`,
+      [
+        partialFixture.providerScope.walletId,
+        partialFixture.providerScope.walletId,
+        partialFixture.providerScope.walletId,
+        partialOwner.workspaceId,
+        partialFixture.providerScope.intentId,
+        partialOwner.workspaceId,
+        partialFixture.paymentId,
+      ]
+    );
+    expect({
+      walletStatus: partialReview.walletStatus,
+      balance: Number(partialReview.balance),
+      refundDebits: Number(partialReview.refundDebits),
+      manualReviews: Number(partialReview.manualReviews),
+      completedDeliveries: Number(partialReview.completedDeliveries),
+    }).toEqual({
+      walletStatus: "frozen",
+      balance: 8,
+      refundDebits: 0,
+      manualReviews: 1,
+      completedDeliveries: 1,
+    });
+  });
+
+  it("replays exact chargeback debit and restore effects across later provider snapshots", async () => {
+    const owner = await createOwnerScope();
+    const fixture = await reserveAndConsumeCheckout(owner, "chargeback-replay");
+    await openCheckout(fixture);
+    const paid = molliePayment(fixture, "paid");
+    await expect(
+      applyCreditPaymentWebhookSnapshot({
+        webhookPaymentId: fixture.paymentId,
+        expectedMode: "test",
+        payment: paid,
+      })
+    ).resolves.toBe("processed");
+
+    const chargebackId = `chb_${randomUUID().replaceAll("-", "")}`;
+    const activeChargeback: MolliePayment = {
+      ...paid,
+      _embedded: {
+        refunds: [],
+        chargebacks: [
+          {
+            id: chargebackId,
+            amount: { currency: "EUR", value: "4.99" },
+            createdAt: "2026-08-28T11:00:00.000Z",
+          },
+        ],
+      },
+    };
+    await expect(
+      applyCreditPaymentWebhookSnapshot({
+        webhookPaymentId: fixture.paymentId,
+        expectedMode: "test",
+        payment: activeChargeback,
+      })
+    ).resolves.toBe("processed");
+    await expect(
+      applyCreditPaymentWebhookSnapshot({
+        webhookPaymentId: fixture.paymentId,
+        expectedMode: "test",
+        payment: {
+          ...activeChargeback,
+          settlementAmount: { currency: "EUR", value: "4.98" },
+        },
+      })
+    ).resolves.toBe("duplicate");
+
+    const reversedChargeback: MolliePayment = {
+      ...activeChargeback,
+      _embedded: {
+        refunds: [],
+        chargebacks: [
+          {
+            ...activeChargeback._embedded!.chargebacks![0]!,
+            reversedAt: "2026-08-28T12:00:00.000Z",
+          },
+        ],
+      },
+    };
+    await expect(
+      applyCreditPaymentWebhookSnapshot({
+        webhookPaymentId: fixture.paymentId,
+        expectedMode: "test",
+        payment: reversedChargeback,
+      })
+    ).resolves.toBe("processed");
+    await expect(
+      applyCreditPaymentWebhookSnapshot({
+        webhookPaymentId: fixture.paymentId,
+        expectedMode: "test",
+        payment: {
+          ...reversedChargeback,
+          settlementAmount: { currency: "EUR", value: "4.97" },
+        },
+      })
+    ).resolves.toBe("duplicate");
+
+    const [[state]] = await connection.query<RowDataPacket[]>(
+      `SELECT
+        (SELECT \`status\` FROM \`credit_wallets\`
+          WHERE BINARY \`wallet_id\`=BINARY ?) AS walletStatus,
+        (SELECT \`credit_balance\` FROM \`credit_wallets\`
+          WHERE BINARY \`wallet_id\`=BINARY ?) AS balance,
+        (SELECT COUNT(*) FROM \`credit_ledger\`
+          WHERE BINARY \`wallet_id\`=BINARY ? AND \`entry_kind\`='chargeback_debit') AS debits,
+        (SELECT COUNT(*) FROM \`credit_ledger\`
+          WHERE BINARY \`wallet_id\`=BINARY ? AND \`entry_kind\`='chargeback_restore') AS restores,
+        (SELECT COUNT(*) FROM \`billing_outbox\`
+          WHERE \`workspace_id\`=? AND \`mode\`='test' AND \`event_type\`='manual_review'
+            AND JSON_UNQUOTE(JSON_EXTRACT(\`payload\`,'$.intentId'))=?) AS manualReviews`,
+      [
+        fixture.providerScope.walletId,
+        fixture.providerScope.walletId,
+        fixture.providerScope.walletId,
+        fixture.providerScope.walletId,
+        owner.workspaceId,
+        fixture.providerScope.intentId,
+      ]
+    );
+    expect({
+      walletStatus: state.walletStatus,
+      balance: Number(state.balance),
+      debits: Number(state.debits),
+      restores: Number(state.restores),
+      manualReviews: Number(state.manualReviews),
+    }).toEqual({
+      walletStatus: "frozen",
+      balance: 8,
+      debits: 1,
+      restores: 1,
+      manualReviews: 1,
+    });
   });
 
   it("serializes duplicate paid webhooks into one grant without a deadlock", async () => {

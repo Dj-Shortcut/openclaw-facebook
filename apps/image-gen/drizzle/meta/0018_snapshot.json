@@ -1,7 +1,7 @@
 {
   "version": "5",
   "dialect": "mysql",
-  "id": "b7d43a9e-3c7a-4cc4-8de4-8b4db4766827",
+  "id": "23618b74-45dd-465d-a2a2-8c3cc79ac5f6",
   "prevId": "a6639731-46f8-458a-9a9f-5f72ab021515",
   "tables": {
     "aiIdentities": {
@@ -82,17 +82,13 @@
       "compositePrimaryKeys": {
         "aiIdentities_id": {
           "name": "aiIdentities_id",
-          "columns": [
-            "id"
-          ]
+          "columns": ["id"]
         }
       },
       "uniqueConstraints": {
         "aiIdentities_workspaceId_unique": {
           "name": "aiIdentities_workspaceId_unique",
-          "columns": [
-            "workspaceId"
-          ]
+          "columns": ["workspaceId"]
         }
       },
       "checkConstraint": {}
@@ -149,9 +145,7 @@
       "compositePrimaryKeys": {
         "auditLog_id": {
           "name": "auditLog_id",
-          "columns": [
-            "id"
-          ]
+          "columns": ["id"]
         }
       },
       "uniqueConstraints": {},
@@ -214,17 +208,12 @@
       "indexes": {
         "billing_accounting_event_links_event_unique": {
           "name": "billing_accounting_event_links_event_unique",
-          "columns": [
-            "provider_event_id"
-          ],
+          "columns": ["provider_event_id"],
           "isUnique": true
         },
         "billing_accounting_event_links_workspace_status_idx": {
           "name": "billing_accounting_event_links_workspace_status_idx",
-          "columns": [
-            "workspace_id",
-            "link_status"
-          ],
+          "columns": ["workspace_id", "link_status"],
           "isUnique": false
         }
       },
@@ -233,12 +222,8 @@
           "name": "billing_accounting_event_links_workspace_id_workspaces_id_fk",
           "tableFrom": "billing_accounting_event_links",
           "tableTo": "workspaces",
-          "columnsFrom": [
-            "workspace_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["workspace_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         },
@@ -246,14 +231,8 @@
           "name": "billing_accounting_event_links_provider_event_mode_fk",
           "tableFrom": "billing_accounting_event_links",
           "tableTo": "billing_accounting_provider_events",
-          "columnsFrom": [
-            "provider_event_id",
-            "mode"
-          ],
-          "columnsTo": [
-            "id",
-            "mode"
-          ],
+          "columnsFrom": ["provider_event_id", "mode"],
+          "columnsTo": ["id", "mode"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         },
@@ -261,16 +240,8 @@
           "name": "billing_accounting_event_links_ledger_workspace_fk",
           "tableFrom": "billing_accounting_event_links",
           "tableTo": "payment_ledger",
-          "columnsFrom": [
-            "payment_ledger_id",
-            "workspace_id",
-            "mode"
-          ],
-          "columnsTo": [
-            "id",
-            "workspace_id",
-            "mode"
-          ],
+          "columnsFrom": ["payment_ledger_id", "workspace_id", "mode"],
+          "columnsTo": ["id", "workspace_id", "mode"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         }
@@ -278,9 +249,7 @@
       "compositePrimaryKeys": {
         "billing_accounting_event_links_id": {
           "name": "billing_accounting_event_links_id",
-          "columns": [
-            "id"
-          ]
+          "columns": ["id"]
         }
       },
       "uniqueConstraints": {},
@@ -379,10 +348,7 @@
       "indexes": {
         "billing_accounting_import_cursors_lease_idx": {
           "name": "billing_accounting_import_cursors_lease_idx",
-          "columns": [
-            "lease_until",
-            "lease_token"
-          ],
+          "columns": ["lease_until", "lease_token"],
           "isUnique": false
         }
       },
@@ -390,10 +356,7 @@
       "compositePrimaryKeys": {
         "billing_accounting_import_cursors_provider_account_id_mode_pk": {
           "name": "billing_accounting_import_cursors_provider_account_id_mode_pk",
-          "columns": [
-            "provider_account_id",
-            "mode"
-          ]
+          "columns": ["provider_account_id", "mode"]
         }
       },
       "uniqueConstraints": {},
@@ -472,11 +435,7 @@
       "indexes": {
         "billing_accounting_import_runs_account_mode_idx": {
           "name": "billing_accounting_import_runs_account_mode_idx",
-          "columns": [
-            "provider_account_id",
-            "mode",
-            "created_at"
-          ],
+          "columns": ["provider_account_id", "mode", "created_at"],
           "isUnique": false
         }
       },
@@ -484,9 +443,7 @@
       "compositePrimaryKeys": {
         "billing_accounting_import_runs_run_id": {
           "name": "billing_accounting_import_runs_run_id",
-          "columns": [
-            "run_id"
-          ]
+          "columns": ["run_id"]
         }
       },
       "uniqueConstraints": {},
@@ -612,38 +569,22 @@
       "indexes": {
         "billing_accounting_provider_events_account_mode_id_unique": {
           "name": "billing_accounting_provider_events_account_mode_id_unique",
-          "columns": [
-            "provider_account_id",
-            "mode",
-            "provider_event_id"
-          ],
+          "columns": ["provider_account_id", "mode", "provider_event_id"],
           "isUnique": true
         },
         "billing_accounting_provider_events_id_mode_unique": {
           "name": "billing_accounting_provider_events_id_mode_unique",
-          "columns": [
-            "id",
-            "mode"
-          ],
+          "columns": ["id", "mode"],
           "isUnique": true
         },
         "billing_accounting_provider_events_payment_route_idx": {
           "name": "billing_accounting_provider_events_payment_route_idx",
-          "columns": [
-            "mode",
-            "mollie_payment_id",
-            "id"
-          ],
+          "columns": ["mode", "mollie_payment_id", "id"],
           "isUnique": false
         },
         "billing_accounting_provider_events_account_mode_time_idx": {
           "name": "billing_accounting_provider_events_account_mode_time_idx",
-          "columns": [
-            "provider_account_id",
-            "mode",
-            "occurred_at",
-            "id"
-          ],
+          "columns": ["provider_account_id", "mode", "occurred_at", "id"],
           "isUnique": false
         }
       },
@@ -651,9 +592,7 @@
       "compositePrimaryKeys": {
         "billing_accounting_provider_events_id": {
           "name": "billing_accounting_provider_events_id",
-          "columns": [
-            "id"
-          ]
+          "columns": ["id"]
         }
       },
       "uniqueConstraints": {},
@@ -741,40 +680,27 @@
       "indexes": {
         "billing_customers_workspace_mode_unique": {
           "name": "billing_customers_workspace_mode_unique",
-          "columns": [
-            "workspace_id",
-            "mode"
-          ],
+          "columns": ["workspace_id", "mode"],
           "isUnique": true
         },
         "billing_customers_mollie_customer_mode_unique": {
           "name": "billing_customers_mollie_customer_mode_unique",
-          "columns": [
-            "mode",
-            "mollie_customer_id"
-          ],
+          "columns": ["mode", "mollie_customer_id"],
           "isUnique": true
         },
         "billing_customers_external_reference_unique": {
           "name": "billing_customers_external_reference_unique",
-          "columns": [
-            "external_reference"
-          ],
+          "columns": ["external_reference"],
           "isUnique": true
         },
         "billing_customers_idempotency_unique": {
           "name": "billing_customers_idempotency_unique",
-          "columns": [
-            "idempotency_key"
-          ],
+          "columns": ["idempotency_key"],
           "isUnique": true
         },
         "billing_customers_mode_reconciliation_idx": {
           "name": "billing_customers_mode_reconciliation_idx",
-          "columns": [
-            "mode",
-            "next_reconciliation_at"
-          ],
+          "columns": ["mode", "next_reconciliation_at"],
           "isUnique": false
         }
       },
@@ -783,12 +709,8 @@
           "name": "billing_customers_workspace_id_workspaces_id_fk",
           "tableFrom": "billing_customers",
           "tableTo": "workspaces",
-          "columnsFrom": [
-            "workspace_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["workspace_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         }
@@ -796,9 +718,7 @@
       "compositePrimaryKeys": {
         "billing_customers_id": {
           "name": "billing_customers_id",
-          "columns": [
-            "id"
-          ]
+          "columns": ["id"]
         }
       },
       "uniqueConstraints": {},
@@ -853,12 +773,8 @@
           "name": "billing_execution_controls_workspace_fk",
           "tableFrom": "billing_execution_controls",
           "tableTo": "workspaces",
-          "columnsFrom": [
-            "workspace_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["workspace_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         }
@@ -866,10 +782,7 @@
       "compositePrimaryKeys": {
         "billing_execution_controls_workspace_id_mode_pk": {
           "name": "billing_execution_controls_workspace_id_mode_pk",
-          "columns": [
-            "workspace_id",
-            "mode"
-          ]
+          "columns": ["workspace_id", "mode"]
         }
       },
       "uniqueConstraints": {},
@@ -937,18 +850,12 @@
       "indexes": {
         "billing_handoff_recovery_events_outbox_event_unique": {
           "name": "billing_handoff_recovery_events_outbox_event_unique",
-          "columns": [
-            "outbox_id",
-            "event_id_hash"
-          ],
+          "columns": ["outbox_id", "event_id_hash"],
           "isUnique": true
         },
         "billing_handoff_recovery_events_workspace_idx": {
           "name": "billing_handoff_recovery_events_workspace_idx",
-          "columns": [
-            "workspace_id",
-            "created_at"
-          ],
+          "columns": ["workspace_id", "created_at"],
           "isUnique": false
         }
       },
@@ -957,12 +864,8 @@
           "name": "billing_handoff_recovery_events_workspace_id_workspaces_id_fk",
           "tableFrom": "billing_handoff_recovery_events",
           "tableTo": "workspaces",
-          "columnsFrom": [
-            "workspace_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["workspace_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         },
@@ -970,14 +873,8 @@
           "name": "billing_handoff_recovery_outbox_workspace_fk",
           "tableFrom": "billing_handoff_recovery_events",
           "tableTo": "billing_outbox",
-          "columnsFrom": [
-            "outbox_id",
-            "workspace_id"
-          ],
-          "columnsTo": [
-            "id",
-            "workspace_id"
-          ],
+          "columnsFrom": ["outbox_id", "workspace_id"],
+          "columnsTo": ["id", "workspace_id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -985,9 +882,7 @@
       "compositePrimaryKeys": {
         "billing_handoff_recovery_events_id": {
           "name": "billing_handoff_recovery_events_id",
-          "columns": [
-            "id"
-          ]
+          "columns": ["id"]
         }
       },
       "uniqueConstraints": {},
@@ -1254,66 +1149,42 @@
         },
         "billing_intents_scope_unique": {
           "name": "billing_intents_scope_unique",
-          "columns": [
-            "intent_id",
-            "workspace_id",
-            "mode"
-          ],
+          "columns": ["intent_id", "workspace_id", "mode"],
           "isUnique": true
         },
         "billing_intents_credit_funding_scope_unique": {
           "name": "billing_intents_credit_funding_scope_unique",
-          "columns": [
-            "intent_id",
-            "credit_wallet_id",
-            "workspace_id",
-            "mode"
-          ],
+          "columns": ["intent_id", "credit_wallet_id", "workspace_id", "mode"],
           "isUnique": true
         },
         "billing_intents_workspace_mode_created_idx": {
           "name": "billing_intents_workspace_mode_created_idx",
-          "columns": [
-            "workspace_id",
-            "mode",
-            "created_at"
-          ],
+          "columns": ["workspace_id", "mode", "created_at"],
           "isUnique": false
         },
         "billing_intents_mollie_payment_mode_unique": {
           "name": "billing_intents_mollie_payment_mode_unique",
-          "columns": [
-            "mode",
-            "mollie_payment_id"
-          ],
+          "columns": ["mode", "mollie_payment_id"],
           "isUnique": true
         },
         "billing_intents_idempotency_unique": {
           "name": "billing_intents_idempotency_unique",
-          "columns": [
-            "idempotency_key"
-          ],
+          "columns": ["idempotency_key"],
           "isUnique": true
         },
         "billing_intents_checkout_scope_unique": {
           "name": "billing_intents_checkout_scope_unique",
-          "columns": [
-            "checkout_scope_key"
-          ],
+          "columns": ["checkout_scope_key"],
           "isUnique": true
         },
         "billing_intents_checkout_capability_unique": {
           "name": "billing_intents_checkout_capability_unique",
-          "columns": [
-            "checkout_capability_hash"
-          ],
+          "columns": ["checkout_capability_hash"],
           "isUnique": true
         },
         "billing_intents_checkout_session_nonce_unique": {
           "name": "billing_intents_checkout_session_nonce_unique",
-          "columns": [
-            "checkout_capability_session_nonce_hash"
-          ],
+          "columns": ["checkout_capability_session_nonce_hash"],
           "isUnique": true
         },
         "billing_intents_credit_payment_binding_unique": {
@@ -1338,6 +1209,16 @@
             "credit_financial_subject_ref"
           ],
           "isUnique": false
+        },
+        "billing_intents_credit_capability_expiry_idx": {
+          "name": "billing_intents_credit_capability_expiry_idx",
+          "columns": [
+            "kind",
+            "status",
+            "checkout_capability_expires_at",
+            "intent_id"
+          ],
+          "isUnique": false
         }
       },
       "foreignKeys": {
@@ -1345,12 +1226,8 @@
           "name": "billing_intents_workspace_id_workspaces_id_fk",
           "tableFrom": "billing_intents",
           "tableTo": "workspaces",
-          "columnsFrom": [
-            "workspace_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["workspace_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         }
@@ -1358,9 +1235,7 @@
       "compositePrimaryKeys": {
         "billing_intents_intent_id": {
           "name": "billing_intents_intent_id",
-          "columns": [
-            "intent_id"
-          ]
+          "columns": ["intent_id"]
         }
       },
       "uniqueConstraints": {},
@@ -1415,10 +1290,7 @@
       "indexes": {
         "billing_invoice_sequences_mode_year_unique": {
           "name": "billing_invoice_sequences_mode_year_unique",
-          "columns": [
-            "mode",
-            "invoice_year"
-          ],
+          "columns": ["mode", "invoice_year"],
           "isUnique": true
         }
       },
@@ -1426,9 +1298,7 @@
       "compositePrimaryKeys": {
         "billing_invoice_sequences_id": {
           "name": "billing_invoice_sequences_id",
-          "columns": [
-            "id"
-          ]
+          "columns": ["id"]
         }
       },
       "uniqueConstraints": {},
@@ -1498,19 +1368,12 @@
       "indexes": {
         "billing_notification_inbox_receipt_unique": {
           "name": "billing_notification_inbox_receipt_unique",
-          "columns": [
-            "receipt_id"
-          ],
+          "columns": ["receipt_id"],
           "isUnique": true
         },
         "billing_notification_inbox_workspace_audience_created_idx": {
           "name": "billing_notification_inbox_workspace_audience_created_idx",
-          "columns": [
-            "workspace_id",
-            "audience",
-            "occurred_at",
-            "id"
-          ],
+          "columns": ["workspace_id", "audience", "occurred_at", "id"],
           "isUnique": false
         }
       },
@@ -1519,12 +1382,8 @@
           "name": "billing_notification_inbox_workspace_id_workspaces_id_fk",
           "tableFrom": "billing_notification_inbox",
           "tableTo": "workspaces",
-          "columnsFrom": [
-            "workspace_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["workspace_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         },
@@ -1532,16 +1391,8 @@
           "name": "billing_notification_inbox_receipt_workspace_fk",
           "tableFrom": "billing_notification_inbox",
           "tableTo": "billing_notification_receipts",
-          "columnsFrom": [
-            "receipt_id",
-            "workspace_id",
-            "audience"
-          ],
-          "columnsTo": [
-            "id",
-            "workspace_id",
-            "audience"
-          ],
+          "columnsFrom": ["receipt_id", "workspace_id", "audience"],
+          "columnsTo": ["id", "workspace_id", "audience"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         }
@@ -1549,9 +1400,7 @@
       "compositePrimaryKeys": {
         "billing_notification_inbox_id": {
           "name": "billing_notification_inbox_id",
-          "columns": [
-            "id"
-          ]
+          "columns": ["id"]
         }
       },
       "uniqueConstraints": {},
@@ -1621,30 +1470,17 @@
       "indexes": {
         "billing_notification_receipts_source_mode_delivery_unique": {
           "name": "billing_notification_receipts_source_mode_delivery_unique",
-          "columns": [
-            "source_id",
-            "mode",
-            "delivery_id"
-          ],
+          "columns": ["source_id", "mode", "delivery_id"],
           "isUnique": true
         },
         "billing_notification_receipts_id_scope_unique": {
           "name": "billing_notification_receipts_id_scope_unique",
-          "columns": [
-            "id",
-            "workspace_id",
-            "audience"
-          ],
+          "columns": ["id", "workspace_id", "audience"],
           "isUnique": true
         },
         "billing_notification_receipts_id_mode_scope_unique": {
           "name": "billing_notification_receipts_id_mode_scope_unique",
-          "columns": [
-            "id",
-            "workspace_id",
-            "mode",
-            "audience"
-          ],
+          "columns": ["id", "workspace_id", "mode", "audience"],
           "isUnique": true
         }
       },
@@ -1653,12 +1489,8 @@
           "name": "billing_notification_receipts_workspace_id_workspaces_id_fk",
           "tableFrom": "billing_notification_receipts",
           "tableTo": "workspaces",
-          "columnsFrom": [
-            "workspace_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["workspace_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         }
@@ -1666,9 +1498,7 @@
       "compositePrimaryKeys": {
         "billing_notification_receipts_id": {
           "name": "billing_notification_receipts_id",
-          "columns": [
-            "id"
-          ]
+          "columns": ["id"]
         }
       },
       "uniqueConstraints": {},
@@ -1798,18 +1628,12 @@
       "indexes": {
         "billing_notification_receiver_outbox_receipt_unique": {
           "name": "billing_notification_receiver_outbox_receipt_unique",
-          "columns": [
-            "receipt_id"
-          ],
+          "columns": ["receipt_id"],
           "isUnique": true
         },
         "billing_notification_receiver_outbox_status_created_idx": {
           "name": "billing_notification_receiver_outbox_status_created_idx",
-          "columns": [
-            "status",
-            "available_at",
-            "created_at"
-          ],
+          "columns": ["status", "available_at", "created_at"],
           "isUnique": false
         }
       },
@@ -1818,18 +1642,8 @@
           "name": "billing_notification_receiver_outbox_receipt_workspace_fk",
           "tableFrom": "billing_notification_receiver_outbox",
           "tableTo": "billing_notification_receipts",
-          "columnsFrom": [
-            "receipt_id",
-            "workspace_id",
-            "mode",
-            "audience"
-          ],
-          "columnsTo": [
-            "id",
-            "workspace_id",
-            "mode",
-            "audience"
-          ],
+          "columnsFrom": ["receipt_id", "workspace_id", "mode", "audience"],
+          "columnsTo": ["id", "workspace_id", "mode", "audience"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         }
@@ -1837,9 +1651,7 @@
       "compositePrimaryKeys": {
         "billing_notification_receiver_outbox_id": {
           "name": "billing_notification_receiver_outbox_id",
-          "columns": [
-            "id"
-          ]
+          "columns": ["id"]
         }
       },
       "uniqueConstraints": {},
@@ -1924,11 +1736,7 @@
       "indexes": {
         "billing_notification_scheduler_due_idx": {
           "name": "billing_notification_scheduler_due_idx",
-          "columns": [
-            "mode",
-            "next_due_at",
-            "last_served_at"
-          ],
+          "columns": ["mode", "next_due_at", "last_served_at"],
           "isUnique": false
         }
       },
@@ -1937,12 +1745,8 @@
           "name": "billing_notification_scheduler_workspace_fk",
           "tableFrom": "billing_notification_scheduler_tenants",
           "tableTo": "workspaces",
-          "columnsFrom": [
-            "workspace_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["workspace_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         }
@@ -1950,10 +1754,7 @@
       "compositePrimaryKeys": {
         "billing_notification_scheduler_tenants_workspace_id_mode_pk": {
           "name": "billing_notification_scheduler_tenants_workspace_id_mode_pk",
-          "columns": [
-            "workspace_id",
-            "mode"
-          ]
+          "columns": ["workspace_id", "mode"]
         }
       },
       "uniqueConstraints": {},
@@ -2117,34 +1918,22 @@
       "indexes": {
         "billing_outbox_id_workspace_unique": {
           "name": "billing_outbox_id_workspace_unique",
-          "columns": [
-            "id",
-            "workspace_id"
-          ],
+          "columns": ["id", "workspace_id"],
           "isUnique": true
         },
         "billing_outbox_delivery_id_unique": {
           "name": "billing_outbox_delivery_id_unique",
-          "columns": [
-            "delivery_id"
-          ],
+          "columns": ["delivery_id"],
           "isUnique": true
         },
         "billing_outbox_mode_deduplication_unique": {
           "name": "billing_outbox_mode_deduplication_unique",
-          "columns": [
-            "mode",
-            "deduplication_key"
-          ],
+          "columns": ["mode", "deduplication_key"],
           "isUnique": true
         },
         "billing_outbox_mode_status_available_idx": {
           "name": "billing_outbox_mode_status_available_idx",
-          "columns": [
-            "mode",
-            "status",
-            "available_at"
-          ],
+          "columns": ["mode", "status", "available_at"],
           "isUnique": false
         }
       },
@@ -2153,12 +1942,8 @@
           "name": "billing_outbox_workspace_id_workspaces_id_fk",
           "tableFrom": "billing_outbox",
           "tableTo": "workspaces",
-          "columnsFrom": [
-            "workspace_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["workspace_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         }
@@ -2166,9 +1951,7 @@
       "compositePrimaryKeys": {
         "billing_outbox_id": {
           "name": "billing_outbox_id",
-          "columns": [
-            "id"
-          ]
+          "columns": ["id"]
         }
       },
       "uniqueConstraints": {},
@@ -2258,10 +2041,7 @@
       "indexes": {
         "billing_profile_operator_actions_workspace_created_idx": {
           "name": "billing_profile_operator_actions_workspace_created_idx",
-          "columns": [
-            "workspace_id",
-            "created_at"
-          ],
+          "columns": ["workspace_id", "created_at"],
           "isUnique": false
         }
       },
@@ -2270,12 +2050,8 @@
           "name": "billing_profile_operator_actions_workspace_id_workspaces_id_fk",
           "tableFrom": "billing_profile_operator_actions",
           "tableTo": "workspaces",
-          "columnsFrom": [
-            "workspace_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["workspace_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         },
@@ -2283,12 +2059,8 @@
           "name": "billing_profile_operator_actions_actor_user_id_users_id_fk",
           "tableFrom": "billing_profile_operator_actions",
           "tableTo": "users",
-          "columnsFrom": [
-            "actor_user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["actor_user_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         }
@@ -2296,9 +2068,7 @@
       "compositePrimaryKeys": {
         "billing_profile_operator_actions_request_id": {
           "name": "billing_profile_operator_actions_request_id",
-          "columns": [
-            "request_id"
-          ]
+          "columns": ["request_id"]
         }
       },
       "uniqueConstraints": {},
@@ -2476,21 +2246,12 @@
       "indexes": {
         "billing_provider_operations_mode_type_key_unique": {
           "name": "billing_provider_operations_mode_type_key_unique",
-          "columns": [
-            "mode",
-            "operation_type",
-            "operation_key"
-          ],
+          "columns": ["mode", "operation_type", "operation_key"],
           "isUnique": true
         },
         "billing_provider_operations_due_idx": {
           "name": "billing_provider_operations_due_idx",
-          "columns": [
-            "workspace_id",
-            "mode",
-            "state",
-            "resolution_due_at"
-          ],
+          "columns": ["workspace_id", "mode", "state", "resolution_due_at"],
           "isUnique": false
         }
       },
@@ -2499,12 +2260,8 @@
           "name": "billing_provider_operations_workspace_id_workspaces_id_fk",
           "tableFrom": "billing_provider_operations",
           "tableTo": "workspaces",
-          "columnsFrom": [
-            "workspace_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["workspace_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         },
@@ -2533,14 +2290,8 @@
           "name": "billing_provider_ops_execution_control_fk",
           "tableFrom": "billing_provider_operations",
           "tableTo": "billing_execution_controls",
-          "columnsFrom": [
-            "workspace_id",
-            "mode"
-          ],
-          "columnsTo": [
-            "workspace_id",
-            "mode"
-          ],
+          "columnsFrom": ["workspace_id", "mode"],
+          "columnsTo": ["workspace_id", "mode"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         }
@@ -2548,9 +2299,7 @@
       "compositePrimaryKeys": {
         "billing_provider_operations_operation_id": {
           "name": "billing_provider_operations_operation_id",
-          "columns": [
-            "operation_id"
-          ]
+          "columns": ["operation_id"]
         }
       },
       "uniqueConstraints": {},
@@ -2619,11 +2368,7 @@
       "indexes": {
         "billing_reconciliation_anomalies_run_workspace_code_unique": {
           "name": "billing_reconciliation_anomalies_run_workspace_code_unique",
-          "columns": [
-            "run_id",
-            "workspace_id",
-            "code"
-          ],
+          "columns": ["run_id", "workspace_id", "code"],
           "isUnique": true
         }
       },
@@ -2632,12 +2377,8 @@
           "name": "billing_reconciliation_anomalies_workspace_id_workspaces_id_fk",
           "tableFrom": "billing_reconciliation_anomalies",
           "tableTo": "workspaces",
-          "columnsFrom": [
-            "workspace_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["workspace_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         },
@@ -2645,12 +2386,8 @@
           "name": "billing_reconciliation_anomalies_run_fk",
           "tableFrom": "billing_reconciliation_anomalies",
           "tableTo": "billing_reconciliation_runs",
-          "columnsFrom": [
-            "run_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["run_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -2658,9 +2395,7 @@
       "compositePrimaryKeys": {
         "billing_reconciliation_anomalies_id": {
           "name": "billing_reconciliation_anomalies_id",
-          "columns": [
-            "id"
-          ]
+          "columns": ["id"]
         }
       },
       "uniqueConstraints": {},
@@ -2745,11 +2480,7 @@
       "indexes": {
         "billing_reconciliation_runs_workspace_mode_period_unique": {
           "name": "billing_reconciliation_runs_workspace_mode_period_unique",
-          "columns": [
-            "workspace_id",
-            "mode",
-            "period_key"
-          ],
+          "columns": ["workspace_id", "mode", "period_key"],
           "isUnique": true
         }
       },
@@ -2758,12 +2489,8 @@
           "name": "billing_reconciliation_runs_workspace_id_workspaces_id_fk",
           "tableFrom": "billing_reconciliation_runs",
           "tableTo": "workspaces",
-          "columnsFrom": [
-            "workspace_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["workspace_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         }
@@ -2771,9 +2498,7 @@
       "compositePrimaryKeys": {
         "billing_reconciliation_runs_id": {
           "name": "billing_reconciliation_runs_id",
-          "columns": [
-            "id"
-          ]
+          "columns": ["id"]
         }
       },
       "uniqueConstraints": {},
@@ -2832,11 +2557,7 @@
       "compositePrimaryKeys": {
         "billing_scheduler_process_heartbeats_process_id_mode_kind_pk": {
           "name": "billing_scheduler_process_heartbeats_process_id_mode_kind_pk",
-          "columns": [
-            "process_id",
-            "mode",
-            "kind"
-          ]
+          "columns": ["process_id", "mode", "kind"]
         }
       },
       "uniqueConstraints": {},
@@ -2991,11 +2712,7 @@
       "indexes": {
         "billing_scheduler_tenants_workspace_mode_kind_unique": {
           "name": "billing_scheduler_tenants_workspace_mode_kind_unique",
-          "columns": [
-            "workspace_id",
-            "mode",
-            "kind"
-          ],
+          "columns": ["workspace_id", "mode", "kind"],
           "isUnique": true
         },
         "billing_scheduler_tenants_due_idx": {
@@ -3011,10 +2728,7 @@
         },
         "billing_scheduler_tenants_lease_idx": {
           "name": "billing_scheduler_tenants_lease_idx",
-          "columns": [
-            "lease_until",
-            "lease_token"
-          ],
+          "columns": ["lease_until", "lease_token"],
           "isUnique": false
         }
       },
@@ -3023,12 +2737,8 @@
           "name": "billing_scheduler_tenants_workspace_id_workspaces_id_fk",
           "tableFrom": "billing_scheduler_tenants",
           "tableTo": "workspaces",
-          "columnsFrom": [
-            "workspace_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["workspace_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         },
@@ -3036,12 +2746,8 @@
           "name": "billing_scheduler_tenants_enabled_by_user_id_users_id_fk",
           "tableFrom": "billing_scheduler_tenants",
           "tableTo": "users",
-          "columnsFrom": [
-            "enabled_by_user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["enabled_by_user_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         }
@@ -3049,9 +2755,7 @@
       "compositePrimaryKeys": {
         "billing_scheduler_tenants_id": {
           "name": "billing_scheduler_tenants_id",
-          "columns": [
-            "id"
-          ]
+          "columns": ["id"]
         }
       },
       "uniqueConstraints": {},
@@ -3247,25 +2951,17 @@
       "indexes": {
         "billing_subscriptions_workspace_mode_unique": {
           "name": "billing_subscriptions_workspace_mode_unique",
-          "columns": [
-            "workspace_id",
-            "mode"
-          ],
+          "columns": ["workspace_id", "mode"],
           "isUnique": true
         },
         "billing_subscriptions_mollie_subscription_mode_unique": {
           "name": "billing_subscriptions_mollie_subscription_mode_unique",
-          "columns": [
-            "mode",
-            "mollie_subscription_id"
-          ],
+          "columns": ["mode", "mollie_subscription_id"],
           "isUnique": true
         },
         "billing_subscriptions_idempotency_unique": {
           "name": "billing_subscriptions_idempotency_unique",
-          "columns": [
-            "idempotency_key"
-          ],
+          "columns": ["idempotency_key"],
           "isUnique": true
         }
       },
@@ -3274,12 +2970,8 @@
           "name": "billing_subscriptions_workspace_id_workspaces_id_fk",
           "tableFrom": "billing_subscriptions",
           "tableTo": "workspaces",
-          "columnsFrom": [
-            "workspace_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["workspace_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         },
@@ -3287,16 +2979,8 @@
           "name": "billing_subscriptions_source_intent_scope_fk",
           "tableFrom": "billing_subscriptions",
           "tableTo": "billing_intents",
-          "columnsFrom": [
-            "source_intent_id",
-            "workspace_id",
-            "mode"
-          ],
-          "columnsTo": [
-            "intent_id",
-            "workspace_id",
-            "mode"
-          ],
+          "columnsFrom": ["source_intent_id", "workspace_id", "mode"],
+          "columnsTo": ["intent_id", "workspace_id", "mode"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         }
@@ -3304,9 +2988,7 @@
       "compositePrimaryKeys": {
         "billing_subscriptions_id": {
           "name": "billing_subscriptions_id",
-          "columns": [
-            "id"
-          ]
+          "columns": ["id"]
         }
       },
       "uniqueConstraints": {},
@@ -3355,11 +3037,7 @@
       "indexes": {
         "billing_webhook_routes_workspace_mode_idx": {
           "name": "billing_webhook_routes_workspace_mode_idx",
-          "columns": [
-            "workspace_id",
-            "mode",
-            "intent_id"
-          ],
+          "columns": ["workspace_id", "mode", "intent_id"],
           "isUnique": false
         }
       },
@@ -3368,12 +3046,8 @@
           "name": "billing_webhook_routes_workspace_id_workspaces_id_fk",
           "tableFrom": "billing_webhook_routes",
           "tableTo": "workspaces",
-          "columnsFrom": [
-            "workspace_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["workspace_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         },
@@ -3381,16 +3055,8 @@
           "name": "billing_webhook_routes_intent_scope_fk",
           "tableFrom": "billing_webhook_routes",
           "tableTo": "billing_intents",
-          "columnsFrom": [
-            "intent_id",
-            "workspace_id",
-            "mode"
-          ],
-          "columnsTo": [
-            "intent_id",
-            "workspace_id",
-            "mode"
-          ],
+          "columnsFrom": ["intent_id", "workspace_id", "mode"],
+          "columnsTo": ["intent_id", "workspace_id", "mode"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         }
@@ -3398,10 +3064,7 @@
       "compositePrimaryKeys": {
         "billing_webhook_routes_mode_mollie_payment_id_pk": {
           "name": "billing_webhook_routes_mode_mollie_payment_id_pk",
-          "columns": [
-            "mode",
-            "mollie_payment_id"
-          ]
+          "columns": ["mode", "mollie_payment_id"]
         }
       },
       "uniqueConstraints": {},
@@ -3510,43 +3173,27 @@
       "indexes": {
         "channelConnections_workspace_channel_unique": {
           "name": "channelConnections_workspace_channel_unique",
-          "columns": [
-            "workspaceId",
-            "channel"
-          ],
+          "columns": ["workspaceId", "channel"],
           "isUnique": true
         },
         "channelConnections_channel_externalId_unique": {
           "name": "channelConnections_channel_externalId_unique",
-          "columns": [
-            "channel",
-            "externalId"
-          ],
+          "columns": ["channel", "externalId"],
           "isUnique": true
         },
         "channelConnections_channel_providerAccountExternalId_unique": {
           "name": "channelConnections_channel_providerAccountExternalId_unique",
-          "columns": [
-            "channel",
-            "providerAccountExternalId"
-          ],
+          "columns": ["channel", "providerAccountExternalId"],
           "isUnique": true
         },
         "channelConnections_id_workspace_unique": {
           "name": "channelConnections_id_workspace_unique",
-          "columns": [
-            "id",
-            "workspaceId"
-          ],
+          "columns": ["id", "workspaceId"],
           "isUnique": true
         },
         "channelConnections_id_workspace_binding_unique": {
           "name": "channelConnections_id_workspace_binding_unique",
-          "columns": [
-            "id",
-            "workspaceId",
-            "bindingEpoch"
-          ],
+          "columns": ["id", "workspaceId", "bindingEpoch"],
           "isUnique": true
         }
       },
@@ -3555,12 +3202,8 @@
           "name": "channelConnections_workspaceId_workspaces_id_fk",
           "tableFrom": "channelConnections",
           "tableTo": "workspaces",
-          "columnsFrom": [
-            "workspaceId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["workspaceId"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         }
@@ -3568,9 +3211,7 @@
       "compositePrimaryKeys": {
         "channelConnections_id": {
           "name": "channelConnections_id",
-          "columns": [
-            "id"
-          ]
+          "columns": ["id"]
         }
       },
       "uniqueConstraints": {},
@@ -3768,6 +3409,13 @@
           "notNull": false,
           "autoincrement": false
         },
+        "provider_effect_evidence": {
+          "name": "provider_effect_evidence",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "grant_payment_id": {
           "name": "grant_payment_id",
           "type": "varchar(64)",
@@ -3892,89 +3540,52 @@
       "indexes": {
         "credit_ledger_wallet_entry_unique": {
           "name": "credit_ledger_wallet_entry_unique",
-          "columns": [
-            "entry_id",
-            "wallet_id",
-            "workspace_id",
-            "mode"
-          ],
+          "columns": ["entry_id", "wallet_id", "workspace_id", "mode"],
           "isUnique": true
         },
         "credit_ledger_event_unique": {
           "name": "credit_ledger_event_unique",
-          "columns": [
-            "mode",
-            "event_key_hash"
-          ],
+          "columns": ["mode", "event_key_hash"],
           "isUnique": true
         },
         "credit_ledger_grant_payment_unique": {
           "name": "credit_ledger_grant_payment_unique",
-          "columns": [
-            "mode",
-            "grant_payment_id"
-          ],
+          "columns": ["mode", "grant_payment_id"],
           "isUnique": true
         },
         "credit_ledger_reservation_effect_unique": {
           "name": "credit_ledger_reservation_effect_unique",
-          "columns": [
-            "mode",
-            "reservation_id",
-            "entry_kind"
-          ],
+          "columns": ["mode", "reservation_id", "entry_kind"],
           "isUnique": true
         },
         "credit_ledger_reservation_terminal_unique": {
           "name": "credit_ledger_reservation_terminal_unique",
-          "columns": [
-            "mode",
-            "reservation_id",
-            "reservation_terminal_slot"
-          ],
+          "columns": ["mode", "reservation_id", "reservation_terminal_slot"],
           "isUnique": true
         },
         "credit_ledger_root_adjustment_unique": {
           "name": "credit_ledger_root_adjustment_unique",
-          "columns": [
-            "mode",
-            "root_grant_entry_id",
-            "root_adjustment_slot"
-          ],
+          "columns": ["mode", "root_grant_entry_id", "root_adjustment_slot"],
           "isUnique": true
         },
         "credit_ledger_provider_effect_unique": {
           "name": "credit_ledger_provider_effect_unique",
-          "columns": [
-            "mode",
-            "provider_event_hash"
-          ],
+          "columns": ["mode", "provider_event_hash"],
           "isUnique": true
         },
         "credit_ledger_provider_effect_slot_unique": {
           "name": "credit_ledger_provider_effect_slot_unique",
-          "columns": [
-            "mode",
-            "provider_effect_id",
-            "root_adjustment_slot"
-          ],
+          "columns": ["mode", "provider_effect_id", "root_adjustment_slot"],
           "isUnique": true
         },
         "credit_ledger_wallet_version_unique": {
           "name": "credit_ledger_wallet_version_unique",
-          "columns": [
-            "wallet_id",
-            "wallet_version_after"
-          ],
+          "columns": ["wallet_id", "wallet_version_after"],
           "isUnique": true
         },
         "credit_ledger_wallet_time_idx": {
           "name": "credit_ledger_wallet_time_idx",
-          "columns": [
-            "wallet_id",
-            "occurred_at",
-            "entry_id"
-          ],
+          "columns": ["wallet_id", "occurred_at", "entry_id"],
           "isUnique": false
         }
       },
@@ -4054,12 +3665,7 @@
             "mode",
             "provider_payment_id"
           ],
-          "columnsTo": [
-            "id",
-            "workspace_id",
-            "mode",
-            "mollie_payment_id"
-          ],
+          "columnsTo": ["id", "workspace_id", "mode", "mollie_payment_id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         },
@@ -4073,12 +3679,7 @@
             "workspace_id",
             "mode"
           ],
-          "columnsTo": [
-            "entry_id",
-            "wallet_id",
-            "workspace_id",
-            "mode"
-          ],
+          "columnsTo": ["entry_id", "wallet_id", "workspace_id", "mode"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         }
@@ -4086,9 +3687,7 @@
       "compositePrimaryKeys": {
         "credit_ledger_entry_id": {
           "name": "credit_ledger_entry_id",
-          "columns": [
-            "entry_id"
-          ]
+          "columns": ["entry_id"]
         }
       },
       "uniqueConstraints": {},
@@ -4112,6 +3711,10 @@
         "credit_ledger_effect_shape": {
           "name": "credit_ledger_effect_shape",
           "value": "((`credit_ledger`.`entry_kind` NOT IN ('refund_debit','chargeback_debit','chargeback_restore') AND `credit_ledger`.`provider_event_hash` IS NULL AND `credit_ledger`.`provider_effect_id` IS NULL AND `credit_ledger`.`provider_effect_type` IS NULL AND `credit_ledger`.`provider_effect_status` IS NULL AND `credit_ledger`.`provider_effect_amount` IS NULL AND `credit_ledger`.`provider_effect_currency` IS NULL) OR (`credit_ledger`.`entry_kind` = 'refund_debit' AND `credit_ledger`.`provider_event_hash` IS NOT NULL AND `credit_ledger`.`provider_effect_id` IS NOT NULL AND REGEXP_LIKE(`credit_ledger`.`provider_event_hash`, '^[0-9a-f]{64}$', 'c') AND `credit_ledger`.`provider_effect_id` REGEXP '^[A-Za-z0-9_-]{1,64}$' AND `credit_ledger`.`provider_effect_type` = 'refund' AND `credit_ledger`.`provider_effect_status` = 'refunded' AND `credit_ledger`.`provider_effect_amount` = `credit_ledger`.`payment_amount` AND BINARY `credit_ledger`.`provider_effect_currency` = BINARY `credit_ledger`.`currency`) OR (`credit_ledger`.`entry_kind` = 'chargeback_debit' AND `credit_ledger`.`provider_event_hash` IS NOT NULL AND `credit_ledger`.`provider_effect_id` IS NOT NULL AND REGEXP_LIKE(`credit_ledger`.`provider_event_hash`, '^[0-9a-f]{64}$', 'c') AND `credit_ledger`.`provider_effect_id` REGEXP '^[A-Za-z0-9_-]{1,64}$' AND `credit_ledger`.`provider_effect_type` = 'chargeback' AND `credit_ledger`.`provider_effect_status` = 'active' AND `credit_ledger`.`provider_effect_amount` = `credit_ledger`.`payment_amount` AND BINARY `credit_ledger`.`provider_effect_currency` = BINARY `credit_ledger`.`currency`) OR (`credit_ledger`.`entry_kind` = 'chargeback_restore' AND `credit_ledger`.`provider_event_hash` IS NOT NULL AND `credit_ledger`.`provider_effect_id` IS NOT NULL AND REGEXP_LIKE(`credit_ledger`.`provider_event_hash`, '^[0-9a-f]{64}$', 'c') AND `credit_ledger`.`provider_effect_id` REGEXP '^[A-Za-z0-9_-]{1,64}$' AND `credit_ledger`.`provider_effect_type` = 'chargeback' AND `credit_ledger`.`provider_effect_status` = 'reversed' AND `credit_ledger`.`provider_effect_amount` = `credit_ledger`.`payment_amount` AND BINARY `credit_ledger`.`provider_effect_currency` = BINARY `credit_ledger`.`currency`)) IS TRUE"
+        },
+        "credit_ledger_provider_effect_evidence_shape": {
+          "name": "credit_ledger_provider_effect_evidence_shape",
+          "value": "(`credit_ledger`.`entry_kind` = 'refund_debit' AND `credit_ledger`.`provider_effect_evidence` IS NOT NULL AND JSON_TYPE(`credit_ledger`.`provider_effect_evidence`) = 'ARRAY' AND JSON_LENGTH(`credit_ledger`.`provider_effect_evidence`) > 0) OR (`credit_ledger`.`entry_kind` <> 'refund_debit' AND `credit_ledger`.`provider_effect_evidence` IS NULL)"
         },
         "credit_ledger_reservation_terminal_shape": {
           "name": "credit_ledger_reservation_terminal_shape",
@@ -4215,6 +3818,42 @@
           "autoincrement": false,
           "default": "'initializing'"
         },
+        "transport_state": {
+          "name": "transport_state",
+          "type": "enum('pretransport','transport_started','known_accepted','known_rejected')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'pretransport'"
+        },
+        "transport_started_at": {
+          "name": "transport_started_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "provider_accepted_at": {
+          "name": "provider_accepted_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "provider_rejected_at": {
+          "name": "provider_rejected_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "provider_rejected_status": {
+          "name": "provider_rejected_status",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "state_version": {
           "name": "state_version",
           "type": "int",
@@ -4302,34 +3941,13 @@
           "autoincrement": false,
           "onUpdate": true,
           "default": "(now())"
-        },
-        "transport_state": {
-          "name": "transport_state",
-          "type": "enum('pretransport','transport_started','known_accepted')",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": "'pretransport'"
-        },
-        "transport_started_at": {
-          "name": "transport_started_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "provider_accepted_at": {
-          "name": "provider_accepted_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
         }
       },
       "indexes": {
         "credit_reservations_generation_unique": {
           "name": "credit_reservations_generation_unique",
           "columns": [
+            "wallet_id",
             "workspace_id",
             "mode",
             "channel_connection_id",
@@ -4407,9 +4025,7 @@
       "compositePrimaryKeys": {
         "credit_reservations_reservation_id": {
           "name": "credit_reservations_reservation_id",
-          "columns": [
-            "reservation_id"
-          ]
+          "columns": ["reservation_id"]
         }
       },
       "uniqueConstraints": {},
@@ -4428,15 +4044,15 @@
         },
         "credit_reservations_terminal_state": {
           "name": "credit_reservations_terminal_state",
-          "value": "((`credit_reservations`.`status` = 'initializing' AND `credit_reservations`.`transport_state` = 'pretransport' AND `credit_reservations`.`state_version` = 1 AND `credit_reservations`.`hold_ledger_entry_id` IS NULL AND `credit_reservations`.`committed_at` IS NULL AND `credit_reservations`.`released_at` IS NULL AND `credit_reservations`.`terminal_ledger_entry_id` IS NULL AND `credit_reservations`.`terminal_evidence_hash` IS NULL) OR (`credit_reservations`.`status` = 'reserved' AND `credit_reservations`.`state_version` = 2 AND `credit_reservations`.`hold_ledger_entry_id` IS NOT NULL AND `credit_reservations`.`committed_at` IS NULL AND `credit_reservations`.`released_at` IS NULL AND `credit_reservations`.`terminal_ledger_entry_id` IS NULL AND `credit_reservations`.`terminal_evidence_hash` IS NULL) OR (`credit_reservations`.`status` = 'committed' AND `credit_reservations`.`transport_state` = 'known_accepted' AND `credit_reservations`.`state_version` = 3 AND `credit_reservations`.`hold_ledger_entry_id` IS NOT NULL AND `credit_reservations`.`committed_at` IS NOT NULL AND `credit_reservations`.`released_at` IS NULL AND `credit_reservations`.`terminal_ledger_entry_id` IS NOT NULL AND `credit_reservations`.`terminal_evidence_hash` IS NOT NULL AND REGEXP_LIKE(`credit_reservations`.`terminal_evidence_hash`, '^[0-9a-f]{64}$', 'c')) OR (`credit_reservations`.`status` IN ('released','expired') AND `credit_reservations`.`transport_state` = 'pretransport' AND `credit_reservations`.`state_version` = 3 AND `credit_reservations`.`hold_ledger_entry_id` IS NOT NULL AND `credit_reservations`.`released_at` IS NOT NULL AND `credit_reservations`.`committed_at` IS NULL AND `credit_reservations`.`terminal_ledger_entry_id` IS NOT NULL AND `credit_reservations`.`terminal_evidence_hash` IS NOT NULL AND REGEXP_LIKE(`credit_reservations`.`terminal_evidence_hash`, '^[0-9a-f]{64}$', 'c'))) IS TRUE"
-        },
-        "credit_reservations_timestamp_order": {
-          "name": "credit_reservations_timestamp_order",
-          "value": "`credit_reservations`.`created_at` <= `credit_reservations`.`owner_lease_until` AND `credit_reservations`.`owner_lease_until` <= `credit_reservations`.`expires_at` AND `credit_reservations`.`expires_at` <= `credit_reservations`.`resolution_due_at` AND (`credit_reservations`.`transport_started_at` IS NULL OR (`credit_reservations`.`transport_started_at` >= `credit_reservations`.`created_at` AND `credit_reservations`.`transport_started_at` <= `credit_reservations`.`resolution_due_at`)) AND (`credit_reservations`.`provider_accepted_at` IS NULL OR (`credit_reservations`.`provider_accepted_at` >= `credit_reservations`.`created_at` AND `credit_reservations`.`provider_accepted_at` <= `credit_reservations`.`resolution_due_at`)) AND (`credit_reservations`.`committed_at` IS NULL OR (`credit_reservations`.`committed_at` >= `credit_reservations`.`created_at` AND `credit_reservations`.`committed_at` <= `credit_reservations`.`resolution_due_at`)) AND (`credit_reservations`.`released_at` IS NULL OR `credit_reservations`.`released_at` >= `credit_reservations`.`created_at`)"
+          "value": "((`credit_reservations`.`status` = 'initializing' AND `credit_reservations`.`transport_state` = 'pretransport' AND `credit_reservations`.`state_version` = 1 AND `credit_reservations`.`hold_ledger_entry_id` IS NULL AND `credit_reservations`.`committed_at` IS NULL AND `credit_reservations`.`released_at` IS NULL AND `credit_reservations`.`terminal_ledger_entry_id` IS NULL AND `credit_reservations`.`terminal_evidence_hash` IS NULL) OR (`credit_reservations`.`status` = 'reserved' AND `credit_reservations`.`state_version` = 2 AND `credit_reservations`.`hold_ledger_entry_id` IS NOT NULL AND `credit_reservations`.`committed_at` IS NULL AND `credit_reservations`.`released_at` IS NULL AND `credit_reservations`.`terminal_ledger_entry_id` IS NULL AND `credit_reservations`.`terminal_evidence_hash` IS NULL) OR (`credit_reservations`.`status` = 'committed' AND `credit_reservations`.`transport_state` = 'known_accepted' AND `credit_reservations`.`state_version` = 3 AND `credit_reservations`.`hold_ledger_entry_id` IS NOT NULL AND `credit_reservations`.`committed_at` IS NOT NULL AND `credit_reservations`.`released_at` IS NULL AND `credit_reservations`.`terminal_ledger_entry_id` IS NOT NULL AND `credit_reservations`.`terminal_evidence_hash` IS NOT NULL AND REGEXP_LIKE(`credit_reservations`.`terminal_evidence_hash`, '^[0-9a-f]{64}$', 'c')) OR (`credit_reservations`.`status` IN ('released','expired') AND `credit_reservations`.`transport_state` IN ('pretransport','known_rejected') AND `credit_reservations`.`state_version` = 3 AND `credit_reservations`.`hold_ledger_entry_id` IS NOT NULL AND `credit_reservations`.`released_at` IS NOT NULL AND `credit_reservations`.`committed_at` IS NULL AND `credit_reservations`.`terminal_ledger_entry_id` IS NOT NULL AND `credit_reservations`.`terminal_evidence_hash` IS NOT NULL AND REGEXP_LIKE(`credit_reservations`.`terminal_evidence_hash`, '^[0-9a-f]{64}$', 'c'))) IS TRUE"
         },
         "credit_reservations_transport_evidence": {
           "name": "credit_reservations_transport_evidence",
-          "value": "((`credit_reservations`.`transport_state` = 'pretransport' AND `credit_reservations`.`transport_started_at` IS NULL AND `credit_reservations`.`provider_accepted_at` IS NULL) OR (`credit_reservations`.`transport_state` = 'transport_started' AND `credit_reservations`.`transport_started_at` IS NOT NULL AND `credit_reservations`.`provider_accepted_at` IS NULL) OR (`credit_reservations`.`transport_state` = 'known_accepted' AND `credit_reservations`.`transport_started_at` IS NOT NULL AND `credit_reservations`.`provider_accepted_at` IS NOT NULL AND `credit_reservations`.`provider_accepted_at` >= `credit_reservations`.`transport_started_at`)) IS TRUE"
+          "value": "((`credit_reservations`.`transport_state` = 'pretransport' AND `credit_reservations`.`transport_started_at` IS NULL AND `credit_reservations`.`provider_accepted_at` IS NULL AND `credit_reservations`.`provider_rejected_at` IS NULL AND `credit_reservations`.`provider_rejected_status` IS NULL) OR (`credit_reservations`.`transport_state` = 'transport_started' AND `credit_reservations`.`transport_started_at` IS NOT NULL AND `credit_reservations`.`provider_accepted_at` IS NULL AND `credit_reservations`.`provider_rejected_at` IS NULL AND `credit_reservations`.`provider_rejected_status` IS NULL) OR (`credit_reservations`.`transport_state` = 'known_accepted' AND `credit_reservations`.`transport_started_at` IS NOT NULL AND `credit_reservations`.`provider_accepted_at` IS NOT NULL AND `credit_reservations`.`provider_accepted_at` >= `credit_reservations`.`transport_started_at` AND `credit_reservations`.`provider_rejected_at` IS NULL AND `credit_reservations`.`provider_rejected_status` IS NULL) OR (`credit_reservations`.`transport_state` = 'known_rejected' AND `credit_reservations`.`transport_started_at` IS NOT NULL AND `credit_reservations`.`provider_accepted_at` IS NULL AND `credit_reservations`.`provider_rejected_at` IS NOT NULL AND `credit_reservations`.`provider_rejected_at` >= `credit_reservations`.`transport_started_at` AND `credit_reservations`.`provider_rejected_status` BETWEEN 400 AND 499 AND `credit_reservations`.`provider_rejected_status` NOT IN (408,429))) IS TRUE"
+        },
+        "credit_reservations_timestamp_order": {
+          "name": "credit_reservations_timestamp_order",
+          "value": "`credit_reservations`.`created_at` <= `credit_reservations`.`owner_lease_until` AND `credit_reservations`.`owner_lease_until` <= `credit_reservations`.`expires_at` AND `credit_reservations`.`expires_at` <= `credit_reservations`.`resolution_due_at` AND (`credit_reservations`.`transport_started_at` IS NULL OR (`credit_reservations`.`transport_started_at` >= `credit_reservations`.`created_at` AND `credit_reservations`.`transport_started_at` <= `credit_reservations`.`resolution_due_at`)) AND (`credit_reservations`.`provider_accepted_at` IS NULL OR (`credit_reservations`.`provider_accepted_at` >= `credit_reservations`.`created_at` AND `credit_reservations`.`provider_accepted_at` <= `credit_reservations`.`resolution_due_at`)) AND (`credit_reservations`.`provider_rejected_at` IS NULL OR (`credit_reservations`.`provider_rejected_at` >= `credit_reservations`.`created_at` AND `credit_reservations`.`provider_rejected_at` <= `credit_reservations`.`resolution_due_at`)) AND (`credit_reservations`.`committed_at` IS NULL OR (`credit_reservations`.`committed_at` >= `credit_reservations`.`created_at` AND `credit_reservations`.`committed_at` <= `credit_reservations`.`resolution_due_at`)) AND (`credit_reservations`.`released_at` IS NULL OR `credit_reservations`.`released_at` >= `credit_reservations`.`created_at`)"
         }
       }
     },
@@ -4566,11 +4182,7 @@
       "indexes": {
         "credit_wallets_financial_subject_unique": {
           "name": "credit_wallets_financial_subject_unique",
-          "columns": [
-            "workspace_id",
-            "mode",
-            "financial_subject_ref"
-          ],
+          "columns": ["workspace_id", "mode", "financial_subject_ref"],
           "isUnique": true
         },
         "credit_wallets_active_subject_unique": {
@@ -4614,14 +4226,8 @@
           "name": "credit_wallets_connection_workspace_fk",
           "tableFrom": "credit_wallets",
           "tableTo": "channelConnections",
-          "columnsFrom": [
-            "channel_connection_id",
-            "workspace_id"
-          ],
-          "columnsTo": [
-            "id",
-            "workspaceId"
-          ],
+          "columnsFrom": ["channel_connection_id", "workspace_id"],
+          "columnsTo": ["id", "workspaceId"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         },
@@ -4634,11 +4240,7 @@
             "channel_connection_id",
             "current_user_key_hash"
           ],
-          "columnsTo": [
-            "workspace_id",
-            "channel_connection_id",
-            "user_key"
-          ],
+          "columnsTo": ["workspace_id", "channel_connection_id", "user_key"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         }
@@ -4646,9 +4248,7 @@
       "compositePrimaryKeys": {
         "credit_wallets_wallet_id": {
           "name": "credit_wallets_wallet_id",
-          "columns": [
-            "wallet_id"
-          ]
+          "columns": ["wallet_id"]
         }
       },
       "uniqueConstraints": {},
@@ -4735,10 +4335,7 @@
       "indexes": {
         "dailyQuota_userId_date_unique": {
           "name": "dailyQuota_userId_date_unique",
-          "columns": [
-            "userId",
-            "date"
-          ],
+          "columns": ["userId", "date"],
           "isUnique": true
         }
       },
@@ -4746,9 +4343,7 @@
       "compositePrimaryKeys": {
         "dailyQuota_id": {
           "name": "dailyQuota_id",
-          "columns": [
-            "id"
-          ]
+          "columns": ["id"]
         }
       },
       "uniqueConstraints": {},
@@ -4828,9 +4423,7 @@
       "compositePrimaryKeys": {
         "imageRequests_id": {
           "name": "imageRequests_id",
-          "columns": [
-            "id"
-          ]
+          "columns": ["id"]
         }
       },
       "uniqueConstraints": {},
@@ -4918,11 +4511,7 @@
       "indexes": {
         "messenger_privacy_subject_scope_unique": {
           "name": "messenger_privacy_subject_scope_unique",
-          "columns": [
-            "workspace_id",
-            "channel_connection_id",
-            "user_key"
-          ],
+          "columns": ["workspace_id", "channel_connection_id", "user_key"],
           "isUnique": true
         },
         "messenger_privacy_subject_epoch_unique": {
@@ -4937,11 +4526,7 @@
         },
         "messenger_privacy_subject_status_idx": {
           "name": "messenger_privacy_subject_status_idx",
-          "columns": [
-            "workspace_id",
-            "status",
-            "updated_at"
-          ],
+          "columns": ["workspace_id", "status", "updated_at"],
           "isUnique": false
         }
       },
@@ -4950,14 +4535,8 @@
           "name": "messenger_privacy_subject_connection_workspace_fk",
           "tableFrom": "messenger_privacy_subjects",
           "tableTo": "channelConnections",
-          "columnsFrom": [
-            "channel_connection_id",
-            "workspace_id"
-          ],
-          "columnsTo": [
-            "id",
-            "workspaceId"
-          ],
+          "columnsFrom": ["channel_connection_id", "workspace_id"],
+          "columnsTo": ["id", "workspaceId"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         }
@@ -4965,9 +4544,7 @@
       "compositePrimaryKeys": {
         "messenger_privacy_subjects_id": {
           "name": "messenger_privacy_subjects_id",
-          "columns": [
-            "id"
-          ]
+          "columns": ["id"]
         }
       },
       "uniqueConstraints": {},
@@ -5104,18 +4681,12 @@
       "indexes": {
         "messenger_provider_attempt_fences_attempt_unique": {
           "name": "messenger_provider_attempt_fences_attempt_unique",
-          "columns": [
-            "attempt_key_hash"
-          ],
+          "columns": ["attempt_key_hash"],
           "isUnique": true
         },
         "messenger_provider_attempt_fences_connection_active_idx": {
           "name": "messenger_provider_attempt_fences_connection_active_idx",
-          "columns": [
-            "channel_connection_id",
-            "status",
-            "lease_until"
-          ],
+          "columns": ["channel_connection_id", "status", "lease_until"],
           "isUnique": false
         }
       },
@@ -5124,12 +4695,8 @@
           "name": "messenger_provider_attempt_fences_workspace_id_workspaces_id_fk",
           "tableFrom": "messenger_provider_attempt_fences",
           "tableTo": "workspaces",
-          "columnsFrom": [
-            "workspace_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["workspace_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         },
@@ -5137,14 +4704,8 @@
           "name": "messenger_provider_fence_static_connection_fk",
           "tableFrom": "messenger_provider_attempt_fences",
           "tableTo": "channelConnections",
-          "columnsFrom": [
-            "channel_connection_id",
-            "workspace_id"
-          ],
-          "columnsTo": [
-            "id",
-            "workspaceId"
-          ],
+          "columnsFrom": ["channel_connection_id", "workspace_id"],
+          "columnsTo": ["id", "workspaceId"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         },
@@ -5152,16 +4713,8 @@
           "name": "messenger_provider_fence_static_subject_fk",
           "tableFrom": "messenger_provider_attempt_fences",
           "tableTo": "messenger_privacy_subjects",
-          "columnsFrom": [
-            "workspace_id",
-            "channel_connection_id",
-            "user_key"
-          ],
-          "columnsTo": [
-            "workspace_id",
-            "channel_connection_id",
-            "user_key"
-          ],
+          "columnsFrom": ["workspace_id", "channel_connection_id", "user_key"],
+          "columnsTo": ["workspace_id", "channel_connection_id", "user_key"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         }
@@ -5169,9 +4722,7 @@
       "compositePrimaryKeys": {
         "messenger_provider_attempt_fences_id": {
           "name": "messenger_provider_attempt_fences_id",
-          "columns": [
-            "id"
-          ]
+          "columns": ["id"]
         }
       },
       "uniqueConstraints": {},
@@ -5262,23 +4813,17 @@
       "compositePrimaryKeys": {
         "messengerState_id": {
           "name": "messengerState_id",
-          "columns": [
-            "id"
-          ]
+          "columns": ["id"]
         }
       },
       "uniqueConstraints": {
         "messengerState_psid_unique": {
           "name": "messengerState_psid_unique",
-          "columns": [
-            "psid"
-          ]
+          "columns": ["psid"]
         },
         "messengerState_userKey_unique": {
           "name": "messengerState_userKey_unique",
-          "columns": [
-            "userKey"
-          ]
+          "columns": ["userKey"]
         }
       },
       "checkConstraint": {}
@@ -5343,9 +4888,7 @@
       "compositePrimaryKeys": {
         "notificationLog_id": {
           "name": "notificationLog_id",
-          "columns": [
-            "id"
-          ]
+          "columns": ["id"]
         }
       },
       "uniqueConstraints": {},
@@ -5544,37 +5087,22 @@
       "indexes": {
         "payment_ledger_payment_mode_unique": {
           "name": "payment_ledger_payment_mode_unique",
-          "columns": [
-            "mode",
-            "mollie_payment_id"
-          ],
+          "columns": ["mode", "mollie_payment_id"],
           "isUnique": true
         },
         "payment_ledger_id_workspace_mode_unique": {
           "name": "payment_ledger_id_workspace_mode_unique",
-          "columns": [
-            "id",
-            "workspace_id",
-            "mode"
-          ],
+          "columns": ["id", "workspace_id", "mode"],
           "isUnique": true
         },
         "payment_ledger_exact_payment_scope_unique": {
           "name": "payment_ledger_exact_payment_scope_unique",
-          "columns": [
-            "id",
-            "workspace_id",
-            "mode",
-            "mollie_payment_id"
-          ],
+          "columns": ["id", "workspace_id", "mode", "mollie_payment_id"],
           "isUnique": true
         },
         "payment_ledger_credit_intent_unique": {
           "name": "payment_ledger_credit_intent_unique",
-          "columns": [
-            "mode",
-            "credit_intent_id"
-          ],
+          "columns": ["mode", "credit_intent_id"],
           "isUnique": true
         },
         "payment_ledger_effect_owner_unique": {
@@ -5588,19 +5116,12 @@
         },
         "payment_ledger_invoice_unique": {
           "name": "payment_ledger_invoice_unique",
-          "columns": [
-            "invoice_number"
-          ],
+          "columns": ["invoice_number"],
           "isUnique": true
         },
         "payment_ledger_workspace_mode_occurred_idx": {
           "name": "payment_ledger_workspace_mode_occurred_idx",
-          "columns": [
-            "workspace_id",
-            "mode",
-            "occurred_at",
-            "id"
-          ],
+          "columns": ["workspace_id", "mode", "occurred_at", "id"],
           "isUnique": false
         }
       },
@@ -5609,12 +5130,8 @@
           "name": "payment_ledger_workspace_id_workspaces_id_fk",
           "tableFrom": "payment_ledger",
           "tableTo": "workspaces",
-          "columnsFrom": [
-            "workspace_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["workspace_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         },
@@ -5643,9 +5160,7 @@
       "compositePrimaryKeys": {
         "payment_ledger_id": {
           "name": "payment_ledger_id",
-          "columns": [
-            "id"
-          ]
+          "columns": ["id"]
         }
       },
       "uniqueConstraints": {},
@@ -5791,24 +5306,17 @@
       "indexes": {
         "portalHandoffTokens_tokenHash_unique": {
           "name": "portalHandoffTokens_tokenHash_unique",
-          "columns": [
-            "tokenHash"
-          ],
+          "columns": ["tokenHash"],
           "isUnique": true
         },
         "portalHandoffTokens_delivery_key_hash_unique": {
           "name": "portalHandoffTokens_delivery_key_hash_unique",
-          "columns": [
-            "deliveryIdempotencyKeyHash"
-          ],
+          "columns": ["deliveryIdempotencyKeyHash"],
           "isUnique": true
         },
         "portalHandoffTokens_workspace_status_idx": {
           "name": "portalHandoffTokens_workspace_status_idx",
-          "columns": [
-            "workspaceId",
-            "status"
-          ],
+          "columns": ["workspaceId", "status"],
           "isUnique": false
         }
       },
@@ -5816,9 +5324,7 @@
       "compositePrimaryKeys": {
         "portalHandoffTokens_id": {
           "name": "portalHandoffTokens_id",
-          "columns": [
-            "id"
-          ]
+          "columns": ["id"]
         }
       },
       "uniqueConstraints": {},
@@ -5888,17 +5394,13 @@
       "compositePrimaryKeys": {
         "usageStats_id": {
           "name": "usageStats_id",
-          "columns": [
-            "id"
-          ]
+          "columns": ["id"]
         }
       },
       "uniqueConstraints": {
         "usageStats_date_unique": {
           "name": "usageStats_date_unique",
-          "columns": [
-            "date"
-          ]
+          "columns": ["date"]
         }
       },
       "checkConstraint": {}
@@ -5980,17 +5482,13 @@
       "compositePrimaryKeys": {
         "users_id": {
           "name": "users_id",
-          "columns": [
-            "id"
-          ]
+          "columns": ["id"]
         }
       },
       "uniqueConstraints": {
         "users_openId_unique": {
           "name": "users_openId_unique",
-          "columns": [
-            "openId"
-          ]
+          "columns": ["openId"]
         }
       },
       "checkConstraint": {}
@@ -6073,12 +5571,8 @@
           "name": "webhook_deliveries_workspace_id_workspaces_id_fk",
           "tableFrom": "webhook_deliveries",
           "tableTo": "workspaces",
-          "columnsFrom": [
-            "workspace_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["workspace_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         }
@@ -6086,9 +5580,7 @@
       "compositePrimaryKeys": {
         "webhook_deliveries_id": {
           "name": "webhook_deliveries_id",
-          "columns": [
-            "id"
-          ]
+          "columns": ["id"]
         }
       },
       "uniqueConstraints": {},
@@ -6212,17 +5704,12 @@
       "indexes": {
         "workspace_billing_profiles_workspace_unique": {
           "name": "workspace_billing_profiles_workspace_unique",
-          "columns": [
-            "workspace_id"
-          ],
+          "columns": ["workspace_id"],
           "isUnique": true
         },
         "workspace_billing_profiles_verification_idx": {
           "name": "workspace_billing_profiles_verification_idx",
-          "columns": [
-            "verification_status",
-            "country_code"
-          ],
+          "columns": ["verification_status", "country_code"],
           "isUnique": false
         }
       },
@@ -6231,12 +5718,8 @@
           "name": "workspace_billing_profiles_workspace_id_workspaces_id_fk",
           "tableFrom": "workspace_billing_profiles",
           "tableTo": "workspaces",
-          "columnsFrom": [
-            "workspace_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["workspace_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         },
@@ -6244,12 +5727,8 @@
           "name": "workspace_billing_profiles_verified_by_user_id_users_id_fk",
           "tableFrom": "workspace_billing_profiles",
           "tableTo": "users",
-          "columnsFrom": [
-            "verified_by_user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["verified_by_user_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         }
@@ -6257,9 +5736,7 @@
       "compositePrimaryKeys": {
         "workspace_billing_profiles_id": {
           "name": "workspace_billing_profiles_id",
-          "columns": [
-            "id"
-          ]
+          "columns": ["id"]
         }
       },
       "uniqueConstraints": {},
@@ -6384,27 +5861,17 @@
       "indexes": {
         "workspace_entitlement_usage_workspace_mode_plan_unique": {
           "name": "workspace_entitlement_usage_workspace_mode_plan_unique",
-          "columns": [
-            "workspace_id",
-            "mode",
-            "plan_code"
-          ],
+          "columns": ["workspace_id", "mode", "plan_code"],
           "isUnique": true
         },
         "workspace_entitlement_usage_entitlement_unique": {
           "name": "workspace_entitlement_usage_entitlement_unique",
-          "columns": [
-            "entitlement_id"
-          ],
+          "columns": ["entitlement_id"],
           "isUnique": true
         },
         "workspace_entitlement_usage_scope_unique": {
           "name": "workspace_entitlement_usage_scope_unique",
-          "columns": [
-            "entitlement_id",
-            "workspace_id",
-            "mode"
-          ],
+          "columns": ["entitlement_id", "workspace_id", "mode"],
           "isUnique": true
         }
       },
@@ -6413,12 +5880,8 @@
           "name": "weu_workspace_fk",
           "tableFrom": "workspace_entitlement_usage",
           "tableTo": "workspaces",
-          "columnsFrom": [
-            "workspace_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["workspace_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         },
@@ -6426,16 +5889,8 @@
           "name": "weu_entitlement_scope_fk",
           "tableFrom": "workspace_entitlement_usage",
           "tableTo": "workspace_entitlements",
-          "columnsFrom": [
-            "entitlement_id",
-            "workspace_id",
-            "mode"
-          ],
-          "columnsTo": [
-            "id",
-            "workspace_id",
-            "mode"
-          ],
+          "columnsFrom": ["entitlement_id", "workspace_id", "mode"],
+          "columnsTo": ["id", "workspace_id", "mode"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         },
@@ -6443,16 +5898,8 @@
           "name": "weu_source_intent_scope_fk",
           "tableFrom": "workspace_entitlement_usage",
           "tableTo": "billing_intents",
-          "columnsFrom": [
-            "source_intent_id",
-            "workspace_id",
-            "mode"
-          ],
-          "columnsTo": [
-            "intent_id",
-            "workspace_id",
-            "mode"
-          ],
+          "columnsFrom": ["source_intent_id", "workspace_id", "mode"],
+          "columnsTo": ["intent_id", "workspace_id", "mode"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         }
@@ -6460,9 +5907,7 @@
       "compositePrimaryKeys": {
         "workspace_entitlement_usage_id": {
           "name": "workspace_entitlement_usage_id",
-          "columns": [
-            "id"
-          ]
+          "columns": ["id"]
         }
       },
       "uniqueConstraints": {},
@@ -6619,21 +6064,12 @@
       "indexes": {
         "workspace_entitlement_reservations_idempotency_unique": {
           "name": "workspace_entitlement_reservations_idempotency_unique",
-          "columns": [
-            "workspace_id",
-            "mode",
-            "idempotency_key"
-          ],
+          "columns": ["workspace_id", "mode", "idempotency_key"],
           "isUnique": true
         },
         "workspace_entitlement_reservations_expiry_idx": {
           "name": "workspace_entitlement_reservations_expiry_idx",
-          "columns": [
-            "workspace_id",
-            "mode",
-            "status",
-            "resolution_due_at"
-          ],
+          "columns": ["workspace_id", "mode", "status", "resolution_due_at"],
           "isUnique": false
         }
       },
@@ -6642,12 +6078,8 @@
           "name": "weur_workspace_fk",
           "tableFrom": "workspace_entitlement_usage_reservations",
           "tableTo": "workspaces",
-          "columnsFrom": [
-            "workspace_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["workspace_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         },
@@ -6655,14 +6087,8 @@
           "name": "weur_static_connection_workspace_fk",
           "tableFrom": "workspace_entitlement_usage_reservations",
           "tableTo": "channelConnections",
-          "columnsFrom": [
-            "channel_connection_id",
-            "workspace_id"
-          ],
-          "columnsTo": [
-            "id",
-            "workspaceId"
-          ],
+          "columnsFrom": ["channel_connection_id", "workspace_id"],
+          "columnsTo": ["id", "workspaceId"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         },
@@ -6670,16 +6096,8 @@
           "name": "weur_entitlement_scope_fk",
           "tableFrom": "workspace_entitlement_usage_reservations",
           "tableTo": "workspace_entitlements",
-          "columnsFrom": [
-            "entitlement_id",
-            "workspace_id",
-            "mode"
-          ],
-          "columnsTo": [
-            "id",
-            "workspace_id",
-            "mode"
-          ],
+          "columnsFrom": ["entitlement_id", "workspace_id", "mode"],
+          "columnsTo": ["id", "workspace_id", "mode"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         },
@@ -6687,16 +6105,8 @@
           "name": "weur_usage_scope_fk",
           "tableFrom": "workspace_entitlement_usage_reservations",
           "tableTo": "workspace_entitlement_usage",
-          "columnsFrom": [
-            "entitlement_id",
-            "workspace_id",
-            "mode"
-          ],
-          "columnsTo": [
-            "entitlement_id",
-            "workspace_id",
-            "mode"
-          ],
+          "columnsFrom": ["entitlement_id", "workspace_id", "mode"],
+          "columnsTo": ["entitlement_id", "workspace_id", "mode"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         }
@@ -6704,9 +6114,7 @@
       "compositePrimaryKeys": {
         "workspace_entitlement_usage_reservations_reservation_id": {
           "name": "workspace_entitlement_usage_reservations_reservation_id",
-          "columns": [
-            "reservation_id"
-          ]
+          "columns": ["reservation_id"]
         }
       },
       "uniqueConstraints": {},
@@ -6809,19 +6217,12 @@
       "indexes": {
         "workspace_entitlements_workspace_mode_unique": {
           "name": "workspace_entitlements_workspace_mode_unique",
-          "columns": [
-            "workspace_id",
-            "mode"
-          ],
+          "columns": ["workspace_id", "mode"],
           "isUnique": true
         },
         "workspace_entitlements_id_scope_unique": {
           "name": "workspace_entitlements_id_scope_unique",
-          "columns": [
-            "id",
-            "workspace_id",
-            "mode"
-          ],
+          "columns": ["id", "workspace_id", "mode"],
           "isUnique": true
         }
       },
@@ -6830,12 +6231,8 @@
           "name": "workspace_entitlements_workspace_id_workspaces_id_fk",
           "tableFrom": "workspace_entitlements",
           "tableTo": "workspaces",
-          "columnsFrom": [
-            "workspace_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["workspace_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         },
@@ -6843,16 +6240,8 @@
           "name": "workspace_entitlements_source_intent_scope_fk",
           "tableFrom": "workspace_entitlements",
           "tableTo": "billing_intents",
-          "columnsFrom": [
-            "source_intent_id",
-            "workspace_id",
-            "mode"
-          ],
-          "columnsTo": [
-            "intent_id",
-            "workspace_id",
-            "mode"
-          ],
+          "columnsFrom": ["source_intent_id", "workspace_id", "mode"],
+          "columnsTo": ["intent_id", "workspace_id", "mode"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         }
@@ -6860,9 +6249,7 @@
       "compositePrimaryKeys": {
         "workspace_entitlements_id": {
           "name": "workspace_entitlements_id",
-          "columns": [
-            "id"
-          ]
+          "columns": ["id"]
         }
       },
       "uniqueConstraints": {},
@@ -6957,10 +6344,7 @@
       "indexes": {
         "workspaceKnowledgeSources_workspaceId_name_unique": {
           "name": "workspaceKnowledgeSources_workspaceId_name_unique",
-          "columns": [
-            "workspaceId",
-            "name"
-          ],
+          "columns": ["workspaceId", "name"],
           "isUnique": true
         }
       },
@@ -6968,9 +6352,7 @@
       "compositePrimaryKeys": {
         "workspaceKnowledgeSources_id": {
           "name": "workspaceKnowledgeSources_id",
-          "columns": [
-            "id"
-          ]
+          "columns": ["id"]
         }
       },
       "uniqueConstraints": {},
@@ -7020,10 +6402,7 @@
       "indexes": {
         "workspaceMembers_workspaceId_userId_unique": {
           "name": "workspaceMembers_workspaceId_userId_unique",
-          "columns": [
-            "workspaceId",
-            "userId"
-          ],
+          "columns": ["workspaceId", "userId"],
           "isUnique": true
         }
       },
@@ -7031,9 +6410,7 @@
       "compositePrimaryKeys": {
         "workspaceMembers_id": {
           "name": "workspaceMembers_id",
-          "columns": [
-            "id"
-          ]
+          "columns": ["id"]
         }
       },
       "uniqueConstraints": {},
@@ -7113,10 +6490,7 @@
       "indexes": {
         "workspacePrivacyRequests_workspaceId_id_idx": {
           "name": "workspacePrivacyRequests_workspaceId_id_idx",
-          "columns": [
-            "workspaceId",
-            "id"
-          ],
+          "columns": ["workspaceId", "id"],
           "isUnique": false
         }
       },
@@ -7124,9 +6498,7 @@
       "compositePrimaryKeys": {
         "workspacePrivacyRequests_id": {
           "name": "workspacePrivacyRequests_id",
-          "columns": [
-            "id"
-          ]
+          "columns": ["id"]
         }
       },
       "uniqueConstraints": {},
@@ -7194,9 +6566,7 @@
       "indexes": {
         "workspacePrivacySettings_workspaceId_unique": {
           "name": "workspacePrivacySettings_workspaceId_unique",
-          "columns": [
-            "workspaceId"
-          ],
+          "columns": ["workspaceId"],
           "isUnique": true
         }
       },
@@ -7204,9 +6574,7 @@
       "compositePrimaryKeys": {
         "workspacePrivacySettings_id": {
           "name": "workspacePrivacySettings_id",
-          "columns": [
-            "id"
-          ]
+          "columns": ["id"]
         }
       },
       "uniqueConstraints": {},
@@ -7317,10 +6685,7 @@
       "indexes": {
         "workspaceUpgradeRequests_workspaceId_id_idx": {
           "name": "workspaceUpgradeRequests_workspaceId_id_idx",
-          "columns": [
-            "workspaceId",
-            "id"
-          ],
+          "columns": ["workspaceId", "id"],
           "isUnique": false
         }
       },
@@ -7328,9 +6693,7 @@
       "compositePrimaryKeys": {
         "workspaceUpgradeRequests_id": {
           "name": "workspaceUpgradeRequests_id",
-          "columns": [
-            "id"
-          ]
+          "columns": ["id"]
         }
       },
       "uniqueConstraints": {},
@@ -7405,10 +6768,7 @@
       "indexes": {
         "workspaceUsageDaily_workspaceId_date_unique": {
           "name": "workspaceUsageDaily_workspaceId_date_unique",
-          "columns": [
-            "workspaceId",
-            "date"
-          ],
+          "columns": ["workspaceId", "date"],
           "isUnique": true
         }
       },
@@ -7416,9 +6776,7 @@
       "compositePrimaryKeys": {
         "workspaceUsageDaily_id": {
           "name": "workspaceUsageDaily_id",
-          "columns": [
-            "id"
-          ]
+          "columns": ["id"]
         }
       },
       "uniqueConstraints": {},
@@ -7471,17 +6829,13 @@
       "compositePrimaryKeys": {
         "workspaces_id": {
           "name": "workspaces_id",
-          "columns": [
-            "id"
-          ]
+          "columns": ["id"]
         }
       },
       "uniqueConstraints": {
         "workspaces_slug_unique": {
           "name": "workspaces_slug_unique",
-          "columns": [
-            "slug"
-          ]
+          "columns": ["slug"]
         }
       },
       "checkConstraint": {}

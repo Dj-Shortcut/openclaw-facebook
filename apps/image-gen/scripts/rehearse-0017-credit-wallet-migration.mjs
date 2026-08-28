@@ -25,7 +25,7 @@ if (
 }
 const migration0017 = await readStatements(migration0017Files[0]);
 const through0017 = [...through0016, migration0017Files[0]];
-assert(migration0017.length === 51, "0017 must contain 51 reviewed statements");
+assert(migration0017.length === 53, "0017 must contain 53 reviewed statements");
 assert(
   migration0017[0].startsWith(
     "CREATE TEMPORARY TABLE `credit_0017_legacy_effect_preflight`"
@@ -52,9 +52,11 @@ const expectedProcedures = [
   "credit_create_wallet",
   "credit_erase_wallet",
   "credit_expire_reservation",
+  "credit_freeze_wallet_for_review",
   "credit_grant_purchase",
   "credit_mark_reservation_provider_accepted",
   "credit_mark_reservation_transport_started",
+  "credit_release_rejected_reservation",
   "credit_release_reservation",
   "credit_scrub_terminal_reservation",
 ];

@@ -65,6 +65,7 @@ interface ImageGenerator {
     quality?: OpenAiImageQuality;
     onProviderAttempt?: () => Promise<ProviderAttemptAdmission | void>;
     onProviderSuccess?: () => Promise<void>;
+    onProviderRejected?: (status: number) => Promise<void>;
     bypassBudgetLimits?: boolean;
     costLedgerChannel?: string;
     costLedgerScope?: CostLedgerTenantScope;
@@ -98,6 +99,7 @@ type GeneratorInput = {
   quality?: OpenAiImageQuality;
   onProviderAttempt?: () => Promise<ProviderAttemptAdmission | void>;
   onProviderSuccess?: () => Promise<void>;
+  onProviderRejected?: (status: number) => Promise<void>;
   bypassBudgetLimits?: boolean;
   costLedgerChannel?: string;
   costLedgerScope?: CostLedgerTenantScope;
@@ -370,6 +372,7 @@ export class OpenAiImageGenerator implements ImageGenerator {
           }
         },
         onProviderSuccess: recordProviderSuccess,
+        onProviderRejected: input.onProviderRejected,
       });
       // Compatibility fallback for injected response clients in focused tests.
       // The real client invokes this immediately after provider 2xx, before it

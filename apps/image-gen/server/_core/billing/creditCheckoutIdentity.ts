@@ -6,6 +6,8 @@ import {
   listCreditOffers,
   PREMIUM_IMAGE_CREDIT_OFFER_ID,
   PREMIUM_IMAGE_CREDIT_OFFER_VERSION,
+  PREMIUM_IMAGE_CREDIT_REFUND_POLICY_ID,
+  PREMIUM_IMAGE_CREDIT_REFUND_POLICY_VERSION,
 } from "./creditCatalog";
 import {
   deriveCreditCheckoutCapability,
@@ -85,6 +87,8 @@ export type CreditPaymentMetadataSnapshot = Readonly<{
       automaticTopUp: false;
       overageAllowed: false;
     }>;
+    refundPolicyId: typeof PREMIUM_IMAGE_CREDIT_REFUND_POLICY_ID;
+    refundPolicyVersion: typeof PREMIUM_IMAGE_CREDIT_REFUND_POLICY_VERSION;
     description: "Leaderbot - 8 premium beeldcredits";
   }>;
 }>;
@@ -289,6 +293,8 @@ function isExactPilotOffer(offer: CreditOffer): boolean {
     offer.paymentTerms.mandateRequired === false &&
     offer.paymentTerms.automaticTopUp === false &&
     offer.paymentTerms.overageAllowed === false &&
+    offer.refundPolicyId === PREMIUM_IMAGE_CREDIT_REFUND_POLICY_ID &&
+    offer.refundPolicyVersion === PREMIUM_IMAGE_CREDIT_REFUND_POLICY_VERSION &&
     offer.mollieDescription === "Leaderbot - 8 premium beeldcredits"
   );
 }
@@ -460,6 +466,8 @@ function buildPaymentMetadataSnapshot(input: {
         automaticTopUp: input.offer.paymentTerms.automaticTopUp,
         overageAllowed: input.offer.paymentTerms.overageAllowed,
       },
+      refundPolicyId: input.offer.refundPolicyId,
+      refundPolicyVersion: input.offer.refundPolicyVersion,
       description: "Leaderbot - 8 premium beeldcredits" as const,
     },
   });
@@ -515,6 +523,8 @@ export function deriveCreditCheckoutIdentity(
       input.offer.paymentTerms.mandateRequired ? 1 : 0,
       input.offer.paymentTerms.automaticTopUp ? 1 : 0,
       input.offer.paymentTerms.overageAllowed ? 1 : 0,
+      input.offer.refundPolicyId,
+      input.offer.refundPolicyVersion,
       input.offer.mollieDescription,
     ];
     intentDigest = deriveHmac(secretCopy, INTENT_ID_DOMAIN, checkoutFields);

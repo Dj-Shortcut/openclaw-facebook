@@ -52,6 +52,7 @@ type OpenAiResponseContext = {
   partialMetrics: Omit<GenerationMetrics, "totalMs">;
   onProviderAttempt?: () => Promise<void>;
   onProviderSuccess?: () => Promise<void>;
+  onProviderRejected?: (status: number) => Promise<void>;
 };
 
 const OPENAI_RETRY_LIMIT_DEFAULT = 0;
@@ -868,6 +869,7 @@ export async function fetchOpenAiImageResponse(
     const openAiStartedAt = Date.now();
     let attemptDurationRecorded = false;
     let providerResponseAccepted = false;
+    let providerResponseKnownRejected = false;
     const recordAttemptDuration = () => {
       if (attemptDurationRecorded) return;
       context.partialMetrics.openAiMs =
@@ -887,6 +889,18 @@ export async function fetchOpenAiImageResponse(
       );
 
       recordAttemptDuration();
+
+      const retryableResponse = isRetryableResponseStatus(response.status);
+      if (
+        response.status >= 400 &&
+        response.status <= 499 &&
+        !retryableResponse
+      ) {
+        // Set this before durable settlement. A settlement outage must never
+        // turn an exact provider 4xx into another paid POST.
+        providerResponseKnownRejected = true;
+        await context.onProviderRejected?.(response.status);
+      }
 
       if (response.ok) {
         safeLog("openai_image_response_received", {
@@ -916,7 +930,7 @@ export async function fetchOpenAiImageResponse(
         canRetryAttempt({
           attempt,
           maxRetries: openAiRetryLimit,
-          retryable: isRetryableResponseStatus(response.status),
+          retryable: retryableResponse,
         })
       ) {
         const waitMs = getExponentialRetryDelayMs(openAiRetryBaseMs, attempt);
@@ -949,7 +963,7 @@ export async function fetchOpenAiImageResponse(
       // A provider 2xx can be followed by a durable-effect or response-body
       // failure. It is never safe to turn that known accepted operation into
       // another paid request.
-      if (providerResponseAccepted) {
+      if (providerResponseAccepted || providerResponseKnownRejected) {
         throw error;
       }
 

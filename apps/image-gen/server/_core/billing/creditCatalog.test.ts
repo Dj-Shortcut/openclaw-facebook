@@ -29,6 +29,8 @@ describe("credit offer catalog", () => {
           automaticTopUp: false,
           overageAllowed: false,
         },
+        refundPolicyId: "premium_image_credit_refund",
+        refundPolicyVersion: 1,
         mollieDescription: "Leaderbot - 8 premium beeldcredits",
       },
     ]);
@@ -43,6 +45,8 @@ describe("credit offer catalog", () => {
     expect(Object.isFrozen(offer?.providerPolicy)).toBe(true);
     expect(Object.isFrozen(offer?.validity)).toBe(true);
     expect(Object.isFrozen(offer?.paymentTerms)).toBe(true);
+    expect(offer?.refundPolicyId).toBe("premium_image_credit_refund");
+    expect(offer?.refundPolicyVersion).toBe(1);
     expect(Reflect.set(offer!, "amountMinor", 1)).toBe(false);
     expect(offer?.amountMinor).toBe(499);
   });
@@ -61,6 +65,10 @@ describe("credit offer catalog", () => {
       overageAllowed: false,
     });
     expect(offer.validity).toEqual({ expires: false, expiresAfterDays: null });
+    expect(offer).toMatchObject({
+      refundPolicyId: "premium_image_credit_refund",
+      refundPolicyVersion: 1,
+    });
     expect(offer).not.toHaveProperty("interval");
     expect(offer).not.toHaveProperty("subscription");
     expect(offer).not.toHaveProperty("recurringMethod");

@@ -352,6 +352,106 @@ describe("OpenAI image provider errors", () => {
     expect(getGenerationMetrics(error)?.openAiMs).toBe(50);
   });
 
+  it("reports an exact non-retryable 4xx once before returning the failure", async () => {
+    process.env.OPENAI_IMAGE_MAX_RETRIES = "1";
+    const onProviderRejected = vi.fn(async () => undefined);
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ error: { type: "invalid_request" } }), {
+          status: 400,
+          statusText: "Bad Request",
+        })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      fetchOpenAiImageResponse(createRequest(), {
+        reqId: "request-known-rejected",
+        startedAt: Date.now(),
+        partialMetrics: {},
+        onProviderRejected,
+      })
+    ).rejects.toThrow("OpenAI request failed");
+
+    expect(onProviderRejected).toHaveBeenCalledOnce();
+    expect(onProviderRejected).toHaveBeenCalledWith(400);
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("does not report retryable 5xx as a known rejection", async () => {
+    process.env.OPENAI_IMAGE_MAX_RETRIES = "0";
+    const onProviderRejected = vi.fn(async () => undefined);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response("temporary", {
+            status: 500,
+            statusText: "Internal Server Error",
+          })
+      )
+    );
+
+    await expect(
+      fetchOpenAiImageResponse(createRequest(), {
+        reqId: "request-ambiguous-5xx",
+        startedAt: Date.now(),
+        partialMetrics: {},
+        onProviderRejected,
+      })
+    ).rejects.toThrow("OpenAI request failed");
+
+    expect(onProviderRejected).not.toHaveBeenCalled();
+  });
+
+  it.each([400, 403])(
+    "settles a hard budget rejection %s before failing",
+    async status => {
+      const onProviderRejected = vi.fn(async () => undefined);
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(
+          async () =>
+            new Response(
+              JSON.stringify({ error: { code: "insufficient_quota" } }),
+              { status, statusText: "Rejected" }
+            )
+        )
+      );
+
+      await expect(
+        fetchOpenAiImageResponse(createRequest(), {
+          reqId: `request-budget-${status}`,
+          startedAt: Date.now(),
+          partialMetrics: {},
+          onProviderRejected,
+        })
+      ).rejects.toBeInstanceOf(OpenAiBudgetExceededError);
+      expect(onProviderRejected).toHaveBeenCalledWith(status);
+    }
+  );
+
+  it("never retries when known-rejection settlement fails", async () => {
+    process.env.OPENAI_IMAGE_MAX_RETRIES = "1";
+    const settlementError = new TypeError("wallet unavailable");
+    const fetchMock = vi.fn(
+      async () => new Response("invalid", { status: 400 })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      fetchOpenAiImageResponse(createRequest(), {
+        reqId: "request-rejected-settlement-failure",
+        startedAt: Date.now(),
+        partialMetrics: {},
+        onProviderRejected: async () => {
+          throw settlementError;
+        },
+      })
+    ).rejects.toBe(settlementError);
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
   it("records provider success before parsing a malformed 2xx body", async () => {
     const request = createRequest();
     process.env.OPENAI_IMAGE_MAX_RETRIES = "1";

@@ -181,6 +181,8 @@ describe("credit checkout identity", () => {
           automaticTopUp: false,
           overageAllowed: false,
         },
+        refundPolicyId: "premium_image_credit_refund",
+        refundPolicyVersion: 1,
         description: "Leaderbot - 8 premium beeldcredits",
       },
     });
@@ -199,6 +201,10 @@ describe("credit checkout identity", () => {
     expect(
       Object.isFrozen(result.paymentMetadataSnapshot.offer.paymentTerms)
     ).toBe(true);
+    expect(result.paymentMetadataSnapshot.offer).toMatchObject({
+      refundPolicyId: "premium_image_credit_refund",
+      refundPolicyVersion: 1,
+    });
   });
 
   it("keeps secret, user, request hash and raw capability out of JSON", () => {
@@ -231,8 +237,12 @@ describe("credit checkout identity", () => {
       amountMinor: 1,
       amount: { currency: "EUR", value: "0.01" },
     } as unknown as CreditOffer;
+    const alteredRefundPolicy = {
+      ...exactClone,
+      refundPolicyVersion: 2,
+    } as unknown as CreditOffer;
 
-    for (const offer of [exactClone, alteredAmount]) {
+    for (const offer of [exactClone, alteredAmount, alteredRefundPolicy]) {
       expect(() => deriveCreditCheckoutIdentity(input({ offer }))).toThrowError(
         expect.objectContaining({
           name: "CreditCheckoutIdentityError",

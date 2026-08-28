@@ -1,7 +1,7 @@
 import { and, eq, sql, type SQL } from "drizzle-orm";
 
 import { creditWallets } from "../../../drizzle/schema";
-import { getDatabaseOrThrow } from "../../db";
+import { getDatabaseOrThrow, type ImageGenTransaction } from "../../db";
 import type { MollieMode } from "./config";
 
 const MAX_DATABASE_ID = 2_147_483_647;
@@ -11,6 +11,7 @@ const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 const PRIVACY_SUBJECT_USER_KEY_PATTERN =
   /^(?:[0-9a-f]{64}|u2[.]k[1-9][0-9]{0,5}[.][0-9a-f]{64})$/;
 const PROVIDER_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+const PAYMENT_ID_PATTERN = /^tr_[A-Za-z0-9]{1,60}$/;
 const CHECKOUT_SCOPE_KEY_PATTERN = /^credit-checkout:v1:[0-9a-f]{64}$/;
 const CREDIT_OFFER_SNAPSHOT_CODE = "premium_images_8_medium_v1";
 const CREDIT_OFFER_AMOUNT = "4.99";
@@ -39,6 +40,14 @@ export type CreditWalletFinancialScope = Readonly<
   Omit<CreditWalletScope, "userKey">
 >;
 
+export type CreditWalletReviewScope = CreditWalletFinancialScope &
+  Readonly<{
+    intentId: string;
+    paymentLedgerId: number;
+    providerPaymentId: string;
+    snapshotHash: string;
+  }>;
+
 export type AppliedResult = Readonly<{
   result: "applied" | "already_applied";
 }>;
@@ -47,6 +56,10 @@ export type CreditCheckoutReservationResult = AppliedResult &
   Readonly<{ intentId: string; walletId: string }>;
 export type CapabilityConsumptionResult = AppliedResult &
   Readonly<{ intentId: string }>;
+export type PristineCheckoutExpiryResult = Readonly<{
+  result: "applied" | "already_applied" | "skipped";
+  intentId: string;
+}>;
 export type PurchaseGrantResult = AppliedResult & Readonly<{ entryId: string }>;
 export type ReservationResult = AppliedResult &
   Readonly<{ reservationId: string }>;
@@ -68,6 +81,8 @@ export type ChargebackRestoreResult = Readonly<{
   result: "already_applied" | "applied_review_required";
   entryId: string;
 }>;
+export type CreditWalletFreezeResult = AppliedResult &
+  Readonly<{ walletId: string }>;
 
 type ResultContract = Readonly<{
   allowed: ReadonlySet<string>;
@@ -122,6 +137,12 @@ function assertUserKey(value: string): void {
 function assertProviderId(value: string, field: string): void {
   if (typeof value !== "string" || !PROVIDER_ID_PATTERN.test(value)) {
     invalid(field);
+  }
+}
+
+function assertPaymentId(value: string): void {
+  if (typeof value !== "string" || !PAYMENT_ID_PATTERN.test(value)) {
+    invalid("provider payment ID");
   }
 }
 
@@ -218,6 +239,28 @@ async function executeProcedure(
   const database = await getDatabaseOrThrow();
   const execution = await database.execute(query);
   return parseProcedureResult(execution, contract);
+}
+
+export async function freezeCreditWalletForReview(
+  tx: ImageGenTransaction,
+  input: CreditWalletReviewScope
+): Promise<CreditWalletFreezeResult> {
+  assertFinancialScope(input);
+  assertUuid(input.intentId, "intent ID");
+  assertDatabaseId(input.paymentLedgerId, "payment ledger ID");
+  assertPaymentId(input.providerPaymentId);
+  assertSha256(input.snapshotHash, "payment snapshot hash");
+  const execution = await tx.execute(
+    sql`CALL \`credit_freeze_wallet_for_review\`(${input.workspaceId}, ${input.mode}, ${input.channelConnectionId}, ${input.bindingEpoch}, ${input.privacyEpoch}, ${input.walletId}, ${input.financialSubjectRef}, ${input.intentId}, ${input.paymentLedgerId}, ${input.providerPaymentId}, ${input.snapshotHash})`
+  );
+  const row = parseProcedureResult(
+    execution,
+    contract(["applied", "already_applied"], "wallet_id", input.walletId)
+  );
+  return {
+    result: row.result as CreditWalletFreezeResult["result"],
+    walletId: input.walletId,
+  };
 }
 
 function contract(
@@ -379,6 +422,31 @@ export async function consumeCreditCheckoutCapability(
   };
 }
 
+/**
+ * Removes only an expired checkout that never crossed the browser/provider
+ * boundary. The definer routine rechecks every identity and evidence fence
+ * under the canonical database lock order before deleting the pristine intent
+ * and its otherwise unused zero-balance wallet atomically.
+ */
+export async function expirePristineCreditCheckout(
+  input: CreditWalletScope & { intentId: string }
+): Promise<PristineCheckoutExpiryResult> {
+  assertCurrentScope(input);
+  assertUuid(input.intentId, "intent ID");
+  const row = await executeProcedure(
+    sql`CALL \`credit_expire_pristine_checkout\`(${input.workspaceId}, ${input.mode}, ${input.channelConnectionId}, ${input.bindingEpoch}, ${input.privacyEpoch}, ${input.userKey}, ${input.walletId}, ${input.financialSubjectRef}, ${input.intentId})`,
+    contract(
+      ["applied", "already_applied", "skipped"],
+      "intent_id",
+      input.intentId
+    )
+  );
+  return {
+    result: row.result as PristineCheckoutExpiryResult["result"],
+    intentId: input.intentId,
+  };
+}
+
 export async function grantCreditPurchase(
   input: CreditWalletScope & {
     intentId: string;
@@ -438,6 +506,10 @@ type ReservationTerminalInput = CreditWalletScope & {
   ownerTokenHash: string;
   entryId: string;
   evidenceHash: string;
+};
+
+type ReservationProviderRejectedInput = ReservationTerminalInput & {
+  rejectionStatus: number;
 };
 
 type ReservationTransportInput = CreditWalletScope & {
@@ -500,6 +572,21 @@ function validateReservationTerminalInput(
   assertSha256(input.evidenceHash, "evidence hash");
 }
 
+function validateReservationProviderRejectedInput(
+  input: ReservationProviderRejectedInput
+): void {
+  validateReservationTerminalInput(input);
+  if (
+    !Number.isSafeInteger(input.rejectionStatus) ||
+    input.rejectionStatus < 400 ||
+    input.rejectionStatus > 499 ||
+    input.rejectionStatus === 408 ||
+    input.rejectionStatus === 429
+  ) {
+    invalid("provider rejection status");
+  }
+}
+
 async function executeReservationTerminal(
   procedure:
     | "credit_commit_reservation"
@@ -538,6 +625,25 @@ export function releaseCreditReservation(
   input: ReservationTerminalInput
 ): Promise<ReservationResult> {
   return executeReservationTerminal("credit_release_reservation", input);
+}
+
+/** Releases an already-started hold only with an exact non-retryable 4xx. */
+export async function releaseCreditReservationAfterProviderRejection(
+  input: ReservationProviderRejectedInput
+): Promise<ReservationResult> {
+  validateReservationProviderRejectedInput(input);
+  const row = await executeProcedure(
+    sql`CALL \`credit_release_rejected_reservation\`(${input.workspaceId}, ${input.mode}, ${input.channelConnectionId}, ${input.bindingEpoch}, ${input.privacyEpoch}, ${input.userKey}, ${input.walletId}, ${input.financialSubjectRef}, ${input.reservationId}, ${input.ownerTokenHash}, ${input.rejectionStatus}, ${input.entryId}, ${input.evidenceHash})`,
+    contract(
+      ["applied", "already_applied"],
+      "reservation_id",
+      input.reservationId
+    )
+  );
+  return {
+    result: row.result as AppliedResult["result"],
+    reservationId: input.reservationId,
+  };
 }
 
 export function expireCreditReservation(
@@ -665,28 +771,32 @@ export async function eraseCreditWalletsForPrivacySubject(input: {
 
 type CreditAdjustmentInput = CreditWalletFinancialScope & {
   rootGrantEntryId: string;
-  providerEffectId: string;
   entryId: string;
   evidenceHash: string;
+};
+
+type CreditChargebackAdjustmentInput = CreditAdjustmentInput & {
+  providerEffectId: string;
 };
 
 function validateAdjustmentInput(input: CreditAdjustmentInput): void {
   assertFinancialScope(input);
   assertUuid(input.rootGrantEntryId, "root grant entry ID");
-  assertProviderId(input.providerEffectId, "provider effect ID");
   assertUuid(input.entryId, "entry ID");
   assertSha256(input.evidenceHash, "evidence hash");
 }
 
+function validateChargebackAdjustmentInput(
+  input: CreditChargebackAdjustmentInput
+): void {
+  validateAdjustmentInput(input);
+  assertProviderId(input.providerEffectId, "provider effect ID");
+}
+
 async function executeCreditDebit(
-  procedure: "credit_apply_refund_debit" | "credit_apply_chargeback_debit",
+  query: SQL,
   input: CreditAdjustmentInput
 ): Promise<CreditDebitResult> {
-  validateAdjustmentInput(input);
-  const query =
-    procedure === "credit_apply_refund_debit"
-      ? sql`CALL \`credit_apply_refund_debit\`(${input.workspaceId}, ${input.mode}, ${input.channelConnectionId}, ${input.bindingEpoch}, ${input.privacyEpoch}, ${input.walletId}, ${input.financialSubjectRef}, ${input.rootGrantEntryId}, ${input.providerEffectId}, ${input.entryId}, ${input.evidenceHash})`
-      : sql`CALL \`credit_apply_chargeback_debit\`(${input.workspaceId}, ${input.mode}, ${input.channelConnectionId}, ${input.bindingEpoch}, ${input.privacyEpoch}, ${input.walletId}, ${input.financialSubjectRef}, ${input.rootGrantEntryId}, ${input.providerEffectId}, ${input.entryId}, ${input.evidenceHash})`;
   const row = await executeProcedure(
     query,
     splitContract(
@@ -705,22 +815,30 @@ async function executeCreditDebit(
   };
 }
 
-export function applyCreditRefundDebit(
+export async function applyCreditRefundDebit(
   input: CreditAdjustmentInput
 ): Promise<CreditDebitResult> {
-  return executeCreditDebit("credit_apply_refund_debit", input);
+  validateAdjustmentInput(input);
+  return executeCreditDebit(
+    sql`CALL \`credit_apply_refund_debit\`(${input.workspaceId}, ${input.mode}, ${input.channelConnectionId}, ${input.bindingEpoch}, ${input.privacyEpoch}, ${input.walletId}, ${input.financialSubjectRef}, ${input.rootGrantEntryId}, ${input.entryId}, ${input.evidenceHash})`,
+    input
+  );
 }
 
-export function applyCreditChargebackDebit(
-  input: CreditAdjustmentInput
+export async function applyCreditChargebackDebit(
+  input: CreditChargebackAdjustmentInput
 ): Promise<CreditDebitResult> {
-  return executeCreditDebit("credit_apply_chargeback_debit", input);
+  validateChargebackAdjustmentInput(input);
+  return executeCreditDebit(
+    sql`CALL \`credit_apply_chargeback_debit\`(${input.workspaceId}, ${input.mode}, ${input.channelConnectionId}, ${input.bindingEpoch}, ${input.privacyEpoch}, ${input.walletId}, ${input.financialSubjectRef}, ${input.rootGrantEntryId}, ${input.providerEffectId}, ${input.entryId}, ${input.evidenceHash})`,
+    input
+  );
 }
 
 export async function applyCreditChargebackRestore(
-  input: CreditAdjustmentInput
+  input: CreditChargebackAdjustmentInput
 ): Promise<ChargebackRestoreResult> {
-  validateAdjustmentInput(input);
+  validateChargebackAdjustmentInput(input);
   const row = await executeProcedure(
     sql`CALL \`credit_apply_chargeback_restore\`(${input.workspaceId}, ${input.mode}, ${input.channelConnectionId}, ${input.bindingEpoch}, ${input.privacyEpoch}, ${input.walletId}, ${input.financialSubjectRef}, ${input.rootGrantEntryId}, ${input.providerEffectId}, ${input.entryId}, ${input.evidenceHash})`,
     contract(

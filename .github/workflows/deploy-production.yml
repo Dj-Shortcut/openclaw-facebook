@@ -37,6 +37,8 @@ jobs:
     name: Validate ${{ inputs.target }} release
     runs-on: ubuntu-latest
     environment: production-inspection
+    outputs:
+      deploy_required: ${{ steps.duplicate-deploy-check.outputs.deploy_required }}
     steps:
       - name: Require the reviewed main branch
         run: test "$GITHUB_REF" = "refs/heads/main"
@@ -81,10 +83,12 @@ jobs:
           printf '%s\n' "$bin_dir" >> "$GITHUB_PATH"
 
       - name: Preflight settled production baseline before approval
+        id: duplicate-deploy-check
         timeout-minutes: 5
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_PRODUCTION_READONLY_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}
+          REVIEWED_IMAGE: ${{ inputs.rollback_image }}
           TARGET: ${{ inputs.target }}
         run: |
           test -n "$FLY_API_TOKEN"
@@ -96,6 +100,18 @@ jobs:
             --verify-deployment-candidate "$TARGET" "$live_identity" \
             "deploy-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
             --expected-source-sha "$GITHUB_SHA"
+          set +e
+          node scripts/check-production-deploy-noop.mjs \
+            --check-production-deploy-noop "$TARGET" "$REVIEWED_IMAGE"
+          status=$?
+          set -e
+          if [[ "$status" -eq 0 ]]; then
+            echo "deploy_required=false" >> "$GITHUB_OUTPUT"
+          elif [[ "$status" -eq 10 ]]; then
+            echo "deploy_required=true" >> "$GITHUB_OUTPUT"
+          else
+            exit "$status"
+          fi
 
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
@@ -173,7 +189,7 @@ jobs:
 
   deploy-gateway:
     name: Deploy gateway
-    if: inputs.target == 'gateway'
+    if: inputs.target == 'gateway' && needs.validate.outputs.deploy_required == 'true'
     needs: validate
     runs-on: ubuntu-latest
     # Includes enough headroom for the full bounded rollback after a late failure.
@@ -361,7 +377,7 @@ jobs:
 
   deploy-image-gen:
     name: Deploy image-gen
-    if: inputs.target == 'image-gen'
+    if: inputs.target == 'image-gen' && needs.validate.outputs.deploy_required == 'true'
     needs: validate
     runs-on: ubuntu-latest
     # Includes enough headroom for the full bounded rollback after a late failure.
@@ -627,6 +643,18 @@ jobs:
           REVIEWED_IMAGE: ${{ inputs.rollback_image }}
         run: |
           set -euo pipefail
+          transition_state="$(jq -er '.apps["image-gen"].databaseSchemaTransition.state' deploy/production/apps.json)"
+          transition_target="$(jq -er '.apps["image-gen"].databaseSchemaTransition.to' deploy/production/apps.json)"
+          if [[ "$transition_state" = "runtime_reviewed" && "$transition_target" = "0018_credit_checkout_reservation" ]]; then
+            expected_principal_sha256="$(jq -er '.apps["image-gen"].databaseSchemaTransition.runtimePrincipalSha256' deploy/production/apps.json)"
+            [[ "$expected_principal_sha256" =~ ^[a-f0-9]{64}$ ]]
+            # The protected staging workflow already ran this exact reviewed
+            # probe through runtime_verification_url. The bridge Machine still
+            # has the rollback principal, so running it there would validate
+            # the wrong identity. Every successor Machine is proved below.
+            echo "Restricted runtime trigger preflight is bound to protected staging evidence."
+            exit 0
+          fi
           probe_container=""
           probe_machine_id=""
           remote_probe=""
@@ -696,6 +724,90 @@ jobs:
           FLY_API_TOKEN: ${{ secrets.FLY_IMAGE_GEN_DEPLOY_TOKEN }}
         run: node scripts/validate-production-deployment.mjs --live image-gen --expected-deployment-identity "deploy-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
 
+      - name: Prove every image-gen Machine uses the staged runtime principal
+        timeout-minutes: 12
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_IMAGE_GEN_DEPLOY_TOKEN }}
+          REVIEWED_IMAGE: ${{ inputs.rollback_image }}
+        run: |
+          set -euo pipefail
+          transition_state="$(jq -er '.apps["image-gen"].databaseSchemaTransition.state' deploy/production/apps.json)"
+          transition_target="$(jq -er '.apps["image-gen"].databaseSchemaTransition.to' deploy/production/apps.json)"
+          if [[ "$transition_state" != "runtime_reviewed" || "$transition_target" != "0018_credit_checkout_reservation" ]]; then
+            printf '%s\n' '{"required":false}' > "$RUNNER_TEMP/leaderbot-release/runtime-principal-cutover.json"
+            exit 0
+          fi
+          expected_principal_sha256="$(jq -er '.apps["image-gen"].databaseSchemaTransition.runtimePrincipalSha256' deploy/production/apps.json)"
+          [[ "$expected_principal_sha256" =~ ^[a-f0-9]{64}$ ]]
+          candidate_identity="deploy-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          [[ "$candidate_identity" =~ ^deploy-[0-9]+-[0-9]+$ ]]
+          expected_machine_count="$(jq -er '.apps["image-gen"].desiredScale | to_entries | map(.value.count) | add' deploy/production/apps.json)"
+          [[ "$expected_machine_count" =~ ^[1-9][0-9]*$ ]]
+          machines="$(flyctl machine list --app leaderbot-fb-image-gen --json)"
+          mapfile -t machine_ids < <(jq -er \
+            --arg identity "$candidate_identity" \
+            --argjson expected "$expected_machine_count" '
+              [
+                .[]
+                | select(
+                    .state == "started" and
+                    (.config.metadata.fly_process_group == "app" or .config.metadata.fly_process_group == "worker") and
+                    .config.env.LEADERBOT_DEPLOYMENT_IDENTITY == $identity
+                  )
+                | .id
+              ]
+              | if length == $expected and (unique | length) == length and all(.[]; test("^[a-f0-9]{14}$"))
+                then .[]
+                else error("successor Machine set is not exact")
+                end
+            ' <<<"$machines")
+          test "${#machine_ids[@]}" = "$expected_machine_count"
+
+          probe_container="$(docker create "$REVIEWED_IMAGE")"
+          [[ "$probe_container" =~ ^[a-f0-9]{64}$ ]]
+          local_probe="$RUNNER_TEMP/leaderbot-release/runtime-principal-cutover-preflight.cjs"
+          docker cp "$probe_container:/app/dist/billing-trigger-runtime-preflight.cjs" "$local_probe"
+          docker rm "$probe_container" > /dev/null
+          probe_container=""
+          test -s "$local_probe"
+          uploaded_machines=()
+          remote_probe="/tmp/leaderbot-runtime-principal-cutover-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.cjs"
+          [[ "$remote_probe" =~ ^/tmp/leaderbot-runtime-principal-cutover-[0-9]+-[0-9]+\.cjs$ ]]
+          cleanup_cutover_probes() {
+            if [[ "$probe_container" =~ ^[a-f0-9]{64}$ ]]; then
+              docker rm -f "$probe_container" > /dev/null 2>&1 || true
+            fi
+            for machine_id in "${uploaded_machines[@]}"; do
+              timeout --signal=TERM 30s flyctl ssh console \
+                --app leaderbot-fb-image-gen --machine "$machine_id" --quiet \
+                --command "/bin/rm -f $remote_probe" > /dev/null 2>&1 || true
+            done
+          }
+          trap cleanup_cutover_probes EXIT
+          for machine_id in "${machine_ids[@]}"; do
+            timeout --signal=TERM 30s flyctl ssh sftp put \
+              "$local_probe" "$remote_probe" \
+              --app leaderbot-fb-image-gen --machine "$machine_id" --mode 0400
+            uploaded_machines+=("$machine_id")
+            probe_output="$(timeout --signal=TERM 45s flyctl ssh console \
+              --app leaderbot-fb-image-gen --machine "$machine_id" --quiet \
+              --command "EXPECTED_RUNTIME_PRINCIPAL_SHA256=$expected_principal_sha256 node $remote_probe")"
+            test "$probe_output" = "Billing trigger runtime preflight passed."
+            timeout --signal=TERM 30s flyctl ssh console \
+              --app leaderbot-fb-image-gen --machine "$machine_id" --quiet \
+              --command "/bin/rm -f $remote_probe"
+          done
+          uploaded_machines=()
+          trap - EXIT
+          jq -n \
+            --arg sourceCommit "$GITHUB_SHA" \
+            --arg deploymentIdentity "$candidate_identity" \
+            --arg principalSha256 "$expected_principal_sha256" \
+            --argjson machineCount "$expected_machine_count" \
+            --arg provedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{required:true,sourceCommit:$sourceCommit,deploymentIdentity:$deploymentIdentity,principalSha256:$principalSha256,machineCount:$machineCount,healthAndReadinessPending:true,provedAt:$provedAt}' \
+            > "$RUNNER_TEMP/leaderbot-release/runtime-principal-cutover.json"
+
       - name: Smoke-test image-gen
         timeout-minutes: 4
         run: |
@@ -708,6 +820,13 @@ jobs:
           ready_status="$(curl --ipv4 --silent --show-error --location --max-time 20 --retry 2 --retry-delay 5 --retry-all-errors --output "$ready_body" --write-out '%{http_code}' https://leaderbot-fb-image-gen.fly.dev/readyz)"
           test "$ready_status" = "200"
           jq -e '.ok == true' "$ready_body"
+          if jq -e '.required == true' "$RUNNER_TEMP/leaderbot-release/runtime-principal-cutover.json" > /dev/null; then
+            jq '.healthAndReadinessPending = false' \
+              "$RUNNER_TEMP/leaderbot-release/runtime-principal-cutover.json" \
+              > "$RUNNER_TEMP/leaderbot-release/runtime-principal-cutover.complete.json"
+            mv "$RUNNER_TEMP/leaderbot-release/runtime-principal-cutover.complete.json" \
+              "$RUNNER_TEMP/leaderbot-release/runtime-principal-cutover.json"
+          fi
 
       - name: Capture bounded image-gen startup diagnostics
         if: failure() && steps.deploy.outcome != 'skipped'
@@ -926,7 +1045,7 @@ jobs:
 
   deploy-storage-proxy:
     name: Deploy storage-proxy
-    if: inputs.target == 'storage-proxy'
+    if: inputs.target == 'storage-proxy' && needs.validate.outputs.deploy_required == 'true'
     needs: validate
     runs-on: ubuntu-latest
     # Includes enough headroom for the full bounded rollback after a late failure.

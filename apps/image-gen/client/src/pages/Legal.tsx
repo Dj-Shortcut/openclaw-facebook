@@ -3,6 +3,7 @@ import {
   formatPublicBusinessAddress,
 } from "@shared/publicBusinessDetails";
 import { Link } from "wouter";
+import { creditBillingPolicyCopy } from "./creditCheckoutOffer";
 
 type LegalPageKind = "privacy" | "terms" | "billing-policy" | "data-deletion";
 
@@ -72,35 +73,9 @@ const legalCopy: Record<LegalPageKind, LegalPageCopy> = {
     ],
   },
   "billing-policy": {
-    title: "Premium Credit Pricing and Billing Information",
-    intro:
-      "Leaderbot offers a one-time premium image-credit pack. A purchase starts only from a signed checkout link opened from Messenger and requires explicit confirmation.",
-    sections: [
-      {
-        heading: "One-time price",
-        body: "One premium credit pack costs €4.99 once in EUR. The checkout page shows the exact amount and package before the customer continues to Mollie.",
-      },
-      {
-        heading: "Included usage",
-        body: "The pack adds eight medium-quality image credits. Credits do not expire. One credit is permanently consumed only after the image provider accepts that generation successfully; a pre-provider failure does not consume a credit, and a retry of the same accepted request does not consume another credit.",
-      },
-      {
-        heading: "No renewal, top-up or overage",
-        body: "A credit pack is a single purchase without automatic renewal, subscription or direct-debit mandate. Usage stops when no free or paid credits remain. No automatic top-up or additional usage fee is charged, and another pack requires a separate explicit choice.",
-      },
-      {
-        heading: "No payment from a message or link",
-        body: "Sending a Messenger message or opening a signed checkout link does not authorize a payment. A payment can start only after the customer explicitly confirms the displayed credit pack and continues to Mollie.",
-      },
-      {
-        heading: "Before payment",
-        body: "Before any payment, Leaderbot shows the €4.99 total price, eight included medium-quality credits, that credits do not expire, the absence of renewal and overage, and applicable cancellation and refund terms.",
-      },
-      {
-        heading: "Questions",
-        body: "For pricing, privacy or support questions, contact privacy@leaderbot.live. Do not send payment credentials or API keys by email.",
-      },
-    ],
+    title: creditBillingPolicyCopy.title,
+    intro: creditBillingPolicyCopy.intro,
+    sections: creditBillingPolicyCopy.sections.map(section => ({ ...section })),
   },
   "data-deletion": {
     title: "Data Deletion",
@@ -129,22 +104,25 @@ const legalCopy: Record<LegalPageKind, LegalPageCopy> = {
 
 function LegalPage({ page }: { page: LegalPageKind }) {
   const copy = legalCopy[page];
+  const isDutchBillingPolicy = page === "billing-policy";
 
   return (
     <main
       className="min-h-full bg-[#10211d] px-4 py-10 text-stone-100 sm:px-6 lg:px-8"
-      lang="en"
+      lang={isDutchBillingPolicy ? "nl" : "en"}
     >
       <div className="mx-auto max-w-3xl">
         <Link
           className="text-sm font-medium text-lime-300 transition-colors hover:text-lime-200"
           href="/"
         >
-          Back to Leaderbot
+          {isDutchBillingPolicy ? "Terug naar Leaderbot" : "Back to Leaderbot"}
         </Link>
         <section className="mt-6">
           <p className="text-xs font-bold uppercase tracking-[0.16em] text-stone-400">
-            Last updated 28 August 2026
+            {isDutchBillingPolicy
+              ? "Bijgewerkt op 28 augustus 2026"
+              : "Last updated 28 August 2026"}
           </p>
           <h1 className="mt-3 text-3xl font-semibold text-white sm:text-4xl">
             {copy.title}

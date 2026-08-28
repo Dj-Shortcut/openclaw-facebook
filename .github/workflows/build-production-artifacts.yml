@@ -282,7 +282,7 @@ jobs:
             LEADERBOT_TEST_SCHEMA_PHASE=0018_credit_checkout_reservation \
             DATABASE_URL=mysql://root:root@127.0.0.1:3306/leaderbot_artifact_credit_checkout \
             node apps/image-gen/scripts/prepare-artifact-schema-fixture.mjs
-          mysql -h127.0.0.1 -uroot -proot -e "CREATE USER 'runtime_base'@'%' IDENTIFIED BY 'runtime_base'; GRANT SELECT, INSERT, UPDATE, DELETE ON leaderbot_artifact_base.* TO 'runtime_base'@'%'; CREATE USER 'runtime_expand'@'%' IDENTIFIED BY 'runtime_expand'; GRANT SELECT, INSERT, UPDATE, DELETE ON leaderbot_artifact_expand.* TO 'runtime_expand'@'%'; CREATE USER 'runtime_credit'@'%' IDENTIFIED BY 'runtime_credit';"
+          mysql -h127.0.0.1 -uroot -proot -e "CREATE USER 'runtime_base'@'%' IDENTIFIED BY 'runtime_base'; GRANT SELECT, INSERT, UPDATE, DELETE ON leaderbot_artifact_base.* TO 'runtime_base'@'%'; CREATE USER 'runtime_expand'@'%' IDENTIFIED BY 'runtime_expand'; GRANT SELECT, INSERT, UPDATE, DELETE ON leaderbot_artifact_expand.* TO 'runtime_expand'@'%'; CREATE USER 'runtime_legacy_credit'@'%' IDENTIFIED BY 'runtime_legacy_credit'; GRANT SELECT, INSERT, UPDATE, DELETE ON leaderbot_artifact_credit_checkout.* TO 'runtime_legacy_credit'@'%'; CREATE USER 'runtime_credit'@'%' IDENTIFIED BY 'runtime_credit';"
           pnpm --dir apps/image-gen exec node --input-type=module <<'NODE'
           import mysql from "mysql2/promise";
           import {
@@ -323,16 +323,21 @@ jobs:
           test "$(docker image inspect --format '{{json .Config.Cmd}}' "$ARTIFACT_BASE_IMAGE")" = "$(docker image inspect --format '{{json .Config.Cmd}}' "$ARTIFACT_IMAGE")"
           test "$(docker image inspect --format '{{json .Config.Entrypoint}}' "$ARTIFACT_BASE_IMAGE")" = "$(docker image inspect --format '{{json .Config.Entrypoint}}' "$ARTIFACT_IMAGE")"
           docker run --rm --entrypoint node "$ARTIFACT_IMAGE" --check /app/dist/index.cjs
-          for phase in base expand; do
-            docker run --rm --network host \
-              --env "DATABASE_URL=mysql://runtime_${phase}:runtime_${phase}@127.0.0.1:3306/leaderbot_artifact_${phase}" \
-              --env LEADERBOT_PRODUCTION_MIGRATION_MODE=verify-artifact \
-              "$ARTIFACT_IMAGE" node dist/migrate-production.cjs
-          done
+          docker run --rm --network host \
+            --env DATABASE_URL=mysql://runtime_expand:runtime_expand@127.0.0.1:3306/leaderbot_artifact_expand \
+            --env LEADERBOT_PRODUCTION_MIGRATION_MODE=verify-artifact \
+            "$ARTIFACT_IMAGE" node dist/migrate-production.cjs
           docker run --rm --network host \
             --env DATABASE_URL=mysql://runtime_credit:runtime_credit@127.0.0.1:3306/leaderbot_artifact_credit_checkout \
-            --env LEADERBOT_PRODUCTION_MIGRATION_MODE=verify-credit-wallet \
+            --env LEADERBOT_PRODUCTION_MIGRATION_MODE=verify-artifact \
             "$ARTIFACT_IMAGE" node dist/migrate-production.cjs
+          if docker run --rm --network host \
+            --env DATABASE_URL=mysql://runtime_legacy_credit:runtime_legacy_credit@127.0.0.1:3306/leaderbot_artifact_credit_checkout \
+            --env LEADERBOT_PRODUCTION_MIGRATION_MODE=verify-artifact \
+            "$ARTIFACT_IMAGE" node dist/migrate-production.cjs; then
+            echo "Bridge unexpectedly accepted legacy runtime rights on 0018" >&2
+            exit 1
+          fi
 
       - name: Prove runtime refuses pre-credit schemas and accepts exact 0018
         if: inputs.target == 'image-gen-runtime'

@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { CreditCheckoutPilotConfig } from "./creditCheckoutConfig";
 import {
+  deriveCreditReservationCommitRecovery,
+  deriveCreditReservationProviderRejectedRecovery,
   PaidCreditGenerationAdmissionError,
   reservePaidCreditGeneration,
   type CreditGenerationAdmissionDependencies,
@@ -50,6 +52,10 @@ function dependencies(
       reservationId: input.reservationId,
     })),
     release: vi.fn(async input => ({
+      result: "applied" as const,
+      reservationId: input.reservationId,
+    })),
+    releaseProviderRejected: vi.fn(async input => ({
       result: "applied" as const,
       reservationId: input.reservationId,
     })),
@@ -200,6 +206,47 @@ describe("paid credit generation admission", () => {
     expect(release).not.toHaveBeenCalled();
   });
 
+  it("releases exactly one started hold for an exact non-retryable 4xx", async () => {
+    const releaseProviderRejected = vi.fn(async input => ({
+      result: "applied" as const,
+      reservationId: input.reservationId,
+    }));
+    const release = vi.fn();
+    const decision = await reservePaidCreditGeneration(
+      INPUT,
+      dependencies({ release, releaseProviderRejected })
+    );
+    if (!decision.available) throw new Error("unreachable");
+
+    await decision.reservation.markTransportStarted();
+    await decision.reservation.releaseProviderRejected(400);
+    await decision.reservation.releaseProviderRejected(400);
+    await decision.reservation.releaseBeforeTransport();
+
+    expect(releaseProviderRejected).toHaveBeenCalledOnce();
+    expect(releaseProviderRejected).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reservationId: decision.reservation.reservationId,
+        rejectionStatus: 400,
+        entryId: expect.stringMatching(/^[0-9a-f-]{36}$/),
+        evidenceHash: expect.stringMatching(/^[0-9a-f]{64}$/),
+      })
+    );
+    expect(release).not.toHaveBeenCalled();
+  });
+
+  it.each([408, 429, 500])(
+    "refuses an ambiguous provider status %i",
+    async status => {
+      const decision = await reservePaidCreditGeneration(INPUT, dependencies());
+      if (!decision.available) throw new Error("unreachable");
+      await decision.reservation.markTransportStarted();
+      await expect(
+        decision.reservation.releaseProviderRejected(status)
+      ).rejects.toBeInstanceOf(PaidCreditGenerationAdmissionError);
+    }
+  );
+
   it("retains accepted evidence when the debit commit fails and retries only the debit", async () => {
     const markTransportStarted = vi.fn(async input => ({
       result: "applied" as const,
@@ -229,9 +276,9 @@ describe("paid credit generation admission", () => {
     if (!decision.available) throw new Error("unreachable");
 
     await decision.reservation.markTransportStarted();
-    await expect(
-      decision.reservation.commitProviderSuccess()
-    ).rejects.toThrow("database interrupted after acceptance");
+    await expect(decision.reservation.commitProviderSuccess()).rejects.toThrow(
+      "database interrupted after acceptance"
+    );
     await decision.reservation.releaseBeforeTransport();
     await decision.reservation.commitProviderSuccess();
 
@@ -239,6 +286,92 @@ describe("paid credit generation admission", () => {
     expect(markProviderAccepted).toHaveBeenCalledOnce();
     expect(commit).toHaveBeenCalledTimes(2);
     expect(release).not.toHaveBeenCalled();
+  });
+
+  it("reconstructs only the exact commit proof for a persisted known success", async () => {
+    const reserve = vi.fn(async input => ({
+      result: "applied" as const,
+      reservationId: input.reservationId,
+    }));
+    const commit = vi.fn(async input => ({
+      result: "applied" as const,
+      reservationId: input.reservationId,
+    }));
+    const deps = dependencies({ reserve, commit });
+    const decision = await reservePaidCreditGeneration(INPUT, deps);
+    if (!decision.available) throw new Error("unreachable");
+    const hold = reserve.mock.calls[0]?.[0];
+    if (!hold) throw new Error("hold was not recorded");
+
+    const recovered = deriveCreditReservationCommitRecovery(
+      {
+        workspaceId: hold.workspaceId,
+        mode: hold.mode,
+        channelConnectionId: hold.channelConnectionId,
+        bindingEpoch: hold.bindingEpoch,
+        privacyEpoch: hold.privacyEpoch,
+        userKey: hold.userKey,
+        walletId: hold.walletId,
+        financialSubjectRef: hold.financialSubjectRef,
+        reservationId: hold.reservationId,
+        generationRequestKeyHash: hold.generationRequestKeyHash,
+        ownerTokenHash: hold.ownerTokenHash,
+      },
+      deps
+    );
+
+    await decision.reservation.markTransportStarted();
+    await decision.reservation.commitProviderSuccess();
+    expect(recovered).toEqual({
+      entryId: commit.mock.calls[0]?.[0]?.entryId,
+      evidenceHash: commit.mock.calls[0]?.[0]?.evidenceHash,
+    });
+    expect(
+      deriveCreditReservationCommitRecovery(
+        { ...hold, ownerTokenHash: "f".repeat(64) },
+        deps
+      )
+    ).toBeNull();
+  });
+
+  it("reconstructs the exact non-retryable rejection proof", async () => {
+    const reserve = vi.fn(async input => ({
+      result: "applied" as const,
+      reservationId: input.reservationId,
+    }));
+    const releaseProviderRejected = vi.fn(async input => ({
+      result: "applied" as const,
+      reservationId: input.reservationId,
+    }));
+    const deps = dependencies({ reserve, releaseProviderRejected });
+    const decision = await reservePaidCreditGeneration(INPUT, deps);
+    if (!decision.available) throw new Error("unreachable");
+    const hold = reserve.mock.calls[0]?.[0];
+    if (!hold) throw new Error("hold was not recorded");
+
+    const recovered = deriveCreditReservationProviderRejectedRecovery(
+      { ...hold, rejectionStatus: 400 },
+      deps
+    );
+    await decision.reservation.markTransportStarted();
+    await decision.reservation.releaseProviderRejected(400);
+
+    expect(recovered).toEqual({
+      entryId: releaseProviderRejected.mock.calls[0]?.[0]?.entryId,
+      evidenceHash: releaseProviderRejected.mock.calls[0]?.[0]?.evidenceHash,
+    });
+    expect(
+      deriveCreditReservationProviderRejectedRecovery(
+        { ...hold, ownerTokenHash: "f".repeat(64), rejectionStatus: 400 },
+        deps
+      )
+    ).toBeNull();
+    expect(() =>
+      deriveCreditReservationProviderRejectedRecovery(
+        { ...hold, rejectionStatus: 408 },
+        deps
+      )
+    ).toThrow(PaidCreditGenerationAdmissionError);
   });
 
   it("releases a pre-transport hold exactly once and refuses a later commit", async () => {

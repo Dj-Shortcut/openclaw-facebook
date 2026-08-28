@@ -116,7 +116,7 @@ try {
     history0016 = await captureMigrationHistory(connection);
 
     const statements0017 = await readFileStatements(migration0017);
-    if (statements0017.length !== 51) {
+    if (statements0017.length !== 53) {
       throw new Error("0017 statement contract is unsupported");
     }
     if (
@@ -185,12 +185,19 @@ try {
 
     const statements0018 = await readFileStatements(migration0018);
     if (
-      statements0018.length !== 2 ||
+      statements0018.length !== 5 ||
       statements0018[0] !==
         "DROP PROCEDURE IF EXISTS `credit_create_wallet`;" ||
       !/^CREATE PROCEDURE `credit_reserve_checkout_intent`(?:\s|\()/i.test(
         statements0018[1]
-      )
+      ) ||
+      statements0018[2] !==
+        "DROP PROCEDURE IF EXISTS `credit_expire_pristine_checkout`;" ||
+      !/^CREATE PROCEDURE `credit_expire_pristine_checkout`(?:\s|\()/i.test(
+        statements0018[3]
+      ) ||
+      statements0018[4] !==
+        "CREATE INDEX `billing_intents_credit_capability_expiry_idx` ON `billing_intents` (`kind`,`status`,`checkout_capability_expires_at`,`intent_id`);"
     ) {
       throw new Error("0018 statement contract is unsupported");
     }

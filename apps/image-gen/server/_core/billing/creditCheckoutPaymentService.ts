@@ -2,6 +2,8 @@ import { getMollieConfig, type MollieConfig } from "./config";
 import {
   PREMIUM_IMAGE_CREDIT_OFFER_ID,
   PREMIUM_IMAGE_CREDIT_OFFER_VERSION,
+  PREMIUM_IMAGE_CREDIT_REFUND_POLICY_ID,
+  PREMIUM_IMAGE_CREDIT_REFUND_POLICY_VERSION,
   getCreditOffer,
 } from "./creditCatalog";
 import {
@@ -47,7 +49,7 @@ export class CreditCheckoutPaymentError extends Error {
 
 type CreditPaymentClient = Pick<
   MollieClient,
-  "createCreditPayment" | "getHostedCheckoutUrl"
+  "createCreditPayment" | "getPayment" | "getHostedCheckoutUrl"
 >;
 
 type Dependencies = Readonly<{
@@ -101,20 +103,25 @@ export async function confirmCreditCheckoutPayment(
   let transportStarted = false;
   let payment: MolliePayment;
   try {
-    if (!(await dependencies.markTransportStarted(operation))) fail();
-    transportStarted = true;
-    payment = await client.createCreditPayment({
-      amount: offer.amount,
-      description: offer.mollieDescription,
-      billingIntentId: scope.intentId,
-      metadataHash: scope.metadataHash,
-      redirectUrl: new URL(
-        "/credits/checkout/return",
-        mollieConfig.appBaseUrl
-      ).toString(),
-      webhookUrl: mollieConfig.paymentWebhookUrl,
-      idempotencyKey: `credit-payment:${scope.intentId}`,
-    });
+    if (claim.recoveryPaymentId) {
+      payment = await client.getPayment(claim.recoveryPaymentId);
+      if (payment.id !== claim.recoveryPaymentId) fail();
+    } else {
+      if (!(await dependencies.markTransportStarted(operation))) fail();
+      transportStarted = true;
+      payment = await client.createCreditPayment({
+        amount: offer.amount,
+        description: offer.mollieDescription,
+        billingIntentId: scope.intentId,
+        metadataHash: scope.metadataHash,
+        redirectUrl: new URL(
+          "/credits/checkout/return",
+          mollieConfig.appBaseUrl
+        ).toString(),
+        webhookUrl: mollieConfig.paymentWebhookUrl,
+        idempotencyKey: `credit-payment:${scope.intentId}`,
+      });
+    }
   } catch (error) {
     if (transportStarted) {
       await persistFailedTransport(dependencies, operation, error);
@@ -145,12 +152,20 @@ export async function confirmCreditCheckoutPayment(
     payment,
     contract.exact && !!checkoutUrl
   );
-  const finalized = await dependencies.finalize({
-    ...operation,
-    outcome,
-  });
-  if (!finalized.recorded || !finalized.authorized) fail();
-  if (outcome.kind !== "known_succeeded" || !checkoutUrl) fail();
+  if (!claim.recoveryPaymentId) {
+    const finalized = await dependencies.finalize({
+      ...operation,
+      outcome,
+    });
+    if (!finalized.recorded || !finalized.authorized) fail();
+  }
+  if (
+    outcome.kind !== "known_succeeded" ||
+    !checkoutUrl ||
+    (claim.recoveryPaymentId && outcome.paymentId !== claim.recoveryPaymentId)
+  ) {
+    fail();
+  }
 
   const exposed = await dependencies.expose({
     ...operation,
@@ -242,7 +257,10 @@ function requireProviderScope(
     session.offer.creditCount !== 8 ||
     session.offer.imageQuality !== "medium" ||
     session.offer.expires ||
-    session.offer.automaticRenewal
+    session.offer.automaticRenewal ||
+    session.offer.refundPolicyId !== PREMIUM_IMAGE_CREDIT_REFUND_POLICY_ID ||
+    session.offer.refundPolicyVersion !==
+      PREMIUM_IMAGE_CREDIT_REFUND_POLICY_VERSION
   ) {
     return fail();
   }

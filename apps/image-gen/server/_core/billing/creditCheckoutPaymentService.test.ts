@@ -44,6 +44,8 @@ function session(
       imageQuality: "medium",
       expires: false,
       automaticRenewal: false,
+      refundPolicyId: "premium_image_credit_refund",
+      refundPolicyVersion: 1,
     },
     record: {
       intentId: INTENT_ID,
@@ -116,6 +118,7 @@ function harness(
     finalized?: Readonly<{ recorded: boolean; authorized: boolean }>;
     exposed?: boolean;
     checkoutUrlError?: boolean;
+    recoveryPaymentId?: string;
   } = {}
 ) {
   const calls: string[] = [];
@@ -129,6 +132,11 @@ function harness(
     if (options.checkoutUrlError) throw new Error("bad provider URL");
     return "https://www.mollie.com/checkout/select-method/x";
   });
+  const getPayment = vi.fn(async (paymentId: string) => {
+    calls.push("get");
+    if (options.providerError) throw options.providerError;
+    return options.providerResult ?? payment({ id: paymentId });
+  });
   const claim = vi.fn(async (_scope: CreditCheckoutProviderScope) => {
     calls.push("claim");
     return options.claim === false
@@ -137,6 +145,9 @@ function harness(
           claimed: true,
           operationId: OPERATION_ID,
           leaseToken: LEASE_TOKEN,
+          ...(options.recoveryPaymentId
+            ? { recoveryPaymentId: options.recoveryPaymentId }
+            : {}),
         } as const);
   });
   const markTransportStarted = vi.fn(async () => {
@@ -159,7 +170,11 @@ function harness(
   const dependencies = {
     mollieConfig: () => config,
     pilotConfig: () => pilot,
-    createClient: () => ({ createCreditPayment, getHostedCheckoutUrl }),
+    createClient: () => ({
+      createCreditPayment,
+      getPayment,
+      getHostedCheckoutUrl,
+    }),
     claim,
     markTransportStarted,
     finalize,
@@ -168,6 +183,7 @@ function harness(
   return {
     calls,
     createCreditPayment,
+    getPayment,
     getHostedCheckoutUrl,
     claim,
     markTransportStarted,
@@ -211,6 +227,39 @@ describe("confirmCreditCheckoutPayment", () => {
       })
     );
   });
+
+  it.each(["before", "after"] as const)(
+    "recovers a crash %s checkout exposure with one exact GET and no second POST",
+    async crashBoundary => {
+      const test = harness({ recoveryPaymentId: PAYMENT_ID });
+      await expect(
+        confirmCreditCheckoutPayment(
+          session(
+            crashBoundary === "after"
+              ? {
+                  status: "open",
+                  molliePaymentId: PAYMENT_ID,
+                  urlExposedAt: new Date("2026-08-28T09:02:00.000Z"),
+                }
+              : { status: "creating_payment" }
+          ),
+          test.dependencies
+        )
+      ).resolves.toEqual({
+        checkoutUrl: "https://www.mollie.com/checkout/select-method/x",
+      });
+
+      expect(test.calls).toEqual(["claim", "get", "url", "expose"]);
+      expect(test.getPayment).toHaveBeenCalledOnce();
+      expect(test.getPayment).toHaveBeenCalledWith(PAYMENT_ID);
+      expect(test.createCreditPayment).not.toHaveBeenCalled();
+      expect(test.markTransportStarted).not.toHaveBeenCalled();
+      expect(test.finalize).not.toHaveBeenCalled();
+      expect(test.expose).toHaveBeenCalledWith(
+        expect.objectContaining({ paymentId: PAYMENT_ID })
+      );
+    }
+  );
 
   it("makes no provider call when the exact claim or transport lease is lost", async () => {
     const noClaim = harness({ claim: false });
@@ -316,5 +365,28 @@ describe("confirmCreditCheckoutPayment", () => {
     ).rejects.toBeInstanceOf(CreditCheckoutPaymentError);
     expect(test.claim).not.toHaveBeenCalled();
     expect(test.createCreditPayment).not.toHaveBeenCalled();
+  });
+
+  it("fails before claiming when the immutable refund policy changes", async () => {
+    for (const offer of [
+      {
+        ...session().offer,
+        refundPolicyId: "different_refund_policy",
+      },
+      {
+        ...session().offer,
+        refundPolicyVersion: 2,
+      },
+    ]) {
+      const test = harness();
+      await expect(
+        confirmCreditCheckoutPayment(
+          { ...session(), offer } as CreditCheckoutPaymentSession,
+          test.dependencies
+        )
+      ).rejects.toBeInstanceOf(CreditCheckoutPaymentError);
+      expect(test.claim).not.toHaveBeenCalled();
+      expect(test.createCreditPayment).not.toHaveBeenCalled();
+    }
   });
 });

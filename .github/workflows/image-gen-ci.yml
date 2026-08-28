@@ -130,6 +130,7 @@ jobs:
             server/billingExecution.mysql.test.ts \
             server/billingHandoffErasure.mysql.test.ts \
             server/billingPrivacySerialization.mysql.test.ts \
+            server/creditCheckoutRetention.mysql.test.ts \
             server/creditCheckoutReservationSchema.mysql.test.ts \
             server/creditPaymentFlow.mysql.test.ts \
             server/creditWalletSchema.mysql.test.ts \

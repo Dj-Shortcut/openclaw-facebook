@@ -130,7 +130,8 @@ function getConnectedDeletionChannelConnection(
 
 async function deleteUserDataInternal(
   psid: string,
-  lockedPrivacyErasure?: LockedPrivacyErasure
+  lockedPrivacyErasure?: LockedPrivacyErasure,
+  creditWalletCleanupPending = false
 ): Promise<UserDataDeletionOutcome> {
   const requestChannel = getMessengerRequestChannel();
   if (!requestChannel && process.env.NODE_ENV === "production") {
@@ -325,11 +326,20 @@ async function deleteUserDataInternal(
       });
       creditWalletsPending = outcome.result === "pending";
     });
-    if (!creditWalletsErased || creditWalletsPending) {
-      return { status: "pending" };
-    }
+    // A wallet may need to retain minimal financial evidence while a paid
+    // provider attempt is still being resolved. That must keep the overall
+    // privacy saga pending, but it must not retain unrelated conversation,
+    // media, memory, quota, or state content. Continue the locked content
+    // erasure and leave the privacy subject in its erasing epoch until the
+    // wallet procedure succeeds on a later retry.
+    const financialCleanupPending =
+      !creditWalletsErased || creditWalletsPending;
     return await runWithLockedMessengerPrivacyErasure(erasure, async () => {
-      const value = await deleteUserDataInternal(psid, erasure);
+      const value = await deleteUserDataInternal(
+        psid,
+        erasure,
+        financialCleanupPending
+      );
       return { value, complete: value.status === "completed" };
     });
   }
@@ -512,7 +522,11 @@ async function deleteUserDataInternal(
     if (!deleteStepsSucceeded) {
       return { status: "failed" };
     }
-    if (privacyErasure) return { status: "completed" };
+    if (privacyErasure) {
+      return creditWalletCleanupPending
+        ? { status: "pending" }
+        : { status: "completed" };
+    }
     await Promise.resolve(clearUserState(psid));
     return { status: "completed" };
   }
@@ -663,7 +677,9 @@ async function deleteUserDataInternal(
       ? deletePersistedStateForErasure(psid, deletionState)
       : clearUserState(psid)
   );
-  return { status: "completed" };
+  return creditWalletCleanupPending
+    ? { status: "pending" }
+    : { status: "completed" };
 }
 
 export async function deleteUserData(

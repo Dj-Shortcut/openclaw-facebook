@@ -20,6 +20,8 @@ const OFFER: CreditCheckoutPublicOffer = Object.freeze({
   imageQuality: "medium",
   expires: false,
   automaticRenewal: false,
+  refundPolicyId: "premium_image_credit_refund",
+  refundPolicyVersion: 1,
 });
 
 type BoundServer = Readonly<{ server: Server; baseUrl: string }>;

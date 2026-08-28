@@ -3,34 +3,55 @@ import { createHash } from "node:crypto";
 import { safeLog } from "../logger";
 import { getConfiguredBillingMode } from "./config";
 import {
+  enqueueCreditReservationTransportReview,
+  listDueCreditReservationResolutions,
+  listExpiredPristineCreditCheckouts,
   listExpiredCreditReservations,
   type ExpiredCreditReservation,
 } from "./creditReservationExpiryStore";
-import { expireCreditReservation } from "./creditWalletStore";
+import {
+  commitCreditReservation,
+  expirePristineCreditCheckout,
+  expireCreditReservation,
+} from "./creditWalletStore";
+import { deriveCreditReservationCommitRecovery } from "./creditGenerationAdmission";
 
 const POLL_INTERVAL_MS = 60_000;
 let timer: NodeJS.Timeout | null = null;
 let running = false;
 
-type Dependencies = Readonly<{
+export type CreditReservationExpiryDependencies = Readonly<{
   mode: typeof getConfiguredBillingMode;
   list: typeof listExpiredCreditReservations;
+  listDue: typeof listDueCreditReservationResolutions;
+  listPristineCheckouts: typeof listExpiredPristineCreditCheckouts;
   expire: typeof expireCreditReservation;
+  expirePristineCheckout: typeof expirePristineCreditCheckout;
+  commit: typeof commitCreditReservation;
+  deriveCommit: typeof deriveCreditReservationCommitRecovery;
+  review: typeof enqueueCreditReservationTransportReview;
 }>;
 
-const defaultDependencies: Dependencies = Object.freeze({
+const defaultDependencies: CreditReservationExpiryDependencies = Object.freeze({
   mode: getConfiguredBillingMode,
   list: listExpiredCreditReservations,
+  listDue: listDueCreditReservationResolutions,
+  listPristineCheckouts: listExpiredPristineCreditCheckouts,
   expire: expireCreditReservation,
+  expirePristineCheckout: expirePristineCreditCheckout,
+  commit: commitCreditReservation,
+  deriveCommit: deriveCreditReservationCommitRecovery,
+  review: enqueueCreditReservationTransportReview,
 });
 
 export async function runCreditReservationExpiryOnce(
   limit = 25,
   now = new Date(),
-  dependencies: Dependencies = defaultDependencies
+  dependencies: CreditReservationExpiryDependencies = defaultDependencies
 ): Promise<number> {
-  const rows = await dependencies.list(dependencies.mode(), now, limit);
-  let expired = 0;
+  const mode = dependencies.mode();
+  const rows = await dependencies.list(mode, now, limit);
+  let resolved = 0;
   for (const row of rows) {
     const terminal = deriveExpiryEvidence(row);
     await dependencies.expire({
@@ -47,9 +68,52 @@ export async function runCreditReservationExpiryOnce(
       entryId: terminal.entryId,
       evidenceHash: terminal.evidenceHash,
     });
-    expired += 1;
+    resolved += 1;
   }
-  return expired;
+
+  const dueRows = await dependencies.listDue(mode, now, limit);
+  for (const row of dueRows) {
+    if (row.transportState === "known_accepted") {
+      try {
+        const terminal = dependencies.deriveCommit(row);
+        if (terminal) {
+          await dependencies.commit({
+            workspaceId: row.workspaceId,
+            mode: row.mode,
+            channelConnectionId: row.channelConnectionId,
+            bindingEpoch: row.bindingEpoch,
+            privacyEpoch: row.privacyEpoch,
+            userKey: row.userKey,
+            walletId: row.walletId,
+            financialSubjectRef: row.financialSubjectRef,
+            reservationId: row.reservationId,
+            ownerTokenHash: row.ownerTokenHash,
+            entryId: terminal.entryId,
+            evidenceHash: terminal.evidenceHash,
+          });
+          resolved += 1;
+          continue;
+        }
+      } catch {
+        // A missing/rotated proof is indistinguishable from an ambiguous
+        // provider outcome. Keep the credit held and use the durable review
+        // plane rather than releasing or consuming it speculatively.
+      }
+    }
+    await dependencies.review(row);
+    resolved += 1;
+  }
+
+  const pristineCheckouts = await dependencies.listPristineCheckouts(
+    mode,
+    now,
+    limit
+  );
+  for (const checkout of pristineCheckouts) {
+    const outcome = await dependencies.expirePristineCheckout(checkout);
+    if (outcome.result === "applied") resolved += 1;
+  }
+  return resolved;
 }
 
 export function startCreditReservationExpiryWorker(): void {

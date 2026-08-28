@@ -41,6 +41,7 @@ const OPERATOR_REASONS = new Set([
   "subscription_cancellation_local_scope_mismatch",
   "subscription_cancellation_provider_scope_mismatch",
   "payment_cancellation_failed",
+  "credit_reservation_transport_ambiguous",
 ]);
 const CUSTOMER_REASONS = new Set([
   "payment_failed",

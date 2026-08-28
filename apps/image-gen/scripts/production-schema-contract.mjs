@@ -10,10 +10,13 @@ export const creditWalletRoutineNames = Object.freeze([
   "credit_create_reservation_hold",
   "credit_reserve_checkout_intent",
   "credit_erase_wallet",
+  "credit_expire_pristine_checkout",
   "credit_expire_reservation",
+  "credit_freeze_wallet_for_review",
   "credit_grant_purchase",
   "credit_mark_reservation_provider_accepted",
   "credit_mark_reservation_transport_started",
+  "credit_release_rejected_reservation",
   "credit_release_reservation",
   "credit_scrub_terminal_reservation",
 ]);
@@ -407,7 +410,13 @@ export function assertCreditWalletMigrationGrantScope(
   const schemaGrants = [];
   let globalSuper = false;
   let revokedGlobalSuper = false;
-  const expectedRoutines = new Set(creditWalletRoutineNames);
+  const expectedRoutines = new Set([
+    ...creditWalletRoutineNames,
+    // MySQL 8.4 automatically grants the creator ALTER ROUTINE and EXECUTE
+    // on this 0017-only helper until 0018 drops it. Accept only that exact
+    // transitional procedure so the same least-privilege principal can resume.
+    "credit_create_wallet",
+  ]);
   for (const grant of grants) {
     const parsed = /^(GRANT|REVOKE) (.+) ON (.+) (?:TO|FROM) /i.exec(grant);
     const privileges = parsed?.[2]
@@ -455,6 +464,7 @@ export function assertCreditWalletMigrationGrantScope(
       "UPDATE",
       "TRIGGER",
       "CREATE ROUTINE",
+      "ALTER ROUTINE",
     ],
     "credit wallet migration principal"
   );

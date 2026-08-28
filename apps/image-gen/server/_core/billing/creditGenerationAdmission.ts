@@ -21,6 +21,7 @@ import {
   createCreditReservationHold,
   markCreditReservationProviderAccepted,
   markCreditReservationTransportStarted,
+  releaseCreditReservationAfterProviderRejection,
   releaseCreditReservation,
   type CreditWalletScope,
 } from "./creditWalletStore";
@@ -44,6 +45,7 @@ export type PaidCreditGenerationReservation = Readonly<{
   imageQuality: "medium";
   markTransportStarted: () => Promise<void>;
   commitProviderSuccess: () => Promise<void>;
+  releaseProviderRejected: (status: number) => Promise<void>;
   releaseBeforeTransport: () => Promise<void>;
   toJSON: () => Readonly<{
     reservationId: string;
@@ -76,7 +78,25 @@ type ReservationMaterial = Readonly<{
   commitEvidenceHash: string;
   releaseEntryId: string;
   releaseEvidenceHash: string;
+  providerRejectedEntryId: string;
 }>;
+
+/**
+ * Immutable proof needed to settle a provider response that was accepted
+ * before the process could debit the held credit.
+ */
+export type CreditReservationCommitRecoveryInput = CreditWalletScope &
+  Readonly<{
+    reservationId: string;
+    generationRequestKeyHash: string;
+    ownerTokenHash: string;
+  }>;
+
+export type CreditReservationProviderRejectedRecoveryInput =
+  CreditReservationCommitRecoveryInput &
+    Readonly<{
+      rejectionStatus: number;
+    }>;
 
 export type CreditGenerationAdmissionDependencies = Readonly<{
   enabled: () => boolean;
@@ -97,6 +117,7 @@ export type CreditGenerationAdmissionDependencies = Readonly<{
   markProviderAccepted: typeof markCreditReservationProviderAccepted;
   commit: typeof commitCreditReservation;
   release: typeof releaseCreditReservation;
+  releaseProviderRejected: typeof releaseCreditReservationAfterProviderRejection;
 }>;
 
 const defaultDependencies: CreditGenerationAdmissionDependencies =
@@ -111,6 +132,7 @@ const defaultDependencies: CreditGenerationAdmissionDependencies =
     markProviderAccepted: markCreditReservationProviderAccepted,
     commit: commitCreditReservation,
     release: releaseCreditReservation,
+    releaseProviderRejected: releaseCreditReservationAfterProviderRejection,
   });
 
 export class PaidCreditGenerationAdmissionError extends Error {
@@ -182,9 +204,10 @@ function hmac(
 }
 
 function evidenceHash(
-  purpose: "hold" | "commit" | "release",
+  purpose: "hold" | "commit" | "release" | "provider_rejected",
   reservationId: string,
-  requestHash: string
+  requestHash: string,
+  providerStatus?: number
 ): string {
   return createHash("sha256")
     .update("leaderbot.premium-credit-evidence.v1\0", "utf8")
@@ -193,18 +216,15 @@ function evidenceHash(
     .update(reservationId, "utf8")
     .update("\0", "utf8")
     .update(requestHash, "utf8")
+    .update(providerStatus === undefined ? "" : `\0${providerStatus}`, "utf8")
     .digest("hex");
 }
 
-function deriveReservationMaterial(
+function deriveReservationMaterialFromRequestHash(
   secret: Uint8Array,
   scope: CreditWalletScope,
-  requestId: string
+  requestHash: string
 ): ReservationMaterial {
-  const requestHash = createHash("sha256")
-    .update("leaderbot.premium-credit-generation.v1\0", "utf8")
-    .update(requestId, "utf8")
-    .digest("hex");
   const fields = [
     String(scope.workspaceId),
     scope.mode,
@@ -241,6 +261,11 @@ function deriveReservationMaterial(
     "leaderbot.premium-credit-release-entry.v1\0",
     fields
   );
+  const providerRejectedDigest = hmac(
+    secret,
+    "leaderbot.premium-credit-provider-rejected-entry.v1\0",
+    fields
+  );
   try {
     const reservationId = uuidV8FromDigest(reservationDigest);
     return Object.freeze({
@@ -253,6 +278,7 @@ function deriveReservationMaterial(
       commitEvidenceHash: evidenceHash("commit", reservationId, requestHash),
       releaseEntryId: uuidV8FromDigest(releaseDigest),
       releaseEvidenceHash: evidenceHash("release", reservationId, requestHash),
+      providerRejectedEntryId: uuidV8FromDigest(providerRejectedDigest),
     });
   } finally {
     reservationDigest.fill(0);
@@ -260,7 +286,133 @@ function deriveReservationMaterial(
     holdDigest.fill(0);
     commitDigest.fill(0);
     releaseDigest.fill(0);
+    providerRejectedDigest.fill(0);
   }
+}
+
+function deriveReservationMaterial(
+  secret: Uint8Array,
+  scope: CreditWalletScope,
+  requestId: string
+): ReservationMaterial {
+  const requestHash = createHash("sha256")
+    .update("leaderbot.premium-credit-generation.v1\0", "utf8")
+    .update(requestId, "utf8")
+    .digest("hex");
+  return deriveReservationMaterialFromRequestHash(secret, scope, requestHash);
+}
+
+/**
+ * Rebuilds only the deterministic commit proof for a persisted, known-2xx
+ * reservation. It returns null when the current secret no longer proves the
+ * stored owner/reservation binding; callers must contain that case for review
+ * rather than guessing whether a provider charge occurred.
+ */
+export function deriveCreditReservationCommitRecovery(
+  input: CreditReservationCommitRecoveryInput,
+  dependencies: Pick<
+    CreditGenerationAdmissionDependencies,
+    "withSecret"
+  > = defaultDependencies
+): Readonly<{ entryId: string; evidenceHash: string }> | null {
+  if (
+    !isDatabaseId(input.workspaceId) ||
+    !isDatabaseId(input.channelConnectionId) ||
+    !isDatabaseId(input.bindingEpoch) ||
+    !isDatabaseId(input.privacyEpoch) ||
+    !USER_KEY_PATTERN.test(input.userKey)
+  ) {
+    fail();
+  }
+  if (input.mode !== "test" && input.mode !== "live") fail();
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(
+      input.walletId
+    ) ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(
+      input.reservationId
+    )
+  ) {
+    fail();
+  }
+  if (
+    !/^[0-9a-f]{64}$/.test(input.financialSubjectRef) ||
+    !/^[0-9a-f]{64}$/.test(input.generationRequestKeyHash) ||
+    !/^[0-9a-f]{64}$/.test(input.ownerTokenHash)
+  ) {
+    fail();
+  }
+  return dependencies.withSecret(secret => {
+    const material = deriveReservationMaterialFromRequestHash(
+      secret,
+      {
+        workspaceId: input.workspaceId,
+        mode: input.mode,
+        channelConnectionId: input.channelConnectionId,
+        bindingEpoch: input.bindingEpoch,
+        privacyEpoch: input.privacyEpoch,
+        userKey: input.userKey,
+        walletId: input.walletId,
+        financialSubjectRef: input.financialSubjectRef,
+      },
+      input.generationRequestKeyHash
+    );
+    if (
+      material.reservationId !== input.reservationId ||
+      material.ownerTokenHash !== input.ownerTokenHash
+    ) {
+      return null;
+    }
+    return Object.freeze({
+      entryId: material.commitEntryId,
+      evidenceHash: material.commitEvidenceHash,
+    });
+  });
+}
+
+/**
+ * Rebuilds the deterministic terminal proof for an operator-confirmed,
+ * non-retryable provider rejection. The same persisted request/owner binding
+ * used by the live path must still verify; otherwise the hold remains for
+ * review. Retryable or ambiguous HTTP outcomes are deliberately rejected.
+ */
+export function deriveCreditReservationProviderRejectedRecovery(
+  input: CreditReservationProviderRejectedRecoveryInput,
+  dependencies: Pick<
+    CreditGenerationAdmissionDependencies,
+    "withSecret"
+  > = defaultDependencies
+): Readonly<{ entryId: string; evidenceHash: string }> | null {
+  if (
+    !Number.isSafeInteger(input.rejectionStatus) ||
+    input.rejectionStatus < 400 ||
+    input.rejectionStatus > 499 ||
+    input.rejectionStatus === 408 ||
+    input.rejectionStatus === 429
+  ) {
+    fail();
+  }
+  const commitProof = deriveCreditReservationCommitRecovery(
+    input,
+    dependencies
+  );
+  if (!commitProof) return null;
+  return dependencies.withSecret(secret => {
+    const material = deriveReservationMaterialFromRequestHash(
+      secret,
+      input,
+      input.generationRequestKeyHash
+    );
+    return Object.freeze({
+      entryId: material.providerRejectedEntryId,
+      evidenceHash: evidenceHash(
+        "provider_rejected",
+        input.reservationId,
+        input.generationRequestKeyHash,
+        input.rejectionStatus
+      ),
+    });
+  });
 }
 
 function exactScope(
@@ -363,6 +515,7 @@ export async function reservePaidCreditGeneration(
     | "transport_started"
     | "provider_accepted"
     | "committed"
+    | "provider_rejected"
     | "released" = "open";
   const jsonView = Object.freeze({
     reservationId: derived.material.reservationId,
@@ -408,6 +561,33 @@ export async function reservePaidCreditGeneration(
         evidenceHash: derived.material.commitEvidenceHash,
       });
       state = "committed";
+    },
+    releaseProviderRejected: async status => {
+      if (
+        !Number.isSafeInteger(status) ||
+        status < 400 ||
+        status > 499 ||
+        status === 408 ||
+        status === 429
+      ) {
+        fail();
+      }
+      if (state === "released" || state === "provider_rejected") return;
+      if (state !== "transport_started") fail();
+      await dependencies.releaseProviderRejected({
+        ...derived.scope,
+        reservationId: derived.material.reservationId,
+        ownerTokenHash: derived.material.ownerTokenHash,
+        rejectionStatus: status,
+        entryId: derived.material.providerRejectedEntryId,
+        evidenceHash: evidenceHash(
+          "provider_rejected",
+          derived.material.reservationId,
+          derived.material.generationRequestKeyHash,
+          status
+        ),
+      });
+      state = "provider_rejected";
     },
     releaseBeforeTransport: async () => {
       if (state === "released") return;

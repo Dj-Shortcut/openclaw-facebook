@@ -442,6 +442,8 @@ export function createMessengerGenerationJobRunner(
         let paidCreditTransportStarted = false;
         let paidCreditReleasePromise: Promise<void> | null = null;
         let paidCreditCommitPromise: Promise<void> | null = null;
+        let paidCreditRejectedReleasePromise: Promise<void> | null = null;
+        let paidCreditProviderRejected = false;
         const releasePaidCreditBeforeTransport = async (): Promise<void> => {
           if (
             !paidCreditReservation ||
@@ -459,6 +461,19 @@ export function createMessengerGenerationJobRunner(
           paidCreditCommitPromise ??=
             paidCreditReservation.commitProviderSuccess();
           await paidCreditCommitPromise;
+        };
+        const releasePaidCreditProviderRejected = async (
+          status: number
+        ): Promise<void> => {
+          if (!paidCreditReservation || !paidCreditTransportStarted) {
+            throw new Error(
+              "Paid credit provider rejection arrived before transport started"
+            );
+          }
+          paidCreditRejectedReleasePromise ??=
+            paidCreditReservation.releaseProviderRejected(status);
+          await paidCreditRejectedReleasePromise;
+          paidCreditProviderRejected = true;
         };
         let providerAttemptsStarted = 0;
         let providerFenceSequence = 0;
@@ -486,6 +501,15 @@ export function createMessengerGenerationJobRunner(
           );
           const beginProviderAttempt =
             async (): Promise<ProviderAttemptAdmission> => {
+              // A paid hold represents exactly one provider transport. Once
+              // that transport may have reached OpenAI, a retry could create
+              // a second billable image while only one credit is reserved.
+              // Leave the hold for bounded reconciliation instead.
+              if (paidCreditReservation && paidCreditTransportStarted) {
+                throw new Error(
+                  "Paid credit provider transport is already in progress"
+                );
+              }
               await assertMessengerGenerationOwnership(job);
               await assertGenerationJobPrivacy(job);
               providerFenceSequence += 1;
@@ -510,7 +534,9 @@ export function createMessengerGenerationJobRunner(
                   }
                   if (
                     paidCreditReservation &&
-                    (paidCreditReleasePromise || paidCreditCommitPromise)
+                    (paidCreditReleasePromise ||
+                      paidCreditCommitPromise ||
+                      paidCreditRejectedReleasePromise)
                   ) {
                     throw new Error(
                       "Paid credit reservation is already terminal"
@@ -666,6 +692,9 @@ export function createMessengerGenerationJobRunner(
             onProviderSuccess: paidCreditReservation
               ? commitPaidCreditProviderSuccess
               : undefined,
+            onProviderRejected: paidCreditReservation
+              ? releasePaidCreditProviderRejected
+              : undefined,
             bypassBudgetLimits: ownerQuotaBypass,
             costLedgerChannel: "facebook_messenger",
             costLedgerScope:
@@ -752,7 +781,10 @@ export function createMessengerGenerationJobRunner(
 
           await Promise.all(
             providerFences.map(fence =>
-              finalizeMessengerProviderAttemptFence(fence, "ambiguous")
+              finalizeMessengerProviderAttemptFence(
+                fence,
+                paidCreditProviderRejected ? "known_failed" : "ambiguous"
+              )
             )
           );
           providerFences.length = 0;

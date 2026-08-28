@@ -19,11 +19,14 @@ import {
   createCreditReservationHold,
   CreditWalletStoreError,
   eraseCreditWallet,
+  expirePristineCreditCheckout,
   expireCreditReservation,
+  freezeCreditWalletForReview,
   grantCreditPurchase,
   markCreditReservationProviderAccepted,
   markCreditReservationTransportStarted,
   releaseCreditReservation,
+  releaseCreditReservationAfterProviderRejection,
   reserveCreditCheckoutIntent,
   scrubTerminalCreditReservation,
 } from "./creditWalletStore";
@@ -33,6 +36,7 @@ const INTENT_ID = "22222222-2222-2222-2222-222222222222";
 const RESERVATION_ID = "33333333-3333-3333-3333-333333333333";
 const ENTRY_ID = "44444444-4444-4444-4444-444444444444";
 const ROOT_ENTRY_ID = "55555555-5555-5555-5555-555555555555";
+const PAYMENT_ID = "tr_creditpayment1";
 const USER_KEY = "a".repeat(64);
 const FINANCIAL_REF = "b".repeat(64);
 const CAPABILITY_HASH = "c".repeat(64);
@@ -64,6 +68,14 @@ const financialScope = {
   privacyEpoch: scope.privacyEpoch,
   walletId: scope.walletId,
   financialSubjectRef: scope.financialSubjectRef,
+};
+
+const reviewScope = {
+  ...financialScope,
+  intentId: INTENT_ID,
+  paymentLedgerId: 16,
+  providerPaymentId: PAYMENT_ID,
+  snapshotHash: EVIDENCE_HASH,
 };
 
 const terminalInput = {
@@ -134,7 +146,7 @@ describe("creditWalletStore procedure boundary", () => {
     getDatabaseOrThrowMock.mockResolvedValue({ execute: executeMock });
   });
 
-  it("calls all fourteen frozen procedures with the exact parameter order", async () => {
+  it("calls all sixteen direct frozen procedures with the exact parameter order", async () => {
     const cases = [
       {
         procedure: "credit_reserve_checkout_intent",
@@ -185,6 +197,23 @@ describe("creditWalletStore procedure boundary", () => {
             capabilityHash: CAPABILITY_HASH,
             sessionNonceHash: NONCE_HASH,
           }),
+      },
+      {
+        procedure: "credit_expire_pristine_checkout",
+        params: [
+          11,
+          "test",
+          12,
+          13,
+          14,
+          USER_KEY,
+          WALLET_ID,
+          FINANCIAL_REF,
+          INTENT_ID,
+        ],
+        response: procedureResponse("applied", "intent_id", INTENT_ID),
+        invoke: () =>
+          expirePristineCreditCheckout({ ...scope, intentId: INTENT_ID }),
       },
       {
         procedure: "credit_grant_purchase",
@@ -281,6 +310,34 @@ describe("creditWalletStore procedure boundary", () => {
             ownerTokenHash: OWNER_HASH,
           }),
       })),
+      {
+        procedure: "credit_release_rejected_reservation",
+        params: [
+          11,
+          "test",
+          12,
+          13,
+          14,
+          USER_KEY,
+          WALLET_ID,
+          FINANCIAL_REF,
+          RESERVATION_ID,
+          OWNER_HASH,
+          400,
+          ENTRY_ID,
+          EVIDENCE_HASH,
+        ],
+        response: procedureResponse(
+          "applied",
+          "reservation_id",
+          RESERVATION_ID
+        ),
+        invoke: () =>
+          releaseCreditReservationAfterProviderRejection({
+            ...terminalInput,
+            rejectionStatus: 400,
+          }),
+      },
       ...[
         ["credit_commit_reservation", commitCreditReservation],
         ["credit_release_reservation", releaseCreditReservation],
@@ -347,11 +404,25 @@ describe("creditWalletStore procedure boundary", () => {
         response: procedureResponse("erased", "wallet_id", WALLET_ID),
         invoke: () => eraseCreditWallet(erasureScope),
       },
-      ...[
-        ["credit_apply_refund_debit", applyCreditRefundDebit],
-        ["credit_apply_chargeback_debit", applyCreditChargebackDebit],
-      ].map(([procedure, invoke]) => ({
-        procedure: procedure as string,
+      {
+        procedure: "credit_apply_refund_debit",
+        params: [
+          11,
+          "test",
+          12,
+          13,
+          14,
+          WALLET_ID,
+          FINANCIAL_REF,
+          ROOT_ENTRY_ID,
+          ENTRY_ID,
+          EVIDENCE_HASH,
+        ],
+        response: procedureResponse("applied", "entry_id", ENTRY_ID),
+        invoke: () => applyCreditRefundDebit(adjustmentInput),
+      },
+      {
+        procedure: "credit_apply_chargeback_debit",
         params: [
           11,
           "test",
@@ -366,9 +437,8 @@ describe("creditWalletStore procedure boundary", () => {
           EVIDENCE_HASH,
         ],
         response: procedureResponse("applied", "entry_id", ENTRY_ID),
-        invoke: () =>
-          (invoke as typeof applyCreditRefundDebit)(adjustmentInput),
-      })),
+        invoke: () => applyCreditChargebackDebit(adjustmentInput),
+      },
       {
         procedure: "credit_apply_chargeback_restore",
         params: [
@@ -398,7 +468,7 @@ describe("creditWalletStore procedure boundary", () => {
       await testCase.invoke();
     }
 
-    expect(executeMock).toHaveBeenCalledTimes(14);
+    expect(executeMock).toHaveBeenCalledTimes(16);
     cases.forEach((testCase, index) => {
       const call = compiledCall(index);
       expect(call.sql).toBe(
@@ -408,6 +478,43 @@ describe("creditWalletStore procedure boundary", () => {
       expect(call.sql).not.toMatch(/\b(?:insert|update|delete)\b/i);
       expect(call.sql).not.toMatch(/credit_(?:wallets|ledger|reservations)/i);
     });
+  });
+
+  it("freezes a wallet through the transaction-bound definer routine", async () => {
+    const transactionExecute = vi
+      .fn()
+      .mockResolvedValue(procedureResponse("applied", "wallet_id", WALLET_ID));
+
+    await expect(
+      freezeCreditWalletForReview(
+        { execute: transactionExecute } as never,
+        reviewScope
+      )
+    ).resolves.toEqual({
+      result: "applied",
+      walletId: WALLET_ID,
+    });
+
+    const query = transactionExecute.mock.calls[0]?.[0];
+    expect(query).toBeDefined();
+    const compiled = new MySqlDialect().sqlToQuery(query);
+    expect(compiled.sql).toBe(
+      "CALL `credit_freeze_wallet_for_review`(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    );
+    expect(compiled.params).toEqual([
+      11,
+      "test",
+      12,
+      13,
+      14,
+      WALLET_ID,
+      FINANCIAL_REF,
+      INTENT_ID,
+      16,
+      PAYMENT_ID,
+      EVIDENCE_HASH,
+    ]);
+    expect(getDatabaseOrThrowMock).not.toHaveBeenCalled();
   });
 
   it("preserves review, pending, erasure, and replay statuses", async () => {
@@ -579,7 +686,7 @@ describe("creditWalletStore procedure boundary", () => {
           evidenceHash: EVIDENCE_HASH,
         }),
       () =>
-        applyCreditRefundDebit({
+        applyCreditChargebackDebit({
           ...adjustmentInput,
           providerEffectId: "refund effect with spaces",
         }),

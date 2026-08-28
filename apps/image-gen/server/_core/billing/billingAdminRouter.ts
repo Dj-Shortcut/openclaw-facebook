@@ -16,8 +16,39 @@ import {
   acknowledgeOperatorBillingNotification,
   listOperatorBillingNotifications,
 } from "./billingNotificationInboxStore";
+import { resolveAmbiguousPaidCreditReservation } from "./creditReservationOperatorResolution";
 
 const workspaceId = z.number().int().positive();
+const operatorReservationResolution = z
+  .object({
+    requestId: z.uuid(),
+    workspaceId,
+    reservationId: z.uuid(),
+    walletId: z.uuid(),
+    decision: z.enum(["provider_accepted", "provider_rejected"]),
+    providerStatus: z.number().int().min(200).max(499),
+    evidenceReference: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]{7,255}$/),
+  })
+  .strict()
+  .superRefine((input, context) => {
+    const accepted =
+      input.decision === "provider_accepted" &&
+      input.providerStatus >= 200 &&
+      input.providerStatus <= 299;
+    const rejected =
+      input.decision === "provider_rejected" &&
+      input.providerStatus >= 400 &&
+      input.providerStatus <= 499 &&
+      input.providerStatus !== 408 &&
+      input.providerStatus !== 429;
+    if (!accepted && !rejected) {
+      context.addIssue({
+        code: "custom",
+        path: ["providerStatus"],
+        message: "Provider proof does not match the operator decision",
+      });
+    }
+  });
 
 export const billingAdminRouter = router({
   operatorNotifications: adminProcedure
@@ -38,6 +69,15 @@ export const billingAdminRouter = router({
     )
     .mutation(({ ctx, input }) =>
       acknowledgeOperatorBillingNotification({
+        ...input,
+        actorUserId: ctx.user.id,
+      })
+    ),
+
+  resolveCreditReservationTransport: adminProcedure
+    .input(operatorReservationResolution)
+    .mutation(({ ctx, input }) =>
+      resolveAmbiguousPaidCreditReservation({
         ...input,
         actorUserId: ctx.user.id,
       })

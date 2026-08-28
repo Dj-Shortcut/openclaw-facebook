@@ -1,6 +1,9 @@
 export const PREMIUM_IMAGE_CREDIT_OFFER_ID =
   "premium_images_8_medium_v1" as const;
 export const PREMIUM_IMAGE_CREDIT_OFFER_VERSION = 1 as const;
+export const PREMIUM_IMAGE_CREDIT_REFUND_POLICY_ID =
+  "premium_image_credit_refund" as const;
+export const PREMIUM_IMAGE_CREDIT_REFUND_POLICY_VERSION = 1 as const;
 
 export type CreditOffer = Readonly<{
   offerId: typeof PREMIUM_IMAGE_CREDIT_OFFER_ID;
@@ -28,6 +31,8 @@ export type CreditOffer = Readonly<{
     automaticTopUp: false;
     overageAllowed: false;
   }>;
+  refundPolicyId: typeof PREMIUM_IMAGE_CREDIT_REFUND_POLICY_ID;
+  refundPolicyVersion: typeof PREMIUM_IMAGE_CREDIT_REFUND_POLICY_VERSION;
   mollieDescription: string;
 }>;
 
@@ -63,6 +68,8 @@ const PREMIUM_IMAGE_CREDIT_OFFER = Object.freeze({
     automaticTopUp: false as const,
     overageAllowed: false as const,
   }),
+  refundPolicyId: PREMIUM_IMAGE_CREDIT_REFUND_POLICY_ID,
+  refundPolicyVersion: PREMIUM_IMAGE_CREDIT_REFUND_POLICY_VERSION,
   mollieDescription: "Leaderbot - 8 premium beeldcredits",
 }) satisfies CreditOffer;
 

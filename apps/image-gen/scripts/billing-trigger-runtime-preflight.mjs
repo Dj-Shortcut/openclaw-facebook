@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import {
   assertCreditWalletRuntimeGrantScope,
@@ -33,9 +33,32 @@ async function runStage(stage, action) {
  * Exercises every production billing scheduler trigger through the DML-only
  * runtime principal. All writes use synthetic metadata and are rolled back.
  */
-export async function assertBillingTriggerRuntimePreflight(connection, mode) {
+export async function assertBillingTriggerRuntimePreflight(
+  connection,
+  mode,
+  options = {}
+) {
   if (!billingModes.has(mode)) {
     throw new BillingTriggerRuntimePreflightError("configuration");
+  }
+
+  if (options.expectedPrincipalSha256 !== undefined) {
+    const expectedPrincipalSha256 = options.expectedPrincipalSha256;
+    if (!/^[a-f0-9]{64}$/.test(expectedPrincipalSha256)) {
+      throw new BillingTriggerRuntimePreflightError("principal_identity");
+    }
+    await runStage("principal_identity", async () => {
+      const [[identity]] = await connection.query(
+        "SELECT CURRENT_USER() AS currentUser"
+      );
+      const match = /^([^@]+)@[^@]+$/.exec(identity?.currentUser ?? "");
+      const actualPrincipalSha256 = match
+        ? createHash("sha256").update(match[1], "utf8").digest("hex")
+        : "";
+      if (actualPrincipalSha256 !== expectedPrincipalSha256) {
+        throw new BillingTriggerRuntimePreflightError("principal_identity");
+      }
+    });
   }
 
   await runStage("grant_scope", async () => {

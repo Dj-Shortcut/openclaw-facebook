@@ -1,15 +1,13 @@
 import { useEffect, useState } from "react";
 import { Link } from "wouter";
 
-type CreditCheckoutOffer = Readonly<{
-  mode: "test" | "live";
-  amount: "4.99";
-  currency: "EUR";
-  creditCount: 8;
-  imageQuality: "medium";
-  expires: false;
-  automaticRenewal: false;
-}>;
+import {
+  CREDIT_CHECKOUT_BILLING_POLICY_PATH,
+  creditCheckoutModeDisclosure,
+  creditCheckoutRefundPolicyDisclosure,
+  parseCreditCheckoutOffer,
+  type CreditCheckoutOffer,
+} from "./creditCheckoutOffer";
 
 type CheckoutState =
   | Readonly<{ kind: "loading" }>
@@ -31,25 +29,6 @@ async function readJson(response: Response): Promise<unknown> {
     throw new Error("Unexpected checkout response");
   }
   return await response.json();
-}
-
-function parseOffer(value: unknown): CreditCheckoutOffer {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Invalid checkout offer");
-  }
-  const offer = value as Record<string, unknown>;
-  if (
-    (offer.mode !== "test" && offer.mode !== "live") ||
-    offer.amount !== "4.99" ||
-    offer.currency !== "EUR" ||
-    offer.creditCount !== 8 ||
-    offer.imageQuality !== "medium" ||
-    offer.expires !== false ||
-    offer.automaticRenewal !== false
-  ) {
-    throw new Error("Invalid checkout offer");
-  }
-  return offer as CreditCheckoutOffer;
 }
 
 function parseHostedCheckoutUrl(value: unknown): string {
@@ -81,7 +60,7 @@ async function claimCheckoutSession(
   );
   if (!response.ok) throw new Error("Checkout claim failed");
   const payload = (await readJson(response)) as { offer?: unknown };
-  return parseOffer(payload.offer);
+  return parseCreditCheckoutOffer(payload.offer);
 }
 
 async function readCheckoutSession(): Promise<CreditCheckoutOffer> {
@@ -91,7 +70,7 @@ async function readCheckoutSession(): Promise<CreditCheckoutOffer> {
   });
   if (!response.ok) throw new Error("Checkout session is unavailable");
   const payload = (await readJson(response)) as { offer?: unknown };
-  return parseOffer(payload.offer);
+  return parseCreditCheckoutOffer(payload.offer);
 }
 
 async function readReturnStatus(): Promise<CheckoutState> {
@@ -118,7 +97,7 @@ function ReturnMessage({ status }: { status: string }) {
     return (
       <>
         <h1 className="text-3xl font-semibold text-slate-950">
-          Je testbetaling is ontvangen
+          Je betaling is ontvangen
         </h1>
         <p className="mt-4 text-slate-700">
           Je 8 premium beeldcredits staan klaar. Ga terug naar Messenger om ze
@@ -131,7 +110,7 @@ function ReturnMessage({ status }: { status: string }) {
     return (
       <>
         <h1 className="text-3xl font-semibold text-slate-950">
-          We controleren je testbetaling
+          We controleren je betaling
         </h1>
         <p className="mt-4 text-slate-700">
           De terugkeerpagina is geen betaalbewijs. De credits verschijnen pas
@@ -143,7 +122,7 @@ function ReturnMessage({ status }: { status: string }) {
   return (
     <>
       <h1 className="text-3xl font-semibold text-slate-950">
-        De testbetaling is niet voltooid
+        De betaling is niet voltooid
       </h1>
       <p className="mt-4 text-slate-700">
         Er zijn geen credits toegevoegd. Je kunt veilig teruggaan naar
@@ -243,12 +222,46 @@ export default function CreditCheckout() {
               8 premium beeldcredits
             </h1>
             <p className="mt-3 text-4xl font-bold text-slate-950">€ 4,99</p>
+            <div
+              className={`mt-5 rounded-2xl p-4 text-sm ${
+                state.offer.mode === "test"
+                  ? "bg-amber-50 text-amber-950"
+                  : "bg-blue-50 text-blue-950"
+              }`}
+            >
+              {creditCheckoutModeDisclosure(state.offer)}
+            </div>
             <ul className="mt-6 space-y-2 text-slate-700">
               <li>8 afbeeldingen in medium kwaliteit</li>
               <li>Je credits vervallen niet</li>
               <li>Eén betaling, zonder abonnement</li>
               <li>Geen automatische verlenging of extra kosten</li>
             </ul>
+            <div className="mt-5 rounded-2xl border border-slate-200 p-4 text-sm leading-6 text-slate-700">
+              <p>{creditCheckoutRefundPolicyDisclosure(state.offer)}</p>
+              <p className="mt-2">
+                Een terugboeking (chargeback) kan premiumgebruik eveneens
+                pauzeren voor controle. Vermoed je een dubbele of technische
+                aanrekening? Neem dan contact op via de gegevens in het{" "}
+                <Link
+                  href={CREDIT_CHECKOUT_BILLING_POLICY_PATH}
+                  className="font-medium text-blue-700 hover:underline"
+                >
+                  betaal- en terugbetalingsbeleid
+                </Link>
+                .
+              </p>
+            </div>
+            <p className="mt-4 text-sm text-slate-600">
+              Lees vóór je bevestigt het volledige{" "}
+              <Link
+                href={CREDIT_CHECKOUT_BILLING_POLICY_PATH}
+                className="font-medium text-blue-700 hover:underline"
+              >
+                betaal- en terugbetalingsbeleid
+              </Link>
+              . Je wettelijke rechten als Belgische consument blijven gelden.
+            </p>
             <div className="mt-8 rounded-2xl bg-blue-50 p-4 text-sm text-blue-950">
               Alleen de knop hieronder start de beveiligde Mollie-checkout. Het
               openen van deze pagina heeft nog niets aangerekend.
