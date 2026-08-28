@@ -90,14 +90,14 @@
       "config": "apps/image-gen/fly.toml",
       "workingDirectory": "apps/image-gen",
       "deployScript": "deploy:image-gen",
-      "deploymentEnabled": false,
-      "deploymentBlockReason": "The reviewed 0016-to-0018 credit transition is waiting for a trusted, attested compatibility-bridge artifact.",
+      "deploymentEnabled": true,
+      "deploymentBlockReason": null,
       "sourceDeployEnabled": false,
       "sourceDeployBlockReason": "Production deploys require an immutable image built from reviewed source and recorded in this manifest before rollout.",
       "trustedBuilderWorkflow": ".github/workflows/build-production-artifacts.yml",
-      "reviewedImage": "registry.fly.io/leaderbot-fb-image-gen@sha256:01ccf154e0ac4c314f68775a0fd00fe925aaba92fee997a32f932c8d4c36d806",
-      "reviewedArtifactKind": "runtime",
-      "reviewedSourceCommit": "0b778ef7936b492b9b22b21690ecf54ea60a9856",
+      "reviewedImage": "registry.fly.io/leaderbot-fb-image-gen@sha256:dc40601684b2f9f7b3698914c5acb887ea7103631873a316930414e55ef10a03",
+      "reviewedArtifactKind": "migration-bridge",
+      "reviewedSourceCommit": "ab7a7e97003bd65fb31b8e57c718d6329b163d9f",
       "reviewedSettledPredecessor": {
         "identity": "deploy-32860967800-1",
         "image": "registry.fly.io/leaderbot-fb-image-gen@sha256:01ccf154e0ac4c314f68775a0fd00fe925aaba92fee997a32f932c8d4c36d806",
@@ -123,10 +123,10 @@
       "databaseSchemaTransition": {
         "from": "0016_expand",
         "to": "0018_credit_checkout_reservation",
-        "state": "awaiting_attested_bridge",
+        "state": "bridge_reviewed",
         "legacyBaseImage": "registry.fly.io/leaderbot-fb-image-gen@sha256:01ccf154e0ac4c314f68775a0fd00fe925aaba92fee997a32f932c8d4c36d806",
-        "bridgeImage": null,
-        "bridgeSourceCommit": null,
+        "bridgeImage": "registry.fly.io/leaderbot-fb-image-gen@sha256:dc40601684b2f9f7b3698914c5acb887ea7103631873a316930414e55ef10a03",
+        "bridgeSourceCommit": "ab7a7e97003bd65fb31b8e57c718d6329b163d9f",
         "bridgePredicateType": "https://leaderbot.live/attestations/migration-bridge/v1"
       },
       "databaseRecovery": {
@@ -138,7 +138,11 @@
         "probeVmMemoryMb": 2048,
         "mysqlImage": "docker-hub-mirror.fly.io/library/mysql:8.4.11@sha256:1d6b6a8fcee8ff758ff151d017f5203cd06792a0e698f0a593c9dfcb14609cf0"
       },
-      "reviewedImageSchemaPhases": ["0016_expand"],
+      "reviewedImageSchemaPhases": [
+        "0016_expand",
+        "0017_credit_wallet_expand",
+        "0018_credit_checkout_reservation"
+      ],
       "reviewedRollbackImageSchemaPhases": {
         "registry.fly.io/leaderbot-fb-image-gen@sha256:01ccf154e0ac4c314f68775a0fd00fe925aaba92fee997a32f932c8d4c36d806": [
           "0016_expand"
