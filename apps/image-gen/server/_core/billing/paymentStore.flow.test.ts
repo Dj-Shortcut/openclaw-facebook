@@ -15,6 +15,7 @@ import {
   type BillingSubscription,
 } from "../../../drizzle/schema";
 import type { MolliePayment } from "./mollieClient";
+import { createPaymentSnapshot } from "./paymentSnapshot";
 
 const { databaseMock, schedulerFenceMock } = vi.hoisted(() => ({
   databaseMock: vi.fn(),
@@ -444,6 +445,132 @@ describe("payment snapshot persistence flow", () => {
     });
   });
 
+  it.each(["paid", "failed", "canceled", "expired"])(
+    "does not regress terminal payment status %s at an equal timestamp",
+    async terminalStatus => {
+      const flow = paymentFlow({
+        existingLedger: {
+          status: terminalStatus,
+          occurredAt: new Date("2026-08-01T10:00:00.000Z"),
+          paidEffectApplied: terminalStatus === "paid" ? 1 : 0,
+        },
+      });
+      databaseMock.mockResolvedValue(flow.database);
+
+      await expect(
+        applyMolliePaymentSnapshot(
+          molliePayment({ status: "open", paidAt: undefined }),
+          1
+        )
+      ).resolves.toEqual({ result: "processed", workspaceId: 1 });
+
+      expect(flow.operations).not.toContain("upsert:paymentLedger");
+      expect(flow.updates).toContainEqual({
+        table: webhookDeliveries,
+        values: expect.objectContaining({
+          processingResult: "stale_snapshot_ignored",
+        }),
+      });
+    }
+  );
+
+  it("persists a monotone financial projection while hashing the raw observation", async () => {
+    const payment = molliePayment({
+      amount: { currency: "EUR", value: "19.00" },
+      _embedded: {
+        refunds: [
+          {
+            id: "re_existing",
+            status: "pending",
+            amount: { currency: "EUR", value: "19.00" },
+          },
+        ],
+      },
+    });
+    const flow = paymentFlow({
+      intent: startpilotIntent(),
+      existingLedger: {
+        status: "paid",
+        occurredAt: new Date("2026-08-01T10:00:00.000Z"),
+        paidEffectApplied: 1,
+        refunds: [
+          {
+            id: "re_existing",
+            status: "refunded",
+            amount: { currency: "EUR", value: "19.00" },
+            createdAt: null,
+          },
+        ],
+        chargebacks: [
+          {
+            id: "ch_existing",
+            amount: { currency: "EUR", value: "19.00" },
+            createdAt: null,
+            reversedAt: "2026-08-02T10:00:00.000Z",
+          },
+        ],
+      },
+    });
+    databaseMock.mockResolvedValue(flow.database);
+
+    await expect(applyMolliePaymentSnapshot(payment, 1)).resolves.toEqual({
+      result: "processed",
+      workspaceId: 1,
+    });
+
+    const ledgerUpdate = flow.updates.find(
+      entry =>
+        entry.table === paymentLedger &&
+        Object.prototype.hasOwnProperty.call(entry.values, "refunds")
+    );
+    expect(ledgerUpdate?.values).toMatchObject({
+      refunds: [expect.objectContaining({ status: "refunded" })],
+      chargebacks: [
+        expect.objectContaining({
+          id: "ch_existing",
+          reversedAt: "2026-08-02T10:00:00.000Z",
+        }),
+      ],
+      observedSnapshotHash: createPaymentSnapshot(payment).snapshotHash,
+    });
+    expect(flow.updates).toContainEqual({
+      table: workspaceEntitlements,
+      values: expect.objectContaining({ status: "inactive" }),
+    });
+  });
+
+  it("fails closed when a stale core snapshot carries new financial history", async () => {
+    const flow = paymentFlow({
+      intent: startpilotIntent(),
+      existingLedger: {
+        status: "paid",
+        occurredAt: new Date("2026-08-02T10:00:00.000Z"),
+        paidEffectApplied: 1,
+      },
+    });
+    databaseMock.mockResolvedValue(flow.database);
+
+    await expect(
+      applyMolliePaymentSnapshot(
+        molliePayment({
+          amount: { currency: "EUR", value: "19.00" },
+          _embedded: {
+            refunds: [
+              {
+                id: "re_new",
+                status: "refunded",
+                amount: { currency: "EUR", value: "19.00" },
+              },
+            ],
+          },
+        }),
+        1
+      )
+    ).rejects.toThrow("billing_payment_financial_snapshot_stale_conflict");
+
+    expect(flow.operations).not.toContain("upsert:paymentLedger");
+  });
+
   it("upserts a mismatched paid snapshot before returning without applying paid access", async () => {
     const flow = paymentFlow();
     databaseMock.mockResolvedValue(flow.database);
@@ -558,6 +685,8 @@ function paymentFlow(
       status: string;
       occurredAt: Date;
       paidEffectApplied: number;
+      refunds?: unknown;
+      chargebacks?: unknown;
     };
     ledgerPaidEffectApplied?: number;
     usageSourceIntentId?: string;
@@ -622,7 +751,14 @@ function paymentFlow(
       paymentLedgerSelectCount += 1;
       if (paymentLedgerSelectCount === 1) {
         return options.existingLedger
-          ? [{ id: 7, ...options.existingLedger }]
+          ? [
+              {
+                id: 7,
+                refunds: [],
+                chargebacks: [],
+                ...options.existingLedger,
+              },
+            ]
           : [];
       }
       if (paymentLedgerSelectCount === 2) {

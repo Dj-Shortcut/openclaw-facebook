@@ -22,7 +22,10 @@ import {
 import { deterministicIdempotencyKey } from "./ids";
 import { parseEurValueMinor, sumAmountsMinor } from "./amounts";
 import { assertMollieId, type MolliePayment } from "./mollieClient";
-import { createPaymentSnapshot } from "./paymentSnapshot";
+import {
+  createPaymentSnapshot,
+  mergePaymentFinancialSnapshot,
+} from "./paymentSnapshot";
 import { metadataIntentId } from "./providerMetadata";
 import { blocksSubscriptionStart } from "./checkoutStore";
 import {
@@ -379,17 +382,17 @@ export async function applyMolliePaymentSnapshot(
       }
 
       const completedRefundTotal = sumAmountsMinor(
-        observed.refunds
+        ledgerResult.refunds
           .filter(refund => refund.status === "refunded")
           .map(refund => refund.amount)
       );
       const pendingRefundTotal = sumAmountsMinor(
-        observed.refunds
+        ledgerResult.refunds
           .filter(refund => isPendingRefundStatus(refund.status))
           .map(refund => refund.amount)
       );
       const grossMinor = plan.amountMinor;
-      const hasChargeback = observed.chargebacks.some(
+      const hasChargeback = ledgerResult.chargebacks.some(
         chargeback => !chargeback.reversedAt
       );
       const hasLaterPaidPeriod =
@@ -1405,6 +1408,8 @@ async function upsertLedger(
       status: paymentLedger.status,
       occurredAt: paymentLedger.occurredAt,
       paidEffectApplied: paymentLedger.paidEffectApplied,
+      refunds: paymentLedger.refunds,
+      chargebacks: paymentLedger.chargebacks,
     })
     .from(paymentLedger)
     .where(
@@ -1417,10 +1422,21 @@ async function upsertLedger(
     .limit(1)
     .for("update");
   const existing = existingRows[0];
+  const financial = mergePaymentFinancialSnapshot({
+    existingRefunds: existing ? existing.refunds : [],
+    existingChargebacks: existing ? existing.chargebacks : [],
+    observedRefunds: input.refunds,
+    observedChargebacks: input.chargebacks,
+  });
   if (existing && !shouldApplyLedgerSnapshot(existing, input)) {
+    if (financial.changedFromExisting) {
+      throw new Error("billing_payment_financial_snapshot_stale_conflict");
+    }
     return {
       paidEffectAlreadyApplied: existing.paidEffectApplied === 1,
       shouldApplyDomainEffects: false,
+      refunds: financial.refunds,
+      chargebacks: financial.chargebacks,
     };
   }
   const settlementAmount = input.payment.settlementAmount?.value ?? null;
@@ -1434,8 +1450,10 @@ async function upsertLedger(
       currency: input.payment.amount.currency,
       status: input.payment.status,
       paymentMethod: input.payment.method ?? null,
-      refunds: input.refunds,
-      chargebacks: input.chargebacks,
+      refunds: financial.refunds,
+      chargebacks: financial.chargebacks,
+      // This hash identifies the exact provider observation. The financial
+      // arrays above are intentionally a monotone projection across snapshots.
       observedSnapshotHash: input.snapshotHash,
       settlementId: null,
       settlementAmount,
@@ -1449,8 +1467,10 @@ async function upsertLedger(
         currency: input.payment.amount.currency,
         status: input.payment.status,
         paymentMethod: input.payment.method ?? null,
-        refunds: input.refunds,
-        chargebacks: input.chargebacks,
+        refunds: financial.refunds,
+        chargebacks: financial.chargebacks,
+        // Keep the raw provider-observation identity, not a synthetic hash of
+        // the monotone financial projection.
         observedSnapshotHash: input.snapshotHash,
         settlementAmount,
         occurredAt: input.occurredAt,
@@ -1485,6 +1505,8 @@ async function upsertLedger(
   return {
     paidEffectAlreadyApplied: ledger?.paidEffectApplied === 1,
     shouldApplyDomainEffects: true,
+    refunds: financial.refunds,
+    chargebacks: financial.chargebacks,
   };
 }
 
@@ -1495,14 +1517,24 @@ function shouldApplyLedgerSnapshot(
   if (input.occurredAt.getTime() < existing.occurredAt.getTime()) {
     return false;
   }
-  // A provider Payment cannot legitimately leave `paid`. Preserve financial
-  // and entitlement truth even if an older or contradictory terminal snapshot
-  // is delivered later with a malformed/newer timestamp.
-  if (existing.status === "paid" && input.payment.status !== "paid") {
+  // Mollie terminal payment states cannot legitimately reopen or switch to a
+  // different terminal state. Preserve the first locked terminal truth even
+  // when a contradictory snapshot carries an equal or newer timestamp.
+  if (
+    TERMINAL_PAYMENT_STATUSES.has(existing.status) &&
+    input.payment.status !== existing.status
+  ) {
     return false;
   }
   return true;
 }
+
+const TERMINAL_PAYMENT_STATUSES = new Set([
+  "paid",
+  "failed",
+  "canceled",
+  "expired",
+]);
 
 async function allocateInvoiceNumber(
   tx: Parameters<
