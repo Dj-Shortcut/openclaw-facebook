@@ -75,13 +75,19 @@ export function registerCreditCheckoutRoutes(
   );
 
   app.get(
-    "/api/credits/checkout/session",
+    "/api/credits/checkout/:intentId/session",
     asyncRoute(async (req, res) => {
+      const intentId = singleParam(req.params.intentId);
+      if (!intentId || !INTENT_ID_PATTERN.test(intentId)) {
+        unavailable(res);
+        return;
+      }
       const cookieValue = readSessionCookie(req);
       try {
         const session = await readSession(cookieValue, {
           requireUnexpired: true,
         });
+        if (session.intentId !== intentId) throw new Error("Intent mismatch");
         noStore(res).status(200).json({ offer: session.offer });
       } catch {
         unavailable(res);
@@ -90,7 +96,7 @@ export function registerCreditCheckoutRoutes(
   );
 
   app.post(
-    "/api/credits/checkout/confirm",
+    "/api/credits/checkout/:intentId/confirm",
     json,
     asyncRoute(async (req, res) => {
       if (!isSameOriginMutation(req)) {
@@ -101,11 +107,17 @@ export function registerCreditCheckoutRoutes(
         unavailable(res);
         return;
       }
+      const intentId = singleParam(req.params.intentId);
+      if (!intentId || !INTENT_ID_PATTERN.test(intentId)) {
+        unavailable(res);
+        return;
+      }
       const cookieValue = readSessionCookie(req);
       try {
         const session = await readSession(cookieValue, {
           requireUnexpired: true,
         });
+        if (session.intentId !== intentId) throw new Error("Intent mismatch");
         const result = await dependencies.confirm(session);
         noStore(res)
           .status(200)

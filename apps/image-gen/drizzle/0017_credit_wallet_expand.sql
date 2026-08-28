@@ -425,7 +425,7 @@ CREATE TRIGGER `credit_wallets_before_update`
 BEFORE UPDATE ON `credit_wallets`
 FOR EACH ROW
 BEGIN
-	DECLARE v_projection_count int DEFAULT 0;
+	DECLARE v_projection_count int DEFAULT 0; DECLARE v_clean_refund_reactivation int DEFAULT 0;
 	IF BINARY OLD.`wallet_id`<>BINARY NEW.`wallet_id`
 		OR OLD.`workspace_id`<>NEW.`workspace_id` OR OLD.`mode`<>NEW.`mode`
 		OR OLD.`channel_connection_id`<>NEW.`channel_connection_id`
@@ -435,8 +435,15 @@ BEGIN
 		OR OLD.`created_at`<>NEW.`created_at` THEN
 		SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='credit wallet retained scope is immutable';
 	END IF;
+	IF OLD.`status`='frozen' AND NEW.`status`='active' THEN
+		SELECT COUNT(*) INTO v_clean_refund_reactivation FROM `credit_ledger` entry
+		WHERE BINARY entry.`entry_id`=BINARY NEW.`last_ledger_entry_id`
+			AND BINARY entry.`wallet_id`=BINARY NEW.`wallet_id`
+			AND entry.`entry_kind`='refund_debit' AND entry.`balance_after`>=0
+			AND entry.`reserved_after`=0;
+	END IF;
 	IF OLD.`status`='erased' AND NEW.`status`<>'erased'
-		OR OLD.`status`='frozen' AND NEW.`status`='active' THEN
+		OR OLD.`status`='frozen' AND NEW.`status`='active' AND v_clean_refund_reactivation<>1 THEN
 		SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='credit wallet cannot reactivate automatically';
 	END IF;
 	IF NOT (BINARY OLD.`current_user_key_hash`<=>BINARY NEW.`current_user_key_hash`)
@@ -848,6 +855,7 @@ BEGIN
 		`status`=CASE
 			WHEN `status`='active' AND NEW.`entry_kind`='chargeback_debit' THEN 'frozen'
 			WHEN `status`='active' AND NEW.`entry_kind`='refund_debit' AND NEW.`balance_after`<0 THEN 'frozen'
+			WHEN `status`='frozen' AND NEW.`entry_kind`='refund_debit' AND NEW.`balance_after`>=0 AND NEW.`reserved_after`=0 THEN 'active'
 			ELSE `status`
 		END
 	WHERE BINARY `wallet_id`=BINARY NEW.`wallet_id`
@@ -1965,10 +1973,11 @@ credit_refund_body: BEGIN
 	DECLARE v_event_hash varchar(64); DECLARE v_provider_event_hash varchar(64); DECLARE v_existing varchar(36);
 	DECLARE v_existing_kind varchar(32); DECLARE v_provider_effect_id varchar(64); DECLARE v_refunds json;
 	DECLARE v_refund_count int DEFAULT 0; DECLARE v_refund_distinct int DEFAULT 0;
-	DECLARE v_refunded_count int DEFAULT 0;
+	DECLARE v_refunded_count int DEFAULT 0; DECLARE v_spend_count int DEFAULT 0;
+	DECLARE v_grant_at timestamp;
 	DECLARE v_refund_invalid int DEFAULT 0; DECLARE v_refund_total decimal(10,2) DEFAULT 0;
 	DECLARE EXIT HANDLER FOR SQLEXCEPTION BEGIN ROLLBACK; RESIGNAL; END;
-	SELECT `source_intent_id`,`payment_ledger_id` INTO v_intent_id,v_payment_ledger_id
+	SELECT `source_intent_id`,`payment_ledger_id`,`occurred_at` INTO v_intent_id,v_payment_ledger_id,v_grant_at
 	FROM `credit_ledger` WHERE BINARY `entry_id`=BINARY p_root_grant_entry_id AND `entry_kind`='purchase_grant';
 	IF v_intent_id IS NULL OR v_payment_ledger_id IS NULL THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='refund root grant is unavailable'; END IF;
 	START TRANSACTION;
@@ -2064,6 +2073,16 @@ credit_refund_body: BEGIN
 		UPDATE `credit_wallets` SET `status`=CASE WHEN `status`='active' THEN 'frozen' ELSE `status` END
 		WHERE BINARY `wallet_id`=BINARY p_wallet_id;
 		COMMIT; SELECT 'pending_holds' AS `result`,p_root_grant_entry_id AS `root_grant_entry_id`; LEAVE credit_refund_body;
+	END IF;
+	-- Pooled wallet balance cannot prove that this particular grant is unspent.
+	-- Conservatively require review after any spend following the grant.
+	SELECT COUNT(*) INTO v_spend_count FROM `credit_ledger`
+	WHERE BINARY `wallet_id`=BINARY p_wallet_id AND `workspace_id`=p_workspace_id AND `mode`=p_mode
+		AND `entry_kind`='generation_spend' AND `occurred_at`>=v_grant_at FOR UPDATE;
+	IF v_spend_count<>0 THEN
+		UPDATE `credit_wallets` SET `status`=CASE WHEN `status`='active' THEN 'frozen' ELSE `status` END
+		WHERE BINARY `wallet_id`=BINARY p_wallet_id;
+		COMMIT; SELECT 'manual_review' AS `result`,p_root_grant_entry_id AS `root_grant_entry_id`; LEAVE credit_refund_body;
 	END IF;
 	IF v_balance<v_credits THEN
 		UPDATE `credit_wallets` SET `status`=CASE WHEN `status`='active' THEN 'frozen' ELSE `status` END

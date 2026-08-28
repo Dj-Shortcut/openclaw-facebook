@@ -2259,13 +2259,17 @@ export async function upsertChannelConnection(
       actorUserId: number;
       allowedRoles: readonly WorkspaceMember["role"][];
     }>;
-    updatePolicy?: "preserve_exact_whatsapp_binding";
+    updatePolicy?:
+      | "preserve_exact_whatsapp_binding"
+      | "preserve_exact_facebook_page_binding";
   }> = {}
 ) {
   const { externalId, providerAccountExternalId } =
     normalizeChannelConnectionEndpoint(values);
   const preservesExactWhatsAppBinding =
     options.updatePolicy === "preserve_exact_whatsapp_binding";
+  const preservesExactFacebookBinding =
+    options.updatePolicy === "preserve_exact_facebook_page_binding";
   const exactWhatsAppEndpoint =
     preservesExactWhatsAppBinding && externalId && providerAccountExternalId
       ? Object.freeze({ externalId, providerAccountExternalId })
@@ -2277,6 +2281,12 @@ export async function upsertChannelConnection(
       !exactWhatsAppEndpoint)
   ) {
     throw new WhatsAppChannelConnectionMigrationRequiredError();
+  }
+  if (
+    preservesExactFacebookBinding &&
+    (values.channel !== "facebook_messenger" || !externalId)
+  ) {
+    throw new Error("Exact Facebook Page binding is required");
   }
   if (options.auditLog && options.auditLog.workspaceId !== values.workspaceId) {
     throw new Error("Channel connection audit workspace does not match");
@@ -2383,6 +2393,7 @@ export async function upsertChannelConnection(
           externalId: channelConnections.externalId,
           providerAccountExternalId:
             channelConnections.providerAccountExternalId,
+          bindingEpoch: channelConnections.bindingEpoch,
         })
         .from(channelConnections)
         .where(
@@ -2393,6 +2404,10 @@ export async function upsertChannelConnection(
         )
         .limit(1)
         .for("update");
+      const preservesCurrentFacebookPage =
+        preservesExactFacebookBinding &&
+        existing.length === 1 &&
+        existing[0].externalId === externalId;
 
       if (existing[0]) {
         if (preservesExactWhatsAppBinding) {
@@ -2428,6 +2443,28 @@ export async function upsertChannelConnection(
                   channelConnections.providerAccountExternalId,
                   exactWhatsAppEndpoint.providerAccountExternalId
                 )
+              )
+            );
+        } else if (preservesCurrentFacebookPage) {
+          // A credential refresh for the identical Page keeps the durable
+          // privacy/billing binding. A different Page still takes the fenced
+          // epoch-rotation path below and can never inherit its wallets.
+          await tx
+            .update(channelConnections)
+            .set({
+              status: values.status,
+              displayName: values.displayName ?? null,
+              encryptedAccessToken: values.encryptedAccessToken ?? null,
+              grantedScopes: values.grantedScopes ?? null,
+              lastCheckedAt,
+            })
+            .where(
+              and(
+                eq(channelConnections.id, existing[0].id),
+                eq(channelConnections.workspaceId, values.workspaceId),
+                eq(channelConnections.channel, "facebook_messenger"),
+                eq(channelConnections.externalId, externalId!),
+                eq(channelConnections.bindingEpoch, existing[0].bindingEpoch)
               )
             );
         } else {

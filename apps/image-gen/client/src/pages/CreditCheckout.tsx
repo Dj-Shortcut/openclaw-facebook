@@ -11,8 +11,12 @@ import {
 
 type CheckoutState =
   | Readonly<{ kind: "loading" }>
-  | Readonly<{ kind: "ready"; offer: CreditCheckoutOffer }>
-  | Readonly<{ kind: "redirecting"; offer: CreditCheckoutOffer }>
+  | Readonly<{ kind: "ready"; intentId: string; offer: CreditCheckoutOffer }>
+  | Readonly<{
+      kind: "redirecting";
+      intentId: string;
+      offer: CreditCheckoutOffer;
+    }>
   | Readonly<{
       kind: "returned";
       status: "processing" | "paid" | "failed" | "canceled" | "expired";
@@ -63,11 +67,16 @@ async function claimCheckoutSession(
   return parseCreditCheckoutOffer(payload.offer);
 }
 
-async function readCheckoutSession(): Promise<CreditCheckoutOffer> {
-  const response = await fetch("/api/credits/checkout/session", {
-    credentials: "include",
-    headers: { Accept: "application/json" },
-  });
+async function readCheckoutSession(
+  intentId: string
+): Promise<CreditCheckoutOffer> {
+  const response = await fetch(
+    `/api/credits/checkout/${encodeURIComponent(intentId)}/session`,
+    {
+      credentials: "include",
+      headers: { Accept: "application/json" },
+    }
+  );
   if (!response.ok) throw new Error("Checkout session is unavailable");
   const payload = (await readJson(response)) as { offer?: unknown };
   return parseCreditCheckoutOffer(payload.offer);
@@ -164,14 +173,14 @@ export default function CreditCheckout() {
         }
         let offer: CreditCheckoutOffer;
         if (!capability) {
-          offer = await readCheckoutSession();
+          offer = await readCheckoutSession(match[1]);
         } else {
           if (!CAPABILITY_PATTERN.test(capability)) {
             throw new Error("Invalid checkout link");
           }
           offer = await claimCheckoutSession(match[1], capability);
         }
-        if (active) setState({ kind: "ready", offer });
+        if (active) setState({ kind: "ready", intentId: match[1], offer });
       } catch {
         if (active) setState({ kind: "error" });
       }
@@ -182,15 +191,18 @@ export default function CreditCheckout() {
     };
   }, []);
 
-  const confirm = async (offer: CreditCheckoutOffer) => {
-    setState({ kind: "redirecting", offer });
+  const confirm = async (intentId: string, offer: CreditCheckoutOffer) => {
+    setState({ kind: "redirecting", intentId, offer });
     try {
-      const response = await fetch("/api/credits/checkout/confirm", {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: "{}",
-      });
+      const response = await fetch(
+        `/api/credits/checkout/${encodeURIComponent(intentId)}/confirm`,
+        {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: "{}",
+        }
+      );
       if (!response.ok) throw new Error("Checkout confirmation failed");
       const payload = (await readJson(response)) as { checkoutUrl?: unknown };
       window.location.assign(parseHostedCheckoutUrl(payload.checkoutUrl));
@@ -269,7 +281,7 @@ export default function CreditCheckout() {
             <button
               type="button"
               disabled={state.kind === "redirecting"}
-              onClick={() => void confirm(state.offer)}
+              onClick={() => void confirm(state.intentId, state.offer)}
               className="mt-7 w-full rounded-xl bg-blue-700 px-5 py-3 font-semibold text-white transition hover:bg-blue-800 disabled:cursor-wait disabled:opacity-60"
             >
               {state.kind === "redirecting"

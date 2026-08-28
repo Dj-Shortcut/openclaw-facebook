@@ -180,7 +180,7 @@ describe("credit checkout public routes", () => {
   it("loads an existing session without a provider call", async () => {
     const target = await start();
     const response = await fetch(
-      `${target.baseUrl}/api/credits/checkout/session`,
+      `${target.baseUrl}/api/credits/checkout/${INTENT_ID}/session`,
       {
         headers: {
           Cookie: `${CREDIT_CHECKOUT_SESSION_COOKIE}=${COOKIE_VALUE}`,
@@ -195,10 +195,46 @@ describe("credit checkout public routes", () => {
     expect(confirm).not.toHaveBeenCalled();
   });
 
+  it("rejects a cookie claimed for a different visible intent", async () => {
+    const target = await start();
+    const otherIntent = "33333333-3333-8333-8333-333333333333";
+    const response = await fetch(
+      `${target.baseUrl}/api/credits/checkout/${otherIntent}/session`,
+      {
+        headers: {
+          Cookie: `${CREDIT_CHECKOUT_SESSION_COOKIE}=${COOKIE_VALUE}`,
+        },
+      }
+    );
+
+    expect(response.status).toBe(404);
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it("rejects confirmation when the path and cookie intents differ", async () => {
+    const target = await start();
+    const otherIntent = "33333333-3333-8333-8333-333333333333";
+    const response = await fetch(
+      `${target.baseUrl}/api/credits/checkout/${otherIntent}/confirm`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Origin: target.baseUrl,
+          Cookie: `${CREDIT_CHECKOUT_SESSION_COOKIE}=${COOKIE_VALUE}`,
+        },
+        body: "{}",
+      }
+    );
+
+    expect(response.status).toBe(404);
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
   it("calls the provider path only after an explicit same-origin confirmation", async () => {
     const target = await start();
     const response = await fetch(
-      `${target.baseUrl}/api/credits/checkout/confirm`,
+      `${target.baseUrl}/api/credits/checkout/${INTENT_ID}/confirm`,
       {
         method: "POST",
         headers: {
@@ -223,7 +259,7 @@ describe("credit checkout public routes", () => {
     });
     const target = await start();
     const response = await fetch(
-      `${target.baseUrl}/api/credits/checkout/confirm`,
+      `${target.baseUrl}/api/credits/checkout/${INTENT_ID}/confirm`,
       {
         method: "POST",
         headers: {
