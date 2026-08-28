@@ -10,12 +10,18 @@ import {
   billingSchedulerProcessHeartbeats,
   billingSchedulerTenants,
   billingSubscriptions,
+  billingWebhookRoutes,
 } from "../../../drizzle/schema";
 import { getDatabaseOrThrow } from "../../db";
 import type { MollieMode } from "./config";
 import { getBillingSchedulerRollout } from "./config";
+import { getCreditOffer } from "./creditCatalog";
 
 const TENANT_LEASE_MS = 15 * 60_000;
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const PAYMENT_ID_PATTERN = /^tr_[A-Za-z0-9]{1,60}$/;
+const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 export type BillingScheduleKind =
   "outbox" | "reconciliation" | "profile_expiry" | "ai_finalization";
 export type BillingProcessKind = BillingScheduleKind | "notification_receiver";
@@ -372,7 +378,23 @@ export async function disableBillingSchedulerTenant(input: {
     const intents = await tx
       .select({
         intentId: billingIntents.intentId,
+        kind: billingIntents.kind,
+        planCode: billingIntents.planCode,
+        expectedAmount: billingIntents.expectedAmount,
+        currency: billingIntents.currency,
+        interval: billingIntents.interval,
+        mollieDescription: billingIntents.mollieDescription,
         molliePaymentId: billingIntents.molliePaymentId,
+        billingProfileVersion: billingIntents.billingProfileVersion,
+        authorizationEpoch: billingIntents.authorizationEpoch,
+        messengerChannelConnectionId:
+          billingIntents.messengerChannelConnectionId,
+        messengerBindingEpoch: billingIntents.messengerBindingEpoch,
+        messengerPrivacyEpoch: billingIntents.messengerPrivacyEpoch,
+        creditWalletId: billingIntents.creditWalletId,
+        creditFinancialSubjectRef: billingIntents.creditFinancialSubjectRef,
+        creditCount: billingIntents.creditCount,
+        creditMetadataHash: billingIntents.creditMetadataHash,
       })
       .from(billingIntents)
       .where(
@@ -404,6 +426,10 @@ export async function disableBillingSchedulerTenant(input: {
         )
       );
     for (const intent of intents) {
+      // Customerless credit Payments are bound to their exact provider
+      // operation below. The legacy customer-payment payload is intentionally
+      // not emitted for them because it requires a Mollie customer ID.
+      if (intent.kind === "credit_purchase") continue;
       if (!intent.molliePaymentId) continue;
       await tx
         .insert(billingOutbox)
@@ -427,10 +453,16 @@ export async function disableBillingSchedulerTenant(input: {
       .select({
         operationId: billingProviderOperations.operationId,
         operationType: billingProviderOperations.operationType,
+        operationKey: billingProviderOperations.operationKey,
         intentId: billingProviderOperations.intentId,
         state: billingProviderOperations.state,
         providerResourceId: billingProviderOperations.providerResourceId,
         providerCustomerId: billingProviderOperations.providerCustomerId,
+        requestFingerprint: billingProviderOperations.requestFingerprint,
+        authorizationEpoch: billingProviderOperations.authorizationEpoch,
+        billingProfileVersion: billingProviderOperations.billingProfileVersion,
+        credentialGenerationId:
+          billingProviderOperations.credentialGenerationId,
       })
       .from(billingProviderOperations)
       .where(
@@ -456,6 +488,17 @@ export async function disableBillingSchedulerTenant(input: {
       .for("update");
     for (const operation of revokedOperations) {
       const isPayment = operation.operationType === "create_payment";
+      if (
+        await handleRevokedCustomerlessCreditPayment(
+          tx,
+          input,
+          now,
+          intents,
+          operation
+        )
+      ) {
+        continue;
+      }
       if (
         operation.state === "succeeded" &&
         operation.providerResourceId &&
@@ -609,6 +652,308 @@ export async function disableBillingSchedulerTenant(input: {
     });
     return { executionEpoch: resultingEpoch };
   });
+}
+
+type RevokedIntent = Pick<
+  typeof billingIntents.$inferSelect,
+  | "intentId"
+  | "kind"
+  | "planCode"
+  | "expectedAmount"
+  | "currency"
+  | "interval"
+  | "mollieDescription"
+  | "molliePaymentId"
+  | "billingProfileVersion"
+  | "authorizationEpoch"
+  | "messengerChannelConnectionId"
+  | "messengerBindingEpoch"
+  | "messengerPrivacyEpoch"
+  | "creditWalletId"
+  | "creditFinancialSubjectRef"
+  | "creditCount"
+  | "creditMetadataHash"
+>;
+
+type RevokedOperation = Pick<
+  typeof billingProviderOperations.$inferSelect,
+  | "operationId"
+  | "operationType"
+  | "operationKey"
+  | "intentId"
+  | "state"
+  | "providerResourceId"
+  | "providerCustomerId"
+  | "requestFingerprint"
+  | "authorizationEpoch"
+  | "billingProfileVersion"
+  | "credentialGenerationId"
+>;
+
+type DisableBoundary = Readonly<{
+  workspaceId: number;
+  mode: MollieMode;
+  expectedExecutionEpoch: number;
+}>;
+
+async function handleRevokedCustomerlessCreditPayment(
+  tx: BillingTransaction,
+  input: DisableBoundary,
+  now: Date,
+  intents: readonly RevokedIntent[],
+  operation: RevokedOperation
+): Promise<boolean> {
+  if (operation.operationType !== "create_payment") return false;
+  const intent = intents.find(row => row.intentId === operation.intentId);
+  if (!intent || !isExactRevokedCreditIntent(intent, operation, input)) {
+    return false;
+  }
+  if (
+    operation.state === "succeeded" &&
+    operation.providerResourceId &&
+    PAYMENT_ID_PATTERN.test(operation.providerResourceId)
+  ) {
+    await containKnownRevokedCreditPayment(
+      tx,
+      input,
+      now,
+      intent,
+      operation,
+      operation.providerResourceId
+    );
+    return true;
+  }
+  await enqueueRevokedCreditPaymentReconciliation(tx, input, intent, operation);
+  return true;
+}
+
+function isExactRevokedCreditIntent(
+  intent: RevokedIntent,
+  operation: RevokedOperation,
+  input: DisableBoundary
+): boolean {
+  const offer = getCreditOffer(intent.planCode, 1);
+  return Boolean(
+    offer &&
+    intent.kind === "credit_purchase" &&
+    intent.billingProfileVersion === 0 &&
+    intent.authorizationEpoch === input.expectedExecutionEpoch &&
+    intent.expectedAmount === offer.amount.value &&
+    intent.currency === offer.amount.currency &&
+    intent.interval === "oneoff" &&
+    intent.mollieDescription === offer.mollieDescription &&
+    intent.creditCount === offer.creditCount &&
+    typeof intent.creditWalletId === "string" &&
+    UUID_PATTERN.test(intent.creditWalletId) &&
+    typeof intent.creditMetadataHash === "string" &&
+    SHA256_PATTERN.test(intent.creditMetadataHash) &&
+    typeof intent.creditFinancialSubjectRef === "string" &&
+    SHA256_PATTERN.test(intent.creditFinancialSubjectRef) &&
+    Number.isSafeInteger(intent.messengerChannelConnectionId) &&
+    Number(intent.messengerChannelConnectionId) > 0 &&
+    Number.isSafeInteger(intent.messengerBindingEpoch) &&
+    Number(intent.messengerBindingEpoch) > 0 &&
+    Number.isSafeInteger(intent.messengerPrivacyEpoch) &&
+    Number(intent.messengerPrivacyEpoch) > 0 &&
+    operation.billingProfileVersion === 0 &&
+    operation.operationKey === intent.intentId &&
+    operation.authorizationEpoch === input.expectedExecutionEpoch &&
+    operation.requestFingerprint === intent.creditMetadataHash &&
+    operation.providerCustomerId === null
+  );
+}
+
+function revokedCreditPayload(
+  input: DisableBoundary,
+  intent: RevokedIntent,
+  operation: RevokedOperation
+) {
+  return {
+    reason: "billing_execution_disabled" as const,
+    intentId: intent.intentId,
+    targetCustomerId: null,
+    providerOperationId: operation.operationId,
+    revokedAuthorizationEpoch: input.expectedExecutionEpoch,
+    creditPurpose: "premium_image_credits" as const,
+    creditWalletId: intent.creditWalletId!,
+    creditMetadataHash: intent.creditMetadataHash!,
+    channelConnectionId: intent.messengerChannelConnectionId!,
+    bindingEpoch: intent.messengerBindingEpoch!,
+    privacyEpoch: intent.messengerPrivacyEpoch!,
+  };
+}
+
+async function containKnownRevokedCreditPayment(
+  tx: BillingTransaction,
+  input: DisableBoundary,
+  now: Date,
+  intent: RevokedIntent,
+  operation: RevokedOperation,
+  paymentId: string
+): Promise<void> {
+  const contained = await tx
+    .update(billingProviderOperations)
+    .set({ state: "contained", resolutionDueAt: now })
+    .where(
+      and(
+        eq(billingProviderOperations.operationId, operation.operationId),
+        eq(billingProviderOperations.workspaceId, input.workspaceId),
+        eq(billingProviderOperations.mode, input.mode),
+        eq(billingProviderOperations.operationType, "create_payment"),
+        eq(billingProviderOperations.state, "succeeded"),
+        eq(
+          billingProviderOperations.authorizationEpoch,
+          input.expectedExecutionEpoch
+        ),
+        eq(
+          billingProviderOperations.requestFingerprint,
+          intent.creditMetadataHash!
+        ),
+        isNull(billingProviderOperations.providerCustomerId)
+      )
+    );
+  if (extractAffectedRows(contained) !== 1) {
+    throw new Error("credit payment containment fence was lost");
+  }
+  await tx
+    .insert(billingWebhookRoutes)
+    .values({
+      mode: input.mode,
+      molliePaymentId: paymentId,
+      workspaceId: input.workspaceId,
+      intentId: intent.intentId,
+    })
+    .onDuplicateKeyUpdate({
+      set: { molliePaymentId: sql`mollie_payment_id` },
+    });
+  const routes = await tx
+    .select({
+      workspaceId: billingWebhookRoutes.workspaceId,
+      intentId: billingWebhookRoutes.intentId,
+    })
+    .from(billingWebhookRoutes)
+    .where(
+      and(
+        eq(billingWebhookRoutes.mode, input.mode),
+        eq(billingWebhookRoutes.molliePaymentId, paymentId)
+      )
+    )
+    .limit(1)
+    .for("update");
+  const routeExact =
+    routes[0]?.workspaceId === input.workspaceId &&
+    routes[0]?.intentId === intent.intentId;
+  const intentBound = routeExact
+    ? await tx
+        .update(billingIntents)
+        .set({ molliePaymentId: paymentId, status: "contained" })
+        .where(
+          and(
+            eq(billingIntents.intentId, intent.intentId),
+            eq(billingIntents.workspaceId, input.workspaceId),
+            eq(billingIntents.mode, input.mode),
+            eq(billingIntents.kind, "credit_purchase"),
+            eq(billingIntents.authorizationEpoch, input.expectedExecutionEpoch),
+            eq(billingIntents.creditWalletId, intent.creditWalletId!),
+            eq(billingIntents.creditMetadataHash, intent.creditMetadataHash!),
+            or(
+              isNull(billingIntents.molliePaymentId),
+              eq(billingIntents.molliePaymentId, paymentId)
+            )
+          )
+        )
+    : null;
+  if (routeExact && extractAffectedRows(intentBound) === 1) {
+    await tx
+      .insert(billingOutbox)
+      .values({
+        workspaceId: input.workspaceId,
+        mode: input.mode,
+        eventType: "cancel_payment",
+        deduplicationKey: `credit_payment_containment:${operation.operationId}:${paymentId}`,
+        payload: {
+          ...revokedCreditPayload(input, intent, operation),
+          targetPaymentId: paymentId,
+        },
+        status: "pending",
+      })
+      .onDuplicateKeyUpdate({
+        set: { deduplicationKey: sql`deduplication_key` },
+      });
+  }
+  await insertRevokedCreditReview(
+    tx,
+    input,
+    intent,
+    operation,
+    routeExact
+      ? "provider_payment_created_after_checkout_superseded"
+      : "payment_mismatch",
+    "disable"
+  );
+}
+
+async function enqueueRevokedCreditPaymentReconciliation(
+  tx: BillingTransaction,
+  input: DisableBoundary,
+  intent: RevokedIntent,
+  operation: RevokedOperation
+): Promise<void> {
+  await tx
+    .insert(billingOutbox)
+    .values({
+      workspaceId: input.workspaceId,
+      mode: input.mode,
+      eventType: "cancel_payment",
+      deduplicationKey: `credit_payment_ambiguous_reconcile:${operation.operationId}`,
+      payload: {
+        ...revokedCreditPayload(input, intent, operation),
+        targetPaymentId: null,
+      },
+      status: "pending",
+    })
+    .onDuplicateKeyUpdate({
+      set: { deduplicationKey: sql`deduplication_key` },
+    });
+  await insertRevokedCreditReview(
+    tx,
+    input,
+    intent,
+    operation,
+    "payment_provider_ambiguous_after_disable",
+    "ambiguous"
+  );
+}
+
+async function insertRevokedCreditReview(
+  tx: BillingTransaction,
+  input: DisableBoundary,
+  intent: RevokedIntent,
+  operation: RevokedOperation,
+  reason:
+    | "payment_provider_ambiguous_after_disable"
+    | "provider_payment_created_after_checkout_superseded"
+    | "payment_mismatch",
+  suffix: "disable" | "ambiguous"
+): Promise<void> {
+  await tx
+    .insert(billingOutbox)
+    .values({
+      workspaceId: input.workspaceId,
+      mode: input.mode,
+      eventType: "manual_review",
+      deduplicationKey: `credit_payment_${suffix}_review:${operation.operationId}`,
+      payload: {
+        reason,
+        intentId: intent.intentId,
+        providerOperationId: operation.operationId,
+        creditPurpose: "premium_image_credits",
+      },
+      status: "pending",
+    })
+    .onDuplicateKeyUpdate({
+      set: { deduplicationKey: sql`deduplication_key` },
+    });
 }
 
 /** Wake an already-provisioned scheduler tenant without creating or enabling it. */

@@ -7,12 +7,16 @@ import mysql, {
 } from "mysql2/promise";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { eraseCreditWalletsForPrivacySubject } from "./_core/billing/creditWalletStore";
+
 const suite = describe.runIf(
   process.env.RUN_MYSQL_INTEGRATION === "1" && Boolean(process.env.DATABASE_URL)
 );
 
 const USER_A = `u2.k1.${"a".repeat(64)}`;
 const USER_B = `u2.k1.${"b".repeat(64)}`;
+const LEGACY_USER_A = "d".repeat(64);
+const LEGACY_USER_B = "e".repeat(64);
 const FINANCIAL_REF = "c".repeat(64);
 
 function hash(value: string): string {
@@ -21,12 +25,19 @@ function hash(value: string): string {
 
 type Scope = {
   channelConnectionId: number;
+  checkoutReservation: {
+    capabilityHash: string;
+    checkoutScopeKey: string;
+    intentId: string;
+    metadataHash: string;
+  };
   financialSubjectRef: string;
+  userKey: string;
   walletId: string;
   workspaceId: number;
 };
 
-suite("0017 credit wallet MySQL 8.4 procedure boundary", () => {
+suite("0018 credit wallet MySQL 8.4 procedure boundary", () => {
   let connection: Connection;
 
   beforeAll(async () => {
@@ -47,7 +58,14 @@ suite("0017 credit wallet MySQL 8.4 procedure boundary", () => {
     await connection?.end();
   });
 
-  async function createScope(options: { secondSubject?: boolean } = {}) {
+  async function createScope(
+    options: {
+      secondSubject?: boolean;
+      secondUserKey?: string;
+      userKey?: string;
+    } = {}
+  ) {
+    const userKey = options.userKey ?? USER_A;
     const suffix = randomUUID();
     const [workspace] = await connection.query<ResultSetHeader>(
       "INSERT INTO `workspaces` (`name`,`slug`) VALUES (?,?)",
@@ -65,29 +83,47 @@ suite("0017 credit wallet MySQL 8.4 procedure boundary", () => {
     const channelConnectionId = channel.insertId;
     await connection.query(
       "INSERT INTO `messenger_privacy_subjects` (`workspace_id`,`channel_connection_id`,`user_key`,`privacy_epoch`,`status`) VALUES (?,?,?,1,'active')",
-      [workspaceId, channelConnectionId, USER_A]
+      [workspaceId, channelConnectionId, userKey]
     );
     if (options.secondSubject) {
       await connection.query(
         "INSERT INTO `messenger_privacy_subjects` (`workspace_id`,`channel_connection_id`,`user_key`,`privacy_epoch`,`status`) VALUES (?,?,?,1,'active')",
-        [workspaceId, channelConnectionId, USER_B]
+        [workspaceId, channelConnectionId, options.secondUserKey ?? USER_B]
       );
     }
     const walletId = randomUUID();
+    const intentId = randomUUID();
+    const metadataHash = hash(`checkout-metadata:${suffix}`);
+    const checkoutScopeKey = `credit-checkout:v1:${hash(
+      `checkout-scope:${suffix}`
+    )}`;
+    const capabilityHash = hash(`checkout-capability:${suffix}`);
     const [rows] = await connection.query<RowDataPacket[][]>(
-      "CALL `credit_create_wallet`(?,?,'test',?,1,1,?,?)",
+      "CALL `credit_reserve_checkout_intent`(?, ?, ?, 'test', ?, 1, 1, ?, ?, 2, 'premium_images_8_medium_v1', '4.99', 8, 'Leaderbot - 8 premium beeldcredits', ?, ?, ?, ?, TIMESTAMPADD(MINUTE,10,CURRENT_TIMESTAMP))",
       [
+        intentId,
         walletId,
         workspaceId,
         channelConnectionId,
-        USER_A,
+        userKey,
         FINANCIAL_REF,
+        metadataHash,
+        `credit-payment:${intentId}`,
+        checkoutScopeKey,
+        capabilityHash,
       ]
     );
     expect(rows[0]?.[0]?.result).toBe("applied");
     return {
       channelConnectionId,
+      checkoutReservation: {
+        capabilityHash,
+        checkoutScopeKey,
+        intentId,
+        metadataHash,
+      },
       financialSubjectRef: FINANCIAL_REF,
+      userKey,
       walletId,
       workspaceId,
     } satisfies Scope;
@@ -104,7 +140,7 @@ suite("0017 credit wallet MySQL 8.4 procedure boundary", () => {
         scope.workspaceId,
         `credit-idempotency-${label}`,
         `credit-scope-${label}`,
-        USER_A,
+        scope.userKey,
         scope.channelConnectionId,
         scope.walletId,
         scope.financialSubjectRef,
@@ -115,6 +151,32 @@ suite("0017 credit wallet MySQL 8.4 procedure boundary", () => {
     return { capabilityHash, intentId, metadataHash };
   }
 
+  async function markReservationProviderAccepted(
+    scope: Scope,
+    reservationId: string,
+    ownerTokenHash: string
+  ): Promise<void> {
+    const shared = [
+      scope.workspaceId,
+      scope.channelConnectionId,
+      scope.userKey,
+      scope.walletId,
+      scope.financialSubjectRef,
+      reservationId,
+      ownerTokenHash,
+    ];
+    const [started] = await connection.query<RowDataPacket[][]>(
+      "CALL `credit_mark_reservation_transport_started`(?,'test',?,1,1,?,?,?,?,?)",
+      shared
+    );
+    expect(["applied", "already_applied"]).toContain(started[0]?.[0]?.result);
+    const [accepted] = await connection.query<RowDataPacket[][]>(
+      "CALL `credit_mark_reservation_provider_accepted`(?,'test',?,1,1,?,?,?,?,?)",
+      shared
+    );
+    expect(["applied", "already_applied"]).toContain(accepted[0]?.[0]?.result);
+  }
+
   async function makeIntentPaid(
     scope: Scope,
     intent: Awaited<ReturnType<typeof createCreditIntent>>,
@@ -122,7 +184,7 @@ suite("0017 credit wallet MySQL 8.4 procedure boundary", () => {
     options: {
       consume?: boolean;
       exposed?: boolean;
-      operationState?: "contained" | "succeeded";
+      operationState?: "ambiguous" | "contained" | "succeeded";
     } = {}
   ) {
     const paymentId = `tr_credit_${label}`;
@@ -135,7 +197,7 @@ suite("0017 credit wallet MySQL 8.4 procedure boundary", () => {
         [
           scope.workspaceId,
           scope.channelConnectionId,
-          USER_A,
+          scope.userKey,
           scope.walletId,
           scope.financialSubjectRef,
           intent.intentId,
@@ -170,14 +232,19 @@ suite("0017 credit wallet MySQL 8.4 procedure boundary", () => {
     return { evidenceHash, paymentId, paymentLedgerId: payment.insertId };
   }
 
-  async function grant(scope: Scope, intentId: string, paymentId: string, evidenceHash: string) {
+  async function grant(
+    scope: Scope,
+    intentId: string,
+    paymentId: string,
+    evidenceHash: string
+  ) {
     const entryId = randomUUID();
     const [rows] = await connection.query<RowDataPacket[][]>(
       "CALL `credit_grant_purchase`(?, 'test', ?,1,1,?,?,?,?,?,?,?)",
       [
         scope.workspaceId,
         scope.channelConnectionId,
-        USER_A,
+        scope.userKey,
         scope.walletId,
         scope.financialSubjectRef,
         intentId,
@@ -198,7 +265,10 @@ suite("0017 credit wallet MySQL 8.4 procedure boundary", () => {
 
   async function runBehindControlBarrier<T>(
     scope: Scope,
-    actions: [(peer: Connection) => Promise<T>, (peer: Connection) => Promise<T>]
+    actions: [
+      (peer: Connection) => Promise<T>,
+      (peer: Connection) => Promise<T>,
+    ]
   ) {
     const blocker = await openPeer();
     const observer = await openPeer();
@@ -398,13 +468,18 @@ suite("0017 credit wallet MySQL 8.4 procedure boundary", () => {
       ownerRef: intent.intentId,
     });
     const [walletReplay] = await connection.query<RowDataPacket[][]>(
-      "CALL `credit_create_wallet`(?,?,'test',?,1,1,?,?)",
+      "CALL `credit_reserve_checkout_intent`(?, ?, ?, 'test', ?, 1, 1, ?, ?, 2, 'premium_images_8_medium_v1', '4.99', 8, 'Leaderbot - 8 premium beeldcredits', ?, ?, ?, ?, TIMESTAMPADD(MINUTE,10,CURRENT_TIMESTAMP))",
       [
+        scope.checkoutReservation.intentId,
         scope.walletId,
         scope.workspaceId,
         scope.channelConnectionId,
         USER_A,
         scope.financialSubjectRef,
+        scope.checkoutReservation.metadataHash,
+        `credit-payment:${scope.checkoutReservation.intentId}`,
+        scope.checkoutReservation.checkoutScopeKey,
+        scope.checkoutReservation.capabilityHash,
       ]
     );
     expect(walletReplay[0]?.[0]?.result).toBe("already_applied");
@@ -446,11 +521,107 @@ suite("0017 credit wallet MySQL 8.4 procedure boundary", () => {
     expect(unconsumedWallet).toMatchObject({ balance: 0, lastEntry: null });
   });
 
+  it("binds a production legacy privacy subject through reserve, grant and hold", async () => {
+    const scope = await createScope({
+      secondSubject: true,
+      secondUserKey: USER_B,
+      userKey: LEGACY_USER_A,
+    });
+    const intent = await createCreditIntent(scope, randomUUID());
+    const payment = await makeIntentPaid(scope, intent, randomUUID());
+    const granted = await grant(
+      scope,
+      intent.intentId,
+      payment.paymentId,
+      payment.evidenceHash
+    );
+    expect(granted.result).toBe("applied");
+
+    const wrongUserReservation = randomUUID();
+    await expect(
+      connection.query(
+        "CALL `credit_create_reservation_hold`(?,'test',?,1,1,?,?,?,?,?,?,?,?,?)",
+        [
+          scope.workspaceId,
+          scope.channelConnectionId,
+          USER_B,
+          scope.walletId,
+          scope.financialSubjectRef,
+          wrongUserReservation,
+          hash("legacy-wrong-user-generation"),
+          hash("legacy-wrong-user-owner"),
+          1,
+          randomUUID(),
+          hash("legacy-wrong-user-evidence"),
+        ]
+      )
+    ).rejects.toThrow();
+
+    const otherTenant = await createScope({ userKey: LEGACY_USER_B });
+    const wrongTenantReservation = randomUUID();
+    await expect(
+      connection.query(
+        "CALL `credit_create_reservation_hold`(?,'test',?,1,1,?,?,?,?,?,?,?,?,?)",
+        [
+          otherTenant.workspaceId,
+          otherTenant.channelConnectionId,
+          otherTenant.userKey,
+          scope.walletId,
+          scope.financialSubjectRef,
+          wrongTenantReservation,
+          hash("legacy-wrong-tenant-generation"),
+          hash("legacy-wrong-tenant-owner"),
+          1,
+          randomUUID(),
+          hash("legacy-wrong-tenant-evidence"),
+        ]
+      )
+    ).rejects.toThrow();
+
+    const reservationId = randomUUID();
+    const [held] = await connection.query<RowDataPacket[][]>(
+      "CALL `credit_create_reservation_hold`(?,'test',?,1,1,?,?,?,?,?,?,?,?,?)",
+      [
+        scope.workspaceId,
+        scope.channelConnectionId,
+        scope.userKey,
+        scope.walletId,
+        scope.financialSubjectRef,
+        reservationId,
+        hash("legacy-generation"),
+        hash("legacy-owner"),
+        1,
+        randomUUID(),
+        hash("legacy-evidence"),
+      ]
+    );
+    expect(held[0]?.[0]?.result).toBe("applied");
+    const [[wallet]] = await connection.query<RowDataPacket[]>(
+      "SELECT `credit_balance` AS balance,`reserved_credits` AS reserved,`current_user_key_hash` AS userKey FROM `credit_wallets` WHERE `wallet_id`=?",
+      [scope.walletId]
+    );
+    expect(wallet).toMatchObject({
+      balance: 10,
+      reserved: 1,
+      userKey: LEGACY_USER_A,
+    });
+    const [[wrongReservations]] = await connection.query<RowDataPacket[]>(
+      "SELECT COUNT(*) AS count FROM `credit_reservations` WHERE `reservation_id` IN (?,?)",
+      [wrongUserReservation, wrongTenantReservation]
+    );
+    expect(Number(wrongReservations.count)).toBe(0);
+  });
+
   it("rejects another Messenger subject at the reservation terminal boundary", async () => {
     const scope = await createScope({ secondSubject: true });
     const intent = await createCreditIntent(scope, randomUUID());
     const payment = await makeIntentPaid(scope, intent, randomUUID());
-    await grant(scope, intent.intentId, payment.paymentId, payment.evidenceHash);
+    await grant(
+      scope,
+      intent.intentId,
+      payment.paymentId,
+      payment.evidenceHash
+    );
     const reservationId = randomUUID();
     const ownerHash = hash("reservation-owner");
     const holdEntryId = randomUUID();
@@ -460,7 +631,7 @@ suite("0017 credit wallet MySQL 8.4 procedure boundary", () => {
       [
         scope.workspaceId,
         scope.channelConnectionId,
-        USER_A,
+        scope.userKey,
         scope.walletId,
         scope.financialSubjectRef,
         reservationId,
@@ -477,7 +648,7 @@ suite("0017 credit wallet MySQL 8.4 procedure boundary", () => {
       [
         scope.workspaceId,
         scope.channelConnectionId,
-        USER_A,
+        scope.userKey,
         scope.walletId,
         scope.financialSubjectRef,
         reservationId,
@@ -533,7 +704,11 @@ suite("0017 credit wallet MySQL 8.4 procedure boundary", () => {
       "SELECT `status`,`state_version` AS stateVersion FROM `credit_reservations` WHERE `reservation_id`=?",
       [reservationId]
     );
-    expect(afterWrongUser).toMatchObject({ stateVersion: 2, status: "reserved" });
+    expect(afterWrongUser).toMatchObject({
+      stateVersion: 2,
+      status: "reserved",
+    });
+    await markReservationProviderAccepted(scope, reservationId, ownerHash);
     const [committed] = await connection.query<RowDataPacket[][]>(
       "CALL `credit_commit_reservation`(?,'test',?,1,1,?,?,?,?,?,?,?)",
       [
@@ -682,6 +857,83 @@ suite("0017 credit wallet MySQL 8.4 procedure boundary", () => {
     ).rejects.toThrow("credit release wallet scope is stale");
   });
 
+  it("never expires a provider-accepted hold after a commit crash", async () => {
+    const scope = await createScope();
+    const intent = await createCreditIntent(scope, randomUUID());
+    const payment = await makeIntentPaid(scope, intent, randomUUID());
+    await grant(
+      scope,
+      intent.intentId,
+      payment.paymentId,
+      payment.evidenceHash
+    );
+
+    const reservationId = randomUUID();
+    const ownerTokenHash = hash("provider-accepted-crash-owner");
+    await connection.query(
+      "CALL `credit_create_reservation_hold`(?,'test',?,1,1,?,?,?,?,?,?,?,?,?)",
+      [
+        scope.workspaceId,
+        scope.channelConnectionId,
+        scope.userKey,
+        scope.walletId,
+        scope.financialSubjectRef,
+        reservationId,
+        hash("provider-accepted-crash-request"),
+        ownerTokenHash,
+        1,
+        randomUUID(),
+        hash("provider-accepted-crash-hold"),
+      ]
+    );
+    await markReservationProviderAccepted(
+      scope,
+      reservationId,
+      ownerTokenHash
+    );
+
+    const [[clock]] = await connection.query<RowDataPacket[]>(
+      "SELECT UNIX_TIMESTAMP(CURRENT_TIMESTAMP)+960 AS futureTimestamp"
+    );
+    await connection.query("SET SESSION timestamp=?", [
+      Number(clock.futureTimestamp),
+    ]);
+    try {
+      await expect(
+        connection.query(
+          "CALL `credit_expire_reservation`(?,'test',?,1,1,?,?,?,?,?,?,?)",
+          [
+            scope.workspaceId,
+            scope.channelConnectionId,
+            scope.userKey,
+            scope.walletId,
+            scope.financialSubjectRef,
+            reservationId,
+            ownerTokenHash,
+            randomUUID(),
+            hash("provider-accepted-crash-expiry"),
+          ]
+        )
+      ).rejects.toThrow("credit expiry requires one expired owned hold");
+    } finally {
+      await connection.query("SET SESSION timestamp=0");
+    }
+
+    const [[wallet]] = await connection.query<RowDataPacket[]>(
+      "SELECT `credit_balance` AS balance,`reserved_credits` AS reserved FROM `credit_wallets` WHERE `wallet_id`=?",
+      [scope.walletId]
+    );
+    const [[reservation]] = await connection.query<RowDataPacket[]>(
+      "SELECT `status`,`transport_state` AS transportState FROM `credit_reservations` WHERE `reservation_id`=?",
+      [reservationId]
+    );
+    expect(wallet).toMatchObject({ balance: 10, reserved: 1 });
+    expect(reservation).toMatchObject({
+      status: "reserved",
+      transportState: "known_accepted",
+    });
+  });
+
   it("drains an exposed paid checkout after disable but never grants an unexposed one", async () => {
     const exposedScope = await createScope();
     const exposedIntent = await createCreditIntent(exposedScope, randomUUID());
@@ -741,47 +993,45 @@ suite("0017 credit wallet MySQL 8.4 procedure boundary", () => {
     const secondEntry = randomUUID();
     const outcomes = await runBehindControlBarrier(scope, [
       a =>
-        a.query(
-          "CALL `credit_grant_purchase`(?,'test',?,1,1,?,?,?,?,?,?,?)",
-          [
-            scope.workspaceId,
-            scope.channelConnectionId,
-            USER_A,
-            scope.walletId,
-            scope.financialSubjectRef,
-            intent.intentId,
-            payment.paymentId,
-            firstEntry,
-            payment.evidenceHash,
-          ]
-        ),
+        a.query("CALL `credit_grant_purchase`(?,'test',?,1,1,?,?,?,?,?,?,?)", [
+          scope.workspaceId,
+          scope.channelConnectionId,
+          USER_A,
+          scope.walletId,
+          scope.financialSubjectRef,
+          intent.intentId,
+          payment.paymentId,
+          firstEntry,
+          payment.evidenceHash,
+        ]),
       b =>
-        b.query(
-          "CALL `credit_grant_purchase`(?,'test',?,1,1,?,?,?,?,?,?,?)",
-          [
-            scope.workspaceId,
-            scope.channelConnectionId,
-            USER_A,
-            scope.walletId,
-            scope.financialSubjectRef,
-            intent.intentId,
-            payment.paymentId,
-            secondEntry,
-            payment.evidenceHash,
-          ]
-        ),
+        b.query("CALL `credit_grant_purchase`(?,'test',?,1,1,?,?,?,?,?,?,?)", [
+          scope.workspaceId,
+          scope.channelConnectionId,
+          USER_A,
+          scope.walletId,
+          scope.financialSubjectRef,
+          intent.intentId,
+          payment.paymentId,
+          secondEntry,
+          payment.evidenceHash,
+        ]),
     ]);
-    expect(outcomes.filter(result => result.status === "fulfilled")).toHaveLength(1);
-    expect(outcomes.filter(result => result.status === "rejected")).toHaveLength(1);
+    expect(
+      outcomes.filter(result => result.status === "fulfilled")
+    ).toHaveLength(1);
+    expect(
+      outcomes.filter(result => result.status === "rejected")
+    ).toHaveLength(1);
     const grantRejection = outcomes.find(
       (result): result is PromiseRejectedResult => result.status === "rejected"
     );
     expect(
       (grantRejection?.reason as { code?: string; message?: string }).code
     ).toBe("ER_SIGNAL_EXCEPTION");
-    expect(
-      (grantRejection?.reason as { message?: string }).message
-    ).toContain("credit grant replay conflicts with existing payment effect");
+    expect((grantRejection?.reason as { message?: string }).message).toContain(
+      "credit grant replay conflicts with existing payment effect"
+    );
     const [[grantCount]] = await connection.query<RowDataPacket[]>(
       "SELECT COUNT(*) AS count FROM `credit_ledger` WHERE `wallet_id`=? AND `entry_kind`='purchase_grant'",
       [scope.walletId]
@@ -813,8 +1063,12 @@ suite("0017 credit wallet MySQL 8.4 procedure boundary", () => {
           holdArgs(randomUUID(), "b")
         ),
     ]);
-    expect(holds.filter(result => result.status === "fulfilled")).toHaveLength(1);
-    expect(holds.filter(result => result.status === "rejected")).toHaveLength(1);
+    expect(holds.filter(result => result.status === "fulfilled")).toHaveLength(
+      1
+    );
+    expect(holds.filter(result => result.status === "rejected")).toHaveLength(
+      1
+    );
     const holdRejection = holds.find(
       (result): result is PromiseRejectedResult => result.status === "rejected"
     );
@@ -831,7 +1085,7 @@ suite("0017 credit wallet MySQL 8.4 procedure boundary", () => {
     expect(wallet).toMatchObject({ balance: 10, reserved: 10, version: 3 });
   });
 
-  it("freezes erasure around a hold, then scrubs identity with retryable provider status", async () => {
+  it("uses the production erasure epoch, drains a hold, and scrubs settled identity", async () => {
     const scope = await createScope();
     const intent = await createCreditIntent(scope, randomUUID());
     const payment = await makeIntentPaid(scope, intent, randomUUID());
@@ -860,18 +1114,19 @@ suite("0017 credit wallet MySQL 8.4 procedure boundary", () => {
       ]
     );
     await connection.query(
-      "UPDATE `messenger_privacy_subjects` SET `status`='erasing' WHERE `workspace_id`=? AND `channel_connection_id`=? AND `user_key`=?",
-      [scope.workspaceId, scope.channelConnectionId, USER_A]
+      "UPDATE `messenger_privacy_subjects` SET `status`='erasing',`privacy_epoch`=2 WHERE `workspace_id`=? AND `channel_connection_id`=? AND `user_key`=?",
+      [scope.workspaceId, scope.channelConnectionId, scope.userKey]
     );
     const eraseArgs = [
       scope.workspaceId,
       scope.channelConnectionId,
-      USER_A,
+      2,
+      scope.userKey,
       scope.walletId,
       scope.financialSubjectRef,
     ];
     const [pending] = await connection.query<RowDataPacket[][]>(
-      "CALL `credit_erase_wallet`(?,'test',?,1,1,?,?,?)",
+      "CALL `credit_erase_wallet`(?,'test',?,1,1,?,?,?,?)",
       eraseArgs
     );
     expect(pending[0]?.[0]?.result).toBe("pending_holds");
@@ -880,7 +1135,7 @@ suite("0017 credit wallet MySQL 8.4 procedure boundary", () => {
       [
         scope.workspaceId,
         scope.channelConnectionId,
-        USER_A,
+        scope.userKey,
         scope.walletId,
         scope.financialSubjectRef,
         reservationId,
@@ -890,21 +1145,21 @@ suite("0017 credit wallet MySQL 8.4 procedure boundary", () => {
       ]
     );
     const [erased] = await connection.query<RowDataPacket[][]>(
-      "CALL `credit_erase_wallet`(?,'test',?,1,1,?,?,?)",
+      "CALL `credit_erase_wallet`(?,'test',?,1,1,?,?,?,?)",
       eraseArgs
     );
-    expect(erased[0]?.[0]?.result).toBe("erased_pending_provider");
+    expect(erased[0]?.[0]?.result).toBe("erased");
     const [retry] = await connection.query<RowDataPacket[][]>(
-      "CALL `credit_erase_wallet`(?,'test',?,1,1,?,?,?)",
+      "CALL `credit_erase_wallet`(?,'test',?,1,1,?,?,?,?)",
       eraseArgs
     );
-    expect(retry[0]?.[0]?.result).toBe("erased_pending_provider");
+    expect(retry[0]?.[0]?.result).toBe("already_applied");
     const [grantReplay] = await connection.query<RowDataPacket[][]>(
       "CALL `credit_grant_purchase`(?,'test',?,1,1,?,?,?,?,?,?,?)",
       [
         scope.workspaceId,
         scope.channelConnectionId,
-        USER_A,
+        scope.userKey,
         scope.walletId,
         scope.financialSubjectRef,
         intent.intentId,
@@ -931,6 +1186,60 @@ suite("0017 credit wallet MySQL 8.4 procedure boundary", () => {
     expect(scrubbedIntent.userKey).toBeNull();
     expect(scrubbedIntent.capability).toBeNull();
     expect(scrubbedIntent.erasedAt).toBeTruthy();
+  });
+
+  it("keeps an ambiguous provider wallet discoverable until exact containment", async () => {
+    const scope = await createScope({ userKey: LEGACY_USER_A });
+    const intent = await createCreditIntent(scope, randomUUID());
+    await makeIntentPaid(scope, intent, randomUUID(), {
+      operationState: "ambiguous",
+    });
+    await connection.query(
+      "UPDATE `messenger_privacy_subjects` SET `status`='erasing',`privacy_epoch`=2 WHERE `workspace_id`=? AND `channel_connection_id`=? AND `user_key`=?",
+      [scope.workspaceId, scope.channelConnectionId, scope.userKey]
+    );
+    const erasureScope = {
+      workspaceId: scope.workspaceId,
+      channelConnectionId: scope.channelConnectionId,
+      bindingEpoch: 1,
+      dataPrivacyEpoch: 1,
+      erasurePrivacyEpoch: 2,
+      userKey: scope.userKey,
+    };
+    await expect(
+      eraseCreditWalletsForPrivacySubject(erasureScope)
+    ).resolves.toEqual({ result: "pending", walletCount: 1 });
+    const [[retained]] = await connection.query<RowDataPacket[]>(
+      "SELECT `status`,`current_user_key_hash` AS userKey FROM `credit_wallets` WHERE `wallet_id`=?",
+      [scope.walletId]
+    );
+    expect(retained).toMatchObject({
+      status: "frozen",
+      userKey: LEGACY_USER_A,
+    });
+    const [[scrubbedIntent]] = await connection.query<RowDataPacket[]>(
+      "SELECT `messenger_sender_user_key` AS userKey,`checkout_capability_hash` AS capability,`credit_identity_erased_at` AS erasedAt FROM `billing_intents` WHERE `intent_id`=?",
+      [intent.intentId]
+    );
+    expect(scrubbedIntent.userKey).toBeNull();
+    expect(scrubbedIntent.capability).toBeNull();
+    expect(scrubbedIntent.erasedAt).toBeTruthy();
+
+    await expect(
+      eraseCreditWalletsForPrivacySubject(erasureScope)
+    ).resolves.toEqual({ result: "pending", walletCount: 1 });
+    await connection.query(
+      "UPDATE `billing_provider_operations` SET `state`='contained',`completed_at`=CURRENT_TIMESTAMP WHERE `workspace_id`=? AND `mode`='test' AND `intent_id`=? AND `operation_type`='create_payment'",
+      [scope.workspaceId, intent.intentId]
+    );
+    await expect(
+      eraseCreditWalletsForPrivacySubject(erasureScope)
+    ).resolves.toEqual({ result: "erased", walletCount: 1 });
+    const [[detached]] = await connection.query<RowDataPacket[]>(
+      "SELECT `status`,`current_user_key_hash` AS userKey FROM `credit_wallets` WHERE `wallet_id`=?",
+      [scope.walletId]
+    );
+    expect(detached).toMatchObject({ status: "erased", userKey: null });
   });
 
   it("records only an exact full refund and waits for active holds", async () => {
@@ -1095,9 +1404,7 @@ suite("0017 credit wallet MySQL 8.4 procedure boundary", () => {
     expect(afterRefund).toMatchObject({ balance: 0, status: "active" });
 
     const laterChargebackId = `chb_${randomUUID()}`;
-    const laterChargebackEvidence = hash(
-      `ordered-chargeback:${randomUUID()}`
-    );
+    const laterChargebackEvidence = hash(`ordered-chargeback:${randomUUID()}`);
     await connection.query(
       "UPDATE `payment_ledger` SET `chargebacks`=JSON_ARRAY(JSON_OBJECT('id',?,'amount',JSON_OBJECT('value','19.00','currency','EUR'))),`observed_snapshot_hash`=? WHERE `id`=?",
       [
@@ -1151,9 +1458,7 @@ suite("0017 credit wallet MySQL 8.4 procedure boundary", () => {
       chargedPayment.evidenceHash
     );
     const firstChargebackId = `chb_${randomUUID()}`;
-    const firstChargebackEvidence = hash(
-      `first-chargeback:${randomUUID()}`
-    );
+    const firstChargebackEvidence = hash(`first-chargeback:${randomUUID()}`);
     await connection.query(
       "UPDATE `payment_ledger` SET `chargebacks`=JSON_ARRAY(JSON_OBJECT('id',?,'amount',JSON_OBJECT('value','19.00','currency','EUR'))),`observed_snapshot_hash`=? WHERE `id`=?",
       [
@@ -1277,6 +1582,10 @@ suite("0017 credit wallet MySQL 8.4 procedure boundary", () => {
       "SELECT `credit_balance` AS balance,`reserved_credits` AS reserved,`status` FROM `credit_wallets` WHERE `wallet_id`=?",
       [scope.walletId]
     );
-    expect(wallet).toMatchObject({ balance: 10, reserved: 0, status: "frozen" });
+    expect(wallet).toMatchObject({
+      balance: 10,
+      reserved: 0,
+      status: "frozen",
+    });
   });
 });

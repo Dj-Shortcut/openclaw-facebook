@@ -1,5 +1,6 @@
-import { sql, type SQL } from "drizzle-orm";
+import { and, eq, sql, type SQL } from "drizzle-orm";
 
+import { creditWallets } from "../../../drizzle/schema";
 import { getDatabaseOrThrow } from "../../db";
 import type { MollieMode } from "./config";
 
@@ -7,8 +8,14 @@ const MAX_DATABASE_ID = 2_147_483_647;
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
-const CONVERSATION_USER_KEY_PATTERN = /^u2[.]k[1-9][0-9]{0,5}[.][0-9a-f]{64}$/;
+const PRIVACY_SUBJECT_USER_KEY_PATTERN =
+  /^(?:[0-9a-f]{64}|u2[.]k[1-9][0-9]{0,5}[.][0-9a-f]{64})$/;
 const PROVIDER_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+const CHECKOUT_SCOPE_KEY_PATTERN = /^credit-checkout:v1:[0-9a-f]{64}$/;
+const CREDIT_OFFER_SNAPSHOT_CODE = "premium_images_8_medium_v1";
+const CREDIT_OFFER_AMOUNT = "4.99";
+const CREDIT_OFFER_COUNT = 8;
+const CREDIT_OFFER_DESCRIPTION = "Leaderbot - 8 premium beeldcredits";
 
 export class CreditWalletStoreError extends Error {
   constructor(message: string) {
@@ -36,17 +43,20 @@ export type AppliedResult = Readonly<{
   result: "applied" | "already_applied";
 }>;
 
-export type WalletCreationResult = AppliedResult &
-  Readonly<{ walletId: string }>;
+export type CreditCheckoutReservationResult = AppliedResult &
+  Readonly<{ intentId: string; walletId: string }>;
 export type CapabilityConsumptionResult = AppliedResult &
   Readonly<{ intentId: string }>;
 export type PurchaseGrantResult = AppliedResult & Readonly<{ entryId: string }>;
 export type ReservationResult = AppliedResult &
   Readonly<{ reservationId: string }>;
 export type WalletErasureResult = Readonly<{
-  result:
-    "already_applied" | "erased" | "erased_pending_provider" | "pending_holds";
+  result: "already_applied" | "erased" | "pending_holds" | "pending_provider";
   walletId: string;
+}>;
+export type PrivacySubjectWalletErasureResult = Readonly<{
+  result: "erased" | "pending";
+  walletCount: number;
 }>;
 export type CreditDebitResult =
   | (AppliedResult & Readonly<{ entryId: string }>)
@@ -88,8 +98,23 @@ function assertSha256(value: string, field: string): void {
   if (typeof value !== "string" || !SHA256_PATTERN.test(value)) invalid(field);
 }
 
+function assertCheckoutScopeKey(value: string): void {
+  if (typeof value !== "string" || !CHECKOUT_SCOPE_KEY_PATTERN.test(value)) {
+    invalid("checkout scope key");
+  }
+}
+
+function assertValidDate(value: Date, field: string): void {
+  if (!(value instanceof Date) || !Number.isFinite(value.getTime())) {
+    invalid(field);
+  }
+}
+
 function assertUserKey(value: string): void {
-  if (typeof value !== "string" || !CONVERSATION_USER_KEY_PATTERN.test(value)) {
+  if (
+    typeof value !== "string" ||
+    !PRIVACY_SUBJECT_USER_KEY_PATTERN.test(value)
+  ) {
     invalid("user key");
   }
 }
@@ -236,7 +261,8 @@ function splitContract(
   };
 }
 
-export async function createCreditWallet(input: {
+export async function reserveCreditCheckoutIntent(input: {
+  intentId: string;
   walletId: string;
   workspaceId: number;
   mode: MollieMode;
@@ -245,14 +271,89 @@ export async function createCreditWallet(input: {
   privacyEpoch: number;
   userKey: string;
   financialSubjectRef: string;
-}): Promise<WalletCreationResult> {
+  authorizationEpoch: number;
+  offerSnapshotCode: typeof CREDIT_OFFER_SNAPSHOT_CODE;
+  expectedAmount: typeof CREDIT_OFFER_AMOUNT;
+  creditCount: typeof CREDIT_OFFER_COUNT;
+  description: typeof CREDIT_OFFER_DESCRIPTION;
+  metadataHash: string;
+  idempotencyKey: string;
+  checkoutScopeKey: string;
+  capabilityHash: string;
+  capabilityExpiresAt: Date;
+}): Promise<CreditCheckoutReservationResult> {
   assertCurrentScope(input);
-  const row = await executeProcedure(
-    sql`CALL \`credit_create_wallet\`(${input.walletId}, ${input.workspaceId}, ${input.mode}, ${input.channelConnectionId}, ${input.bindingEpoch}, ${input.privacyEpoch}, ${input.userKey}, ${input.financialSubjectRef})`,
-    contract(["applied", "already_applied"], "wallet_id", input.walletId)
+  assertUuid(input.intentId, "intent ID");
+  assertDatabaseId(input.authorizationEpoch, "authorization epoch");
+  if (input.offerSnapshotCode !== CREDIT_OFFER_SNAPSHOT_CODE) {
+    invalid("offer snapshot code");
+  }
+  if (input.expectedAmount !== CREDIT_OFFER_AMOUNT) {
+    invalid("expected amount");
+  }
+  if (input.creditCount !== CREDIT_OFFER_COUNT) {
+    invalid("credit count");
+  }
+  if (input.description !== CREDIT_OFFER_DESCRIPTION) {
+    invalid("description");
+  }
+  assertSha256(input.metadataHash, "metadata hash");
+  if (input.idempotencyKey !== `credit-payment:${input.intentId}`) {
+    invalid("idempotency key");
+  }
+  assertCheckoutScopeKey(input.checkoutScopeKey);
+  assertSha256(input.capabilityHash, "capability hash");
+  assertValidDate(input.capabilityExpiresAt, "capability expiry");
+
+  const database = await getDatabaseOrThrow();
+  const execution = await database.execute(
+    sql`CALL \`credit_reserve_checkout_intent\`(${input.intentId}, ${input.walletId}, ${input.workspaceId}, ${input.mode}, ${input.channelConnectionId}, ${input.bindingEpoch}, ${input.privacyEpoch}, ${input.userKey}, ${input.financialSubjectRef}, ${input.authorizationEpoch}, ${input.offerSnapshotCode}, ${input.expectedAmount}, ${input.creditCount}, ${input.description}, ${input.metadataHash}, ${input.idempotencyKey}, ${input.checkoutScopeKey}, ${input.capabilityHash}, ${input.capabilityExpiresAt})`
   );
+  if (!Array.isArray(execution) || execution.length !== 2) {
+    throw new CreditWalletStoreError(
+      "Credit wallet procedure returned a malformed result"
+    );
+  }
+  const executionTuple: readonly unknown[] = execution;
+  const rows = executionTuple[0];
+  if (!Array.isArray(rows) || rows.length !== 2) {
+    throw new CreditWalletStoreError(
+      "Credit wallet procedure returned a malformed result"
+    );
+  }
+  const procedureRows: readonly unknown[] = rows;
+  const resultSet = procedureRows[0];
+  const terminalHeader = procedureRows[1];
+  if (
+    !Array.isArray(resultSet) ||
+    resultSet.length !== 1 ||
+    Array.isArray(terminalHeader) ||
+    typeof terminalHeader !== "object" ||
+    terminalHeader === null ||
+    !isPlainRecord(resultSet[0])
+  ) {
+    throw new CreditWalletStoreError(
+      "Credit wallet procedure returned a malformed result"
+    );
+  }
+  const row = resultSet[0];
+  const keys = Object.keys(row).sort();
+  if (
+    keys.length !== 3 ||
+    keys[0] !== "intent_id" ||
+    keys[1] !== "result" ||
+    keys[2] !== "wallet_id" ||
+    (row.result !== "applied" && row.result !== "already_applied") ||
+    row.intent_id !== input.intentId ||
+    row.wallet_id !== input.walletId
+  ) {
+    throw new CreditWalletStoreError(
+      "Credit wallet procedure returned a malformed result"
+    );
+  }
   return {
-    result: row.result as AppliedResult["result"],
+    result: row.result,
+    intentId: input.intentId,
     walletId: input.walletId,
   };
 }
@@ -339,6 +440,56 @@ type ReservationTerminalInput = CreditWalletScope & {
   evidenceHash: string;
 };
 
+type ReservationTransportInput = CreditWalletScope & {
+  reservationId: string;
+  ownerTokenHash: string;
+};
+
+async function executeReservationTransport(
+  procedure:
+    | "credit_mark_reservation_transport_started"
+    | "credit_mark_reservation_provider_accepted",
+  input: ReservationTransportInput
+): Promise<ReservationResult> {
+  assertCurrentScope(input);
+  assertUuid(input.reservationId, "reservation ID");
+  assertSha256(input.ownerTokenHash, "owner token hash");
+  const query =
+    procedure === "credit_mark_reservation_transport_started"
+      ? sql`CALL \`credit_mark_reservation_transport_started\`(${input.workspaceId}, ${input.mode}, ${input.channelConnectionId}, ${input.bindingEpoch}, ${input.privacyEpoch}, ${input.userKey}, ${input.walletId}, ${input.financialSubjectRef}, ${input.reservationId}, ${input.ownerTokenHash})`
+      : sql`CALL \`credit_mark_reservation_provider_accepted\`(${input.workspaceId}, ${input.mode}, ${input.channelConnectionId}, ${input.bindingEpoch}, ${input.privacyEpoch}, ${input.userKey}, ${input.walletId}, ${input.financialSubjectRef}, ${input.reservationId}, ${input.ownerTokenHash})`;
+  const row = await executeProcedure(
+    query,
+    contract(
+      ["applied", "already_applied"],
+      "reservation_id",
+      input.reservationId
+    )
+  );
+  return {
+    result: row.result as AppliedResult["result"],
+    reservationId: input.reservationId,
+  };
+}
+
+export function markCreditReservationTransportStarted(
+  input: ReservationTransportInput
+): Promise<ReservationResult> {
+  return executeReservationTransport(
+    "credit_mark_reservation_transport_started",
+    input
+  );
+}
+
+export function markCreditReservationProviderAccepted(
+  input: ReservationTransportInput
+): Promise<ReservationResult> {
+  return executeReservationTransport(
+    "credit_mark_reservation_provider_accepted",
+    input
+  );
+}
+
 function validateReservationTerminalInput(
   input: ReservationTerminalInput
 ): void {
@@ -415,22 +566,100 @@ export async function scrubTerminalCreditReservation(
 }
 
 export async function eraseCreditWallet(
-  input: CreditWalletScope
+  input: CreditWalletScope & { erasurePrivacyEpoch: number }
 ): Promise<WalletErasureResult> {
   assertCurrentScope(input);
+  assertDatabaseId(input.erasurePrivacyEpoch, "erasure privacy epoch");
+  if (input.erasurePrivacyEpoch !== input.privacyEpoch + 1) {
+    invalid("erasure privacy epoch");
+  }
   const statuses = [
     "already_applied",
     "erased",
-    "erased_pending_provider",
     "pending_holds",
+    "pending_provider",
   ] as const;
   const row = await executeProcedure(
-    sql`CALL \`credit_erase_wallet\`(${input.workspaceId}, ${input.mode}, ${input.channelConnectionId}, ${input.bindingEpoch}, ${input.privacyEpoch}, ${input.userKey}, ${input.walletId}, ${input.financialSubjectRef})`,
+    sql`CALL \`credit_erase_wallet\`(${input.workspaceId}, ${input.mode}, ${input.channelConnectionId}, ${input.bindingEpoch}, ${input.privacyEpoch}, ${input.erasurePrivacyEpoch}, ${input.userKey}, ${input.walletId}, ${input.financialSubjectRef})`,
     contract(statuses, "wallet_id", input.walletId)
   );
   return {
     result: row.result as WalletErasureResult["result"],
     walletId: input.walletId,
+  };
+}
+
+/**
+ * Erases only wallets linked to one exact Messenger privacy subject. The
+ * privacy key remains the deletion/FK key; the financial reference is read
+ * from the already-bound wallet and is never derived from or exposed to the
+ * deletion caller.
+ */
+export async function eraseCreditWalletsForPrivacySubject(input: {
+  workspaceId: number;
+  channelConnectionId: number;
+  bindingEpoch: number;
+  dataPrivacyEpoch: number;
+  erasurePrivacyEpoch: number;
+  userKey: string;
+}): Promise<PrivacySubjectWalletErasureResult> {
+  assertDatabaseId(input.workspaceId, "workspace ID");
+  assertDatabaseId(input.channelConnectionId, "channel connection ID");
+  assertDatabaseId(input.bindingEpoch, "binding epoch");
+  assertDatabaseId(input.dataPrivacyEpoch, "data privacy epoch");
+  assertDatabaseId(input.erasurePrivacyEpoch, "erasure privacy epoch");
+  assertUserKey(input.userKey);
+  if (input.erasurePrivacyEpoch !== input.dataPrivacyEpoch + 1) {
+    invalid("erasure privacy epoch");
+  }
+
+  const database = await getDatabaseOrThrow();
+  const wallets = await database
+    .select({
+      financialSubjectRef: creditWallets.financialSubjectRef,
+      mode: creditWallets.mode,
+      walletId: creditWallets.walletId,
+    })
+    .from(creditWallets)
+    .where(
+      and(
+        eq(creditWallets.workspaceId, input.workspaceId),
+        eq(creditWallets.channelConnectionId, input.channelConnectionId),
+        eq(creditWallets.bindingEpoch, input.bindingEpoch),
+        eq(creditWallets.privacyEpoch, input.dataPrivacyEpoch),
+        eq(creditWallets.currentUserKeyHash, input.userKey)
+      )
+    )
+    .limit(3);
+  if (wallets.length > 2) {
+    throw new CreditWalletStoreError(
+      "Credit wallet privacy scope returned too many wallets"
+    );
+  }
+
+  let pending = false;
+  for (const wallet of wallets) {
+    const outcome = await eraseCreditWallet({
+      workspaceId: input.workspaceId,
+      mode: wallet.mode,
+      channelConnectionId: input.channelConnectionId,
+      bindingEpoch: input.bindingEpoch,
+      privacyEpoch: input.dataPrivacyEpoch,
+      erasurePrivacyEpoch: input.erasurePrivacyEpoch,
+      userKey: input.userKey,
+      walletId: wallet.walletId,
+      financialSubjectRef: wallet.financialSubjectRef,
+    });
+    if (
+      outcome.result === "pending_holds" ||
+      outcome.result === "pending_provider"
+    ) {
+      pending = true;
+    }
+  }
+  return {
+    result: pending ? "pending" : "erased",
+    walletCount: wallets.length,
   };
 }
 

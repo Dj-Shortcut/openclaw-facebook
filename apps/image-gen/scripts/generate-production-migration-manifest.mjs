@@ -12,7 +12,7 @@ const appDirectory = path.resolve(
 const drizzleDirectory = path.join(appDirectory, "drizzle");
 const journalPath = path.join(drizzleDirectory, "meta", "_journal.json");
 const baseSchemaSnapshot = "meta/0014_snapshot.json";
-const schemaSnapshot = "meta/0017_snapshot.json";
+const schemaSnapshot = "meta/0018_snapshot.json";
 const productionSchemaContract = "production-schema-contract.json";
 const outputPath = path.join(drizzleDirectory, "migration-manifest.json");
 

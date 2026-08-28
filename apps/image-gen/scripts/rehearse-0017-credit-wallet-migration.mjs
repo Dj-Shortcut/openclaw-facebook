@@ -25,7 +25,7 @@ if (
 }
 const migration0017 = await readStatements(migration0017Files[0]);
 const through0017 = [...through0016, migration0017Files[0]];
-assert(migration0017.length === 49, "0017 must contain 49 reviewed statements");
+assert(migration0017.length === 51, "0017 must contain 51 reviewed statements");
 assert(
   migration0017[0].startsWith(
     "CREATE TEMPORARY TABLE `credit_0017_legacy_effect_preflight`"
@@ -33,11 +33,15 @@ assert(
     migration0017[1] ===
       "DROP TEMPORARY TABLE `credit_0017_legacy_effect_preflight`;" &&
     migration0017[2] ===
-    "ALTER TABLE `payment_ledger`\n\tADD CONSTRAINT `payment_ledger_exact_payment_scope_unique` UNIQUE(`id`,`workspace_id`,`mode`,`mollie_payment_id`);",
+      "ALTER TABLE `payment_ledger`\n\tADD CONSTRAINT `payment_ledger_exact_payment_scope_unique` UNIQUE(`id`,`workspace_id`,`mode`,`mollie_payment_id`);",
   "0017 must prove legacy ownership before the first permanent DDL"
 );
 
-const expectedTables = ["credit_ledger", "credit_reservations", "credit_wallets"];
+const expectedTables = [
+  "credit_ledger",
+  "credit_reservations",
+  "credit_wallets",
+];
 const expectedProcedures = [
   "credit_apply_chargeback_debit",
   "credit_apply_chargeback_restore",
@@ -49,16 +53,24 @@ const expectedProcedures = [
   "credit_erase_wallet",
   "credit_expire_reservation",
   "credit_grant_purchase",
+  "credit_mark_reservation_provider_accepted",
+  "credit_mark_reservation_transport_started",
   "credit_release_reservation",
   "credit_scrub_terminal_reservation",
 ];
 const expectedTriggers = Array.from(
-  (await fs.readFile(path.join(drizzleDirectory, migration0017Files[0]), "utf8")).matchAll(
-    /CREATE TRIGGER `([^`]+)`/g
-  ),
+  (
+    await fs.readFile(
+      path.join(drizzleDirectory, migration0017Files[0]),
+      "utf8"
+    )
+  ).matchAll(/CREATE TRIGGER `([^`]+)`/g),
   match => match[1]
 ).sort();
-assert(expectedTriggers.length === 14, "0017 must contain 14 reviewed triggers");
+assert(
+  expectedTriggers.length === 14,
+  "0017 must contain 14 reviewed triggers"
+);
 
 const databases = {
   collision: "leaderbot_0017_credit_wallet_collision_rehearsal",
@@ -86,7 +98,9 @@ try {
   );
   for (const database of Object.values(databases)) {
     assert(
-      /^leaderbot_0017_credit_wallet_(?:collision|fresh|locked|upgrade)_rehearsal$/.test(database),
+      /^leaderbot_0017_credit_wallet_(?:collision|fresh|locked|upgrade)_rehearsal$/.test(
+        database
+      ),
       "unsafe rehearsal database name"
     );
     await admin.query(`DROP DATABASE IF EXISTS \`${database}\``);
@@ -201,7 +215,8 @@ async function assertInstalledShape(connection) {
     "SELECT TABLE_NAME AS name FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME LIKE 'credit\\_%' ORDER BY TABLE_NAME"
   );
   assert(
-    JSON.stringify(tables.map(row => row.name)) === JSON.stringify(expectedTables),
+    JSON.stringify(tables.map(row => row.name)) ===
+      JSON.stringify(expectedTables),
     "0017 must install exactly three credit tables"
   );
   const [procedures] = await connection.query(
@@ -231,7 +246,7 @@ async function assertRuntimePrivilegeBoundary(connection, database) {
   const runtimeUser = "lb_credit_rt_rehearsal";
   const runtimePassword = "credit-runtime-rehearsal-only";
   const walletId = "17170000-0000-4000-8000-000000000001";
-  const userKey = `u2.k1.${"a".repeat(64)}`;
+  const userKey = "a".repeat(64);
   const financialSubjectRef = "b".repeat(64);
   await admin.query(`DROP USER IF EXISTS '${runtimeUser}'@'localhost'`);
   try {
@@ -274,12 +289,21 @@ async function assertRuntimePrivilegeBoundary(connection, database) {
         "SELECT `credit_balance` AS balance FROM `credit_wallets` WHERE `wallet_id`=?",
         [walletId]
       );
-      assert(Number(wallet.balance) === 0, "runtime procedure must create a zero-balance wallet");
+      assert(
+        Number(wallet.balance) === 0,
+        "runtime procedure must create a zero-balance wallet"
+      );
       for (const forbidden of [
-        ["UPDATE `credit_wallets` SET `credit_balance`=1 WHERE `wallet_id`=?", [walletId]],
+        [
+          "UPDATE `credit_wallets` SET `credit_balance`=1 WHERE `wallet_id`=?",
+          [walletId],
+        ],
         ["UPDATE `payment_ledger` SET `paid_effect_applied`=1 WHERE 1=0", []],
         ["DELETE FROM `credit_reservations` WHERE 1=0", []],
-        ["INSERT INTO `credit_ledger` (`entry_id`) VALUES ('17170000-0000-4000-8000-000000000002')", []],
+        [
+          "INSERT INTO `credit_ledger` (`entry_id`) VALUES ('17170000-0000-4000-8000-000000000002')",
+          [],
+        ],
       ]) {
         let denied;
         try {

@@ -8,6 +8,7 @@ import {
   getTenantBillingWorkerWorkspaceId,
 } from "./config";
 import { safeBillingErrorCode } from "./errorCode";
+import { applyCreditPaymentWebhookSnapshot } from "./creditPaymentWebhook";
 import { MollieApiError, MollieClient } from "./mollieClient";
 import { applyMolliePaymentSnapshot } from "./paymentStore";
 import { resolveMollieWebhookWorkspace } from "./checkoutStore";
@@ -105,6 +106,16 @@ export async function handleMollieWebhook(
   if (payment.id !== paymentId || payment.mode !== config.mode) {
     return "unknown";
   }
+  // Resolve the durable customerless credit route before considering the
+  // legacy workspace billing path. This remains safe for legacy Payments:
+  // the credit handler returns `unknown` unless an exact local webhook route
+  // and credit intent are bound to the provider resource.
+  const creditResult = await applyCreditPaymentWebhookSnapshot({
+    webhookPaymentId: paymentId,
+    expectedMode: config.mode,
+    payment,
+  });
+  if (creditResult !== "unknown") return creditResult;
   const intentId = readProviderIntentId(payment.metadata);
   if (!intentId) return "unknown";
   const workspaceId = await resolveMollieWebhookWorkspace(

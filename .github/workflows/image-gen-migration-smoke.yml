@@ -73,7 +73,7 @@ jobs:
         run: |
           corepack pnpm --dir apps/image-gen install --frozen-lockfile
 
-      - name: Rehearse and apply the production schema expand
+      - name: Rehearse and apply the final production credit schema
         working-directory: apps/image-gen
         env:
           DATABASE_URL: mysql://root:root@127.0.0.1:3306/test_image_gen
@@ -81,6 +81,8 @@ jobs:
         run: |
           pnpm run db:rehearse-0015
           pnpm run db:rehearse-0016
+          pnpm run db:rehearse-0017
+          pnpm run db:rehearse-0018
           pnpm run db:test-production-migrator
           pnpm run db:generate-production-contract
           git diff --exit-code -- drizzle/production-schema-contract.json
@@ -90,7 +92,7 @@ jobs:
         working-directory: apps/image-gen
         env:
           DATABASE_URL: mysql://root:root@127.0.0.1:3306/test_image_gen
-          LEADERBOT_PRODUCTION_MIGRATION_MODE: verify-expand
+          LEADERBOT_PRODUCTION_MIGRATION_MODE: verify-credit-wallet
         run: node scripts/run-production-migrations.mjs
 
       - name: Apply and verify from the exact production container
@@ -100,17 +102,17 @@ jobs:
           image="leaderbot-image-gen-migration:${GITHUB_SHA}"
           docker build --build-arg SOURCE_REVISION="$GITHUB_SHA" --tag "$image" .
           test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$image")" = "$GITHUB_SHA"
-          test "$(docker image inspect --format '{{ index .Config.Labels "io.leaderbot.schema.minimum" }}' "$image")" = "0016_expand"
-          test "$(docker image inspect --format '{{ index .Config.Labels "io.leaderbot.schema.maximum" }}' "$image")" = "0016_expand"
+          test "$(docker image inspect --format '{{ index .Config.Labels "io.leaderbot.schema.minimum" }}' "$image")" = "0018_credit_checkout_reservation"
+          test "$(docker image inspect --format '{{ index .Config.Labels "io.leaderbot.schema.maximum" }}' "$image")" = "0018_credit_checkout_reservation"
           docker run --rm --network host \
             --env DATABASE_URL=mysql://root:root@127.0.0.1:3306/test_image_gen_container \
             --env NODE_ENV=test \
             --env LEADERBOT_ALLOW_TEST_SCHEMA_BOOTSTRAP=1 \
-            --env LEADERBOT_PRODUCTION_MIGRATION_MODE=apply-empty-bootstrap \
+            --env LEADERBOT_PRODUCTION_MIGRATION_MODE=apply-empty-credit-wallet-bootstrap \
             "$image" node dist/migrate-production.cjs
           docker run --rm --network host \
             --env DATABASE_URL=mysql://root:root@127.0.0.1:3306/test_image_gen_container \
-            --env LEADERBOT_PRODUCTION_MIGRATION_MODE=verify-expand \
+            --env LEADERBOT_PRODUCTION_MIGRATION_MODE=verify-credit-wallet \
             "$image" node dist/migrate-production.cjs
 
       - name: Verify dailyQuota composite index exists

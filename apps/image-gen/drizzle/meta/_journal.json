@@ -127,6 +127,13 @@
       "when": 1787881948952,
       "tag": "0017_credit_wallet_expand",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "5",
+      "when": 1787886000000,
+      "tag": "0018_credit_checkout_reservation",
+      "breakpoints": true
     }
   ]
 }

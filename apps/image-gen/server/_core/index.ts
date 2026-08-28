@@ -96,6 +96,14 @@ import { registerLegalRoutes } from "./runtime/legalRoutes";
 import { registerPublicConfigRoute } from "./runtime/publicConfig";
 import { registerWebhookRuntime } from "./runtime/webhookRuntime";
 import { registerMollieWebhookRoute } from "./billing/webhookRoutes";
+import { registerCreditCheckoutRoutes } from "./billing/creditCheckoutRoutes";
+import { confirmCreditCheckoutPayment } from "./billing/creditCheckoutPaymentService";
+import {
+  getCreditCheckoutPilotConfig,
+  withCreditCheckoutHmacSecret,
+} from "./billing/creditCheckoutConfig";
+import { startCreditReservationExpiryWorker } from "./billing/creditReservationExpiryWorker";
+import { assertCreditCheckoutDatabaseReadiness } from "./billing/creditCheckoutReadiness";
 import { registerBillingPortalRoutes } from "./billing/portalRoutes";
 import { startBillingOutboxWorker } from "./billing/outboxWorker";
 import { startDailyBillingReconciliation } from "./billing/reconciliation";
@@ -227,6 +235,18 @@ async function startServer() {
     process.env.AI_ANSWER_QUOTA_PREFLIGHT_ENABLED === "true";
   const accountingImportEnabled = isMollieAccountingImportEnabled();
   const notificationPlaneEnabled = isBillingNotificationPlaneEnabled();
+  const creditCheckoutConfig = getCreditCheckoutPilotConfig();
+  if (
+    creditCheckoutConfig.paidCreditsEnabled ||
+    creditCheckoutConfig.checkoutEnabled
+  ) {
+    withCreditCheckoutHmacSecret(() => undefined);
+    await assertCreditCheckoutDatabaseReadiness({
+      mode: creditCheckoutConfig.mode,
+      workspaceId: creditCheckoutConfig.workspaceId!,
+      commercialExposureEnabled: creditCheckoutConfig.checkoutEnabled,
+    });
+  }
   const mollieRuntimePolicy = getMollieRuntimePolicy({
     commercialExposureEnabled: mollieBillingEnabled,
     providerDrainEnabled: mollieBillingDrainEnabled,
@@ -339,6 +359,11 @@ async function startServer() {
   if (mollieRuntimePolicy.registerClassicWebhook) {
     registerMollieWebhookRoute(app);
   }
+  // Credit checkout owns strict 2 KB JSON parsers and is therefore also
+  // registered before the global Messenger/media body parsers.
+  registerCreditCheckoutRoutes(app, {
+    confirm: confirmCreditCheckoutPayment,
+  });
   if (notificationPlaneEnabled) {
     registerBillingNotificationReceiverRoute(app);
   }
@@ -387,6 +412,9 @@ async function startServer() {
   }
   if (mollieRuntimePolicy.startSafetyOutbox) {
     startBillingOutboxWorker();
+  }
+  if (mollieBillingDrainEnabled) {
+    startCreditReservationExpiryWorker();
   }
   if (mollieRuntimePolicy.startReconciliation) {
     startDailyBillingReconciliation();

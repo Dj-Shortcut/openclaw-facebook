@@ -3,11 +3,12 @@ import {
   formatPublicBusinessAddress,
 } from "../../../shared/publicBusinessDetails";
 import type express from "express";
+import { formatAmountMinor } from "../billing/catalog";
 import {
-  STARTPILOT_PLAN_CODE,
-  formatAmountMinor,
-  getBillingPlan,
-} from "../billing/catalog";
+  PREMIUM_IMAGE_CREDIT_OFFER_ID,
+  PREMIUM_IMAGE_CREDIT_OFFER_VERSION,
+  getCreditOffer,
+} from "../billing/creditCatalog";
 import { formatFaceMemoryRetentionDays } from "../faceMemoryRetention";
 import { escapeHtml } from "../html";
 
@@ -17,32 +18,33 @@ type LegalPage = {
   sections: Array<{ heading: string; html: string }>;
 };
 
-const FALLBACK_STARTPILOT_PRICING = Object.freeze({
-  startpilotPrice: "€19",
-  startpilotCurrency: "EUR",
+const FALLBACK_PREMIUM_CREDIT_PRICING = Object.freeze({
+  premiumCreditPrice: "€4.99",
+  premiumCreditCurrency: "EUR",
 });
 
-export function getStartpilotPricingDisplay(
-  lookupPlan: typeof getBillingPlan = getBillingPlan
+export function getPremiumCreditPricingDisplay(
+  lookupOffer: typeof getCreditOffer = getCreditOffer
 ) {
   try {
-    const startpilotPlan = lookupPlan(STARTPILOT_PLAN_CODE);
-    if (!startpilotPlan) return FALLBACK_STARTPILOT_PRICING;
+    const offer = lookupOffer(
+      PREMIUM_IMAGE_CREDIT_OFFER_ID,
+      PREMIUM_IMAGE_CREDIT_OFFER_VERSION
+    );
+    if (!offer) return FALLBACK_PREMIUM_CREDIT_PRICING;
     return {
-      startpilotPrice: `€${formatAmountMinor(
-        startpilotPlan.amountMinor
-      ).replace(/\.00$/, "")}`,
-      startpilotCurrency: startpilotPlan.currency,
+      premiumCreditPrice: `€${formatAmountMinor(offer.amountMinor)}`,
+      premiumCreditCurrency: offer.amount.currency,
     };
   } catch {
-    return FALLBACK_STARTPILOT_PRICING;
+    return FALLBACK_PREMIUM_CREDIT_PRICING;
   }
 }
 
 export function registerLegalRoutes(app: express.Express) {
   app.get("/privacy", (_req, res) => {
     const faceMemoryRetention = formatFaceMemoryRetentionDays("en");
-    const { startpilotPrice } = getStartpilotPricingDisplay();
+    const { premiumCreditPrice } = getPremiumCreditPricingDisplay();
     res.type("html").send(
       renderLegalPage({
         title: "Privacy Policy",
@@ -71,7 +73,7 @@ export function registerLegalRoutes(app: express.Express) {
           },
           {
             heading: "Payments",
-            html: `<p>A Startpilot purchase starts only inside the signed-in customer portal. Mollie processes one ${startpilotPrice} payment after the customer reviews and confirms checkout. The pilot does not create a subscription, automatic renewal, direct-debit mandate, top-up or overage charge.</p>`,
+            html: `<p>A premium-credit purchase starts only from a signed checkout link opened from Messenger. Mollie processes one ${premiumCreditPrice} payment after the customer reviews and confirms checkout. The purchase adds eight medium-quality image credits that do not expire. It does not create a subscription, automatic renewal, direct-debit mandate, automatic top-up or overage charge.</p>`,
           },
         ],
       })
@@ -79,20 +81,20 @@ export function registerLegalRoutes(app: express.Express) {
   });
 
   app.get("/terms", (_req, res) => {
-    const { startpilotPrice } = getStartpilotPricingDisplay();
+    const { premiumCreditPrice } = getPremiumCreditPricingDisplay();
     res.type("html").send(
       renderLegalPage({
         title: "Terms of Service",
         intro:
-          "These pilot terms apply to the Leaderbot customer portal and connected Messenger image experience. Leaderbot provides AI-generated images and guided Messenger controls together with workspace, usage and privacy controls.",
+          "These terms apply to the Leaderbot Messenger image experience. Leaderbot provides AI-generated images and guided Messenger controls together with usage and privacy controls.",
         sections: [
           {
-            heading: "Startpilot offer",
-            html: `<p>Leaderbot Startpilot costs ${startpilotPrice} as a single payment for 30 days. It includes one workspace, one connected Facebook Page, guided Messenger image controls and 20 Images 2.0 image generations, with a maximum of five image generations per day. An image generation counts once when its first AI-provider attempt starts; retries within that same request do not consume extra pilot generations. Purchase starts only in the signed-in portal.</p>`,
+            heading: "Premium image credits",
+            html: `<p>Leaderbot premium credits cost ${premiumCreditPrice} as a single payment for eight medium-quality image generations. Credits do not expire. One credit is consumed only after the image provider accepts that generation successfully; a failure before the provider call does not consume a credit. Purchase starts only from a signed checkout link opened from Messenger and requires explicit confirmation before continuing to Mollie.</p>`,
           },
           {
             heading: "No subscription or overage",
-            html: "<p>The proposed Startpilot does not renew automatically and does not create a subscription or direct-debit mandate. Usage stops at the included limits; there are no automatic top-ups or additional usage charges. Any later offer requires a separate, explicit choice.</p>",
+            html: "<p>A credit pack does not renew automatically and does not create a subscription or direct-debit mandate. Usage stops when no free or paid credits remain. There are no automatic top-ups or additional usage charges. Every later purchase requires a separate, explicit choice.</p>",
           },
           {
             heading: "AI-generated content",
@@ -116,33 +118,33 @@ export function registerLegalRoutes(app: express.Express) {
   });
 
   app.get("/billing-policy", (_req, res) => {
-    const { startpilotPrice, startpilotCurrency } =
-      getStartpilotPricingDisplay();
+    const { premiumCreditPrice, premiumCreditCurrency } =
+      getPremiumCreditPricingDisplay();
     res.type("html").send(
       renderLegalPage({
-        title: "Startpilot Pricing and Billing Information",
+        title: "Premium Credit Pricing and Billing Information",
         intro:
-          "Leaderbot offers a bounded one-time Startpilot. A purchase starts only in the signed-in customer portal and requires an explicit checkout confirmation.",
+          "Leaderbot offers a one-time premium image-credit pack. A purchase starts only from a signed checkout link opened from Messenger and requires explicit confirmation.",
         sections: [
           {
             heading: "One-time price",
-            html: `<p>Leaderbot Startpilot costs ${startpilotPrice} once in ${startpilotCurrency} for 30 days. Checkout is available only inside the signed-in customer portal, where the customer reviews the exact amount before continuing to Mollie.</p>`,
+            html: `<p>One premium credit pack costs ${premiumCreditPrice} once in ${premiumCreditCurrency}. The checkout page shows the exact amount and package before the customer continues to Mollie.</p>`,
           },
           {
-            heading: "Included pilot usage",
-            html: "<p>The proposed package covers one workspace, one Facebook Page, guided Messenger image controls and 20 Images 2.0 image generations. Image generation is additionally limited to five per day during the 30-day access period. A generation counts once when its first AI-provider attempt starts; retries within the same request do not consume another pilot generation.</p>",
+            heading: "Included usage",
+            html: "<p>The pack adds eight medium-quality image credits. Credits do not expire. One credit is permanently consumed only after the image provider accepts that generation successfully; a pre-provider failure does not consume a credit, and a retry of the same accepted request does not consume another credit.</p>",
           },
           {
             heading: "No renewal, top-up or overage",
-            html: "<p>The Startpilot is a single purchase without automatic renewal, subscription or direct-debit mandate. Usage stops at the included limits. No automatic top-up or additional usage fee is charged, and continuing later requires a separate explicit choice.</p>",
+            html: "<p>A credit pack is a single purchase without automatic renewal, subscription or direct-debit mandate. Usage stops when no free or paid credits remain. No automatic top-up or additional usage fee is charged, and another pack requires a separate explicit choice.</p>",
           },
           {
-            heading: "No payment from an interest request",
-            html: "<p>Sending an email or early-access request does not authorize a payment or create a contract. A payment can start only from an explicitly enabled checkout shown to an authenticated workspace owner or administrator.</p>",
+            heading: "No payment from a message or link",
+            html: "<p>Sending a Messenger message or opening a signed checkout link does not authorize a payment. A payment can start only after the customer explicitly confirms the displayed credit pack and continues to Mollie.</p>",
           },
           {
             heading: "Before payment",
-            html: "<p>Before any payment, Leaderbot shows the total price, 30-day access period, included usage, payment method, absence of renewal and overage, and applicable cancellation and refund terms.</p>",
+            html: `<p>Before any payment, Leaderbot shows the ${premiumCreditPrice} total price, eight included medium-quality credits, that credits do not expire, the absence of renewal and overage, and applicable cancellation and refund terms.</p>`,
           },
           {
             heading: "Questions",
@@ -219,7 +221,7 @@ function renderLegalPage(page: LegalPage): string {
 <body>
   <main>
     <a class="back" href="/">Back to Leaderbot</a>
-    <p class="updated">Last updated 1 August 2026</p>
+    <p class="updated">Last updated 28 August 2026</p>
     <h1>${escapeHtml(page.title)}</h1>
     <p class="intro">${escapeHtml(page.intro)}</p>
     ${sections}

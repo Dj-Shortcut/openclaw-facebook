@@ -918,7 +918,7 @@ export const billingIntents = mysqlTable(
     molliePaymentId: varchar("mollie_payment_id", { length: 64 }),
     idempotencyKey: varchar("idempotency_key", { length: 96 }).notNull(),
     checkoutScopeKey: varchar("checkout_scope_key", { length: 160 }).notNull(),
-    /** HMAC-derived Messenger identity captured only for an opted-in handoff checkout. */
+    /** Exact privacy-subject key (legacy HMAC or versioned key); never a raw PSID. */
     messengerSenderUserKey: varchar("messenger_sender_user_key", {
       length: 96,
     }),
@@ -1012,7 +1012,7 @@ export const billingIntents = mysqlTable(
     ),
     check(
       "billing_intents_credit_purchase_shape",
-      sql`(((${table.kind} <> 'credit_purchase') AND ${table.creditWalletId} IS NULL AND ${table.messengerBindingEpoch} IS NULL AND ${table.creditFinancialSubjectRef} IS NULL AND ${table.creditCount} IS NULL AND ${table.creditMetadataHash} IS NULL AND ${table.checkoutCapabilityHash} IS NULL AND ${table.checkoutCapabilityExpiresAt} IS NULL AND ${table.checkoutCapabilityConsumedAt} IS NULL AND ${table.checkoutCapabilitySessionNonceHash} IS NULL AND ${table.creditIdentityErasedAt} IS NULL) OR (${table.kind} = 'credit_purchase' AND ${table.interval} = 'oneoff' AND ${table.billingProfileVersion} = 0 AND JSON_TYPE(${table.entitlements}) = 'OBJECT' AND JSON_LENGTH(${table.entitlements}) = 0 AND ${table.expectedAmount} > 0 AND BINARY ${table.currency} = BINARY 'EUR' AND ${table.creditCount} > 0 AND ${table.messengerPageId} IS NULL AND ${table.messengerChannelConnectionId} IS NOT NULL AND ${table.messengerBindingEpoch} > 0 AND ${table.messengerPrivacyEpoch} > 0 AND REGEXP_LIKE(${table.intentId}, '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', 'c') AND REGEXP_LIKE(${table.creditWalletId}, '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', 'c') AND REGEXP_LIKE(${table.creditFinancialSubjectRef}, '^[0-9a-f]{64}$', 'c') AND REGEXP_LIKE(${table.creditMetadataHash}, '^[0-9a-f]{64}$', 'c') AND CHAR_LENGTH(TRIM(${table.planCode})) > 0 AND CHAR_LENGTH(TRIM(${table.mollieDescription})) > 0 AND ((${table.creditIdentityErasedAt} IS NULL AND REGEXP_LIKE(${table.messengerSenderUserKey}, '^u2[.]k[1-9][0-9]{0,5}[.][0-9a-f]{64}$', 'c') AND REGEXP_LIKE(${table.checkoutCapabilityHash}, '^[0-9a-f]{64}$', 'c') AND ${table.checkoutCapabilityExpiresAt} >= ${table.createdAt} AND ${table.checkoutCapabilityExpiresAt} <= TIMESTAMPADD(MINUTE, 15, ${table.createdAt}) AND ((${table.checkoutCapabilityConsumedAt} IS NULL AND ${table.checkoutCapabilitySessionNonceHash} IS NULL) OR (${table.checkoutCapabilityConsumedAt} >= ${table.createdAt} AND ${table.checkoutCapabilityConsumedAt} <= ${table.checkoutCapabilityExpiresAt} AND REGEXP_LIKE(${table.checkoutCapabilitySessionNonceHash}, '^[0-9a-f]{64}$', 'c')))) OR (${table.creditIdentityErasedAt} IS NOT NULL AND ${table.creditIdentityErasedAt} >= ${table.createdAt} AND ${table.messengerSenderUserKey} IS NULL AND ${table.checkoutCapabilityHash} IS NULL AND ${table.checkoutCapabilityExpiresAt} IS NULL AND ${table.checkoutCapabilityConsumedAt} IS NULL AND ${table.checkoutCapabilitySessionNonceHash} IS NULL AND ${table.status} IN ('paid','failed','canceled','expired','mismatch','contained'))))) IS TRUE`
+      sql`(((${table.kind} <> 'credit_purchase') AND ${table.creditWalletId} IS NULL AND ${table.messengerBindingEpoch} IS NULL AND ${table.creditFinancialSubjectRef} IS NULL AND ${table.creditCount} IS NULL AND ${table.creditMetadataHash} IS NULL AND ${table.checkoutCapabilityHash} IS NULL AND ${table.checkoutCapabilityExpiresAt} IS NULL AND ${table.checkoutCapabilityConsumedAt} IS NULL AND ${table.checkoutCapabilitySessionNonceHash} IS NULL AND ${table.creditIdentityErasedAt} IS NULL) OR (${table.kind} = 'credit_purchase' AND ${table.interval} = 'oneoff' AND ${table.billingProfileVersion} = 0 AND JSON_TYPE(${table.entitlements}) = 'OBJECT' AND JSON_LENGTH(${table.entitlements}) = 0 AND ${table.expectedAmount} > 0 AND BINARY ${table.currency} = BINARY 'EUR' AND ${table.creditCount} > 0 AND ${table.messengerPageId} IS NULL AND ${table.messengerChannelConnectionId} IS NOT NULL AND ${table.messengerBindingEpoch} > 0 AND ${table.messengerPrivacyEpoch} > 0 AND REGEXP_LIKE(${table.intentId}, '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', 'c') AND REGEXP_LIKE(${table.creditWalletId}, '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', 'c') AND REGEXP_LIKE(${table.creditFinancialSubjectRef}, '^[0-9a-f]{64}$', 'c') AND REGEXP_LIKE(${table.creditMetadataHash}, '^[0-9a-f]{64}$', 'c') AND CHAR_LENGTH(TRIM(${table.planCode})) > 0 AND CHAR_LENGTH(TRIM(${table.mollieDescription})) > 0 AND ((${table.creditIdentityErasedAt} IS NULL AND REGEXP_LIKE(${table.messengerSenderUserKey}, '^([0-9a-f]{64}|u2[.]k[1-9][0-9]{0,5}[.][0-9a-f]{64})$', 'c') AND REGEXP_LIKE(${table.checkoutCapabilityHash}, '^[0-9a-f]{64}$', 'c') AND ${table.checkoutCapabilityExpiresAt} >= ${table.createdAt} AND ${table.checkoutCapabilityExpiresAt} <= TIMESTAMPADD(MINUTE, 15, ${table.createdAt}) AND ((${table.checkoutCapabilityConsumedAt} IS NULL AND ${table.checkoutCapabilitySessionNonceHash} IS NULL) OR (${table.checkoutCapabilityConsumedAt} >= ${table.createdAt} AND ${table.checkoutCapabilityConsumedAt} <= ${table.checkoutCapabilityExpiresAt} AND REGEXP_LIKE(${table.checkoutCapabilitySessionNonceHash}, '^[0-9a-f]{64}$', 'c')))) OR (${table.creditIdentityErasedAt} IS NOT NULL AND ${table.creditIdentityErasedAt} >= ${table.createdAt} AND ${table.messengerSenderUserKey} IS NULL AND ${table.checkoutCapabilityHash} IS NULL AND ${table.checkoutCapabilityExpiresAt} IS NULL AND ${table.checkoutCapabilityConsumedAt} IS NULL AND ${table.checkoutCapabilitySessionNonceHash} IS NULL AND ${table.status} IN ('paid','failed','canceled','expired','mismatch','contained'))))) IS TRUE`
     ),
   ]
 );
@@ -2131,7 +2131,7 @@ export const creditWallets = mysqlTable(
     ),
     check(
       "credit_wallets_identity_hashes_valid",
-      sql`REGEXP_LIKE(${table.financialSubjectRef}, '^[0-9a-f]{64}$', 'c') AND (${table.currentUserKeyHash} IS NULL OR REGEXP_LIKE(${table.currentUserKeyHash}, '^u2[.]k[1-9][0-9]{0,5}[.][0-9a-f]{64}$', 'c'))`
+      sql`REGEXP_LIKE(${table.financialSubjectRef}, '^[0-9a-f]{64}$', 'c') AND (${table.currentUserKeyHash} IS NULL OR REGEXP_LIKE(${table.currentUserKeyHash}, '^([0-9a-f]{64}|u2[.]k[1-9][0-9]{0,5}[.][0-9a-f]{64})$', 'c'))`
     ),
     check(
       "credit_wallets_id_valid",
@@ -2179,6 +2179,15 @@ export const creditReservations = mysqlTable(
     ])
       .default("initializing")
       .notNull(),
+    transportState: mysqlEnum("transport_state", [
+      "pretransport",
+      "transport_started",
+      "known_accepted",
+    ])
+      .default("pretransport")
+      .notNull(),
+    transportStartedAt: timestamp("transport_started_at"),
+    providerAcceptedAt: timestamp("provider_accepted_at"),
     stateVersion: int("state_version").default(1).notNull(),
     ownerLeaseUntil: timestamp("owner_lease_until").notNull(),
     expiresAt: timestamp("expires_at").notNull(),
@@ -2244,7 +2253,8 @@ export const creditReservations = mysqlTable(
       table.workspaceId,
       table.mode,
       table.status,
-      table.resolutionDueAt
+      table.transportState,
+      table.expiresAt
     ),
     check(
       "credit_reservations_values_valid",
@@ -2260,18 +2270,21 @@ export const creditReservations = mysqlTable(
     ),
     check(
       "credit_reservations_terminal_state",
-      sql`((${table.status} = 'initializing' AND ${table.stateVersion} = 1 AND ${table.holdLedgerEntryId} IS NULL AND ${table.committedAt} IS NULL AND ${table.releasedAt} IS NULL AND ${table.terminalLedgerEntryId} IS NULL AND ${table.terminalEvidenceHash} IS NULL) OR (${table.status} = 'reserved' AND ${table.stateVersion} = 2 AND ${table.holdLedgerEntryId} IS NOT NULL AND ${table.committedAt} IS NULL AND ${table.releasedAt} IS NULL AND ${table.terminalLedgerEntryId} IS NULL AND ${table.terminalEvidenceHash} IS NULL) OR (${table.status} = 'committed' AND ${table.stateVersion} = 3 AND ${table.holdLedgerEntryId} IS NOT NULL AND ${table.committedAt} IS NOT NULL AND ${table.releasedAt} IS NULL AND ${table.terminalLedgerEntryId} IS NOT NULL AND ${table.terminalEvidenceHash} IS NOT NULL AND REGEXP_LIKE(${table.terminalEvidenceHash}, '^[0-9a-f]{64}$', 'c')) OR (${table.status} IN ('released','expired') AND ${table.stateVersion} = 3 AND ${table.holdLedgerEntryId} IS NOT NULL AND ${table.releasedAt} IS NOT NULL AND ${table.committedAt} IS NULL AND ${table.terminalLedgerEntryId} IS NOT NULL AND ${table.terminalEvidenceHash} IS NOT NULL AND REGEXP_LIKE(${table.terminalEvidenceHash}, '^[0-9a-f]{64}$', 'c'))) IS TRUE`
+      sql`((${table.status} = 'initializing' AND ${table.transportState} = 'pretransport' AND ${table.stateVersion} = 1 AND ${table.holdLedgerEntryId} IS NULL AND ${table.committedAt} IS NULL AND ${table.releasedAt} IS NULL AND ${table.terminalLedgerEntryId} IS NULL AND ${table.terminalEvidenceHash} IS NULL) OR (${table.status} = 'reserved' AND ${table.stateVersion} = 2 AND ${table.holdLedgerEntryId} IS NOT NULL AND ${table.committedAt} IS NULL AND ${table.releasedAt} IS NULL AND ${table.terminalLedgerEntryId} IS NULL AND ${table.terminalEvidenceHash} IS NULL) OR (${table.status} = 'committed' AND ${table.transportState} = 'known_accepted' AND ${table.stateVersion} = 3 AND ${table.holdLedgerEntryId} IS NOT NULL AND ${table.committedAt} IS NOT NULL AND ${table.releasedAt} IS NULL AND ${table.terminalLedgerEntryId} IS NOT NULL AND ${table.terminalEvidenceHash} IS NOT NULL AND REGEXP_LIKE(${table.terminalEvidenceHash}, '^[0-9a-f]{64}$', 'c')) OR (${table.status} IN ('released','expired') AND ${table.transportState} = 'pretransport' AND ${table.stateVersion} = 3 AND ${table.holdLedgerEntryId} IS NOT NULL AND ${table.releasedAt} IS NOT NULL AND ${table.committedAt} IS NULL AND ${table.terminalLedgerEntryId} IS NOT NULL AND ${table.terminalEvidenceHash} IS NOT NULL AND REGEXP_LIKE(${table.terminalEvidenceHash}, '^[0-9a-f]{64}$', 'c'))) IS TRUE`
+    ),
+    check(
+      "credit_reservations_transport_evidence",
+      sql`((${table.transportState} = 'pretransport' AND ${table.transportStartedAt} IS NULL AND ${table.providerAcceptedAt} IS NULL) OR (${table.transportState} = 'transport_started' AND ${table.transportStartedAt} IS NOT NULL AND ${table.providerAcceptedAt} IS NULL) OR (${table.transportState} = 'known_accepted' AND ${table.transportStartedAt} IS NOT NULL AND ${table.providerAcceptedAt} IS NOT NULL AND ${table.providerAcceptedAt} >= ${table.transportStartedAt})) IS TRUE`
     ),
     check(
       "credit_reservations_timestamp_order",
-      sql`${table.createdAt} <= ${table.ownerLeaseUntil} AND ${table.ownerLeaseUntil} <= ${table.expiresAt} AND ${table.expiresAt} <= ${table.resolutionDueAt} AND (${table.committedAt} IS NULL OR (${table.committedAt} >= ${table.createdAt} AND ${table.committedAt} <= ${table.resolutionDueAt})) AND (${table.releasedAt} IS NULL OR ${table.releasedAt} >= ${table.createdAt})`
+      sql`${table.createdAt} <= ${table.ownerLeaseUntil} AND ${table.ownerLeaseUntil} <= ${table.expiresAt} AND ${table.expiresAt} <= ${table.resolutionDueAt} AND (${table.transportStartedAt} IS NULL OR (${table.transportStartedAt} >= ${table.createdAt} AND ${table.transportStartedAt} <= ${table.resolutionDueAt})) AND (${table.providerAcceptedAt} IS NULL OR (${table.providerAcceptedAt} >= ${table.createdAt} AND ${table.providerAcceptedAt} <= ${table.resolutionDueAt})) AND (${table.committedAt} IS NULL OR (${table.committedAt} >= ${table.createdAt} AND ${table.committedAt} <= ${table.resolutionDueAt})) AND (${table.releasedAt} IS NULL OR ${table.releasedAt} >= ${table.createdAt})`
     ),
   ]
 );
 
 export type CreditReservation = typeof creditReservations.$inferSelect;
-export type InsertCreditReservation =
-  typeof creditReservations.$inferInsert;
+export type InsertCreditReservation = typeof creditReservations.$inferInsert;
 
 /**
  * Immutable purchased-credit evidence. A payment can create one grant, a

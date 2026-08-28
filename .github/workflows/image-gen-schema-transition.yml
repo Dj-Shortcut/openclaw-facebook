@@ -1,10 +1,10 @@
-name: Apply reviewed image-gen schema expand
+name: Apply reviewed image-gen credit schema
 
 on:
   workflow_dispatch:
     inputs:
       recovery_run_id:
-        description: Prior protected run that uploaded the exact 0015 recovery point (required only when resuming)
+        description: Prior protected run that uploaded the exact 0016 recovery point (required only when resuming)
         required: false
         type: string
       recovery_run_attempt:
@@ -80,7 +80,7 @@ jobs:
           node scripts/validate-production-deployment.mjs --settled-live image-gen
 
   expand:
-    name: Snapshot, restore-test, and apply 0016
+    name: Snapshot, restore-test, and apply 0017 through 0018
     needs: preflight
     runs-on: ubuntu-latest
     timeout-minutes: 150
@@ -107,7 +107,9 @@ jobs:
         run: |
           npm run production:validate
           test "$(jq -er '.apps["image-gen"].databaseSchemaTransition.state' deploy/production/apps.json)" = "expand_pending"
-          test "$(jq -er '.apps["image-gen"].databaseSchemaPhase' deploy/production/apps.json)" = "0015_base"
+          test "$(jq -er '.apps["image-gen"].databaseSchemaTransition.from' deploy/production/apps.json)" = "0016_expand"
+          test "$(jq -er '.apps["image-gen"].databaseSchemaTransition.to' deploy/production/apps.json)" = "0018_credit_checkout_reservation"
+          test "$(jq -er '.apps["image-gen"].databaseSchemaPhase' deploy/production/apps.json)" = "0016_expand"
           test "$(jq -er '.apps["image-gen"].deploymentEnabled' deploy/production/apps.json)" = "false"
 
       - name: Require green CI for this exact transition source
@@ -191,6 +193,8 @@ jobs:
           test "$attested_base" = "$BRIDGE_BASE"
           docker pull "$BRIDGE_IMAGE"
           test "$(docker image inspect --format '{{ index .Config.Labels "io.leaderbot.artifact.kind" }}' "$BRIDGE_IMAGE")" = "migration-bridge"
+          test "$(docker image inspect --format '{{ index .Config.Labels "io.leaderbot.schema.minimum" }}' "$BRIDGE_IMAGE")" = "0016_expand"
+          test "$(docker image inspect --format '{{ index .Config.Labels "io.leaderbot.schema.maximum" }}' "$BRIDGE_IMAGE")" = "0018_credit_checkout_reservation"
           test "$(docker run --rm --entrypoint cat "$BRIDGE_IMAGE" /app/.leaderbot-artifact-kind)" = "migration-bridge"
 
       - name: Remove bridge registry credential
@@ -314,15 +318,15 @@ jobs:
         run: |
           output="$(docker run --rm --network host \
             --env "DATABASE_URL=$DATABASE_MIGRATION_URL" \
-            --env LEADERBOT_PRODUCTION_MIGRATION_MODE=inspect-expand-transition \
+            --env LEADERBOT_PRODUCTION_MIGRATION_MODE=inspect-credit-wallet-transition \
             "$BRIDGE_IMAGE" node dist/migrate-production.cjs)"
-          phase="$(grep -Eo '^Production schema (0015_base|0016_expand|0016_partial_[0-9]+) inspected\.$' <<<"$output" | sed -E 's/^Production schema ([^ ]+) inspected\.$/\1/')"
+          phase="$(grep -Eo '^Production schema (0016_expand|0017_credit_wallet_expand|0018_credit_checkout_reservation|0017_partial_[0-9]+|0018_partial_[0-9]+) inspected\.$' <<<"$output" | sed -E 's/^Production schema ([^ ]+) inspected\.$/\1/')"
           test "$(wc -l <<<"$phase" | tr -d ' ')" = 1
-          [[ "$phase" =~ ^(0015_base|0016_expand|0016_partial_[0-9]+)$ ]]
+          [[ "$phase" =~ ^(0016_expand|0017_credit_wallet_expand|0018_credit_checkout_reservation|0017_partial_[0-9]+|0018_partial_[0-9]+)$ ]]
           echo "OBSERVED_SCHEMA_PHASE=$phase" >> "$GITHUB_ENV"
 
-      - name: Create fresh snapshot from the exact 0015 base
-        if: env.OBSERVED_SCHEMA_PHASE == '0015_base'
+      - name: Create fresh snapshot from the exact 0016 base
+        if: env.OBSERVED_SCHEMA_PHASE == '0016_expand'
         timeout-minutes: 15
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_DATABASE_MIGRATION_TOKEN }}
@@ -361,8 +365,8 @@ jobs:
             echo "RECOVERY_SOURCE_RUN_ATTEMPT=$GITHUB_RUN_ATTEMPT"
           } >> "$GITHUB_ENV"
 
-      - name: Load exact prior 0015 recovery point for a resume
-        if: env.OBSERVED_SCHEMA_PHASE != '0015_base'
+      - name: Load exact prior 0016 recovery point for a resume
+        if: env.OBSERVED_SCHEMA_PHASE != '0016_expand'
         timeout-minutes: 8
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_DATABASE_MIGRATION_TOKEN }}
@@ -382,7 +386,7 @@ jobs:
             '.id==$runId and .run_attempt==$runAttempt and .status=="completed" and (.head_sha|test("^[a-f0-9]{40}$")) and .head_branch=="main" and .event=="workflow_dispatch" and .path==".github/workflows/image-gen-schema-transition.yml"' \
             <<<"$run" > /dev/null
           prior_sha="$(jq -er '.head_sha' <<<"$run")"
-          artifact_name="image-gen-schema-pre-expand-${prior_sha}-${RECOVERY_RUN_ID}-${RECOVERY_RUN_ATTEMPT}"
+          artifact_name="image-gen-schema-pre-credit-${prior_sha}-${RECOVERY_RUN_ID}-${RECOVERY_RUN_ATTEMPT}"
           artifacts="$(gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$RECOVERY_RUN_ID/artifacts?per_page=100")"
           artifact_id="$(jq -er --arg name "$artifact_name" '[.artifacts[] | select(.name==$name and .expired==false)] | if length==1 then .[0].id else error("recovery artifact mismatch") end' <<<"$artifacts")"
           [[ "$artifact_id" =~ ^[0-9]+$ ]]
@@ -408,7 +412,7 @@ jobs:
             --arg databaseName "$database_name" \
             --arg migrationManifestSha "$migration_manifest_sha" \
             --arg schemaContractSha "$schema_contract_sha" \
-            '.sourceCommit==$priorSha and .sourceRef=="refs/heads/main" and .workflowPath==".github/workflows/image-gen-schema-transition.yml" and .runId==$runId and .runAttempt==$runAttempt and .bridgeImage==$bridge and .bridgeSource==$bridgeSource and .migrationManifestSha256==$migrationManifestSha and .schemaContractSha256==$schemaContractSha and .from=="0015_base" and .database.app==$app and .database.volumeId==$volume and .database.name==$databaseName and (.database.machineId|type)=="string" and .snapshot.phase=="0015_base" and .snapshot.restoreVerified==true and (.snapshot.id|type)=="string" and (.snapshot.digest|type)=="string" and (.snapshot.createdAt|type)=="string"' \
+            '.sourceCommit==$priorSha and .sourceRef=="refs/heads/main" and .workflowPath==".github/workflows/image-gen-schema-transition.yml" and .runId==$runId and .runAttempt==$runAttempt and .bridgeImage==$bridge and .bridgeSource==$bridgeSource and .migrationManifestSha256==$migrationManifestSha and .schemaContractSha256==$schemaContractSha and .from=="0016_expand" and .database.app==$app and .database.volumeId==$volume and .database.name==$databaseName and (.database.machineId|type)=="string" and .snapshot.phase=="0016_expand" and .snapshot.restoreVerified==true and (.snapshot.id|type)=="string" and (.snapshot.digest|type)=="string" and (.snapshot.createdAt|type)=="string"' \
             "$prior/snapshot.json" > /dev/null
           snapshot_id="$(jq -er '.snapshot.id' "$prior/snapshot.json")"
           snapshot_digest="$(jq -er '.snapshot.digest' "$prior/snapshot.json")"
@@ -561,8 +565,8 @@ jobs:
             test "$remaining" = 0
           fi
 
-      - name: Record exact pre-expand recovery point
-        if: env.OBSERVED_SCHEMA_PHASE == '0015_base'
+      - name: Record exact pre-credit recovery point
+        if: env.OBSERVED_SCHEMA_PHASE == '0016_expand'
         run: |
           db_app="$(jq -er '.apps["image-gen"].databaseRecovery.app' deploy/production/apps.json)"
           volume_id="$(jq -er '.apps["image-gen"].databaseRecovery.volumeId' deploy/production/apps.json)"
@@ -587,10 +591,10 @@ jobs:
             --arg snapshotDigest "$RECOVERY_SNAPSHOT_DIGEST" \
             --arg snapshotCreatedAt "$RECOVERY_SNAPSHOT_CREATED_AT" \
             --arg recordedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            '{sourceCommit:$sourceCommit,sourceRef:$sourceRef,workflowPath:$workflowPath,runId:$runId,runAttempt:$runAttempt,bridgeImage:$bridgeImage,bridgeSource:$bridgeSource,migrationManifestSha256:$migrationManifestSha,schemaContractSha256:$schemaContractSha,from:"0015_base",database:{app:$databaseApp,volumeId:$databaseVolume,name:$databaseName,machineId:$databaseMachine},snapshot:{phase:"0015_base",id:$snapshotId,digest:$snapshotDigest,createdAt:$snapshotCreatedAt,restoreVerified:true},recordedAt:$recordedAt}' \
+            '{sourceCommit:$sourceCommit,sourceRef:$sourceRef,workflowPath:$workflowPath,runId:$runId,runAttempt:$runAttempt,bridgeImage:$bridgeImage,bridgeSource:$bridgeSource,migrationManifestSha256:$migrationManifestSha,schemaContractSha256:$schemaContractSha,from:"0016_expand",database:{app:$databaseApp,volumeId:$databaseVolume,name:$databaseName,machineId:$databaseMachine},snapshot:{phase:"0016_expand",id:$snapshotId,digest:$snapshotDigest,createdAt:$snapshotCreatedAt,restoreVerified:true},recordedAt:$recordedAt}' \
             > "$RUNNER_TEMP/leaderbot-schema-transition/snapshot.json"
 
-      - name: Validate exact 0015 recovery evidence before DDL
+      - name: Validate exact 0016 recovery evidence before DDL
         run: |
           evidence="$RUNNER_TEMP/leaderbot-schema-transition/snapshot.json"
           test -f "$evidence"
@@ -610,36 +614,36 @@ jobs:
             --arg observedPhase "$OBSERVED_SCHEMA_PHASE" \
             --arg migrationManifestSha "$migration_manifest_sha" \
             --arg schemaContractSha "$schema_contract_sha" \
-            '(.sourceCommit|test("^[a-f0-9]{40}$")) and .sourceRef=="refs/heads/main" and .workflowPath==".github/workflows/image-gen-schema-transition.yml" and .bridgeImage==$bridge and .bridgeSource==$bridgeSource and .migrationManifestSha256==$migrationManifestSha and .schemaContractSha256==$schemaContractSha and .from=="0015_base" and .database.name==$databaseName and .database.app==$databaseApp and .database.volumeId==$databaseVolume and (($observedPhase=="0015_base" and .sourceCommit==$sha and .database.machineId==$databaseMachine) or ($observedPhase!="0015_base" and (.database.machineId|type)=="string")) and .snapshot.phase=="0015_base" and .snapshot.restoreVerified==true' \
+            '(.sourceCommit|test("^[a-f0-9]{40}$")) and .sourceRef=="refs/heads/main" and .workflowPath==".github/workflows/image-gen-schema-transition.yml" and .bridgeImage==$bridge and .bridgeSource==$bridgeSource and .migrationManifestSha256==$migrationManifestSha and .schemaContractSha256==$schemaContractSha and .from=="0016_expand" and .database.name==$databaseName and .database.app==$databaseApp and .database.volumeId==$databaseVolume and (($observedPhase=="0016_expand" and .sourceCommit==$sha and .database.machineId==$databaseMachine) or ($observedPhase!="0016_expand" and (.database.machineId|type)=="string")) and .snapshot.phase=="0016_expand" and .snapshot.restoreVerified==true' \
             "$evidence" > /dev/null
 
-      - name: Upload immutable pre-expand recovery evidence before DDL
+      - name: Upload immutable pre-credit recovery evidence before DDL
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: image-gen-schema-pre-expand-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: image-gen-schema-pre-credit-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/leaderbot-schema-transition/snapshot.json
           if-no-files-found: error
           retention-days: 90
 
-      - name: Apply only the reviewed 0016 expand migration
-        if: env.OBSERVED_SCHEMA_PHASE != '0016_expand'
+      - name: Apply only the reviewed 0017 and 0018 credit migrations
+        if: env.OBSERVED_SCHEMA_PHASE != '0018_credit_checkout_reservation'
         timeout-minutes: 12
         env:
           DATABASE_MIGRATION_URL: ${{ secrets.IMAGE_GEN_DATABASE_MIGRATION_URL }}
         run: |
           docker run --rm --network host \
             --env "DATABASE_URL=$DATABASE_MIGRATION_URL" \
-            --env LEADERBOT_PRODUCTION_MIGRATION_MODE=apply-expand \
+            --env LEADERBOT_PRODUCTION_MIGRATION_MODE=apply-credit-wallet-expand \
             "$BRIDGE_IMAGE" node dist/migrate-production.cjs
 
-      - name: Verify the exact 0016 expanded schema
+      - name: Verify the exact 0018 credit schema
         timeout-minutes: 8
         env:
           DATABASE_MIGRATION_URL: ${{ secrets.IMAGE_GEN_DATABASE_MIGRATION_URL }}
         run: |
           docker run --rm --network host \
             --env "DATABASE_URL=$DATABASE_MIGRATION_URL" \
-            --env LEADERBOT_PRODUCTION_MIGRATION_MODE=verify-expand-transition \
+            --env LEADERBOT_PRODUCTION_MIGRATION_MODE=verify-credit-wallet \
             "$BRIDGE_IMAGE" node dist/migrate-production.cjs
 
       - name: Record metadata-only successful transition
@@ -653,7 +657,7 @@ jobs:
             --arg recoveryRunId "$RECOVERY_SOURCE_RUN_ID" \
             --arg recoveryRunAttempt "$RECOVERY_SOURCE_RUN_ATTEMPT" \
             --arg completedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            '{sourceCommit:$sourceCommit,bridgeImage:$bridgeImage,bridgeSource:$bridgeSource,from:"0015_base",to:"0016_expand",observedPhase:$observedPhase,resumeFrom:(if $observedPhase=="0015_base" then null else $observedPhase end),recoveryRunId:$recoveryRunId,recoveryRunAttempt:$recoveryRunAttempt,recovery:$recovery[0],completedAt:$completedAt}' \
+            '{sourceCommit:$sourceCommit,bridgeImage:$bridgeImage,bridgeSource:$bridgeSource,from:"0016_expand",to:"0018_credit_checkout_reservation",observedPhase:$observedPhase,resumeFrom:(if $observedPhase=="0016_expand" then null else $observedPhase end),recoveryRunId:$recoveryRunId,recoveryRunAttempt:$recoveryRunAttempt,recovery:$recovery[0],completedAt:$completedAt}' \
             > "$RUNNER_TEMP/leaderbot-schema-transition/result.json"
 
       - name: Stop isolated database migration tunnel

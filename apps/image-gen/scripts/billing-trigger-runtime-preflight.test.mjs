@@ -5,6 +5,25 @@ import {
   BillingTriggerRuntimePreflightError,
   billingTriggerPreflightPublicErrorCode,
 } from "./billing-trigger-runtime-preflight.mjs";
+import {
+  creditWalletRoutineNames,
+  productionRuntimeWritableTableNames,
+} from "./production-schema-contract.mjs";
+
+function exactRuntimeGrants() {
+  return [
+    "GRANT USAGE ON *.* TO `runtime`@`%`",
+    "GRANT SELECT ON `leaderbot`.* TO `runtime`@`%`",
+    ...productionRuntimeWritableTableNames.map(
+      tableName =>
+        `GRANT INSERT, UPDATE, DELETE ON \`leaderbot\`.\`${tableName}\` TO \`runtime\`@\`%\``
+    ),
+    ...creditWalletRoutineNames.map(
+      routineName =>
+        `GRANT EXECUTE ON PROCEDURE \`leaderbot\`.\`${routineName}\` TO \`runtime\`@\`%\``
+    ),
+  ];
+}
 
 function successfulConnection(options = {}) {
   const scheduler = {
@@ -18,6 +37,30 @@ function successfulConnection(options = {}) {
   };
   let sentinelReadCount = 0;
   const queryImplementation = async statement => {
+    if (statement === "SELECT DATABASE() AS databaseName") {
+      return [[{ databaseName: "leaderbot" }]];
+    }
+    if (statement === "SHOW GRANTS FOR CURRENT_USER()") {
+      return [
+        (options.grants ?? exactRuntimeGrants()).map(grant => ({ grant })),
+      ];
+    }
+    if (
+      /^(INSERT INTO|UPDATE|DELETE FROM) `credit_(wallets|reservations|ledger)`/.test(
+        statement
+      )
+    ) {
+      throw Object.assign(new Error("command denied"), {
+        code: "ER_TABLEACCESS_DENIED_ERROR",
+        errno: 1142,
+      });
+    }
+    if (statement.startsWith("CALL `credit_reserve_checkout_intent`")) {
+      throw Object.assign(
+        new Error("credit checkout reservation input is invalid"),
+        { code: "ER_SIGNAL_EXCEPTION", errno: 1644 }
+      );
+    }
     if (statement.startsWith("SELECT (SELECT COUNT(*) FROM `workspaces`")) {
       sentinelReadCount += 1;
       const count = options.rollbackResidue && sentinelReadCount > 1 ? 1 : 0;
@@ -105,11 +148,71 @@ describe("billing trigger runtime preflight", () => {
         statement.startsWith("UPDATE `billing_outbox`")
       )
     ).toBe(true);
+    expect(
+      statements.filter(statement =>
+        /^(INSERT INTO|UPDATE|DELETE FROM) `credit_(wallets|reservations|ledger)`/.test(
+          statement
+        )
+      )
+    ).toHaveLength(9);
+    expect(
+      statements.some(statement =>
+        statement.startsWith("DELETE FROM `billing_outbox`")
+      )
+    ).toBe(true);
+    expect(statements.at(-1)).toMatch(/^CALL `credit_reserve_checkout_intent`/);
     expect(connection.beginTransaction).toHaveBeenCalledOnce();
     expect(connection.rollback).toHaveBeenCalledOnce();
-    expect(statements.at(-1)).toMatch(
+    expect(statements.at(-2)).toMatch(
       /^SELECT \(SELECT COUNT\(\*\) FROM `workspaces`/
     );
+  });
+
+  it("fails closed before DML when the runtime grant boundary is broad", async () => {
+    const connection = successfulConnection({
+      grants: [
+        ...exactRuntimeGrants(),
+        "GRANT INSERT ON `leaderbot`.* TO `runtime`@`%`",
+      ],
+    });
+
+    await expect(
+      assertBillingTriggerRuntimePreflight(connection, "test")
+    ).rejects.toMatchObject({ stage: "grant_scope" });
+    expect(connection.beginTransaction).not.toHaveBeenCalled();
+  });
+
+  it("rejects any direct credit-table DML that unexpectedly succeeds", async () => {
+    const connection = successfulConnection();
+    connection.query.mockImplementation(async statement => {
+      if (statement.startsWith("DELETE FROM `credit_ledger`")) {
+        return [{ affectedRows: 0 }];
+      }
+      return connection.queryImplementation(statement);
+    });
+
+    await expect(
+      assertBillingTriggerRuntimePreflight(connection, "test")
+    ).rejects.toMatchObject({ stage: "credit_direct_dml" });
+    expect(connection.rollback).toHaveBeenCalledOnce();
+  });
+
+  it("requires the exact credit procedure to be executable", async () => {
+    const connection = successfulConnection();
+    connection.query.mockImplementation(async statement => {
+      if (statement.startsWith("CALL `credit_reserve_checkout_intent`")) {
+        throw Object.assign(new Error("execute denied"), {
+          code: "ER_PROCACCESS_DENIED_ERROR",
+          errno: 1370,
+        });
+      }
+      return connection.queryImplementation(statement);
+    });
+
+    await expect(
+      assertBillingTriggerRuntimePreflight(connection, "test")
+    ).rejects.toMatchObject({ stage: "credit_procedure_execution" });
+    expect(connection.rollback).toHaveBeenCalledOnce();
   });
 
   it.each([
@@ -162,7 +265,12 @@ describe("billing trigger runtime preflight", () => {
 
   it("makes rollback failure dominant without exposing its cause", async () => {
     const connection = successfulConnection();
-    connection.query.mockRejectedValueOnce(new Error("session outage"));
+    connection.query.mockImplementation(async statement => {
+      if (statement === "SET SESSION time_zone='+00:00'") {
+        throw new Error("session outage");
+      }
+      return connection.queryImplementation(statement);
+    });
     const sessionError = await assertBillingTriggerRuntimePreflight(
       connection,
       "test"

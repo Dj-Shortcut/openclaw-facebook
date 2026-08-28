@@ -37,7 +37,7 @@ const triggerNames = Array.from(
 
 describe("0017 direct Messenger purchased-credit schema", () => {
   it("locks the compact payment prerequisite before any credit DDL", () => {
-    expect(statements).toHaveLength(49);
+    expect(statements).toHaveLength(51);
     expect(statements[0]).toMatch(
       /^CREATE TEMPORARY TABLE `credit_0017_legacy_effect_preflight`/
     );
@@ -124,7 +124,7 @@ describe("0017 direct Messenger purchased-credit schema", () => {
       "FOREIGN KEY (`credit_intent_id`,`credit_wallet_id`,`workspace_id`,`mode`,`credit_metadata_hash`) REFERENCES `billing_intents`(`intent_id`,`credit_wallet_id`,`workspace_id`,`mode`,`credit_metadata_hash`)"
     );
     expect(migration).toContain(
-      "^u2[.]k[1-9][0-9]{0,5}[.][0-9a-f]{64}$"
+      "^([0-9a-f]{64}|u2[.]k[1-9][0-9]{0,5}[.][0-9a-f]{64})$"
     );
   });
 
@@ -140,19 +140,36 @@ describe("0017 direct Messenger purchased-credit schema", () => {
       "credit_erase_wallet",
       "credit_expire_reservation",
       "credit_grant_purchase",
+      "credit_mark_reservation_provider_accepted",
+      "credit_mark_reservation_transport_started",
       "credit_release_reservation",
       "credit_scrub_terminal_reservation",
     ]);
     expect(triggerNames).toHaveLength(14);
-    expect(migration.match(/SQL SECURITY DEFINER/g)).toHaveLength(12);
+    expect(migration.match(/SQL SECURITY DEFINER/g)).toHaveLength(14);
     expect(
       migration.match(
         /DECLARE EXIT HANDLER FOR SQLEXCEPTION BEGIN ROLLBACK; RESIGNAL; END/g
       )
-    ).toHaveLength(12);
-    expect(migration.match(/START TRANSACTION;/g)).toHaveLength(12);
+    ).toHaveLength(14);
+    expect(migration.match(/START TRANSACTION;/g)).toHaveLength(14);
     expect(migration).not.toMatch(
       /CREATE PROCEDURE `credit_(?:configure|set_execution|start_checkout|resolve_checkout)/
+    );
+  });
+
+  it("keeps wallet erasure discoverable across the production privacy epoch", () => {
+    expect(migration).toContain("IN p_erasure_privacy_epoch int");
+    expect(migration).toContain("p_erasure_privacy_epoch<>p_privacy_epoch+1");
+    expect(migration).toContain("`privacy_epoch`=p_erasure_privacy_epoch");
+    expect(migration).toContain(
+      "SELECT 'pending_provider' AS `result`,p_wallet_id AS `wallet_id`"
+    );
+    expect(migration.indexOf("'pending_provider' AS `result`")).toBeLessThan(
+      migration.indexOf("`current_user_key_hash`=NULL")
+    );
+    expect(migration).toContain(
+      "`privacy_epoch`=p_privacy_epoch+1 AND `status` IN ('erasing','erased')"
     );
   });
 
@@ -178,6 +195,24 @@ describe("0017 direct Messenger purchased-credit schema", () => {
     ]) {
       expect(migration).toContain(`\`${column}\``);
     }
+  });
+
+  it("never releases or expires a reservation after provider transport starts", () => {
+    expect(migration).toContain(
+      "`transport_state` enum('pretransport','transport_started','known_accepted') NOT NULL DEFAULT 'pretransport'"
+    );
+    expect(migration).toContain(
+      "v_status<>'reserved' OR v_transport<>'pretransport'"
+    );
+    expect(migration).toContain(
+      "v_status<>'reserved' OR v_transport<>'known_accepted'"
+    );
+    expect(migration).toContain(
+      "CREATE PROCEDURE `credit_mark_reservation_transport_started`"
+    );
+    expect(migration).toContain(
+      "CREATE PROCEDURE `credit_mark_reservation_provider_accepted`"
+    );
   });
 
   it("keeps legacy payment ownership compatible and credit ownership exact", () => {

@@ -68,6 +68,8 @@ const ROOT_VALIDATION_WORKFLOW_PATH = ".github/workflows/main.yml";
 const PRODUCTION_SCHEMA_PHASES = Object.freeze([
   "0015_base",
   "0016_expand",
+  "0017_credit_wallet_expand",
+  "0018_credit_checkout_reservation",
 ]);
 const REVIEWED_ARTIFACT_KINDS = Object.freeze([
   "legacy-bootstrap",
@@ -353,17 +355,11 @@ function validateStorageProxyLifecycleSecretMutationGates(workflow) {
       mutationSteps.length ||
     occurrenceCount(
       storageProxyJob,
-      'fly secrets list --app leaderbot-storage-proxy --json',
+      "fly secrets list --app leaderbot-storage-proxy --json",
     ) !== mutationSteps.length ||
-    occurrenceCount(
-      storageProxyJob,
-      '"R2_LIFECYCLE_ACCESS_KEY_ID"',
-    ) !==
+    occurrenceCount(storageProxyJob, '"R2_LIFECYCLE_ACCESS_KEY_ID"') !==
       mutationSteps.length * 2 ||
-    occurrenceCount(
-      storageProxyJob,
-      '"R2_LIFECYCLE_SECRET_ACCESS_KEY"',
-    ) !==
+    occurrenceCount(storageProxyJob, '"R2_LIFECYCLE_SECRET_ACCESS_KEY"') !==
       mutationSteps.length * 2 ||
     occurrenceCount(storageProxyJob, '.status == "Deployed"') !==
       mutationSteps.length ||
@@ -656,7 +652,10 @@ function assertPinnedNodeDockerfile(dockerfile, dockerfilePath, options = {}) {
 
 function assertPinnedGatewayDockerfile(rootDir) {
   const dockerfilePath = "deploy/fly-gateway/Dockerfile";
-  const dockerfile = fs.readFileSync(path.join(rootDir, dockerfilePath), "utf8");
+  const dockerfile = fs.readFileSync(
+    path.join(rootDir, dockerfilePath),
+    "utf8",
+  );
   const nodeArg = `ARG NODE_BASE_IMAGE=${PINNED_GATEWAY_NODE_BASE_IMAGE}`;
   const firstFrom = dockerfile.search(/^FROM\s+/m);
   if (
@@ -1060,9 +1059,7 @@ function validateGatewayPreparatoryEnforcement(contract, flyConfig) {
     );
   }
   if (
-    /(?:^|\n)\s*LEADERBOT_AI_ANSWER_ENFORCEMENT_ENABLED\s*=/i.test(
-      flyConfig,
-    )
+    /(?:^|\n)\s*LEADERBOT_AI_ANSWER_ENFORCEMENT_ENABLED\s*=/i.test(flyConfig)
   ) {
     fail(
       "fly.toml personal gateway must not configure customer AI answer enforcement",
@@ -2113,7 +2110,9 @@ export function getReviewedRestoreConfig(
   }
   const app = loadProductionManifest(rootDir).apps[target];
   if (app?.reviewedSettledPredecessor?.image === image) {
-    fail(`${target} current image lacks an exact identity-bound restore config`);
+    fail(
+      `${target} current image lacks an exact identity-bound restore config`,
+    );
   }
   return getReviewedRollbackConfig(target, image, rootDir);
 }
@@ -2124,8 +2123,7 @@ function assertReviewedRestoreConfigCopy(
   identity,
   configPath,
   rootDir,
-  failureMessage =
-    "scale count drift allowance requires the reviewed restore config",
+  failureMessage = "scale count drift allowance requires the reviewed restore config",
 ) {
   const reviewedRelativePath = getReviewedRestoreConfig(
     target,
@@ -2173,8 +2171,8 @@ export function validateLegacyTransitionRollback(
         app.reviewedArtifactKind === "migration-bridge" &&
         image === app.databaseSchemaTransition.legacyBaseImage
       : ["runtime_reviewed", "runtime_deployed"].includes(
-            app.artifactTransition?.state,
-          ) &&
+          app.artifactTransition?.state,
+        ) &&
         app.reviewedArtifactKind === "runtime" &&
         image === app.artifactTransition.legacyImage;
   if (
@@ -2533,9 +2531,7 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
       (step.includes(
         '--reviewed-artifact-kind storage-proxy "$rollback_image"',
       ) &&
-        step.includes(
-          'if [[ "$rollback_kind" != "legacy-bootstrap" ]]; then',
-        ));
+        step.includes('if [[ "$rollback_kind" != "legacy-bootstrap" ]]; then'));
     const rollbackHealthWaitIsBounded =
       stepName !== "Verify restored storage-proxy release" ||
       (() => {
@@ -2566,9 +2562,7 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
         step,
         "https://leaderbot-storage-proxy.fly.dev/readyz",
       ) ||
-      !step.includes(
-        "jq -e '.ok == true and .rateLimiter == \"shared_redis\"'",
-      )
+      !step.includes("jq -e '.ok == true and .rateLimiter == \"shared_redis\"'")
     ) {
       fail(
         `${PRODUCTION_WORKFLOW_PATH} must prove storage-proxy liveness and shared-limiter readiness after deploy and rollback`,
@@ -2821,9 +2815,7 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
     !imageGenStartupDiagnosticStep.includes(
       "FLY_API_TOKEN: ${{ secrets.FLY_IMAGE_GEN_DEPLOY_TOKEN }}",
     ) ||
-    !imageGenStartupDiagnosticStep.includes(
-      "timeout --signal=TERM 12s",
-    ) ||
+    !imageGenStartupDiagnosticStep.includes("timeout --signal=TERM 12s") ||
     !imageGenStartupDiagnosticStep.includes(
       "flyctl machine list --app leaderbot-fb-image-gen --json",
     ) ||
@@ -2832,7 +2824,7 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
     ) ||
     !imageGenStartupDiagnosticStep.includes('--machine "$machine_id"') ||
     !imageGenStartupDiagnosticStep.includes(
-      'select($timestampSecond >= $startedAt)',
+      "select($timestampSecond >= $startedAt)",
     ) ||
     !imageGenStartupDiagnosticStep.includes(
       'if ($parsedPayload | type) == "object"',
@@ -2852,12 +2844,8 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
     !imageGenStartupDiagnosticStep.includes(
       'then "notification_receiver_protocol"',
     ) ||
-    !imageGenStartupDiagnosticStep.includes(
-      'head -n 20 "$machine_events"',
-    ) ||
-    !imageGenStartupDiagnosticStep.includes(
-      'head -n 120 "$filtered_events"',
-    ) ||
+    !imageGenStartupDiagnosticStep.includes('head -n 20 "$machine_events"') ||
+    !imageGenStartupDiagnosticStep.includes('head -n 120 "$filtered_events"') ||
     !imageGenStartupDiagnosticStep.includes(
       'printf \'%s\\n\' "$capture_status" > "$diagnostics_dir/capture-status.txt"',
     ) ||
@@ -2925,9 +2913,7 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
       target === "image-gen"
         ? `--reviewed-restore-config ${target} "$rollback_image"`
         : `--reviewed-rollback-config ${target} "$rollback_image"`;
-    const configIndex = workflow.indexOf(
-      configCommand,
-    );
+    const configIndex = workflow.indexOf(configCommand);
     const verifyIndex = workflow.indexOf(
       `--verify-restored-release ${target} "$rollback_image"`,
       configIndex,
@@ -3470,12 +3456,7 @@ function validateImageGenMigrationCi(rootDir) {
   );
   assertNoDirectGithubExpressionsInRunBlocks(imageCi, imageCiPath);
   assertNoDirectGithubExpressionsInRunBlocks(migrationCi, migrationCiPath);
-  assertRequiredSourceCiTriggers(
-    imageCi,
-    imageCiPath,
-    "checks",
-    "image_gen",
-  );
+  assertRequiredSourceCiTriggers(imageCi, imageCiPath, "checks", "image_gen");
   assertRequiredSourceCiTriggers(
     migrationCi,
     migrationCiPath,
@@ -3532,9 +3513,11 @@ function validateImageGenMigrationCi(rootDir) {
   }
   for (const required of [
     "pnpm run db:test-production-migrator",
-    "LEADERBOT_PRODUCTION_MIGRATION_MODE: verify-expand",
-    "LEADERBOT_PRODUCTION_MIGRATION_MODE=apply-empty-bootstrap",
-    "LEADERBOT_PRODUCTION_MIGRATION_MODE=verify-expand",
+    "pnpm run db:rehearse-0017",
+    "pnpm run db:rehearse-0018",
+    "LEADERBOT_PRODUCTION_MIGRATION_MODE: verify-credit-wallet",
+    "LEADERBOT_PRODUCTION_MIGRATION_MODE=apply-empty-credit-wallet-bootstrap",
+    "LEADERBOT_PRODUCTION_MIGRATION_MODE=verify-credit-wallet",
     "io.leaderbot.schema.minimum",
     "io.leaderbot.schema.maximum",
   ]) {
@@ -3542,8 +3525,8 @@ function validateImageGenMigrationCi(rootDir) {
       fail("migration smoke CI must exercise only explicit staged modes");
     }
   }
-  const exactRuntimeMinimum = `io.leaderbot.schema.minimum" }}' "$image")" = "0016_expand"`;
-  const exactRuntimeMaximum = `io.leaderbot.schema.maximum" }}' "$image")" = "0016_expand"`;
+  const exactRuntimeMinimum = `io.leaderbot.schema.minimum" }}' "$image")" = "0018_credit_checkout_reservation"`;
+  const exactRuntimeMaximum = `io.leaderbot.schema.maximum" }}' "$image")" = "0018_credit_checkout_reservation"`;
   for (const [source, sourcePath] of [
     [imageCi, imageCiPath],
     [migrationCi, migrationCiPath],
@@ -3556,7 +3539,7 @@ function validateImageGenMigrationCi(rootDir) {
       )
     ) {
       fail(
-        `${sourcePath} must assert the exact 0016_expand runtime image range`,
+        `${sourcePath} must assert the exact 0018_credit_checkout_reservation runtime image range`,
       );
     }
   }
@@ -3628,6 +3611,14 @@ function validateTrustedArtifactWorkflow(rootDir) {
       "must pin the bridge base",
     ],
     [
+      "MIGRATION_BRIDGE_SCHEMA_MINIMUM=$ARTIFACT_SCHEMA_MINIMUM",
+      "must bind the bridge minimum schema to the frozen transition",
+    ],
+    [
+      'schema_minimum="$(jq -er \'.apps["image-gen"].databaseSchemaTransition.from\' deploy/production/apps.json)"',
+      "must derive the bridge minimum schema from the frozen transition",
+    ],
+    [
       "LEADERBOT_PRODUCTION_MIGRATION_MODE=verify-artifact",
       "must test the exact artifact-specific release check",
     ],
@@ -3640,10 +3631,7 @@ function validateTrustedArtifactWorkflow(rootDir) {
       "https://leaderbot.live/attestations/gateway-runtime/v1",
       "must attest the exact gateway runtime contract",
     ],
-    [
-      "gateway-runtime.json",
-      "must preserve signed gateway runtime evidence",
-    ],
+    ["gateway-runtime.json", "must preserve signed gateway runtime evidence"],
     [
       '--arg openClawVersion "2026.7.2-beta.7"',
       "must bind the gateway attestation to the exact OpenClaw runtime",
@@ -3682,12 +3670,28 @@ function validateTrustedArtifactWorkflow(rootDir) {
       "must give the expand-schema verification principal only runtime DML grants",
     ],
     [
+      "CREATE USER 'runtime_credit'@'%' IDENTIFIED BY 'runtime_credit'",
+      "must create the final credit-schema verification principal",
+    ],
+    [
+      "productionRuntimeWritableTableNames",
+      "must derive exact writable tables from the production runtime contract",
+    ],
+    [
+      "creditWalletRoutineNames",
+      "must derive exact executable routines from the production runtime contract",
+    ],
+    [
       "DATABASE_URL=mysql://runtime_${phase}:runtime_${phase}@127.0.0.1:3306/leaderbot_artifact_${phase}",
       "must verify the bridge with DML-only fixture credentials",
     ],
     [
       "DATABASE_URL=mysql://runtime_expand:runtime_expand@127.0.0.1:3306/leaderbot_artifact_expand",
-      "must verify the runtime with DML-only fixture credentials",
+      "must prove the final runtime refuses the pre-credit schema",
+    ],
+    [
+      "DATABASE_URL=mysql://runtime_credit:runtime_credit@127.0.0.1:3306/leaderbot_artifact_credit_checkout",
+      "must verify final runtime and bridge migration support with the credit principal",
     ],
     [
       "docker logout registry.fly.io",
@@ -3706,13 +3710,13 @@ function validateTrustedArtifactWorkflow(rootDir) {
     fail(`${TRUSTED_ARTIFACT_WORKFLOW_PATH} must never build from a PR event`);
   }
   if (
-    !/kind="runtime"\s+schema_minimum="0016_expand"\s+schema_maximum="0016_expand"/.test(
+    !/kind="runtime"\s+schema_minimum="0018_credit_checkout_reservation"\s+schema_maximum="0018_credit_checkout_reservation"/.test(
       workflow,
     ) ||
     workflow.includes('schema_maximum="0017_contract"')
   ) {
     fail(
-      `${TRUSTED_ARTIFACT_WORKFLOW_PATH} runtime artifacts must remain exactly 0016_expand`,
+      `${TRUSTED_ARTIFACT_WORKFLOW_PATH} runtime artifacts must remain exactly 0018_credit_checkout_reservation`,
     );
   }
   if (occurrenceCount(workflow, `image: ${PINNED_MYSQL_IMAGE}`) !== 1) {
@@ -3730,9 +3734,10 @@ function validateTrustedArtifactWorkflow(rootDir) {
     );
   }
   if (
-    occurrenceCount(workflow, "GRANT ") !== 2 ||
+    occurrenceCount(workflow, "GRANT ") !== 5 ||
     occurrenceCount(workflow, "CREATE USER 'runtime_base'@'%'") !== 1 ||
     occurrenceCount(workflow, "CREATE USER 'runtime_expand'@'%'") !== 1 ||
+    occurrenceCount(workflow, "CREATE USER 'runtime_credit'@'%'") !== 1 ||
     occurrenceCount(
       workflow,
       "GRANT SELECT, INSERT, UPDATE, DELETE ON leaderbot_artifact_base.* TO 'runtime_base'@'%'",
@@ -3740,6 +3745,16 @@ function validateTrustedArtifactWorkflow(rootDir) {
     occurrenceCount(
       workflow,
       "GRANT SELECT, INSERT, UPDATE, DELETE ON leaderbot_artifact_expand.* TO 'runtime_expand'@'%'",
+    ) !== 1 ||
+    occurrenceCount(workflow, "GRANT SELECT ON ${database}.* TO ${account}") !==
+      1 ||
+    occurrenceCount(
+      workflow,
+      "GRANT INSERT, UPDATE, DELETE ON ${database}.\\`${table}\\` TO ${account}",
+    ) !== 1 ||
+    occurrenceCount(
+      workflow,
+      "GRANT EXECUTE ON PROCEDURE ${database}.\\`${routine}\\` TO ${account}",
     ) !== 1
   ) {
     fail(
@@ -3989,8 +4004,16 @@ function validateSchemaTransitionWorkflow(rootDir) {
       "must revalidate the live recovery snapshot digest before reuse",
     ],
     [
-      "Upload immutable pre-expand recovery evidence before DDL",
+      "Upload immutable pre-credit recovery evidence before DDL",
       "must upload durable recovery evidence before changing the live schema",
+    ],
+    [
+      '.databaseSchemaTransition.from\' deploy/production/apps.json)" = "0016_expand"',
+      "must require the exact reviewed 0016 transition source",
+    ],
+    [
+      '.databaseSchemaTransition.to\' deploy/production/apps.json)" = "0018_credit_checkout_reservation"',
+      "must require the exact reviewed 0018 transition target",
     ],
     [
       "if-no-files-found: error",
@@ -4001,12 +4024,20 @@ function validateSchemaTransitionWorkflow(rootDir) {
       "must independently verify the bridge artifact marker",
     ],
     [
-      "LEADERBOT_PRODUCTION_MIGRATION_MODE=apply-expand",
-      "must apply only 0016 from the live bridge",
+      'io.leaderbot.schema.minimum" }}\' "$BRIDGE_IMAGE")" = "0016_expand"',
+      "must verify the bridge starts at the exact live 0016 schema",
     ],
     [
-      "LEADERBOT_PRODUCTION_MIGRATION_MODE=verify-expand-transition",
-      "must fingerprint the final expanded schema",
+      'io.leaderbot.schema.maximum" }}\' "$BRIDGE_IMAGE")" = "0018_credit_checkout_reservation"',
+      "must verify the bridge ends at the exact final 0018 schema",
+    ],
+    [
+      "LEADERBOT_PRODUCTION_MIGRATION_MODE=apply-credit-wallet-expand",
+      "must apply only 0017 and 0018 from the live bridge",
+    ],
+    [
+      "LEADERBOT_PRODUCTION_MIGRATION_MODE=verify-credit-wallet",
+      "must fingerprint the final credit schema",
     ],
     [
       "docker logout registry.fly.io",
@@ -4037,8 +4068,11 @@ function validateSchemaTransitionWorkflow(rootDir) {
       `${SCHEMA_TRANSITION_WORKFLOW_PATH} must bind failed-probe cleanup to the exact name, metadata, and single restore-volume mount tuple`,
     );
   }
-  if (workflow.includes("apply-contract")) {
-    fail(`${SCHEMA_TRANSITION_WORKFLOW_PATH} must keep 0017 blocked`);
+  if (
+    workflow.includes("LEADERBOT_PRODUCTION_MIGRATION_MODE=apply-expand") ||
+    workflow.includes("LEADERBOT_PRODUCTION_MIGRATION_MODE=verify-expand-transition")
+  ) {
+    fail(`${SCHEMA_TRANSITION_WORKFLOW_PATH} must not rerun the completed 0016 transition`);
   }
   if (/\b(?:fly|flyctl) config show[^\n]*--json/.test(workflow)) {
     fail(
@@ -4099,7 +4133,7 @@ function validateSchemaTransitionWorkflow(rootDir) {
       "must execute the restore probe through an explicit remote shell",
     ],
     [
-      'decoded=\\$(printf %s $probe_b64 | base64 -d) || exit 70; exec /bin/sh -c',
+      "decoded=\\$(printf %s $probe_b64 | base64 -d) || exit 70; exec /bin/sh -c",
       "must fail closed on decode errors and propagate the probe exit status",
     ],
     [
@@ -4157,10 +4191,10 @@ function validateSchemaTransitionWorkflow(rootDir) {
     );
   }
   const recoveryUploadIndex = workflow.indexOf(
-    "Upload immutable pre-expand recovery evidence before DDL",
+    "Upload immutable pre-credit recovery evidence before DDL",
   );
   const applyExpandIndex = workflow.indexOf(
-    "LEADERBOT_PRODUCTION_MIGRATION_MODE=apply-expand",
+    "LEADERBOT_PRODUCTION_MIGRATION_MODE=apply-credit-wallet-expand",
   );
   const strictBridgeIndex = workflow.indexOf(
     '--expected-deployment-identity "$settled_identity"',
@@ -4177,7 +4211,7 @@ function validateSchemaTransitionWorkflow(rootDir) {
     settledBridgeIndex > applyExpandIndex
   ) {
     fail(
-      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must durably upload verified snapshot evidence before any expand DDL`,
+      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must durably upload verified snapshot evidence before any credit DDL`,
     );
   }
   const probeStepIndex = workflow.indexOf(
@@ -5113,7 +5147,7 @@ function validateProductionReconciliationWorkflow(rootDir) {
       'phase="$(cat "$RUNNER_TEMP/leaderbot-recovery/rollback-schema-phase.txt")"',
     ) ||
     !schemaEvidenceStep.includes(
-      '[[ "$phase" =~ ^(0015_base|0016_expand)$ ]]',
+      '[[ "$phase" =~ ^(0015_base|0016_expand|0017_credit_wallet_expand|0018_credit_checkout_reservation)$ ]]',
     ) ||
     !schemaEvidenceStep.includes(
       'test "$phase" = "$(jq -er \'.apps["image-gen"].databaseSchemaPhase\' deploy/production/apps.json)"',
@@ -5430,15 +5464,25 @@ function validateImageGenSchemaTransition(app) {
     typeof transition !== "object" ||
     Array.isArray(transition)
   ) {
-    fail("image-gen must declare its reviewed 0015-to-0016 transition state");
+    fail("image-gen must declare its reviewed database schema transition state");
   }
-  if (
-    transition.from !== "0015_base" ||
-    transition.to !== "0016_expand" ||
-    !IMAGE_GEN_TRANSITION_STATES.includes(transition.state)
-  ) {
+  const transitionKey = `${transition.from}->${transition.to}`;
+  const transitionPhases =
+    transitionKey === "0015_base->0016_expand"
+      ? ["0015_base", "0016_expand"]
+      : transitionKey ===
+          "0016_expand->0018_credit_checkout_reservation"
+        ? [
+            "0016_expand",
+            "0017_credit_wallet_expand",
+            "0018_credit_checkout_reservation",
+          ]
+        : null;
+  if (!transitionPhases || !IMAGE_GEN_TRANSITION_STATES.includes(transition.state)) {
     fail("image-gen has an unsupported database schema transition");
   }
+  const baseArtifactKind =
+    transition.from === "0015_base" ? "legacy-bootstrap" : "runtime";
   if (!isImmutableAppImage(app, transition.legacyBaseImage)) {
     fail("image-gen transition must pin the exact proven legacy base digest");
   }
@@ -5480,9 +5524,9 @@ function validateImageGenSchemaTransition(app) {
 
   if (transition.state === "awaiting_attested_bridge") {
     if (
-      app.databaseSchemaPhase !== "0015_base" ||
+      app.databaseSchemaPhase !== transition.from ||
       app.deploymentEnabled !== false ||
-      app.reviewedArtifactKind !== "legacy-bootstrap" ||
+      app.reviewedArtifactKind !== baseArtifactKind ||
       app.reviewedImage !== transition.legacyBaseImage ||
       !sameStringSet(app.reviewedRollbackImages, [transition.legacyBaseImage])
     ) {
@@ -5498,17 +5542,17 @@ function validateImageGenSchemaTransition(app) {
     app.reviewedArtifactKind === "migration-bridge" &&
     app.reviewedSourceCommit === transition.bridgeSourceCommit &&
     JSON.stringify(app.reviewedImageSchemaPhases) ===
-      JSON.stringify(["0015_base", "0016_expand"]);
+      JSON.stringify(transitionPhases);
 
   if (transition.state === "bridge_reviewed") {
     if (
-      app.databaseSchemaPhase !== "0015_base" ||
+      app.databaseSchemaPhase !== transition.from ||
       app.deploymentEnabled !== true ||
       !bridgeIsCurrent ||
       !sameStringSet(app.reviewedRollbackImages, [transition.legacyBaseImage])
     ) {
       fail(
-        "image-gen bridge_reviewed must deploy only the bridge with the proven base as pre-expand rollback",
+        "image-gen bridge_reviewed must deploy only the bridge with the proven base as rollback",
       );
     }
     return;
@@ -5516,7 +5560,7 @@ function validateImageGenSchemaTransition(app) {
 
   if (transition.state === "expand_pending") {
     if (
-      app.databaseSchemaPhase !== "0015_base" ||
+      app.databaseSchemaPhase !== transition.from ||
       app.deploymentEnabled !== false ||
       !bridgeIsCurrent ||
       !sameStringSet(app.reviewedRollbackImages, [transition.bridgeImage]) ||
@@ -5532,7 +5576,7 @@ function validateImageGenSchemaTransition(app) {
 
   if (transition.state === "runtime_build_pending") {
     if (
-      app.databaseSchemaPhase !== "0016_expand" ||
+      app.databaseSchemaPhase !== transition.to ||
       app.deploymentEnabled !== false ||
       !bridgeIsCurrent ||
       !sameStringSet(app.reviewedRollbackImages, [transition.bridgeImage])
@@ -5544,38 +5588,41 @@ function validateImageGenSchemaTransition(app) {
     return;
   }
 
+  const requiresRuntimePredecessor = transition.to === "0016_expand";
   const settledPredecessorImage = app.reviewedSettledPredecessor?.image;
   const hasDistinctRuntimePredecessor =
     settledPredecessorImage != null &&
     settledPredecessorImage !== app.reviewedImage &&
     settledPredecessorImage !== transition.bridgeImage;
-  const expectedRuntimeRollbacks = [
-    ...(hasDistinctRuntimePredecessor
+  const expectedRuntimeRollbacks = requiresRuntimePredecessor
+    ? hasDistinctRuntimePredecessor
       ? [transition.bridgeImage, settledPredecessorImage]
-      : []),
-  ];
+      : []
+    : [transition.bridgeImage];
   const hasExactRuntimePredecessor =
     hasDistinctRuntimePredecessor &&
     app.reviewedRollbackArtifactKinds[settledPredecessorImage] === "runtime" &&
-      isReviewedSourceCommit(
-        app.reviewedRollbackSourceCommits[settledPredecessorImage],
-      ) &&
-      JSON.stringify(
-        app.reviewedRollbackImageSchemaPhases[settledPredecessorImage],
-      ) === JSON.stringify(["0016_expand"]);
+    isReviewedSourceCommit(
+      app.reviewedRollbackSourceCommits[settledPredecessorImage],
+    ) &&
+    JSON.stringify(
+      app.reviewedRollbackImageSchemaPhases[settledPredecessorImage],
+    ) === JSON.stringify([transition.to]);
 
   if (
-    app.databaseSchemaPhase !== "0016_expand" ||
+    app.databaseSchemaPhase !== transition.to ||
     app.deploymentEnabled !== true ||
     app.reviewedArtifactKind !== "runtime" ||
     !isReviewedSourceCommit(app.reviewedSourceCommit) ||
     !sameStringSet(app.reviewedRollbackImages, expectedRuntimeRollbacks) ||
     app.reviewedRollbackArtifactKinds[transition.bridgeImage] !==
       "migration-bridge" ||
-    !hasExactRuntimePredecessor
+    (requiresRuntimePredecessor && !hasExactRuntimePredecessor)
   ) {
     fail(
-      "image-gen reviewed runtime must support expand and retain only the bridge plus exact settled runtime predecessor",
+      requiresRuntimePredecessor
+        ? "image-gen reviewed runtime must support expand and retain only the bridge plus exact settled runtime predecessor"
+        : "image-gen reviewed runtime must support the final credit schema and retain only its exact migration bridge rollback",
     );
   }
 }
@@ -6214,6 +6261,9 @@ export function validateProductionRepository(rootDir = process.cwd()) {
         ["MESSENGER_FREE_DAILY_LIMIT", "5"],
         ["MESSENGER_FREE_MONTHLY_LIMIT", "20"],
         ["MESSENGER_IMAGE_QUOTA_TIME_ZONE", "Europe/Brussels"],
+        ["MESSENGER_PAID_CREDITS_ENABLED", "false"],
+        ["MOLLIE_CREDIT_CHECKOUT_ENABLED", "false"],
+        ["MOLLIE_CREDIT_WORKSPACE_ID", "1"],
         ["OPENAI_IMAGE_MAX_RETRIES", "0"],
         [
           "MESSENGER_GENERATION_QUEUE_WRITE_VERSION",
@@ -6377,10 +6427,11 @@ export function validateProductionRepository(rootDir = process.cwd()) {
         "COPY --from=build /app/drizzle ./drizzle",
         "AS migration_bridge",
         bridgeBaseArg,
+        "ARG MIGRATION_BRIDGE_SCHEMA_MINIMUM=0016_expand",
         'io.leaderbot.artifact.kind="migration-bridge"',
-        'io.leaderbot.schema.minimum="0015_base"',
-        'io.leaderbot.schema.minimum="0016_expand"',
-        'io.leaderbot.schema.maximum="0016_expand"',
+        'io.leaderbot.schema.minimum="${MIGRATION_BRIDGE_SCHEMA_MINIMUM}"',
+        'io.leaderbot.schema.maximum="0018_credit_checkout_reservation"',
+        'io.leaderbot.schema.minimum="0018_credit_checkout_reservation"',
         "'migration-bridge' > /app/.leaderbot-artifact-kind",
         "'runtime' > /app/.leaderbot-artifact-kind",
         "RUN test -s /app/dist/provision-whatsapp-binding.cjs",
@@ -6394,12 +6445,16 @@ export function validateProductionRepository(rootDir = process.cwd()) {
       }
       const runtimeStage = dockerfile.split(" AS runtime", 2)[1] ?? "";
       if (
-        !runtimeStage.includes('io.leaderbot.schema.minimum="0016_expand"') ||
-        !runtimeStage.includes('io.leaderbot.schema.maximum="0016_expand"') ||
+        !runtimeStage.includes(
+          'io.leaderbot.schema.minimum="0018_credit_checkout_reservation"',
+        ) ||
+        !runtimeStage.includes(
+          'io.leaderbot.schema.maximum="0018_credit_checkout_reservation"',
+        ) ||
         runtimeStage.includes("0017_contract")
       ) {
         fail(
-          "image-gen runtime artifact must stay on the exact 0016_expand schema range",
+          "image-gen runtime artifact must stay on the exact 0018_credit_checkout_reservation schema range",
         );
       }
       const imageGenCi = fs.readFileSync(
@@ -6428,6 +6483,17 @@ export function validateProductionRepository(rootDir = process.cwd()) {
         fail(
           "image-gen CI must run the billing trigger probe against disposable MySQL",
         );
+      }
+      for (const creditSchemaTest of [
+        "server/creditWalletSchema.mysql.test.ts",
+        "server/creditCheckoutReservationSchema.mysql.test.ts",
+        "server/creditPaymentFlow.mysql.test.ts",
+      ]) {
+        if (!imageGenCi.includes(creditSchemaTest)) {
+          fail(
+            "image-gen CI must run every credit schema and payment-flow boundary against disposable MySQL",
+          );
+        }
       }
       const migrationRunner = fs.readFileSync(
         path.join(
@@ -6551,9 +6617,7 @@ export function validateProductionRepository(rootDir = process.cwd()) {
           ) ||
           !checkoutSteps[0].includes("persist-credentials: false") ||
           /^\s+(?:ref|repository):/mu.test(checkoutSteps[0]) ||
-          !checkoutSteps[0].includes(
-            "if: github.event_name != 'pull_request'",
-          )
+          !checkoutSteps[0].includes("if: github.event_name != 'pull_request'")
         ) {
           fail(
             `${app.readinessMonitor} must check out the exact manifest without persisting credentials`,
@@ -7640,10 +7704,7 @@ export function checkLiveFlyDrift(target, options = {}) {
         Object.keys(live.deploy).length === 1 &&
         live.deploy.strategy === app.strategy));
   if (storageProxyDeployRepresentationIsCanonical) {
-    if (
-      allowStorageProxyFirstTrustedBootstrapDrift &&
-      live.deploy == null
-    ) {
+    if (allowStorageProxyFirstTrustedBootstrapDrift && live.deploy == null) {
       acceptedBootstrapDrift.push(
         "legacy Fly config omits the transient rolling deploy strategy",
       );
@@ -7952,7 +8013,8 @@ export function checkLiveFlyDrift(target, options = {}) {
     }
     const exactStorageProxyLegacyFlyctlVersion =
       allowStorageProxyFirstTrustedBootstrapDrift &&
-      metadata.fly_flyctl_version === app.artifactTransition.legacyFlyctlVersion;
+      metadata.fly_flyctl_version ===
+        app.artifactTransition.legacyFlyctlVersion;
     const usesPinnedFlyctlVersion =
       typeof metadata.fly_flyctl_version === "string" &&
       /^(?:v)?0\.4\.85$/.test(metadata.fly_flyctl_version);

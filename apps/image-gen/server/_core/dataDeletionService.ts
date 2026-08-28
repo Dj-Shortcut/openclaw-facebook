@@ -8,6 +8,7 @@ import {
   deleteCostLedgerEntriesForUser,
   purgeLegacyCostLedgerEntriesForUser,
 } from "./costLedger";
+import { eraseCreditWalletsForPrivacySubject } from "./billing/creditWalletStore";
 import { deleteFaceMemoryForUser } from "./faceMemory";
 import { safeLog } from "./messengerApi";
 import { deleteMessengerGenerationCompletionsForUser } from "./messengerGenerationCompletion";
@@ -305,6 +306,28 @@ async function deleteUserDataInternal(
       privacyEpoch: erasure.privacyEpoch,
       dataPrivacyEpoch: erasure.dataPrivacyEpoch,
     });
+    // The wallet procedure owns the control -> connection -> privacy -> wallet
+    // lock order. Drain it after the erasing epoch is committed but before the
+    // long privacy transaction locks the subject row, otherwise a nested CALL
+    // from a different pool connection could wait on its own outer lock.
+    const bindingEpoch =
+      state?.bindingEpoch ?? getMessengerRequestOwnership()?.bindingEpoch;
+    if (!bindingEpoch) return { status: "failed" };
+    let creditWalletsPending = false;
+    const creditWalletsErased = await runStep("credit_wallets", async () => {
+      const outcome = await eraseCreditWalletsForPrivacySubject({
+        workspaceId: erasure.workspaceId,
+        channelConnectionId: erasure.channelConnectionId,
+        bindingEpoch,
+        dataPrivacyEpoch: erasure.dataPrivacyEpoch,
+        erasurePrivacyEpoch: erasure.privacyEpoch,
+        userKey: erasure.userKey,
+      });
+      creditWalletsPending = outcome.result === "pending";
+    });
+    if (!creditWalletsErased || creditWalletsPending) {
+      return { status: "pending" };
+    }
     return await runWithLockedMessengerPrivacyErasure(erasure, async () => {
       const value = await deleteUserDataInternal(psid, erasure);
       return { value, complete: value.status === "completed" };

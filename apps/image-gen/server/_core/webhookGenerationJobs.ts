@@ -97,6 +97,16 @@ import {
   assertMessengerPrivacySubject,
   MessengerPrivacyFenceError,
 } from "./messengerPrivacySubject";
+import {
+  reservePaidCreditGeneration,
+  type PaidCreditGenerationInput,
+  type PaidCreditGenerationReservation,
+} from "./billing/creditGenerationAdmission";
+import {
+  CreditCheckoutReservationError,
+  reserveMessengerCreditCheckout,
+  type ReservedMessengerCreditCheckout,
+} from "./billing/creditCheckoutReservationService";
 import { storageDelete, storageKeyFromPublicUrl } from "../storage";
 import {
   finalizeMessengerProviderAttemptFence,
@@ -208,6 +218,21 @@ class MessengerImageQuotaRecoveryError extends Error {
     this.name = "MessengerImageQuotaRecoveryError";
   }
 }
+
+type FreeGenerationQuotaDecision =
+  | Readonly<{
+      status: "reserved";
+      reservation: MessengerImageQuotaReservation;
+    }>
+  | Readonly<{
+      status: "exhausted";
+      quotaStatus: MessengerImageQuotaStatus;
+    }>;
+
+const CREDIT_GENERATION_USER_KEY_PATTERN =
+  /^(?:[0-9a-f]{64}|u2[.]k[1-9][0-9]{0,5}[.][0-9a-f]{64})$/;
+const CREDIT_GENERATION_REQUEST_ID_MAX_LENGTH = 160;
+const CREDIT_GENERATION_MAX_DATABASE_ID = 2_147_483_647;
 
 function toConversationImageQuotaBalance(
   status: MessengerImageQuotaStatus
@@ -349,19 +374,61 @@ export function createMessengerGenerationJobRunner(
           return;
         }
 
-        const quotaReservation = successQuotaIdentity
+        const freeQuotaDecision = successQuotaIdentity
           ? await reserveGenerationQuota({
+              psid,
+              reqId,
+              identity: successQuotaIdentity,
+            })
+          : null;
+        let paidCreditReservation: PaidCreditGenerationReservation | null =
+          null;
+        if (freeQuotaDecision?.status === "exhausted") {
+          const paidInput = paidCreditGenerationInputForJob(job);
+          if (paidInput) {
+            const paidDecision = await reservePaidCreditGeneration(paidInput);
+            if (paidDecision.available) {
+              paidCreditReservation = paidDecision.reservation;
+            } else if (paidDecision.reason === "empty") {
+              const checkout = await tryReserveCreditCheckout(paidInput);
+              if (checkout) {
+                await sendCreditCheckoutNotice({
+                  deps,
+                  psid,
+                  reqId,
+                  lang,
+                  rememberSendOutcome,
+                  quotaStatus: freeQuotaDecision.quotaStatus,
+                  checkout,
+                });
+                return;
+              }
+            } else if (
+              paidDecision.reason === "request_in_progress" ||
+              paidDecision.reason === "request_closed"
+            ) {
+              // Another execution already owns, or permanently resolved, this
+              // deterministic request. Stay provider- and delivery-silent.
+              return;
+            }
+          }
+          if (!paidCreditReservation) {
+            await sendFreeQuotaReachedNotice({
               deps,
               psid,
               reqId,
               lang,
               rememberSendOutcome,
-              identity: successQuotaIdentity,
-            })
-          : null;
-        if (successQuotaIdentity && !quotaReservation) {
-          return;
+              quotaStatus: freeQuotaDecision.quotaStatus,
+            });
+            return;
+          }
         }
+
+        const quotaReservation =
+          freeQuotaDecision?.status === "reserved"
+            ? freeQuotaDecision.reservation
+            : null;
 
         let pendingQuotaReservation: MessengerImageQuotaReservation | null =
           quotaReservation;
@@ -372,6 +439,27 @@ export function createMessengerGenerationJobRunner(
                 reservation: quotaReservation,
               })
             : null;
+        let paidCreditTransportStarted = false;
+        let paidCreditReleasePromise: Promise<void> | null = null;
+        let paidCreditCommitPromise: Promise<void> | null = null;
+        const releasePaidCreditBeforeTransport = async (): Promise<void> => {
+          if (
+            !paidCreditReservation ||
+            paidCreditTransportStarted ||
+            paidCreditCommitPromise
+          ) {
+            return;
+          }
+          paidCreditReleasePromise ??=
+            paidCreditReservation.releaseBeforeTransport();
+          await paidCreditReleasePromise;
+        };
+        const commitPaidCreditProviderSuccess = async (): Promise<void> => {
+          if (!paidCreditReservation) return;
+          paidCreditCommitPromise ??=
+            paidCreditReservation.commitProviderSuccess();
+          await paidCreditCommitPromise;
+        };
         let providerAttemptsStarted = 0;
         let providerFenceSequence = 0;
         const providerFences: MessengerProviderAttemptFence[] = [];
@@ -419,6 +507,14 @@ export function createMessengerGenerationJobRunner(
                   if (state === "started") return;
                   if (state === "terminal") {
                     throw new Error("Provider attempt is already terminal");
+                  }
+                  if (
+                    paidCreditReservation &&
+                    (paidCreditReleasePromise || paidCreditCommitPromise)
+                  ) {
+                    throw new Error(
+                      "Paid credit reservation is already terminal"
+                    );
                   }
                   if (!startPromise) {
                     startPromise = (async () => {
@@ -487,6 +583,10 @@ export function createMessengerGenerationJobRunner(
                           providerFence
                         );
                       }
+                      if (paidCreditReservation) {
+                        await paidCreditReservation.markTransportStarted();
+                        paidCreditTransportStarted = true;
+                      }
                       state = "started";
                       providerFences.push(providerFence);
                       providerAttemptsStarted += 1;
@@ -518,10 +618,26 @@ export function createMessengerGenerationJobRunner(
                       throw new StartpilotProviderAdmissionRetryError(error);
                     }
                   }
-                  await finalizeMessengerProviderAttemptFence(
-                    providerFence,
-                    "known_failed"
-                  );
+                  const cleanupErrors: unknown[] = [];
+                  try {
+                    await finalizeMessengerProviderAttemptFence(
+                      providerFence,
+                      "known_failed"
+                    );
+                  } catch (error) {
+                    cleanupErrors.push(error);
+                  }
+                  try {
+                    await releasePaidCreditBeforeTransport();
+                  } catch (error) {
+                    cleanupErrors.push(error);
+                  }
+                  if (cleanupErrors.length > 0) {
+                    throw new AggregateError(
+                      cleanupErrors,
+                      "Provider admission cleanup failed"
+                    );
+                  }
                   state = "terminal";
                 },
               });
@@ -547,6 +663,9 @@ export function createMessengerGenerationJobRunner(
                 : state.lastPhotoSource
               : undefined,
             onProviderAttempt: beginProviderAttempt,
+            onProviderSuccess: paidCreditReservation
+              ? commitPaidCreditProviderSuccess
+              : undefined,
             bypassBudgetLimits: ownerQuotaBypass,
             costLedgerChannel: "facebook_messenger",
             costLedgerScope:
@@ -567,9 +686,10 @@ export function createMessengerGenerationJobRunner(
                 ? workspacePolicy.imageModel
                 : undefined,
             imageQuality:
-              workspacePolicy.kind === "startpilot"
+              paidCreditReservation?.imageQuality ??
+              (workspacePolicy.kind === "startpilot"
                 ? workspacePolicy.imageQuality
-                : undefined,
+                : undefined),
           });
 
           if (generationResult.kind === "success") {
@@ -578,6 +698,7 @@ export function createMessengerGenerationJobRunner(
                 const admission = await beginProviderAttempt();
                 await admission.markTransportStarted();
               }
+              await commitPaidCreditProviderSuccess();
               await assertMessengerGenerationOwnership(job);
               await assertGenerationJobPrivacy(job);
               await handleGenerationSuccess({
@@ -591,13 +712,17 @@ export function createMessengerGenerationJobRunner(
                 lang,
                 rememberSendOutcome,
                 completionFence: completionFenceForJob(job),
-                successQuotaIdentity,
+                successQuotaIdentity: paidCreditReservation
+                  ? undefined
+                  : successQuotaIdentity,
                 quotaAccountingMode:
                   workspacePolicy.kind === "startpilot"
                     ? "startpilot_attempt_committed_v1"
                     : "success_only_v1",
                 quotaReservation: pendingQuotaReservation,
-                quotaLeaseHeartbeat,
+                quotaLeaseHeartbeat: paidCreditReservation
+                  ? null
+                  : quotaLeaseHeartbeat,
                 assertCurrentBinding: () =>
                   assertMessengerGenerationOwnership(job),
                 onDurableRecoveryRequired: () => {
@@ -682,6 +807,7 @@ export function createMessengerGenerationJobRunner(
               reservation: pendingQuotaReservation,
             });
           }
+          await releasePaidCreditBeforeTransport();
           if (quotaLeaseError !== undefined) throw quotaLeaseError;
         }
       });
@@ -1314,36 +1440,150 @@ function isLegacyQuotaGrandfatherAllowed(
 }
 
 async function reserveGenerationQuota(input: {
-  deps: GenerationJobRunnerDeps;
   psid: string;
   reqId: string;
-  lang: MessengerGenerationJob["lang"];
-  rememberSendOutcome: (outcome: MessengerSendOutcome) => MessengerSendOutcome;
   identity: MessengerImageQuotaIdentity;
-}): Promise<MessengerImageQuotaReservation | null> {
+}): Promise<FreeGenerationQuotaDecision> {
   const decision = await reserveMessengerGenerationQuota({
     psid: input.psid,
     identity: input.identity,
     requestId: input.reqId,
   });
   if (decision.status === "reserved") {
-    return decision.reservation;
+    return { status: "reserved", reservation: decision.reservation };
   }
   if (decision.status === "already_committed") {
     throw new MessengerImageQuotaRecoveryError();
   }
   if (decision.status === "busy") throw new MessengerImageQuotaBusyError();
 
+  return { status: "exhausted", quotaStatus: decision.quotaStatus };
+}
+
+function paidCreditGenerationInputForJob(
+  job: MessengerGenerationJob
+): PaidCreditGenerationInput | null {
+  const databaseIds = [
+    job.workspaceId,
+    job.channelConnectionId,
+    job.bindingEpoch,
+    job.privacyEpoch,
+  ];
+  if (
+    databaseIds.some(
+      value =>
+        !Number.isSafeInteger(value) ||
+        Number(value) < 1 ||
+        Number(value) > CREDIT_GENERATION_MAX_DATABASE_ID
+    ) ||
+    !CREDIT_GENERATION_USER_KEY_PATTERN.test(job.userId) ||
+    typeof job.reqId !== "string" ||
+    job.reqId.length < 1 ||
+    job.reqId.length > CREDIT_GENERATION_REQUEST_ID_MAX_LENGTH
+  ) {
+    return null;
+  }
+  return Object.freeze({
+    workspaceId: job.workspaceId!,
+    channelConnectionId: job.channelConnectionId!,
+    bindingEpoch: job.bindingEpoch!,
+    privacyEpoch: job.privacyEpoch!,
+    // `webhookEventContext` already derives this once with `toUserKey(psid)`;
+    // the durable generation job carries that canonical privacy key unchanged.
+    userKey: job.userId,
+    requestId: job.reqId,
+  });
+}
+
+async function tryReserveCreditCheckout(
+  input: PaidCreditGenerationInput
+): Promise<ReservedMessengerCreditCheckout | null> {
+  try {
+    return await reserveMessengerCreditCheckout(input);
+  } catch (error) {
+    if (error instanceof CreditCheckoutReservationError) return null;
+    throw error;
+  }
+}
+
+async function sendFreeQuotaReachedNotice(input: {
+  deps: GenerationJobRunnerDeps;
+  psid: string;
+  reqId: string;
+  lang: MessengerGenerationJob["lang"];
+  rememberSendOutcome: (outcome: MessengerSendOutcome) => MessengerSendOutcome;
+  quotaStatus: MessengerImageQuotaStatus;
+}): Promise<void> {
   const response = buildFreeQuotaReachedResponse(
     input.lang,
-    toConversationImageQuotaBalance(decision.quotaStatus)
+    toConversationImageQuotaBalance(input.quotaStatus)
   );
-  const outcome = await input.deps.sendLoggedActions(
-    input.psid,
-    response.text ?? t(input.lang, "outOfFreeCredits"),
-    response.actions ?? [],
-    input.reqId
+  await sendQuotaOrCheckoutNotice({
+    ...input,
+    text: response.text ?? t(input.lang, "outOfFreeCredits"),
+    actions: response.actions ?? [],
+  });
+}
+
+async function sendCreditCheckoutNotice(input: {
+  deps: GenerationJobRunnerDeps;
+  psid: string;
+  reqId: string;
+  lang: MessengerGenerationJob["lang"];
+  rememberSendOutcome: (outcome: MessengerSendOutcome) => MessengerSendOutcome;
+  quotaStatus: MessengerImageQuotaStatus;
+  checkout: ReservedMessengerCreditCheckout;
+}): Promise<void> {
+  const quotaResponse = buildFreeQuotaReachedResponse(
+    input.lang,
+    toConversationImageQuotaBalance(input.quotaStatus)
   );
+  const offerText =
+    input.lang === "nl"
+      ? "Koop eenmalig 8 premiumcredits voor € 4,99. Elke credit geeft één afbeelding in medium kwaliteit en vervalt nooit. Geen abonnement of automatische verlenging. Of wacht tot je gratis tegoed opnieuw beschikbaar is."
+      : "Buy 8 premium credits once for €4.99. Each credit gives one medium-quality image and never expires. No subscription or automatic renewal. Or wait until your free allowance is available again.";
+  await sendQuotaOrCheckoutNotice({
+    ...input,
+    text: `${quotaResponse.text ?? t(input.lang, "outOfFreeCredits")}\n\n${offerText}`,
+    actions: [
+      {
+        id: "buy_premium_image_credits",
+        label: input.lang === "nl" ? "Koop 8 credits" : "Buy 8 credits",
+        url: input.checkout.actionUrl,
+      },
+    ],
+    providerAttemptKey: "premium-credit-checkout-offer-v1",
+  });
+}
+
+async function sendQuotaOrCheckoutNotice(input: {
+  deps: GenerationJobRunnerDeps;
+  psid: string;
+  reqId: string;
+  rememberSendOutcome: (outcome: MessengerSendOutcome) => MessengerSendOutcome;
+  text: string;
+  actions: Array<{
+    id: string;
+    label: string;
+    inputText?: string;
+    url?: string;
+  }>;
+  providerAttemptKey?: string;
+}): Promise<void> {
+  const outcome = input.providerAttemptKey
+    ? await input.deps.sendLoggedActions(
+        input.psid,
+        input.text,
+        input.actions,
+        input.reqId,
+        { providerAttemptKey: input.providerAttemptKey }
+      )
+    : await input.deps.sendLoggedActions(
+        input.psid,
+        input.text,
+        input.actions,
+        input.reqId
+      );
   input.rememberSendOutcome(outcome);
   if (!outcome.sent) {
     throw new MessengerGenerationNoticeDeliveryError(
@@ -1351,7 +1591,6 @@ async function reserveGenerationQuota(input: {
     );
   }
   await setFlowState(input.psid, "AWAITING_EDIT_PROMPT");
-  return null;
 }
 
 async function handleGenerationSuccess(input: {

@@ -72,6 +72,7 @@ try {
   const migration0015 = migrationFile(migrationPlan.base0015);
   const migration0016 = migrationFile(migrationPlan.expand0016);
   const migration0017 = migrationFile(migrationPlan.creditWallet0017);
+  const migration0018 = migrationFile(migrationPlan.creditCheckout0018);
 
   const connection = await mysql.createConnection(databaseUrl());
   let base0014;
@@ -87,6 +88,9 @@ try {
   let partial0017CreditWallet;
   let final0017;
   let history0017;
+  let partial0018CreditCheckout;
+  let final0018;
+  let history0018;
   try {
     await assertProductionMigrationRuntime(connection, "credit-bootstrap");
     await createHistoryTable(connection);
@@ -112,7 +116,7 @@ try {
     history0016 = await captureMigrationHistory(connection);
 
     const statements0017 = await readFileStatements(migration0017);
-    if (statements0017.length !== 49) {
+    if (statements0017.length !== 51) {
       throw new Error("0017 statement contract is unsupported");
     }
     if (
@@ -178,6 +182,38 @@ try {
     final0017 = await captureProductionSchemaState(connection);
     await insertMigrationHistory(connection, migration0017);
     history0017 = await captureMigrationHistory(connection);
+
+    const statements0018 = await readFileStatements(migration0018);
+    if (
+      statements0018.length !== 2 ||
+      statements0018[0] !==
+        "DROP PROCEDURE IF EXISTS `credit_create_wallet`;" ||
+      !/^CREATE PROCEDURE `credit_reserve_checkout_intent`(?:\s|\()/i.test(
+        statements0018[1]
+      )
+    ) {
+      throw new Error("0018 statement contract is unsupported");
+    }
+    const states0018 = [];
+    const boundaries0018 = [];
+    for (let boundary = 0; boundary <= statements0018.length; boundary += 1) {
+      const schema = await captureProductionSchemaState(connection);
+      const schemaSha256 = sha256(canonicalJson(schema));
+      states0018.push({ resumeFrom: boundary, schemaSha256, schema });
+      boundaries0018.push({ boundary, resumeFrom: boundary, schemaSha256 });
+      if (boundary < statements0018.length) {
+        await connection.query(statements0018[boundary]);
+      }
+    }
+    partial0018CreditCheckout = {
+      statementCount: statements0018.length,
+      statementSha256: statements0018.map(statement => sha256(statement)),
+      boundaries: boundaries0018,
+      states: states0018,
+    };
+    final0018 = await captureProductionSchemaState(connection);
+    await insertMigrationHistory(connection, migration0018);
+    history0018 = await captureMigrationHistory(connection);
   } finally {
     await connection.end();
   }
@@ -235,6 +271,9 @@ try {
     partial0017CreditWallet,
     final0017,
     history0017,
+    partial0018CreditCheckout,
+    final0018,
+    history0018,
   };
   await fs.writeFile(
     outputPath,

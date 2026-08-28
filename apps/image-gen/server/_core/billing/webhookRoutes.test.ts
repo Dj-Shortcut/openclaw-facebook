@@ -10,11 +10,16 @@ import {
 } from "./mollieClient";
 
 const mocks = vi.hoisted(() => ({
+  applyCreditPaymentWebhookSnapshot: vi.fn(),
   applyMolliePaymentSnapshot: vi.fn(),
   getRedisClient: vi.fn(),
   isRedisEnabled: vi.fn(),
   safeLog: vi.fn(),
   resolveMollieWebhookWorkspace: vi.fn(),
+}));
+
+vi.mock("./creditPaymentWebhook", () => ({
+  applyCreditPaymentWebhookSnapshot: mocks.applyCreditPaymentWebhookSnapshot,
 }));
 
 vi.mock("./paymentStore", () => ({
@@ -113,6 +118,7 @@ describe("classic Mollie payment webhook", () => {
       result: "processed",
       workspaceId: 42,
     });
+    mocks.applyCreditPaymentWebhookSnapshot.mockResolvedValue("unknown");
     mocks.resolveMollieWebhookWorkspace.mockResolvedValue(42);
   });
 
@@ -148,6 +154,69 @@ describe("classic Mollie payment webhook", () => {
       "intent_opaque123"
     );
     expect(mocks.applyMolliePaymentSnapshot).toHaveBeenCalledWith(payment, 42);
+  });
+
+  it("routes an exact customerless credit payment without legacy tenant lookup", async () => {
+    const payment = providerPayment({
+      id: "tr_credit123",
+      amount: { currency: "EUR", value: "4.99" },
+      description: "Leaderbot - 8 premium beeldcredits",
+      customerId: undefined,
+      method: "bancontact",
+      sequenceType: "oneoff",
+      metadata: {
+        billingIntentId: "11111111-1111-8111-8111-111111111111",
+        purpose: "premium_image_credits",
+        version: 1,
+        metadataHash: "a".repeat(64),
+      },
+    });
+    mocks.applyCreditPaymentWebhookSnapshot.mockResolvedValueOnce("processed");
+    const getPayment = vi.fn().mockResolvedValue(payment);
+
+    const response = await postWebhook({
+      body: "id=tr_credit123",
+      contentType: "application/x-www-form-urlencoded",
+      createClient: () => ({ getPayment }) as unknown as MollieClient,
+    });
+
+    expect(response.status).toBe(200);
+    expect(mocks.applyCreditPaymentWebhookSnapshot).toHaveBeenCalledWith({
+      webhookPaymentId: "tr_credit123",
+      expectedMode: "test",
+      payment,
+    });
+    expect(mocks.resolveMollieWebhookWorkspace).not.toHaveBeenCalled();
+    expect(mocks.applyMolliePaymentSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("does not acknowledge a retryable credit grant failure", async () => {
+    const payment = providerPayment({
+      id: "tr_creditretry",
+      customerId: undefined,
+      metadata: {
+        billingIntentId: "11111111-1111-8111-8111-111111111111",
+        purpose: "premium_image_credits",
+        version: 1,
+        metadataHash: "a".repeat(64),
+      },
+    });
+    mocks.applyCreditPaymentWebhookSnapshot.mockRejectedValueOnce(
+      new Error("credit database unavailable")
+    );
+
+    const response = await postWebhook({
+      body: "id=tr_creditretry",
+      contentType: "application/x-www-form-urlencoded",
+      createClient: () =>
+        ({
+          getPayment: vi.fn().mockResolvedValue(payment),
+        }) as unknown as MollieClient,
+    });
+
+    expect(response.status).toBe(503);
+    expect(response.body).toBe("Retry");
+    expect(mocks.resolveMollieWebhookWorkspace).not.toHaveBeenCalled();
   });
 
   it("routes multiple tenants from immutable provider metadata without a singleton pin", async () => {

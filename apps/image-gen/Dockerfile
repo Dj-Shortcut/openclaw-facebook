@@ -12,18 +12,20 @@ RUN pnpm install --frozen-lockfile
 COPY . .
 RUN pnpm run build:docker
 
-# This bridge keeps the exact currently proven 0015 runtime and adds only the
-# reviewed migrator bundle. It can restart safely before and after 0016 expand.
+# This bridge keeps the exact currently proven runtime and adds only the
+# reviewed migrator bundle. Its minimum phase is supplied by the protected
+# artifact workflow from the frozen transition manifest.
 FROM ${MIGRATION_BRIDGE_BASE_IMAGE} AS migration_bridge
 WORKDIR /app
 ARG SOURCE_REVISION=unreviewed-local-build
 ARG MIGRATION_BRIDGE_BASE_IMAGE
+ARG MIGRATION_BRIDGE_SCHEMA_MINIMUM=0016_expand
 LABEL org.opencontainers.image.source="https://github.com/Dj-Shortcut/openclaw-facebook" \
       org.opencontainers.image.revision="${SOURCE_REVISION}" \
       io.leaderbot.artifact.kind="migration-bridge" \
       io.leaderbot.bridge.base-image="${MIGRATION_BRIDGE_BASE_IMAGE}" \
-      io.leaderbot.schema.minimum="0015_base" \
-      io.leaderbot.schema.maximum="0016_expand"
+      io.leaderbot.schema.minimum="${MIGRATION_BRIDGE_SCHEMA_MINIMUM}" \
+      io.leaderbot.schema.maximum="0018_credit_checkout_reservation"
 COPY --from=build /app/dist/migrate-production.cjs ./dist/migrate-production.cjs
 COPY --from=build /app/drizzle ./drizzle
 RUN printf '%s\n' 'migration-bridge' > /app/.leaderbot-artifact-kind
@@ -39,8 +41,8 @@ LABEL org.opencontainers.image.source="https://github.com/Dj-Shortcut/openclaw-f
       io.leaderbot.artifact.kind="runtime" \
       io.leaderbot.base.node="${NODE_BASE_IMAGE}" \
       io.leaderbot.runtime.ffmpeg="${FFMPEG_VERSION}" \
-      io.leaderbot.schema.minimum="0016_expand" \
-      io.leaderbot.schema.maximum="0016_expand"
+      io.leaderbot.schema.minimum="0018_credit_checkout_reservation" \
+      io.leaderbot.schema.maximum="0018_credit_checkout_reservation"
 RUN apk add --no-cache "ffmpeg=${FFMPEG_VERSION}"
 RUN printf '%s\n' 'runtime' > /app/.leaderbot-artifact-kind
 # Keep the runtime stage slim: copy only the bundled server entrypoint and the

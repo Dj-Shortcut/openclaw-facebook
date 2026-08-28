@@ -8,6 +8,7 @@ import {
   type ReadinessCheck,
 } from "./_core/readiness";
 import * as billingReadiness from "./_core/billing/billingReadiness";
+import * as creditCheckoutReadiness from "./_core/billing/creditCheckoutReadiness";
 import { resetConversationIdentityConfigForTests } from "./_core/conversationIdentityConfig";
 import { registerHealthRoutes } from "./_core/runtime/healthRoutes";
 import { bindTestHttpServer } from "./testHttpServer";
@@ -33,6 +34,10 @@ const READINESS_ENV_KEYS = [
   "MESSENGER_USER_DAILY_SPEND_CAP_USD",
   "MOLLIE_BILLING_WORKER_WORKSPACE_ID",
   "MOLLIE_BILLING_SCHEDULER_MODE",
+  "MOLLIE_CREDIT_CHECKOUT_ENABLED",
+  "MESSENGER_PAID_CREDITS_ENABLED",
+  "MOLLIE_CREDIT_WORKSPACE_ID",
+  "CREDIT_CHECKOUT_HMAC_SECRET",
   "PORTAL_HANDOFF_TOKEN_SECRET",
   "REDIS_URL",
   "CONVERSATION_SCOPE_HMAC_KEY_ID",
@@ -254,6 +259,35 @@ describe("readiness", () => {
     await expect(check?.check()).resolves.toBeUndefined();
     expect(databaseCheck).toHaveBeenCalledWith("test", {
       requireRuntimeHeartbeat: true,
+    });
+  });
+
+  it("checks the exact paid-credit schema and pilot boundary", async () => {
+    for (const [name, value] of Object.entries({
+      MOLLIE_MODE: "test",
+      MOLLIE_CREDIT_CHECKOUT_ENABLED: "true",
+      MESSENGER_PAID_CREDITS_ENABLED: "true",
+      MOLLIE_CREDIT_WORKSPACE_ID: "42",
+      MOLLIE_BILLING_DRAIN_ENABLED: "true",
+      BILLING_NOTIFICATION_PLANE_ENABLED: "true",
+      MOLLIE_BILLING_ENABLED: "false",
+      MOLLIE_LIVE_BILLING_ENABLED: "false",
+      CREDIT_CHECKOUT_HMAC_SECRET: "ab".repeat(32),
+    })) {
+      vi.stubEnv(name, value);
+    }
+    const databaseCheck = vi
+      .spyOn(creditCheckoutReadiness, "assertCreditCheckoutDatabaseReadiness")
+      .mockResolvedValue();
+    const check = buildRuntimeReadinessChecks().find(
+      item => item.name === "credit_checkout"
+    );
+
+    await expect(check?.check()).resolves.toBeUndefined();
+    expect(databaseCheck).toHaveBeenCalledWith({
+      mode: "test",
+      workspaceId: 42,
+      commercialExposureEnabled: true,
     });
   });
 

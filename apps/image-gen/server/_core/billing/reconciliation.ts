@@ -32,6 +32,7 @@ import {
 } from "./billingSchedulerStore";
 import { expireWorkspaceBillingProfileIfDue } from "./billingProfileStore";
 import { resolveDuePaymentProviderOperations } from "./checkoutStore";
+import { enqueueDueCustomerlessCreditPaymentRecoveries } from "./creditPaymentRecovery";
 
 const RECONCILIATION_DISPATCH_INTERVAL_MS = 60_000;
 const RECONCILIATION_LEASE_MS = 2 * 60 * 60 * 1_000;
@@ -216,6 +217,12 @@ export async function runDailyBillingReconciliation(
     const database = await getDatabaseOrThrow();
     await assertExecutionFence();
     await resolveDuePaymentProviderOperations(workspaceId, config.mode, now);
+    await enqueueDueCustomerlessCreditPaymentRecoveries(
+      workspaceId,
+      config.mode,
+      now,
+      tenantLease
+    );
     await assertExecutionFence();
     await expireWorkspaceBillingProfileIfDue(workspaceId, now);
     const expiryResult = await database

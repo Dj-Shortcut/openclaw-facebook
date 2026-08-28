@@ -17,7 +17,9 @@ const databaseUrl = new URL(process.env.DATABASE_URL ?? "");
 const databaseName = databaseUrl.pathname.slice(1);
 if (
   !["127.0.0.1", "localhost"].includes(databaseUrl.hostname) ||
-  !/^leaderbot_artifact_(?:base|expand|credit_wallet)$/.test(databaseName)
+  !/^leaderbot_artifact_(?:base|expand|credit_wallet|credit_checkout)$/.test(
+    databaseName
+  )
 ) {
   throw new Error(
     "artifact schema fixture requires a disposable local database"
@@ -26,10 +28,15 @@ if (
 
 const phase = process.env.LEADERBOT_TEST_SCHEMA_PHASE;
 if (
-  !new Set(["0015_base", "0016_expand", "0017_credit_wallet_expand"]).has(phase)
+  !new Set([
+    "0015_base",
+    "0016_expand",
+    "0017_credit_wallet_expand",
+    "0018_credit_checkout_reservation",
+  ]).has(phase)
 ) {
   throw new Error(
-    "artifact schema fixture phase must be 0015_base, 0016_expand, or 0017_credit_wallet_expand"
+    "artifact schema fixture phase must be 0015_base, 0016_expand, 0017_credit_wallet_expand, or 0018_credit_checkout_reservation"
   );
 }
 
@@ -43,13 +50,17 @@ const phaseMigrations =
     ? migrationPlan.through0015
     : phase === "0016_expand"
       ? migrationPlan.through0016
-      : migrationPlan.through0017;
+      : phase === "0017_credit_wallet_expand"
+        ? migrationPlan.through0017
+        : migrationPlan.through0018;
 const connection = await mysql.createConnection(databaseUrl.toString());
 
 try {
   await assertProductionMigrationRuntime(
     connection,
-    phase === "0017_credit_wallet_expand" ? "credit-bootstrap" : "bootstrap"
+    phase === "0015_base" || phase === "0016_expand"
+      ? "bootstrap"
+      : "credit-bootstrap"
   );
   const [[state]] = await connection.query(
     "SELECT COUNT(*) AS tableCount FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE()"

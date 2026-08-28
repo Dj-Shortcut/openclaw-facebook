@@ -17,12 +17,14 @@ export const productionMigrationTags = Object.freeze([
   "0015_production_readiness_registry",
   "0016_static_epoch_scope_fks",
   "0017_credit_wallet_expand",
+  "0018_credit_checkout_reservation",
 ]);
 
 const base0014Tag = "0014_portal_handoff_delivery_idempotency";
 const base0015Tag = "0015_production_readiness_registry";
 const expand0016Tag = "0016_static_epoch_scope_fks";
 const creditWallet0017Tag = "0017_credit_wallet_expand";
+const creditCheckout0018Tag = "0018_credit_checkout_reservation";
 
 export function resolveProductionMigrationPlan(migrations) {
   if (!Array.isArray(migrations)) {
@@ -45,7 +47,7 @@ export function resolveProductionMigrationPlan(migrations) {
     if (
       index >= productionMigrationTags.length &&
       (!/^\d{4}_.+/.test(migration.tag) ||
-        Number(migration.tag.slice(0, 4)) <= 17)
+        Number(migration.tag.slice(0, 4)) <= 18)
     ) {
       throw new Error(`production migration plan mismatch at index ${index}`);
     }
@@ -81,9 +83,11 @@ export function resolveProductionMigrationPlan(migrations) {
     through0015: throughTag(base0015Tag),
     through0016: throughTag(expand0016Tag),
     through0017: throughTag(creditWallet0017Tag),
+    through0018: throughTag(creditCheckout0018Tag),
     base0014: byTag.get(base0014Tag),
     base0015: byTag.get(base0015Tag),
     expand0016: byTag.get(expand0016Tag),
     creditWallet0017: byTag.get(creditWallet0017Tag),
+    creditCheckout0018: byTag.get(creditCheckout0018Tag),
   });
 }

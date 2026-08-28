@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 
-export const productionSchemaContractVersion = 7;
+export const productionSchemaContractVersion = 8;
 export const creditWalletRoutineNames = Object.freeze([
   "credit_apply_chargeback_debit",
   "credit_apply_chargeback_restore",
@@ -8,12 +8,62 @@ export const creditWalletRoutineNames = Object.freeze([
   "credit_commit_reservation",
   "credit_consume_checkout_capability",
   "credit_create_reservation_hold",
-  "credit_create_wallet",
+  "credit_reserve_checkout_intent",
   "credit_erase_wallet",
   "credit_expire_reservation",
   "credit_grant_purchase",
+  "credit_mark_reservation_provider_accepted",
+  "credit_mark_reservation_transport_started",
   "credit_release_reservation",
   "credit_scrub_terminal_reservation",
+]);
+export const productionRuntimeWritableTableNames = Object.freeze([
+  "users",
+  "workspaces",
+  "workspaceMembers",
+  "aiIdentities",
+  "channelConnections",
+  "messenger_privacy_subjects",
+  "workspaceKnowledgeSources",
+  "workspacePrivacySettings",
+  "workspacePrivacyRequests",
+  "workspaceUpgradeRequests",
+  "portalHandoffTokens",
+  "auditLog",
+  "billing_customers",
+  "workspace_billing_profiles",
+  "billing_execution_controls",
+  "billing_profile_operator_actions",
+  "billing_scheduler_tenants",
+  "billing_notification_scheduler_tenants",
+  "billing_scheduler_process_heartbeats",
+  "messenger_provider_attempt_fences",
+  "billing_intents",
+  "billing_provider_operations",
+  "billing_subscriptions",
+  "billing_invoice_sequences",
+  "payment_ledger",
+  "webhook_deliveries",
+  "workspace_entitlements",
+  "workspace_entitlement_usage",
+  "workspace_entitlement_usage_reservations",
+  "billing_outbox",
+  "billing_webhook_routes",
+  "billing_notification_receipts",
+  "billing_accounting_import_runs",
+  "billing_accounting_import_cursors",
+  "billing_accounting_provider_events",
+  "billing_accounting_event_links",
+  "billing_notification_receiver_outbox",
+  "billing_notification_inbox",
+  "billing_handoff_recovery_events",
+  "billing_reconciliation_runs",
+  "billing_reconciliation_anomalies",
+]);
+export const creditWalletTableNames = Object.freeze([
+  "credit_wallets",
+  "credit_reservations",
+  "credit_ledger",
 ]);
 export const productionSchemaSqlMode =
   "ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION";
@@ -185,10 +235,15 @@ export function assertProductionRuntimeGrantScope(grants, databaseName) {
 }
 
 export function assertCreditWalletRuntimeGrantScope(grants, databaseName) {
-  const schemaGrants = [];
+  const schemaPrivileges = new Set();
+  const revokedSchemaPrivileges = new Set();
+  const grantedTablePrivileges = new Map();
+  const revokedTablePrivileges = new Map();
   const grantedRoutines = new Set();
   const revokedRoutines = new Set();
   const unexpected = [];
+  const expectedTables = new Set(productionRuntimeWritableTableNames);
+  const expectedRoutines = new Set(creditWalletRoutineNames);
   for (const grant of grants) {
     const parsed = /^(GRANT|REVOKE) (.+) ON (.+) (?:TO|FROM) /i.exec(grant);
     if (!parsed) {
@@ -200,40 +255,120 @@ export function assertCreditWalletRuntimeGrantScope(grants, databaseName) {
       .split(",")
       .map(value => value.trim().toUpperCase());
     const rawScope = parsed[3].replaceAll("`", "");
-    const procedure = /^PROCEDURE\s+([^\.]+)\.(.+)$/i.exec(rawScope);
-    if (!procedure) {
-      schemaGrants.push(grant);
-      continue;
-    }
-    const [, schemaName, routineName] = procedure;
     if (
-      schemaName !== databaseName ||
-      privileges.length !== 1 ||
-      privileges[0] !== "EXECUTE" ||
+      privileges.length === 0 ||
+      privileges.some(privilege =>
+        new Set(["ALL", "ALL PRIVILEGES"]).has(privilege)
+      ) ||
       /\bWITH GRANT OPTION\b/i.test(grant)
     ) {
       unexpected.push(grant);
       continue;
     }
-    (operation === "REVOKE" ? revokedRoutines : grantedRoutines).add(
-      routineName
-    );
+    if (
+      operation === "GRANT" &&
+      rawScope === "*.*" &&
+      privileges.length === 1 &&
+      privileges[0] === "USAGE"
+    ) {
+      continue;
+    }
+    const procedure = /^PROCEDURE\s+([^\.]+)\.(.+)$/i.exec(rawScope);
+    if (procedure) {
+      const [, schemaName, routineName] = procedure;
+      if (
+        schemaName !== databaseName ||
+        !expectedRoutines.has(routineName) ||
+        privileges.length !== 1 ||
+        privileges[0] !== "EXECUTE"
+      ) {
+        unexpected.push(grant);
+        continue;
+      }
+      (operation === "REVOKE" ? revokedRoutines : grantedRoutines).add(
+        routineName
+      );
+      continue;
+    }
+
+    if (rawScope === `${databaseName}.*`) {
+      if (privileges.some(privilege => privilege !== "SELECT")) {
+        unexpected.push(grant);
+        continue;
+      }
+      const target =
+        operation === "REVOKE" ? revokedSchemaPrivileges : schemaPrivileges;
+      for (const privilege of privileges) target.add(privilege);
+      continue;
+    }
+
+    const table = /^([^\.]+)\.(.+)$/.exec(rawScope);
+    if (
+      !table ||
+      table[1] !== databaseName ||
+      !expectedTables.has(table[2]) ||
+      privileges.some(
+        privilege => !new Set(["INSERT", "UPDATE", "DELETE"]).has(privilege)
+      )
+    ) {
+      unexpected.push(grant);
+      continue;
+    }
+    const target =
+      operation === "REVOKE" ? revokedTablePrivileges : grantedTablePrivileges;
+    const tablePrivileges = target.get(table[2]) ?? new Set();
+    for (const privilege of privileges) tablePrivileges.add(privilege);
+    target.set(table[2], tablePrivileges);
   }
-  assertExactScopedPrivileges(
-    schemaGrants,
-    databaseName,
-    ["SELECT"],
-    "credit runtime principal"
-  );
+
+  for (const privilege of revokedSchemaPrivileges) {
+    schemaPrivileges.delete(privilege);
+  }
+  const schemaBoundaryMismatch =
+    schemaPrivileges.size !== 1 || !schemaPrivileges.has("SELECT");
+
+  const requiredTablePrivileges = new Set(["INSERT", "UPDATE", "DELETE"]);
+  const missingTablePrivileges = [];
+  for (const tableName of productionRuntimeWritableTableNames) {
+    const effective = new Set(grantedTablePrivileges.get(tableName) ?? []);
+    for (const privilege of revokedTablePrivileges.get(tableName) ?? []) {
+      effective.delete(privilege);
+    }
+    const missing = [...requiredTablePrivileges].filter(
+      privilege => !effective.has(privilege)
+    );
+    if (missing.length > 0) {
+      missingTablePrivileges.push(`${tableName}:${missing.join("+")}`);
+    }
+  }
+
   for (const name of revokedRoutines) grantedRoutines.delete(name);
-  const expected = new Set(creditWalletRoutineNames);
-  const missing = [...expected].filter(name => !grantedRoutines.has(name));
-  const excessive = [...grantedRoutines].filter(name => !expected.has(name));
-  if (unexpected.length > 0 || missing.length > 0 || excessive.length > 0) {
+  const missingRoutines = [...expectedRoutines].filter(
+    name => !grantedRoutines.has(name)
+  );
+  const excessiveRoutines = [...grantedRoutines].filter(
+    name => !expectedRoutines.has(name)
+  );
+  if (
+    unexpected.length > 0 ||
+    schemaBoundaryMismatch ||
+    missingTablePrivileges.length > 0 ||
+    missingRoutines.length > 0 ||
+    excessiveRoutines.length > 0
+  ) {
     throw new Error(
-      "credit runtime procedure privilege boundary mismatch" +
-        (missing.length > 0 ? `; missing ${missing.join(",")}` : "") +
-        (excessive.length > 0 ? `; excessive ${excessive.join(",")}` : "")
+      "credit runtime privilege boundary mismatch" +
+        (schemaBoundaryMismatch ? "; schema SELECT mismatch" : "") +
+        (missingTablePrivileges.length > 0
+          ? `; missing table privileges ${missingTablePrivileges.join(",")}`
+          : "") +
+        (missingRoutines.length > 0
+          ? `; missing routines ${missingRoutines.join(",")}`
+          : "") +
+        (excessiveRoutines.length > 0
+          ? `; excessive routines ${excessiveRoutines.join(",")}`
+          : "") +
+        (unexpected.length > 0 ? "; unexpected grant scope" : "")
     );
   }
 }

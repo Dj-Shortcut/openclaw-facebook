@@ -104,7 +104,10 @@ function createRepositoryFixture() {
     if (settledPredecessor?.path) {
       const destination = path.join(root, settledPredecessor.path);
       fs.mkdirSync(path.dirname(destination), { recursive: true });
-      fs.copyFileSync(path.join(repoRoot, settledPredecessor.path), destination);
+      fs.copyFileSync(
+        path.join(repoRoot, settledPredecessor.path),
+        destination,
+      );
     }
   }
   return root;
@@ -135,7 +138,10 @@ function storageProxyLifecycleJqFilters(root) {
   );
   const extractFilter = (stepName, nextStepName) => {
     const stepStart = workflow.indexOf(`      - name: ${stepName}\n`);
-    const stepEnd = workflow.indexOf(`      - name: ${nextStepName}\n`, stepStart);
+    const stepEnd = workflow.indexOf(
+      `      - name: ${nextStepName}\n`,
+      stepStart,
+    );
     if (stepStart < 0 || stepEnd <= stepStart) {
       throw new Error(`Missing workflow step boundary for ${stepName}`);
     }
@@ -144,7 +150,9 @@ function storageProxyLifecycleJqFilters(root) {
       step.split("fly secrets list --app leaderbot-storage-proxy --json")
         .length - 1;
     if (commandCount !== 1) {
-      throw new Error(`Missing exact storage-proxy secret listing in ${stepName}`);
+      throw new Error(
+        `Missing exact storage-proxy secret listing in ${stepName}`,
+      );
     }
     const filter = step.match(/\| jq -e '([^'\r\n]+)' \\/u)?.[1];
     if (!filter) throw new Error(`Missing lifecycle jq filter in ${stepName}`);
@@ -1097,8 +1105,7 @@ describe("production deployment contract", () => {
     const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
     const app = manifest.apps["image-gen"];
     const predecessor = app.reviewedSettledPredecessor;
-    const extraImage =
-      `registry.fly.io/${app.app}@sha256:${"c".repeat(64)}`;
+    const extraImage = `registry.fly.io/${app.app}@sha256:${"c".repeat(64)}`;
 
     app.reviewedRollbackImages.push(extraImage);
     app.reviewedRollbackConfigs[extraImage] = {
@@ -1116,15 +1123,21 @@ describe("production deployment contract", () => {
   });
 
   it.each([
-    ["artifact kind", (app, image) => {
-      app.reviewedRollbackArtifactKinds[image] = "migration-bridge";
-    }],
-    ["schema range", (app, image) => {
-      app.reviewedRollbackImageSchemaPhases[image] = [
-        "0015_base",
-        "0016_expand",
-      ];
-    }],
+    [
+      "artifact kind",
+      (app, image) => {
+        app.reviewedRollbackArtifactKinds[image] = "migration-bridge";
+      },
+    ],
+    [
+      "schema range",
+      (app, image) => {
+        app.reviewedRollbackImageSchemaPhases[image] = [
+          "0015_base",
+          "0016_expand",
+        ];
+      },
+    ],
   ])("rejects settled predecessor %s drift", (_label, mutate) => {
     const root = createRepositoryFixture();
     const manifestPath = path.join(root, "deploy/production/apps.json");
@@ -1731,12 +1744,7 @@ describe("production deployment contract", () => {
     ).toBe(false);
   });
 
-  it.each([
-    null,
-    438,
-    ["2026.8.27-dev.1787839287"],
-    "2026.8.27-dev.latest",
-  ])(
+  it.each([null, 438, ["2026.8.27-dev.1787839287"], "2026.8.27-dev.latest"])(
     "rejects malformed storage legacy flyctl metadata %j",
     (legacyFlyctlVersion) => {
       const root = createRepositoryFixture();
@@ -1797,10 +1805,7 @@ describe("production deployment contract", () => {
           persist-credentials: false`;
     const source = fs.readFileSync(workflowPath, "utf8");
     expect(source).toContain(checkoutStep);
-    const withoutReadinessCheckout = source.replace(
-      `${checkoutStep}\n\n`,
-      "",
-    );
+    const withoutReadinessCheckout = source.replace(`${checkoutStep}\n\n`, "");
     expect(withoutReadinessCheckout).not.toBe(source);
     const checkoutInHealthJob = withoutReadinessCheckout.replace(
       "\n  readiness:\n",
@@ -1829,7 +1834,10 @@ describe("production deployment contract", () => {
     expect(source).toContain(checkoutStep);
     const withoutCheckout = source.replace(`${checkoutStep}\n\n`, "");
     expect(withoutCheckout).not.toBe(source);
-    fs.writeFileSync(workflowPath, `${withoutCheckout.trimEnd()}\n\n${checkoutStep}\n`);
+    fs.writeFileSync(
+      workflowPath,
+      `${withoutCheckout.trimEnd()}\n\n${checkoutStep}\n`,
+    );
 
     expect(() => validateProductionRepository(root)).toThrow(
       "must check out the exact manifest without persisting credentials",
@@ -1869,7 +1877,7 @@ describe("production deployment contract", () => {
     replaceFixtureText(
       root,
       ".github/workflows/production-uptime.yml",
-      "          jq -e '.ok == true and .rateLimiter == \"shared_redis\"' \"$body\"\n",
+      '          jq -e \'.ok == true and .rateLimiter == "shared_redis"\' "$body"\n',
       "          jq -e '.ok == true' \"$body\"\n",
     );
 
@@ -2383,6 +2391,24 @@ describe("production deployment contract", () => {
     );
   });
 
+  it.each([
+    "server/creditWalletSchema.mysql.test.ts",
+    "server/creditCheckoutReservationSchema.mysql.test.ts",
+    "server/creditPaymentFlow.mysql.test.ts",
+  ])("requires %s in the disposable MySQL lane", (testPath) => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/image-gen-ci.yml",
+      testPath,
+      `server/missing-${path.basename(testPath)}`,
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "image-gen CI must run every credit schema and payment-flow boundary against disposable MySQL",
+    );
+  });
+
   it("requires CI to inspect the bundled WhatsApp provisioning command", () => {
     const root = createRepositoryFixture();
     replaceFixtureText(
@@ -2397,25 +2423,26 @@ describe("production deployment contract", () => {
     );
   });
 
-  it("keeps runtime artifacts on the exact supported 0016 phase", () => {
+  it("keeps runtime artifacts on the exact supported 0018 phase", () => {
     const root = createRepositoryFixture();
     replaceFixtureText(
       root,
       ".github/workflows/build-production-artifacts.yml",
-      'kind="runtime"\n              schema_minimum="0016_expand"\n              schema_maximum="0016_expand"',
-      'kind="runtime"\n              schema_minimum="0016_expand"\n              schema_maximum="0017_contract"',
+      'kind="runtime"\n              schema_minimum="0018_credit_checkout_reservation"\n              schema_maximum="0018_credit_checkout_reservation"',
+      'kind="runtime"\n              schema_minimum="0018_credit_checkout_reservation"\n              schema_maximum="0017_contract"',
     );
 
     expect(() => validateProductionRepository(root)).toThrow(
-      "runtime artifacts must remain exactly 0016_expand",
+      "runtime artifacts must remain exactly 0018_credit_checkout_reservation",
     );
   });
 
-  it("rejects a Docker runtime that claims unsupported 0017 compatibility", () => {
+  it("rejects a Docker runtime that claims unsupported pre-0018 compatibility", () => {
     const root = createRepositoryFixture();
     const dockerfilePath = path.join(root, "apps/image-gen/Dockerfile");
     const dockerfile = fs.readFileSync(dockerfilePath, "utf8");
-    const marker = 'io.leaderbot.schema.maximum="0016_expand"';
+    const marker =
+      'io.leaderbot.schema.maximum="0018_credit_checkout_reservation"';
     const runtimeMarkerIndex = dockerfile.lastIndexOf(marker);
     expect(runtimeMarkerIndex).toBeGreaterThan(0);
     fs.writeFileSync(
@@ -2424,24 +2451,24 @@ describe("production deployment contract", () => {
     );
 
     expect(() => validateProductionRepository(root)).toThrow(
-      "runtime artifact must stay on the exact 0016_expand schema range",
+      "runtime artifact must stay on the exact 0018_credit_checkout_reservation schema range",
     );
   });
 
   it.each([
     ".github/workflows/image-gen-ci.yml",
     ".github/workflows/image-gen-migration-smoke.yml",
-  ])("keeps %s runtime label checks on exact 0016", (workflowPath) => {
+  ])("keeps %s runtime label checks on exact 0018", (workflowPath) => {
     const root = createRepositoryFixture();
     replaceFixtureText(
       root,
       workflowPath,
-      `io.leaderbot.schema.maximum" }}' "$image")" = "0016_expand"`,
+      `io.leaderbot.schema.maximum" }}' "$image")" = "0018_credit_checkout_reservation"`,
       `io.leaderbot.schema.maximum" }}' "$image")" = "0017_contract"`,
     );
 
     expect(() => validateProductionRepository(root)).toThrow(
-      `${workflowPath} must assert the exact 0016_expand runtime image range`,
+      `${workflowPath} must assert the exact 0018_credit_checkout_reservation runtime image range`,
     );
   });
 
@@ -2607,19 +2634,19 @@ describe("production deployment contract", () => {
     );
   });
 
-  it("uploads durable snapshot evidence before any live expand DDL", () => {
+  it("uploads durable snapshot evidence before any live credit DDL", () => {
     const root = createRepositoryFixture();
     const relativePath = ".github/workflows/image-gen-schema-transition.yml";
     const workflowPath = path.join(root, relativePath);
     const workflow = fs.readFileSync(workflowPath, "utf8");
     const uploadStart = workflow.indexOf(
-      "      - name: Upload immutable pre-expand recovery evidence before DDL",
+      "      - name: Upload immutable pre-credit recovery evidence before DDL",
     );
     const applyStart = workflow.indexOf(
-      "      - name: Apply only the reviewed 0016 expand migration",
+      "      - name: Apply only the reviewed 0017 and 0018 credit migrations",
     );
     const verifyStart = workflow.indexOf(
-      "      - name: Verify the exact 0016 expanded schema",
+      "      - name: Verify the exact 0018 credit schema",
     );
     expect(uploadStart).toBeGreaterThan(-1);
     expect(applyStart).toBeGreaterThan(uploadStart);
@@ -2631,7 +2658,7 @@ describe("production deployment contract", () => {
     );
 
     expect(() => validateProductionRepository(root)).toThrow(
-      "must durably upload verified snapshot evidence before any expand DDL",
+      "must durably upload verified snapshot evidence before any credit DDL",
     );
   });
 
@@ -3305,9 +3332,7 @@ describe("production deployment contract", () => {
         after,
       );
 
-      expect(() => validateProductionRepository(root)).toThrow(
-        expectedError,
-      );
+      expect(() => validateProductionRepository(root)).toThrow(expectedError);
     },
   );
 
@@ -3970,7 +3995,7 @@ describe("production deployment contract", () => {
     );
   });
 
-  it("verifies production artifacts with DML-only fixture users", () => {
+  it("refuses the pre-credit schema with an unprivileged runtime user", () => {
     const root = createRepositoryFixture();
     replaceFixtureText(
       root,
@@ -3980,7 +4005,7 @@ describe("production deployment contract", () => {
     );
 
     expect(() => validateProductionRepository(root)).toThrow(
-      "must verify the runtime with DML-only fixture credentials",
+      "must prove the final runtime refuses the pre-credit schema",
     );
   });
 
@@ -4418,9 +4443,7 @@ describe("production deployment contract", () => {
         manifest.apps["image-gen"].reviewedRollbackImages[0],
         repoRoot,
       ),
-    ).toBe(
-      manifest.apps["image-gen"].reviewedRollbackImages[0],
-    );
+    ).toBe(manifest.apps["image-gen"].reviewedRollbackImages[0]);
 
     const root = createRepositoryFixture();
     const manifestPath = path.join(root, "deploy/production/apps.json");
@@ -4488,8 +4511,7 @@ describe("production deployment contract", () => {
         "utf8",
       ),
     );
-    const predecessor =
-      manifest.apps["image-gen"].reviewedSettledPredecessor;
+    const predecessor = manifest.apps["image-gen"].reviewedSettledPredecessor;
 
     expect(() =>
       getReviewedRestoreConfig(
@@ -4512,12 +4534,7 @@ describe("production deployment contract", () => {
     const image = app.databaseSchemaTransition.bridgeImage;
 
     expect(
-      getReviewedRestoreConfig(
-        "image-gen",
-        image,
-        "deploy-999-1",
-        repoRoot,
-      ),
+      getReviewedRestoreConfig("image-gen", image, "deploy-999-1", repoRoot),
     ).toBe(app.reviewedRollbackConfigs[image].path);
   });
 
@@ -4714,9 +4731,7 @@ describe("production deployment contract", () => {
     expect(reviewedImage).toBe(
       "registry.fly.io/leaderbot-storage-proxy@sha256:27dd75daaa30dac5a279fc097a57c14133efb419cbdbbd1fdefba26a21ffeace",
     );
-    expect(manifest.apps["storage-proxy"].reviewedArtifactKind).toBe(
-      "runtime",
-    );
+    expect(manifest.apps["storage-proxy"].reviewedArtifactKind).toBe("runtime");
     expect(manifest.apps["storage-proxy"].artifactTransition.state).toBe(
       "runtime_deployed",
     );
@@ -5250,9 +5265,8 @@ describe("production deployment contract", () => {
     const rollbackStep = workflow.slice(rollbackStepStart, rollbackStepEnd);
 
     expect(
-      workflow.split(
-        "fly secrets list --app leaderbot-storage-proxy --json",
-      ).length - 1,
+      workflow.split("fly secrets list --app leaderbot-storage-proxy --json")
+        .length - 1,
     ).toBe(2);
     expect(deployStep).toContain('.name == "R2_LIFECYCLE_ACCESS_KEY_ID"');
     expect(deployStep).toContain('.status == "Staged"');
@@ -5277,8 +5291,7 @@ describe("production deployment contract", () => {
       created_at: "2026-08-27T00:00:00Z",
       status,
     });
-    const accessKey = (status) =>
-      record("R2_LIFECYCLE_ACCESS_KEY_ID", status);
+    const accessKey = (status) => record("R2_LIFECYCLE_ACCESS_KEY_ID", status);
     const secretKey = (status) =>
       record("R2_LIFECYCLE_SECRET_ACCESS_KEY", status);
     const unrelatedObjectKey = record("R2_ACCESS_KEY_ID", "Deployed");
@@ -5447,8 +5460,8 @@ describe("production deployment contract", () => {
     replaceFixtureText(
       root,
       ".github/workflows/deploy-production.yml",
-      '            >/dev/null\n          args=(',
-      '            >/dev/null\n          fly secrets list --app leaderbot-storage-proxy --json\n          args=(',
+      "            >/dev/null\n          args=(",
+      "            >/dev/null\n          fly secrets list --app leaderbot-storage-proxy --json\n          args=(",
     );
 
     expect(() => validateProductionRepository(root)).toThrow(
@@ -7889,9 +7902,7 @@ describe("settled production identity", () => {
         ),
         ...verificationOptions,
         fetchImpl: async () =>
-          jsonResponse(
-            canonicalDeploymentRun("image-gen", "32860967800", "1"),
-          ),
+          jsonResponse(canonicalDeploymentRun("image-gen", "32860967800", "1")),
       }),
     ).resolves.toMatchObject({
       identity: predecessor.identity,
@@ -7934,8 +7945,7 @@ describe("settled production identity", () => {
     const manifest = JSON.parse(
       fs.readFileSync(path.join(root, "deploy/production/apps.json"), "utf8"),
     );
-    const predecessor =
-      manifest.apps["image-gen"].reviewedSettledPredecessor;
+    const predecessor = manifest.apps["image-gen"].reviewedSettledPredecessor;
     fs.appendFileSync(path.join(root, predecessor.path), "\n");
 
     await expect(
@@ -8602,22 +8612,25 @@ describe("settled production identity", () => {
     ["null", null],
     ["an empty object", {}],
     ["the explicit rolling strategy", { strategy: "rolling" }],
-  ])("accepts %s as a canonical storage deploy representation", async (_label, deploy) => {
-    const root = createRepositoryFixture();
-    const manifestPath = path.join(root, "deploy/production/apps.json");
-    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-    const { legacyImage } = stageStorageProxyRuntime(manifest);
-    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  ])(
+    "accepts %s as a canonical storage deploy representation",
+    async (_label, deploy) => {
+      const root = createRepositoryFixture();
+      const manifestPath = path.join(root, "deploy/production/apps.json");
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+      const { legacyImage } = stageStorageProxyRuntime(manifest);
+      fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 
-    const result = await checkSettledLiveFlyDrift("storage-proxy", {
-      rootDir: root,
-      runFly: storageProxyLegacyBootstrapFlyState(legacyImage, ({ live }) => {
-        live.deploy = deploy;
-      }),
-    });
-    expect(result.blockingErrors).toEqual([]);
-    expect(result.reconcilableDrift).toEqual([]);
-  });
+      const result = await checkSettledLiveFlyDrift("storage-proxy", {
+        rootDir: root,
+        runFly: storageProxyLegacyBootstrapFlyState(legacyImage, ({ live }) => {
+          live.deploy = deploy;
+        }),
+      });
+      expect(result.blockingErrors).toEqual([]);
+      expect(result.reconcilableDrift).toEqual([]);
+    },
+  );
 
   it.each([
     [
@@ -8721,10 +8734,9 @@ describe("settled production identity", () => {
         rootDir: root,
         runFly: storageProxyLegacyBootstrapFlyState(legacyImage, mutate),
       });
-      expect([
-        ...result.blockingErrors,
-        ...result.reconcilableDrift,
-      ]).toEqual(expect.arrayContaining([expect.stringContaining(message)]));
+      expect([...result.blockingErrors, ...result.reconcilableDrift]).toEqual(
+        expect.arrayContaining([expect.stringContaining(message)]),
+      );
     },
   );
 

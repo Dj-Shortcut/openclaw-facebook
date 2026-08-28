@@ -43,6 +43,12 @@ import {
   deliverBillingNotification,
 } from "./billingNotificationDelivery";
 import {
+  cancelCustomerlessCreditPayment,
+  CreditPaymentRecoveryError,
+  isCustomerlessCreditPaymentPayload,
+  reconcileCustomerlessCreditPayment,
+} from "./creditPaymentRecovery";
+import {
   claimNextBillingTenant,
   assertBillingTenantLeaseOwned,
   releaseBillingTenantLease,
@@ -1513,6 +1519,23 @@ export async function cancelContainedMolliePayment(
   job: ClaimedBillingOutboxItem,
   clientOverride?: MollieClient
 ): Promise<void> {
+  if (isCustomerlessCreditPaymentPayload(job.payload)) {
+    try {
+      const payload = job.payload as Record<string, unknown>;
+      if (payload.targetPaymentId === null) {
+        await reconcileCustomerlessCreditPayment(job, clientOverride);
+      } else {
+        await cancelCustomerlessCreditPayment(job, clientOverride);
+      }
+      return;
+    } catch (error) {
+      if (error instanceof CreditPaymentRecoveryError) {
+        if (error.retryable) throw new RetryableOutboxError(error.code);
+        throw new PermanentOutboxError(error.code);
+      }
+      throw error;
+    }
+  }
   const record =
     job.payload &&
     typeof job.payload === "object" &&

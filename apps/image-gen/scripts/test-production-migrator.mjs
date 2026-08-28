@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import mysql from "mysql2/promise";
 import { runProductionLegacyBridge } from "./bridge-production-0007-to-0014.mjs";
+import { assertBillingTriggerRuntimePreflight } from "./billing-trigger-runtime-preflight.mjs";
 import {
   cleanupMigrationConnection,
   combineMigrationErrors,
@@ -14,6 +15,7 @@ import {
   productionMigrationOptionsForMode,
   productionSchemaPhases,
   runProductionMigrations as runProductionMigrationStage,
+  transitionInspectionPhase,
 } from "./migrate-production.mjs";
 import {
   productionMigrationTags,
@@ -34,6 +36,8 @@ import {
   canonicalRoutineTuple,
   canonicalTriggerTuple,
   creditWalletRoutineNames,
+  creditWalletTableNames,
+  productionRuntimeWritableTableNames,
   productionSchemaSqlMode,
   sha256,
 } from "./production-schema-contract.mjs";
@@ -488,6 +492,13 @@ try {
     migrationPlan,
     migration0017Statements,
   });
+  const migration0018Statements = await readMigrationStatements(
+    migrationPlan.creditCheckout0018
+  );
+  await testEvery0018StatementBoundary({
+    migrationPlan,
+    migration0018Statements,
+  });
   const freshCredit = await runProductionMigrationStage({
     databaseUrl: databaseUrl(creditFreshDatabase),
     target: "credit-wallet",
@@ -496,9 +507,9 @@ try {
     privilegeProfile: "credit-bootstrap",
   });
   assert(
-    freshCredit.appliedCount === migrationPlan.through0017.length &&
-      freshCredit.schemaPhase === "0017_credit_wallet_expand",
-    "fresh credit-wallet bootstrap reaches exact 0017"
+    freshCredit.appliedCount === migrationPlan.through0018.length &&
+      freshCredit.schemaPhase === "0018_credit_checkout_reservation",
+    "fresh credit-wallet bootstrap reaches exact 0018"
   );
   await assertExactCreditWalletObjects(creditFreshDatabase);
   await testCreditWalletLeastPrivilegeProfiles(migrationPlan);
@@ -509,9 +520,9 @@ try {
     privilegeProfile: "credit-bootstrap",
   });
   assert(
-    creditNoop.appliedCount === migrationPlan.through0017.length &&
-      creditNoop.schemaPhase === "0017_credit_wallet_expand",
-    "complete 0017 is an exact no-op"
+    creditNoop.appliedCount === migrationPlan.through0018.length &&
+      creditNoop.schemaPhase === "0018_credit_checkout_reservation",
+    "complete 0018 is an exact no-op"
   );
 
   await withDatabase(databases[2], async connection => {
@@ -751,11 +762,12 @@ try {
     "0014 schema fingerprint mismatch"
   );
   await resetLegacyMessengerState(databases[8]);
-  await withDatabase(databases[8], connection =>
-    connection.query(
+  await withDatabase(databases[8], async connection => {
+    await connection.query("SET SESSION sql_require_primary_key=OFF");
+    await connection.query(
       "ALTER TABLE `messengerState` ADD UNIQUE INDEX `temporary_id_unique` (`id`), DROP PRIMARY KEY"
-    )
-  );
+    );
+  });
   await expectFailure(
     runProductionMigrations({ databaseUrl: databaseUrl(databases[8]) }),
     "messengerState malformed primary key",
@@ -784,7 +796,7 @@ try {
   });
 
   process.stdout.write(
-    "Production migrator passed: singleton, exact 0000-0017 plan, fresh and 0016-to-0017 apply, every 0016/0017 boundary resume, routine/trigger inventory, no-op, and drift refusal.\n"
+    "Production migrator passed: singleton, exact 0000-0018 plan, fresh and 0017-to-0018 apply, every 0016/0017/0018 boundary resume, routine/trigger inventory, no-op, and drift refusal.\n"
   );
 } finally {
   await admin.query(`DROP USER IF EXISTS \`${creditMigrationUser}\`@'%'`);
@@ -827,8 +839,8 @@ async function testEvery0017StatementBoundary({
   migration0017Statements,
 }) {
   assert(
-    migration0017Statements.length === 49,
-    "0017 exposes the exact 49-statement migration contract"
+    migration0017Statements.length === 51,
+    "0017 exposes the exact 51-statement migration contract"
   );
   for (
     let boundary = 0;
@@ -853,9 +865,44 @@ async function testEvery0017StatementBoundary({
       privilegeProfile: "credit-bootstrap",
     });
     assert(
-      resumed.appliedCount === migrationPlan.through0017.length &&
-        resumed.schemaPhase === "0017_credit_wallet_expand",
+      resumed.appliedCount === migrationPlan.through0018.length &&
+        resumed.schemaPhase === "0018_credit_checkout_reservation",
       `0017 resumes after statement boundary ${boundary}`
+    );
+  }
+  await assertExactCreditWalletObjects(creditBoundaryDatabase);
+}
+
+async function testEvery0018StatementBoundary({
+  migrationPlan,
+  migration0018Statements,
+}) {
+  assert(
+    migration0018Statements.length === 2,
+    "0018 exposes the exact two-statement migration contract"
+  );
+  for (let boundary = 0; boundary <= 2; boundary += 1) {
+    await admin.query(`DROP DATABASE IF EXISTS \`${creditBoundaryDatabase}\``);
+    await admin.query(
+      `CREATE DATABASE \`${creditBoundaryDatabase}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci`
+    );
+    await withDatabase(creditBoundaryDatabase, async connection => {
+      await applyMigrationPrefix(connection, migrationPlan.through0017);
+      await applyStatements(
+        connection,
+        migration0018Statements.slice(0, boundary)
+      );
+    });
+    const resumed = await runProductionMigrationStage({
+      databaseUrl: databaseUrl(creditBoundaryDatabase),
+      target: "credit-wallet",
+      verifyOnly: false,
+      privilegeProfile: "credit-bootstrap",
+    });
+    assert(
+      resumed.appliedCount === migrationPlan.through0018.length &&
+        resumed.schemaPhase === "0018_credit_checkout_reservation",
+      `0018 resumes after statement boundary ${boundary}`
     );
   }
   await assertExactCreditWalletObjects(creditBoundaryDatabase);
@@ -877,12 +924,20 @@ async function assertExactCreditWalletObjects(database) {
       "0017 creates exactly three credit tables"
     );
     assert(
-      Number(routines.count) === 12,
-      "0017 creates exactly twelve credit routines"
+      Number(routines.count) === creditWalletRoutineNames.length,
+      "0018 retains the exact reviewed credit routine count"
     );
     assert(
       Number(triggers.count) === 14,
       "0017 creates exactly fourteen credit triggers"
+    );
+    const [routineRows] = await connection.query(
+      "SELECT ROUTINE_NAME AS name FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA=DATABASE() AND ROUTINE_NAME LIKE 'credit\\_%' ORDER BY ROUTINE_NAME"
+    );
+    assert(
+      JSON.stringify(routineRows.map(row => row.name).sort()) ===
+        JSON.stringify([...creditWalletRoutineNames].sort()),
+      "0018 exposes only the exact reviewed credit routine inventory"
     );
   });
 }
@@ -892,7 +947,15 @@ async function testCreditWalletLeastPrivilegeProfiles(migrationPlan) {
     applyMigrationPrefix(connection, migrationPlan.through0016)
   );
   await admin.query(`CREATE USER \`${creditMigrationUser}\`@'%'`);
-  await admin.query(`GRANT SUPER ON *.* TO \`${creditMigrationUser}\`@'%'`);
+  const [[triggerRuntime]] = await admin.query(
+    "SELECT @@GLOBAL.log_bin AS logBin, @@GLOBAL.log_bin_trust_function_creators AS trustFunctionCreators"
+  );
+  if (
+    Number(triggerRuntime.logBin) === 1 &&
+    Number(triggerRuntime.trustFunctionCreators) === 0
+  ) {
+    await admin.query(`GRANT SUPER ON *.* TO \`${creditMigrationUser}\`@'%'`);
+  }
   const migrationPrivileges =
     "CREATE, CREATE TEMPORARY TABLES, ALTER, INDEX, REFERENCES, SELECT, INSERT, UPDATE, TRIGGER";
   await admin.query(
@@ -933,14 +996,19 @@ async function testCreditWalletLeastPrivilegeProfiles(migrationPlan) {
     privilegeProfile: "credit-expand",
   });
   assert(
-    applied.appliedCount === migrationPlan.through0017.length,
-    "least-privilege credit migration applies 0017"
+    applied.appliedCount === migrationPlan.through0018.length,
+    "least-privilege credit migration applies 0018"
   );
 
   await admin.query(`CREATE USER \`${creditRuntimeUser}\`@'%'`);
   await admin.query(
     `GRANT SELECT ON \`${creditPrivilegeDatabase}\`.* TO \`${creditRuntimeUser}\`@'%'`
   );
+  for (const tableName of productionRuntimeWritableTableNames) {
+    await admin.query(
+      `GRANT INSERT, UPDATE, DELETE ON \`${creditPrivilegeDatabase}\`.\`${tableName}\` TO \`${creditRuntimeUser}\`@'%'`
+    );
+  }
   for (const routine of creditWalletRoutineNames) {
     await admin.query(
       `GRANT EXECUTE ON PROCEDURE \`${creditPrivilegeDatabase}\`.\`${routine}\` TO \`${creditRuntimeUser}\`@'%'`
@@ -953,35 +1021,80 @@ async function testCreditWalletLeastPrivilegeProfiles(migrationPlan) {
     privilegeProfile: "credit-runtime",
   });
   assert(
-    verified.appliedCount === migrationPlan.through0017.length,
-    "least-privilege runtime verifies exact 0017 schema"
+    verified.appliedCount === migrationPlan.through0018.length,
+    "least-privilege runtime verifies exact 0018 schema"
   );
   const runtimeConnection = await mysql.createConnection(
     databaseUrlForUser(creditPrivilegeDatabase, creditRuntimeUser)
   );
   try {
-    for (const [operation, statement] of [
+    await assertBillingTriggerRuntimePreflight(runtimeConnection, "test");
+
+    const procedureScope = await withDatabaseResult(
+      creditPrivilegeDatabase,
+      async connection => {
+        const suffix = sha256(`combined-runtime-${Date.now()}`);
+        const [workspace] = await connection.query(
+          "INSERT INTO `workspaces` (`name`,`slug`) VALUES ('Combined runtime procedure preflight',?)",
+          [`combined-runtime-${suffix.slice(0, 24)}`]
+        );
+        await connection.query(
+          "INSERT INTO `billing_execution_controls` (`workspace_id`,`mode`,`commercial_enabled`,`authorization_epoch`) VALUES (?,'test',true,2)",
+          [workspace.insertId]
+        );
+        const [channel] = await connection.query(
+          "INSERT INTO `channelConnections` (`workspaceId`,`channel`,`status`,`externalId`,`bindingEpoch`) VALUES (?,'facebook_messenger','connected',?,1)",
+          [workspace.insertId, `page-${suffix.slice(0, 32)}`]
+        );
+        const userKey = "a".repeat(64);
+        await connection.query(
+          "INSERT INTO `messenger_privacy_subjects` (`workspace_id`,`channel_connection_id`,`user_key`,`privacy_epoch`,`status`) VALUES (?,?,?,1,'active')",
+          [workspace.insertId, channel.insertId, userKey]
+        );
+        return {
+          channelConnectionId: channel.insertId,
+          suffix,
+          userKey,
+          workspaceId: workspace.insertId,
+        };
+      }
+    );
+    const intentId = "10000000-0000-4000-8000-000000000001";
+    const walletId = "10000000-0000-4000-8000-000000000002";
+    const financialSubjectRef = "b".repeat(64);
+    const [procedureRows] = await runtimeConnection.query(
+      "CALL `credit_reserve_checkout_intent`(?, ?, ?, 'test', ?, 1, 1, ?, ?, 2, 'premium_images_8_medium_v1', '4.99', 8, 'Leaderbot - 8 premium beeldcredits', ?, ?, ?, ?, TIMESTAMPADD(MINUTE,10,CURRENT_TIMESTAMP))",
       [
-        "INSERT",
-        "INSERT INTO `credit_wallets` SELECT * FROM `credit_wallets` WHERE 1=0",
-      ],
-      [
-        "UPDATE",
-        "UPDATE `credit_wallets` SET `updated_at`=`updated_at` WHERE 1=0",
-      ],
-      ["DELETE", "DELETE FROM `credit_wallets` WHERE 1=0"],
-    ]) {
-      await expectFailure(
-        runtimeConnection.query(statement),
-        `credit runtime direct ${operation}`,
-        `${operation} command denied`
-      );
-    }
+        intentId,
+        walletId,
+        procedureScope.workspaceId,
+        procedureScope.channelConnectionId,
+        procedureScope.userKey,
+        financialSubjectRef,
+        "c".repeat(64),
+        `credit-payment:${intentId}`,
+        `credit-checkout:v1:${"d".repeat(64)}`,
+        "e".repeat(64),
+      ]
+    );
+    assert(
+      procedureRows[0]?.[0]?.result === "applied",
+      "combined runtime executes checkout for the production legacy user-key shape"
+    );
+    const [[procedureEffect]] = await runtimeConnection.query(
+      "SELECT (SELECT COUNT(*) FROM `credit_wallets` WHERE `wallet_id`=?) AS walletCount,(SELECT COUNT(*) FROM `billing_intents` WHERE `intent_id`=? AND `credit_wallet_id`=?) AS intentCount",
+      [walletId, intentId, walletId]
+    );
+    assert(
+      Number(procedureEffect.walletCount) === 1 &&
+        Number(procedureEffect.intentCount) === 1,
+      "combined runtime procedure result is durably bound"
+    );
   } finally {
     await runtimeConnection.end();
   }
   await admin.query(
-    `REVOKE EXECUTE ON PROCEDURE \`${creditPrivilegeDatabase}\`.\`credit_create_wallet\` FROM \`${creditRuntimeUser}\`@'%'`
+    `REVOKE EXECUTE ON PROCEDURE \`${creditPrivilegeDatabase}\`.\`credit_reserve_checkout_intent\` FROM \`${creditRuntimeUser}\`@'%'`
   );
   await expectFailure(
     runProductionMigrationStage({
@@ -994,7 +1107,7 @@ async function testCreditWalletLeastPrivilegeProfiles(migrationPlan) {
       privilegeProfile: "credit-runtime",
     }),
     "credit runtime partial routine revoke",
-    "missing credit_create_wallet"
+    "missing routines credit_reserve_checkout_intent"
   );
 }
 
@@ -1064,11 +1177,12 @@ async function assertNo0015Objects(connection, label) {
 }
 
 async function testCompletedSchemaRefusals(database, migration0015Statements) {
-  await withDatabase(database, connection =>
-    connection.query(
+  await withDatabase(database, async connection => {
+    await connection.query("SET SESSION sql_require_primary_key=OFF");
+    await connection.query(
       "ALTER TABLE `messengerState` ADD UNIQUE INDEX `temporary_id_unique` (`id`), DROP PRIMARY KEY"
-    )
-  );
+    );
+  });
   await expectRunnerRefusal(
     database,
     "complete schema malformed primary key",
@@ -1130,7 +1244,7 @@ async function testCompletedSchemaRefusals(database, migration0015Statements) {
 
   await withDatabase(database, async connection => {
     await connection.query(
-      "CREATE TABLE `unexpected_schema_object` (`id` int)"
+      "CREATE TABLE `unexpected_schema_object` (`id` int PRIMARY KEY)"
     );
     await connection.query(
       "CREATE PROCEDURE `unexpected_schema_routine`() SELECT 1"
@@ -1430,8 +1544,27 @@ async function testCleanupContracts() {
 
 function testStagedRolloutContracts() {
   assert(
+    transitionInspectionPhase(
+      { kind: "resume-0018", nextStatement: 2 },
+      { inspectCreditWalletTransition: true }
+    ) === "0018_partial_2",
+    "credit checkout partial recovery remains inspectable"
+  );
+  assert(
+    transitionInspectionPhase(
+      { kind: "resume-0018", nextStatement: 2 },
+      { inspectCreditWalletTransition: false }
+    ) === null,
+    "credit checkout partial recovery is hidden outside its explicit inspection mode"
+  );
+  assert(
     JSON.stringify(productionSchemaPhases) ===
-      JSON.stringify(["0015_base", "0016_expand", "0017_credit_wallet_expand"]),
+      JSON.stringify([
+        "0015_base",
+        "0016_expand",
+        "0017_credit_wallet_expand",
+        "0018_credit_checkout_reservation",
+      ]),
     "schema phase names are stable"
   );
   const exactPlanRows = productionMigrationTags.map((tag, idx) => ({
@@ -1442,12 +1575,13 @@ function testStagedRolloutContracts() {
   assert(
     exactPlan.expand0016.tag === "0016_static_epoch_scope_fks" &&
       exactPlan.creditWallet0017.tag === "0017_credit_wallet_expand" &&
-      exactPlan.through0017.length === productionMigrationTags.length,
-    "exact named production migration plan terminates at 0017"
+      exactPlan.creditCheckout0018.tag === "0018_credit_checkout_reservation" &&
+      exactPlan.through0018.length === productionMigrationTags.length,
+    "exact named production migration plan terminates at 0018"
   );
   for (const [label, tail] of [
-    ["unreviewed future tail", "0018_unreviewed_future_tail"],
-    ["later future tail", "0019_unreviewed_future_tail"],
+    ["unreviewed future tail", "0019_unreviewed_future_tail"],
+    ["later future tail", "0020_unreviewed_future_tail"],
   ]) {
     const planWithFutureTail = resolveProductionMigrationPlan([
       ...exactPlanRows,
@@ -1456,8 +1590,10 @@ function testStagedRolloutContracts() {
     assert(
       planWithFutureTail.all.length === productionMigrationTags.length &&
         planWithFutureTail.through0016.length ===
-          productionMigrationTags.length - 1 &&
+          productionMigrationTags.length - 2 &&
         planWithFutureTail.through0017.length ===
+          productionMigrationTags.length - 1 &&
+        planWithFutureTail.through0018.length ===
           productionMigrationTags.length &&
         !planWithFutureTail.all.some(migration => migration.tag === tail),
       `${label} cannot alter the selected or bootstrapped migration count`
@@ -1476,10 +1612,10 @@ function testStagedRolloutContracts() {
       ],
     ],
     [
-      "different migration interleaved at 0017",
+      "different migration interleaved at 0018",
       exactPlanRows.map((row, index) =>
         index === exactPlanRows.length - 1
-          ? { idx: index, tag: "0017_handoff_privacy_scope" }
+          ? { idx: index, tag: "0018_handoff_privacy_scope" }
           : row
       ),
     ],
@@ -1542,7 +1678,7 @@ function testStagedRolloutContracts() {
         allowEmptyBootstrap: true,
         privilegeProfile: "credit-bootstrap",
       }),
-    "credit wallet empty bootstrap is bounded to the exact 0017 plan"
+    "credit wallet empty bootstrap is bounded to the exact 0018 plan"
   );
   assert(
     JSON.stringify(
@@ -1572,10 +1708,10 @@ function testStagedRolloutContracts() {
     ) ===
       JSON.stringify({
         verifyOnly: true,
-        target: "expand",
-        privilegeProfile: "runtime",
+        target: "credit-wallet",
+        privilegeProfile: "credit-runtime",
       }),
-    "runtime artifact refuses the base schema"
+    "runtime artifact requires the exact final 0018 credit schema"
   );
   assert(
     JSON.stringify(
@@ -1849,26 +1985,99 @@ function testSchemaDigestContracts() {
   const creditRuntimeGrants = [
     "GRANT USAGE ON *.* TO `credit_runtime`@`%`",
     "GRANT SELECT ON `leaderbot`.* TO `credit_runtime`@`%`",
+    ...productionRuntimeWritableTableNames.map(
+      name =>
+        `GRANT INSERT, UPDATE, DELETE ON \`leaderbot\`.\`${name}\` TO \`credit_runtime\`@\`%\``
+    ),
     ...creditWalletRoutineNames.map(
       name =>
         `GRANT EXECUTE ON PROCEDURE \`leaderbot\`.\`${name}\` TO \`credit_runtime\`@\`%\``
     ),
   ];
+  assert(
+    productionRuntimeWritableTableNames.length === 41 &&
+      new Set(productionRuntimeWritableTableNames).size === 41 &&
+      creditWalletTableNames.length === 3 &&
+      creditWalletTableNames.every(
+        name => !productionRuntimeWritableTableNames.includes(name)
+      ),
+    "combined runtime grant inventory is exact and excludes credit tables"
+  );
   assertCreditWalletRuntimeGrantScope(creditRuntimeGrants, "leaderbot");
-  for (const privilege of ["INSERT", "UPDATE", "DELETE"]) {
+  expectSynchronousFailure(
+    () =>
+      assertCreditWalletRuntimeGrantScope(
+        creditRuntimeGrants.filter(
+          grant => !grant.includes("`leaderbot`.`billing_intents`")
+        ),
+        "leaderbot"
+      ),
+    "credit runtime missing one writable table",
+    "missing table privileges billing_intents:INSERT+UPDATE+DELETE"
+  );
+  for (const [label, grant] of [
+    ["schema DML", "GRANT INSERT ON `leaderbot`.* TO `credit_runtime`@`%`"],
+    ["global DML", "GRANT UPDATE ON *.* TO `credit_runtime`@`%`"],
+    [
+      "credit table DML",
+      "GRANT DELETE ON `leaderbot`.`credit_wallets` TO `credit_runtime`@`%`",
+    ],
+    [
+      "extra table DML",
+      "GRANT INSERT, UPDATE, DELETE ON `leaderbot`.`dailyQuota` TO `credit_runtime`@`%`",
+    ],
+    [
+      "wrong schema",
+      "GRANT INSERT, UPDATE, DELETE ON `otherdb`.`billing_intents` TO `credit_runtime`@`%`",
+    ],
+    [
+      "ALL PRIVILEGES",
+      "GRANT ALL PRIVILEGES ON `leaderbot`.`billing_intents` TO `credit_runtime`@`%`",
+    ],
+    [
+      "grant option",
+      "GRANT INSERT, UPDATE, DELETE ON `leaderbot`.`billing_intents` TO `credit_runtime`@`%` WITH GRANT OPTION",
+    ],
+    [
+      "extra routine",
+      "GRANT EXECUTE ON PROCEDURE `leaderbot`.`credit_unreviewed` TO `credit_runtime`@`%`",
+    ],
+    ["role", "GRANT `billing_role`@`%` TO `credit_runtime`@`%`"],
+  ]) {
     expectSynchronousFailure(
       () =>
         assertCreditWalletRuntimeGrantScope(
-          [
-            ...creditRuntimeGrants,
-            `GRANT ${privilege} ON \`leaderbot\`.* TO \`credit_runtime\`@\`%\``,
-          ],
+          [...creditRuntimeGrants, grant],
           "leaderbot"
         ),
-      `credit runtime rejects direct ${privilege}`,
-      `excessive ${privilege}`
+      `credit runtime rejects ${label}`,
+      "credit runtime privilege boundary mismatch"
     );
   }
+  expectSynchronousFailure(
+    () =>
+      assertCreditWalletRuntimeGrantScope(
+        [
+          ...creditRuntimeGrants,
+          "REVOKE UPDATE ON `leaderbot`.`billing_intents` FROM `credit_runtime`@`%`",
+        ],
+        "leaderbot"
+      ),
+    "credit runtime table partial revoke wins",
+    "missing table privileges billing_intents:UPDATE"
+  );
+  expectSynchronousFailure(
+    () =>
+      assertCreditWalletRuntimeGrantScope(
+        [
+          ...creditRuntimeGrants,
+          "REVOKE SELECT ON `leaderbot`.* FROM `credit_runtime`@`%`",
+        ],
+        "leaderbot"
+      ),
+    "credit runtime schema partial revoke wins",
+    "schema SELECT mismatch"
+  );
   expectSynchronousFailure(
     () =>
       assertCreditWalletRuntimeGrantScope(
@@ -1876,19 +2085,19 @@ function testSchemaDigestContracts() {
         "leaderbot"
       ),
     "credit runtime missing exact routine",
-    "credit runtime procedure privilege boundary mismatch"
+    "credit runtime privilege boundary mismatch"
   );
   expectSynchronousFailure(
     () =>
       assertCreditWalletRuntimeGrantScope(
         [
           ...creditRuntimeGrants,
-          "REVOKE EXECUTE ON PROCEDURE `leaderbot`.`credit_create_wallet` FROM `credit_runtime`@`%`",
+          "REVOKE EXECUTE ON PROCEDURE `leaderbot`.`credit_reserve_checkout_intent` FROM `credit_runtime`@`%`",
         ],
         "leaderbot"
       ),
     "credit runtime partial routine revoke",
-    "missing credit_create_wallet"
+    "missing routines credit_reserve_checkout_intent"
   );
   expectSynchronousFailure(
     () =>
@@ -1900,7 +2109,7 @@ function testSchemaDigestContracts() {
         "leaderbot"
       ),
     "credit runtime rejects global execute",
-    "credit runtime principal privilege boundary mismatch"
+    "credit runtime privilege boundary mismatch"
   );
   assertCreditWalletBinlogFormat({ binlogFormat: "ROW" });
   expectSynchronousFailure(
@@ -2001,8 +2210,8 @@ async function testContractManifestBinding() {
     ...migrations,
     {
       idx: migrations.length,
-      tag: "0018_future_append_only",
-      when: Number(migrationPlan.creditWallet0017.when) + 1,
+      tag: "0019_future_append_only",
+      when: Number(migrationPlan.creditCheckout0018.when) + 1,
       sha256: "a".repeat(64),
     },
   ]);

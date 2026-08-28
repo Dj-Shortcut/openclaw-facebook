@@ -9,6 +9,7 @@ import { ThemeProvider } from "./contexts/ThemeContext";
 const Home = lazy(() => import("./pages/Home"));
 const NotFound = lazy(() => import("./pages/NotFound"));
 const PortalHandoff = lazy(() => import("./pages/PortalHandoff"));
+const CreditCheckout = lazy(() => import("./pages/CreditCheckout"));
 const DataDeletionPage = lazy(() =>
   import("./pages/Legal").then(module => ({ default: module.DataDeletionPage }))
 );
@@ -19,7 +20,9 @@ const TermsPage = lazy(() =>
   import("./pages/Legal").then(module => ({ default: module.TermsPage }))
 );
 const BillingPolicyPage = lazy(() =>
-  import("./pages/Legal").then(module => ({ default: module.BillingPolicyPage }))
+  import("./pages/Legal").then(module => ({
+    default: module.BillingPolicyPage,
+  }))
 );
 
 function RouteFallback() {
@@ -36,6 +39,11 @@ function Router() {
         <Route path={"/data-deletion"} component={DataDeletionPage} />
         <Route path={"/handoff/:token"} component={PortalHandoff} />
         <Route path={"/handoff"} component={PortalHandoff} />
+        <Route path={"/credits/checkout/return"} component={CreditCheckout} />
+        <Route
+          path={"/credits/checkout/:intentId"}
+          component={CreditCheckout}
+        />
         <Route path={"/portal"} component={Home} />
         <Route path={"/:?"} component={Home} />
         <Route path={"/404"} component={NotFound} />

@@ -17,12 +17,14 @@ import {
   commitCreditReservation,
   consumeCreditCheckoutCapability,
   createCreditReservationHold,
-  createCreditWallet,
   CreditWalletStoreError,
   eraseCreditWallet,
   expireCreditReservation,
   grantCreditPurchase,
+  markCreditReservationProviderAccepted,
+  markCreditReservationTransportStarted,
   releaseCreditReservation,
+  reserveCreditCheckoutIntent,
   scrubTerminalCreditReservation,
 } from "./creditWalletStore";
 
@@ -31,13 +33,16 @@ const INTENT_ID = "22222222-2222-2222-2222-222222222222";
 const RESERVATION_ID = "33333333-3333-3333-3333-333333333333";
 const ENTRY_ID = "44444444-4444-4444-4444-444444444444";
 const ROOT_ENTRY_ID = "55555555-5555-5555-5555-555555555555";
-const USER_KEY = `u2.k1.${"a".repeat(64)}`;
+const USER_KEY = "a".repeat(64);
 const FINANCIAL_REF = "b".repeat(64);
 const CAPABILITY_HASH = "c".repeat(64);
 const NONCE_HASH = "d".repeat(64);
 const REQUEST_HASH = "e".repeat(64);
 const OWNER_HASH = "f".repeat(64);
 const EVIDENCE_HASH = "1".repeat(64);
+const METADATA_HASH = "2".repeat(64);
+const CHECKOUT_SCOPE_KEY = `credit-checkout:v1:${"3".repeat(64)}`;
+const CAPABILITY_EXPIRES_AT = new Date("2026-08-28T12:10:00.000Z");
 
 const scope = {
   workspaceId: 11,
@@ -49,6 +54,7 @@ const scope = {
   walletId: WALLET_ID,
   financialSubjectRef: FINANCIAL_REF,
 };
+const erasureScope = { ...scope, erasurePrivacyEpoch: 15 };
 
 const financialScope = {
   workspaceId: scope.workspaceId,
@@ -76,6 +82,21 @@ const adjustmentInput = {
   evidenceHash: EVIDENCE_HASH,
 };
 
+const checkoutReservationInput = {
+  ...scope,
+  intentId: INTENT_ID,
+  authorizationEpoch: 15,
+  offerSnapshotCode: "premium_images_8_medium_v1" as const,
+  expectedAmount: "4.99" as const,
+  creditCount: 8 as const,
+  description: "Leaderbot - 8 premium beeldcredits" as const,
+  metadataHash: METADATA_HASH,
+  idempotencyKey: `credit-payment:${INTENT_ID}`,
+  checkoutScopeKey: CHECKOUT_SCOPE_KEY,
+  capabilityHash: CAPABILITY_HASH,
+  capabilityExpiresAt: CAPABILITY_EXPIRES_AT,
+};
+
 function procedureResponse(
   result: string,
   identifierColumn: string,
@@ -84,6 +105,16 @@ function procedureResponse(
   return [
     [
       [{ result, [identifierColumn]: identifierValue }],
+      { affectedRows: 0, fieldCount: 0 },
+    ],
+    [],
+  ];
+}
+
+function checkoutReservationResponse(result: string) {
+  return [
+    [
+      [{ result, intent_id: INTENT_ID, wallet_id: WALLET_ID }],
       { affectedRows: 0, fieldCount: 0 },
     ],
     [],
@@ -103,13 +134,33 @@ describe("creditWalletStore procedure boundary", () => {
     getDatabaseOrThrowMock.mockResolvedValue({ execute: executeMock });
   });
 
-  it("calls all twelve frozen procedures with the exact parameter order", async () => {
+  it("calls all fourteen frozen procedures with the exact parameter order", async () => {
     const cases = [
       {
-        procedure: "credit_create_wallet",
-        params: [WALLET_ID, 11, "test", 12, 13, 14, USER_KEY, FINANCIAL_REF],
-        response: procedureResponse("applied", "wallet_id", WALLET_ID),
-        invoke: () => createCreditWallet(scope),
+        procedure: "credit_reserve_checkout_intent",
+        params: [
+          INTENT_ID,
+          WALLET_ID,
+          11,
+          "test",
+          12,
+          13,
+          14,
+          USER_KEY,
+          FINANCIAL_REF,
+          15,
+          "premium_images_8_medium_v1",
+          "4.99",
+          8,
+          "Leaderbot - 8 premium beeldcredits",
+          METADATA_HASH,
+          `credit-payment:${INTENT_ID}`,
+          CHECKOUT_SCOPE_KEY,
+          CAPABILITY_HASH,
+          CAPABILITY_EXPIRES_AT,
+        ],
+        response: checkoutReservationResponse("applied"),
+        invoke: () => reserveCreditCheckoutIntent(checkoutReservationInput),
       },
       {
         procedure: "credit_consume_checkout_capability",
@@ -196,6 +247,41 @@ describe("creditWalletStore procedure boundary", () => {
           }),
       },
       ...[
+        [
+          "credit_mark_reservation_transport_started",
+          markCreditReservationTransportStarted,
+        ],
+        [
+          "credit_mark_reservation_provider_accepted",
+          markCreditReservationProviderAccepted,
+        ],
+      ].map(([procedure, invoke]) => ({
+        procedure: procedure as string,
+        params: [
+          11,
+          "test",
+          12,
+          13,
+          14,
+          USER_KEY,
+          WALLET_ID,
+          FINANCIAL_REF,
+          RESERVATION_ID,
+          OWNER_HASH,
+        ],
+        response: procedureResponse(
+          "applied",
+          "reservation_id",
+          RESERVATION_ID
+        ),
+        invoke: () =>
+          (invoke as typeof markCreditReservationTransportStarted)({
+            ...scope,
+            reservationId: RESERVATION_ID,
+            ownerTokenHash: OWNER_HASH,
+          }),
+      })),
+      ...[
         ["credit_commit_reservation", commitCreditReservation],
         ["credit_release_reservation", releaseCreditReservation],
         ["credit_expire_reservation", expireCreditReservation],
@@ -247,9 +333,19 @@ describe("creditWalletStore procedure boundary", () => {
       },
       {
         procedure: "credit_erase_wallet",
-        params: [11, "test", 12, 13, 14, USER_KEY, WALLET_ID, FINANCIAL_REF],
+        params: [
+          11,
+          "test",
+          12,
+          13,
+          14,
+          15,
+          USER_KEY,
+          WALLET_ID,
+          FINANCIAL_REF,
+        ],
         response: procedureResponse("erased", "wallet_id", WALLET_ID),
-        invoke: () => eraseCreditWallet(scope),
+        invoke: () => eraseCreditWallet(erasureScope),
       },
       ...[
         ["credit_apply_refund_debit", applyCreditRefundDebit],
@@ -302,7 +398,7 @@ describe("creditWalletStore procedure boundary", () => {
       await testCase.invoke();
     }
 
-    expect(executeMock).toHaveBeenCalledTimes(12);
+    expect(executeMock).toHaveBeenCalledTimes(14);
     cases.forEach((testCase, index) => {
       const call = compiledCall(index);
       expect(call.sql).toBe(
@@ -323,7 +419,7 @@ describe("creditWalletStore procedure boundary", () => {
         procedureResponse("manual_review", "root_grant_entry_id", ROOT_ENTRY_ID)
       )
       .mockResolvedValueOnce(
-        procedureResponse("erased_pending_provider", "wallet_id", WALLET_ID)
+        procedureResponse("pending_provider", "wallet_id", WALLET_ID)
       )
       .mockResolvedValueOnce(
         procedureResponse("already_applied", "entry_id", ENTRY_ID)
@@ -337,8 +433,8 @@ describe("creditWalletStore procedure boundary", () => {
       result: "manual_review",
       rootGrantEntryId: ROOT_ENTRY_ID,
     });
-    await expect(eraseCreditWallet(scope)).resolves.toEqual({
-      result: "erased_pending_provider",
+    await expect(eraseCreditWallet(erasureScope)).resolves.toEqual({
+      result: "pending_provider",
       walletId: WALLET_ID,
     });
     await expect(
@@ -348,21 +444,100 @@ describe("creditWalletStore procedure boundary", () => {
 
   it("rejects invalid input before obtaining a database connection", async () => {
     const invalidCalls = [
-      () => createCreditWallet({ ...scope, workspaceId: 0 }),
-      () => createCreditWallet({ ...scope, mode: "sandbox" as "test" }),
-      () => createCreditWallet({ ...scope, channelConnectionId: 0 }),
-      () => createCreditWallet({ ...scope, bindingEpoch: 0 }),
-      () => createCreditWallet({ ...scope, privacyEpoch: 0 }),
-      () => createCreditWallet({ ...scope, userKey: "raw-psid" }),
       () =>
-        createCreditWallet({
-          ...scope,
+        reserveCreditCheckoutIntent({
+          ...checkoutReservationInput,
+          workspaceId: 0,
+        }),
+      () =>
+        reserveCreditCheckoutIntent({
+          ...checkoutReservationInput,
+          mode: "sandbox" as "test",
+        }),
+      () =>
+        reserveCreditCheckoutIntent({
+          ...checkoutReservationInput,
+          channelConnectionId: 0,
+        }),
+      () =>
+        reserveCreditCheckoutIntent({
+          ...checkoutReservationInput,
+          bindingEpoch: 0,
+        }),
+      () =>
+        reserveCreditCheckoutIntent({
+          ...checkoutReservationInput,
+          privacyEpoch: 0,
+        }),
+      () =>
+        reserveCreditCheckoutIntent({
+          ...checkoutReservationInput,
+          userKey: "raw-psid",
+        }),
+      () =>
+        reserveCreditCheckoutIntent({
+          ...checkoutReservationInput,
           walletId: "AAAAAAAA-1111-1111-1111-111111111111",
         }),
       () =>
-        createCreditWallet({
-          ...scope,
+        reserveCreditCheckoutIntent({
+          ...checkoutReservationInput,
           financialSubjectRef: FINANCIAL_REF.toUpperCase(),
+        }),
+      () =>
+        reserveCreditCheckoutIntent({
+          ...checkoutReservationInput,
+          intentId: "invalid",
+        }),
+      () =>
+        reserveCreditCheckoutIntent({
+          ...checkoutReservationInput,
+          authorizationEpoch: 0,
+        }),
+      () =>
+        reserveCreditCheckoutIntent({
+          ...checkoutReservationInput,
+          offerSnapshotCode: "wrong" as "premium_images_8_medium_v1",
+        }),
+      () =>
+        reserveCreditCheckoutIntent({
+          ...checkoutReservationInput,
+          expectedAmount: "5.00" as "4.99",
+        }),
+      () =>
+        reserveCreditCheckoutIntent({
+          ...checkoutReservationInput,
+          creditCount: 9 as 8,
+        }),
+      () =>
+        reserveCreditCheckoutIntent({
+          ...checkoutReservationInput,
+          description: "wrong" as "Leaderbot - 8 premium beeldcredits",
+        }),
+      () =>
+        reserveCreditCheckoutIntent({
+          ...checkoutReservationInput,
+          metadataHash: "invalid",
+        }),
+      () =>
+        reserveCreditCheckoutIntent({
+          ...checkoutReservationInput,
+          idempotencyKey: "wrong",
+        }),
+      () =>
+        reserveCreditCheckoutIntent({
+          ...checkoutReservationInput,
+          checkoutScopeKey: "wrong",
+        }),
+      () =>
+        reserveCreditCheckoutIntent({
+          ...checkoutReservationInput,
+          capabilityHash: "invalid",
+        }),
+      () =>
+        reserveCreditCheckoutIntent({
+          ...checkoutReservationInput,
+          capabilityExpiresAt: new Date(Number.NaN),
         }),
       () =>
         consumeCreditCheckoutCapability({
@@ -454,8 +629,66 @@ describe("creditWalletStore procedure boundary", () => {
     ],
   ])("fails closed on a %s", async (_label, response) => {
     executeMock.mockResolvedValueOnce(response);
-    await expect(createCreditWallet(scope)).rejects.toBeInstanceOf(
-      CreditWalletStoreError
-    );
+    await expect(
+      reserveCreditCheckoutIntent(checkoutReservationInput)
+    ).rejects.toBeInstanceOf(CreditWalletStoreError);
+  });
+
+  it.each([
+    ["unknown status", checkoutReservationResponse("unexpected")],
+    [
+      "wrong intent",
+      [
+        [
+          [
+            {
+              result: "applied",
+              intent_id: RESERVATION_ID,
+              wallet_id: WALLET_ID,
+            },
+          ],
+          {},
+        ],
+        [],
+      ],
+    ],
+    [
+      "wrong wallet",
+      [
+        [
+          [
+            {
+              result: "applied",
+              intent_id: INTENT_ID,
+              wallet_id: RESERVATION_ID,
+            },
+          ],
+          {},
+        ],
+        [],
+      ],
+    ],
+    [
+      "extra column",
+      [
+        [
+          [
+            {
+              result: "applied",
+              intent_id: INTENT_ID,
+              wallet_id: WALLET_ID,
+              balance: 0,
+            },
+          ],
+          {},
+        ],
+        [],
+      ],
+    ],
+  ])("fails closed on a checkout reservation %s", async (_label, response) => {
+    executeMock.mockResolvedValueOnce(response);
+    await expect(
+      reserveCreditCheckoutIntent(checkoutReservationInput)
+    ).rejects.toBeInstanceOf(CreditWalletStoreError);
   });
 });

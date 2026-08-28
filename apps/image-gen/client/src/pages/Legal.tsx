@@ -36,22 +36,22 @@ const legalCopy: Record<LegalPageKind, LegalPageCopy> = {
       },
       {
         heading: "Payments",
-        body: "A Startpilot purchase starts only inside the signed-in customer portal. Mollie processes one €19 payment after the customer reviews and confirms checkout. The pilot does not create a subscription, automatic renewal, direct-debit mandate, top-up or overage charge.",
+        body: "A premium-credit purchase starts only from a signed checkout link opened from Messenger. Mollie processes one €4.99 payment after the customer reviews and confirms checkout. The purchase adds eight medium-quality image credits that do not expire. It does not create a subscription, automatic renewal, direct-debit mandate, automatic top-up or overage charge.",
       },
     ],
   },
   terms: {
     title: "Terms of Service",
     intro:
-      "These pilot terms apply to the Leaderbot customer portal and connected Messenger image experience. Leaderbot provides AI-generated images and guided Messenger controls together with workspace, usage and privacy controls.",
+      "These terms apply to the Leaderbot Messenger image experience. Leaderbot provides AI-generated images and guided Messenger controls together with usage and privacy controls.",
     sections: [
       {
-        heading: "Startpilot offer",
-        body: "Leaderbot Startpilot costs €19 as a single payment for 30 days. It includes one workspace, one connected Facebook Page, guided Messenger image controls and 20 Images 2.0 image generations, with a maximum of five image generations per day. An image generation counts once when its first AI-provider attempt starts; retries within that same request do not consume extra pilot generations. Purchase starts only in the signed-in portal.",
+        heading: "Premium image credits",
+        body: "Leaderbot premium credits cost €4.99 as a single payment for eight medium-quality image generations. Credits do not expire. One credit is consumed only after the image provider accepts that generation successfully; a failure before the provider call does not consume a credit. Purchase starts only from a signed checkout link opened from Messenger and requires explicit confirmation before continuing to Mollie.",
       },
       {
         heading: "No subscription or overage",
-        body: "The proposed Startpilot does not renew automatically and does not create a subscription or direct-debit mandate. Usage stops at the included limits; there are no automatic top-ups or additional usage charges. Any later offer requires a separate, explicit choice.",
+        body: "A credit pack does not renew automatically and does not create a subscription or direct-debit mandate. Usage stops when no free or paid credits remain. There are no automatic top-ups or additional usage charges. Every later purchase requires a separate, explicit choice.",
       },
       {
         heading: "AI outputs",
@@ -72,29 +72,29 @@ const legalCopy: Record<LegalPageKind, LegalPageCopy> = {
     ],
   },
   "billing-policy": {
-    title: "Startpilot Pricing and Billing Information",
+    title: "Premium Credit Pricing and Billing Information",
     intro:
-      "Leaderbot offers a bounded one-time Startpilot. A purchase starts only in the signed-in customer portal and requires an explicit checkout confirmation.",
+      "Leaderbot offers a one-time premium image-credit pack. A purchase starts only from a signed checkout link opened from Messenger and requires explicit confirmation.",
     sections: [
       {
         heading: "One-time price",
-        body: "Leaderbot Startpilot costs €19 once in EUR for 30 days. Checkout is available only inside the signed-in customer portal, where the customer reviews the exact amount before continuing to Mollie.",
+        body: "One premium credit pack costs €4.99 once in EUR. The checkout page shows the exact amount and package before the customer continues to Mollie.",
       },
       {
-        heading: "Included pilot usage",
-        body: "The proposed package covers one workspace, one Facebook Page, guided Messenger image controls and 20 Images 2.0 image generations. Image generation is additionally limited to five per day during the 30-day access period. A generation counts once when its first AI-provider attempt starts; retries within the same request do not consume another pilot generation.",
+        heading: "Included usage",
+        body: "The pack adds eight medium-quality image credits. Credits do not expire. One credit is permanently consumed only after the image provider accepts that generation successfully; a pre-provider failure does not consume a credit, and a retry of the same accepted request does not consume another credit.",
       },
       {
         heading: "No renewal, top-up or overage",
-        body: "The Startpilot is a single purchase without automatic renewal, subscription or direct-debit mandate. Usage stops at the included limits. No automatic top-up or additional usage fee is charged, and continuing later requires a separate explicit choice.",
+        body: "A credit pack is a single purchase without automatic renewal, subscription or direct-debit mandate. Usage stops when no free or paid credits remain. No automatic top-up or additional usage fee is charged, and another pack requires a separate explicit choice.",
       },
       {
-        heading: "No payment from an interest request",
-        body: "Sending an email or early-access request does not authorize a payment or create a contract. A payment can start only from an explicitly enabled checkout shown to an authenticated workspace owner or administrator.",
+        heading: "No payment from a message or link",
+        body: "Sending a Messenger message or opening a signed checkout link does not authorize a payment. A payment can start only after the customer explicitly confirms the displayed credit pack and continues to Mollie.",
       },
       {
         heading: "Before payment",
-        body: "Before any payment, Leaderbot shows the total price, 30-day access period, included usage, payment method, absence of renewal and overage, and applicable cancellation and refund terms.",
+        body: "Before any payment, Leaderbot shows the €4.99 total price, eight included medium-quality credits, that credits do not expire, the absence of renewal and overage, and applicable cancellation and refund terms.",
       },
       {
         heading: "Questions",
@@ -144,7 +144,7 @@ function LegalPage({ page }: { page: LegalPageKind }) {
         </Link>
         <section className="mt-6">
           <p className="text-xs font-bold uppercase tracking-[0.16em] text-stone-400">
-            Last updated 1 August 2026
+            Last updated 28 August 2026
           </p>
           <h1 className="mt-3 text-3xl font-semibold text-white sm:text-4xl">
             {copy.title}

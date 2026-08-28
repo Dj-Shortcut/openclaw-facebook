@@ -511,7 +511,7 @@ jobs:
           rollback_schema_maximum="$(node scripts/validate-production-deployment.mjs \
             --reviewed-schema-maximum image-gen "$rollback_image")"
           rollback_schema_phase="$(jq -er '.apps["image-gen"].databaseSchemaPhase' deploy/production/apps.json)"
-          [[ "$rollback_schema_phase" =~ ^(0015_base|0016_expand)$ ]]
+          [[ "$rollback_schema_phase" =~ ^(0015_base|0016_expand|0017_credit_wallet_expand|0018_credit_checkout_reservation)$ ]]
           node scripts/validate-production-deployment.mjs \
             --validate-reviewed-schema-phase image-gen "$rollback_image" \
             "$rollback_schema_phase"

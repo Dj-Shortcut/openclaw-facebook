@@ -225,7 +225,8 @@ describe("billing outbox containment safeguards", () => {
     }
   );
 
-  it("durably escalates a permanent payment cancellation failure", async () => {
+  it("durably escalates a permanent credit-payment cancellation without a Mollie key", async () => {
+    delete process.env.MOLLIE_API_KEY;
     const insertValues = vi.fn(() => ({
       onDuplicateKeyUpdate: vi.fn(async () => undefined),
     }));
@@ -258,6 +259,7 @@ describe("billing outbox containment safeguards", () => {
         status: "processing",
         leaseToken: "lease-1",
         attemptCount: 12,
+        payload: { creditPurpose: "premium_image_credits" },
       } as BillingOutboxItem & { leaseToken: string },
       "payment_cancellation_target_mismatch"
     );
