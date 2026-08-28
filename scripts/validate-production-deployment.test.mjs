@@ -2624,6 +2624,34 @@ describe("production deployment contract", () => {
     );
   });
 
+  it("requires the reversible billing-trigger probe in the migration bridge", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      "apps/image-gen/Dockerfile",
+      "COPY --from=build /app/dist/billing-trigger-runtime-preflight.cjs ./dist/billing-trigger-runtime-preflight.cjs",
+      "COPY --from=build /app/dist/billing-trigger-runtime-preflight.cjs ./dist/missing-billing-trigger-runtime-preflight.cjs",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "image-gen migration bridge must package and validate the deploy billing-trigger runtime probe",
+    );
+  });
+
+  it("requires the trusted bridge artifact to expose the deploy billing-trigger probe", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/build-production-artifacts.yml",
+      'docker run --rm "$ARTIFACT_IMAGE" test -s /app/dist/billing-trigger-runtime-preflight.cjs',
+      'docker run --rm "$ARTIFACT_IMAGE" true',
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must inspect the bridge billing-trigger runtime probe at the deploy extraction path",
+    );
+  });
+
   it("requires the billing trigger probe in the disposable MySQL lane", () => {
     const root = createRepositoryFixture();
     replaceFixtureText(

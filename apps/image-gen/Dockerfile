@@ -12,9 +12,11 @@ RUN pnpm install --frozen-lockfile
 COPY . .
 RUN pnpm run build:docker
 
-# This bridge keeps the exact currently proven runtime and adds only the
-# reviewed migrator bundle. Its minimum phase is supplied by the protected
-# artifact workflow from the frozen transition manifest.
+# This bridge keeps the exact currently proven application runtime and adds
+# only the reviewed migrator material plus the reversible billing-trigger
+# preflight consumed by the protected deploy workflow. Its minimum phase is
+# supplied by the protected artifact workflow from the frozen transition
+# manifest.
 FROM ${MIGRATION_BRIDGE_BASE_IMAGE} AS migration_bridge
 WORKDIR /app
 ARG SOURCE_REVISION=unreviewed-local-build
@@ -27,7 +29,10 @@ LABEL org.opencontainers.image.source="https://github.com/Dj-Shortcut/openclaw-f
       io.leaderbot.schema.minimum="${MIGRATION_BRIDGE_SCHEMA_MINIMUM}" \
       io.leaderbot.schema.maximum="0018_credit_checkout_reservation"
 COPY --from=build /app/dist/migrate-production.cjs ./dist/migrate-production.cjs
+COPY --from=build /app/dist/billing-trigger-runtime-preflight.cjs ./dist/billing-trigger-runtime-preflight.cjs
 COPY --from=build /app/drizzle ./drizzle
+RUN test -s /app/dist/billing-trigger-runtime-preflight.cjs && \
+    node --check /app/dist/billing-trigger-runtime-preflight.cjs
 RUN printf '%s\n' 'migration-bridge' > /app/.leaderbot-artifact-kind
 
 FROM ${NODE_BASE_IMAGE} AS runtime

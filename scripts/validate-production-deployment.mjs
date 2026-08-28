@@ -3792,6 +3792,14 @@ function validateTrustedArtifactWorkflow(rootDir) {
       'docker run --rm "$ARTIFACT_IMAGE" timeout -k 1s 1s true',
       "must prove the artifact runtime supplies the bounded timeout command",
     ],
+    [
+      'docker run --rm "$ARTIFACT_IMAGE" test -s /app/dist/billing-trigger-runtime-preflight.cjs',
+      "must inspect the bridge billing-trigger runtime probe at the deploy extraction path",
+    ],
+    [
+      'docker run --rm --entrypoint node "$ARTIFACT_IMAGE" --check /app/dist/billing-trigger-runtime-preflight.cjs',
+      "must syntax-check the bridge billing-trigger runtime probe at the deploy extraction path",
+    ],
   ]) {
     if (!workflow.includes(needle)) {
       fail(`${TRUSTED_ARTIFACT_WORKFLOW_PATH} ${message}`);
@@ -6968,6 +6976,30 @@ export function validateProductionRepository(rootDir = process.cwd()) {
             "image-gen Dockerfile must include the hashed migration contract and exact schema range",
           );
         }
+      }
+      const bridgeStageStart = dockerfile.indexOf(" AS migration_bridge");
+      const runtimeStageStart = dockerfile.indexOf(
+        " AS runtime",
+        bridgeStageStart + 1,
+      );
+      const bridgeStage =
+        bridgeStageStart >= 0 && runtimeStageStart > bridgeStageStart
+          ? dockerfile.slice(bridgeStageStart, runtimeStageStart)
+          : "";
+      if (
+        !bridgeStage.includes(
+          "COPY --from=build /app/dist/billing-trigger-runtime-preflight.cjs ./dist/billing-trigger-runtime-preflight.cjs",
+        ) ||
+        !bridgeStage.includes(
+          "RUN test -s /app/dist/billing-trigger-runtime-preflight.cjs",
+        ) ||
+        !bridgeStage.includes(
+          "node --check /app/dist/billing-trigger-runtime-preflight.cjs",
+        )
+      ) {
+        fail(
+          "image-gen migration bridge must package and validate the deploy billing-trigger runtime probe",
+        );
       }
       const runtimeStage = dockerfile.split(" AS runtime", 2)[1] ?? "";
       if (

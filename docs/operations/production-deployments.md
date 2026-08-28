@@ -413,8 +413,9 @@ Use this exact sequence:
 2. **Build the bridge.** After that PR is green and merged, dispatch `Build
 trusted production artifact` with `image-gen-bridge`. The workflow proves
    that the bridge keeps the exact settled application runtime, carries only
-   the reviewed 0017/0018 migration material, supports all three declared
-   phases, and attests its source plus exact base digest.
+   the reviewed 0017/0018 migration material and reversible billing-trigger
+   preflight, supports all three declared phases, and attests its source plus
+   exact base digest.
 3. **Review and deploy the bridge.** In a separate manifest PR, record the
    bridge digest and its build-source commit with state `bridge_reviewed`.
    After green CI, deploy that exact digest through `Deploy production` and
