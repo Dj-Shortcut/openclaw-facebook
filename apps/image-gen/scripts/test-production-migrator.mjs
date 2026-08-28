@@ -7,6 +7,7 @@ import { runProductionLegacyBridge } from "./bridge-production-0007-to-0014.mjs"
 import {
   cleanupMigrationConnection,
   combineMigrationErrors,
+  assert0017PreDdlStatementOrder,
   assertProductionSchemaContractManifest,
   loadAndVerifyMigrationManifest,
   migrationLockName,
@@ -21,13 +22,18 @@ import {
 import {
   normalizeShowCreate,
   normalizeSqlOutsideQuotedValues,
+  assertCreditWalletBinlogFormat,
+  assertCreditWalletMigrationGrantScope,
+  assertCreditWalletRuntimeGrantScope,
   assertExpandMigrationGrantScope,
   assertProductionInspectionGrantScope,
   assertProductionMigrationRuntime,
   assertProductionRuntimeGrantScope,
   assertProductionRuntimeValues,
   assertTriggerGrantScope,
+  canonicalRoutineTuple,
   canonicalTriggerTuple,
+  creditWalletRoutineNames,
   productionSchemaSqlMode,
   sha256,
 } from "./production-schema-contract.mjs";
@@ -80,6 +86,12 @@ const resume0016Databases = Array.from(
   (_, index) => `leaderbot_production_migrator_resume_0016_${index}`
 );
 const stagedRolloutDatabase = "leaderbot_production_migrator_staged_rollout";
+const creditBoundaryDatabase = "leaderbot_production_migrator_credit_boundary";
+const creditFreshDatabase = "leaderbot_production_migrator_credit_fresh";
+const creditPrivilegeDatabase =
+  "leaderbot_production_migrator_credit_privilege";
+const creditMigrationUser = "leaderbot_credit_migration_test";
+const creditRuntimeUser = "leaderbot_credit_runtime_test";
 const databases = [
   "leaderbot_production_migrator_concurrency",
   "leaderbot_production_migrator_upgrade",
@@ -106,6 +118,9 @@ const databases = [
   "leaderbot_production_migrator_verify_only",
   ...resume0016Databases,
   stagedRolloutDatabase,
+  creditBoundaryDatabase,
+  creditFreshDatabase,
+  creditPrivilegeDatabase,
 ];
 const admin = await mysql.createConnection({
   host: adminUrl.hostname,
@@ -115,6 +130,8 @@ const admin = await mysql.createConnection({
 });
 
 try {
+  await admin.query(`DROP USER IF EXISTS \`${creditMigrationUser}\`@'%'`);
+  await admin.query(`DROP USER IF EXISTS \`${creditRuntimeUser}\`@'%'`);
   for (const database of databases) {
     await admin.query(`DROP DATABASE IF EXISTS \`${database}\``);
     await admin.query(
@@ -261,7 +278,7 @@ try {
       target: "contract",
     }),
     "retired contract target",
-    "migration target must be compatible or expand"
+    "migration target must be compatible, expand, or credit-wallet"
   );
   const migration0016ForVerify = await readMigrationStatements(
     migrationPlan.expand0016
@@ -464,6 +481,38 @@ try {
     migrationPlan,
     migration0016Statements,
   });
+  const migration0017Statements = await readMigrationStatements(
+    migrationPlan.creditWallet0017
+  );
+  await testEvery0017StatementBoundary({
+    migrationPlan,
+    migration0017Statements,
+  });
+  const freshCredit = await runProductionMigrationStage({
+    databaseUrl: databaseUrl(creditFreshDatabase),
+    target: "credit-wallet",
+    verifyOnly: false,
+    allowEmptyBootstrap: true,
+    privilegeProfile: "credit-bootstrap",
+  });
+  assert(
+    freshCredit.appliedCount === migrationPlan.through0017.length &&
+      freshCredit.schemaPhase === "0017_credit_wallet_expand",
+    "fresh credit-wallet bootstrap reaches exact 0017"
+  );
+  await assertExactCreditWalletObjects(creditFreshDatabase);
+  await testCreditWalletLeastPrivilegeProfiles(migrationPlan);
+  const creditNoop = await runProductionMigrationStage({
+    databaseUrl: databaseUrl(creditFreshDatabase),
+    target: "credit-wallet",
+    verifyOnly: false,
+    privilegeProfile: "credit-bootstrap",
+  });
+  assert(
+    creditNoop.appliedCount === migrationPlan.through0017.length &&
+      creditNoop.schemaPhase === "0017_credit_wallet_expand",
+    "complete 0017 is an exact no-op"
+  );
 
   await withDatabase(databases[2], async connection => {
     await applyMigrationPrefix(connection, migrationPlan.through0014);
@@ -735,9 +784,11 @@ try {
   });
 
   process.stdout.write(
-    "Production migrator passed: singleton, exact 0000-0016 plan, forward resume at every 0016 boundary, and drift refusal.\n"
+    "Production migrator passed: singleton, exact 0000-0017 plan, fresh and 0016-to-0017 apply, every 0016/0017 boundary resume, routine/trigger inventory, no-op, and drift refusal.\n"
   );
 } finally {
+  await admin.query(`DROP USER IF EXISTS \`${creditMigrationUser}\`@'%'`);
+  await admin.query(`DROP USER IF EXISTS \`${creditRuntimeUser}\`@'%'`);
   for (const database of databases) {
     await admin.query(`DROP DATABASE IF EXISTS \`${database}\``);
   }
@@ -769,6 +820,190 @@ async function testEveryTailStatementBoundary({
       `0016 resumes after statement boundary ${boundary}`
     );
   }
+}
+
+async function testEvery0017StatementBoundary({
+  migrationPlan,
+  migration0017Statements,
+}) {
+  assert(
+    migration0017Statements.length === 49,
+    "0017 exposes the exact 49-statement migration contract"
+  );
+  for (
+    let boundary = 0;
+    boundary <= migration0017Statements.length;
+    boundary += 1
+  ) {
+    await admin.query(`DROP DATABASE IF EXISTS \`${creditBoundaryDatabase}\``);
+    await admin.query(
+      `CREATE DATABASE \`${creditBoundaryDatabase}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci`
+    );
+    await withDatabase(creditBoundaryDatabase, async connection => {
+      await applyMigrationPrefix(connection, migrationPlan.through0016);
+      await applyStatements(
+        connection,
+        migration0017Statements.slice(0, boundary)
+      );
+    });
+    const resumed = await runProductionMigrationStage({
+      databaseUrl: databaseUrl(creditBoundaryDatabase),
+      target: "credit-wallet",
+      verifyOnly: false,
+      privilegeProfile: "credit-bootstrap",
+    });
+    assert(
+      resumed.appliedCount === migrationPlan.through0017.length &&
+        resumed.schemaPhase === "0017_credit_wallet_expand",
+      `0017 resumes after statement boundary ${boundary}`
+    );
+  }
+  await assertExactCreditWalletObjects(creditBoundaryDatabase);
+}
+
+async function assertExactCreditWalletObjects(database) {
+  await withDatabase(database, async connection => {
+    const [[tables]] = await connection.query(
+      "SELECT COUNT(*) AS count FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN ('credit_ledger','credit_reservations','credit_wallets')"
+    );
+    const [[routines]] = await connection.query(
+      "SELECT COUNT(*) AS count FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA=DATABASE() AND ROUTINE_NAME LIKE 'credit\\_%'"
+    );
+    const [[triggers]] = await connection.query(
+      "SELECT COUNT(*) AS count FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=DATABASE() AND TRIGGER_NAME LIKE 'credit\\_%'"
+    );
+    assert(
+      Number(tables.count) === 3,
+      "0017 creates exactly three credit tables"
+    );
+    assert(
+      Number(routines.count) === 12,
+      "0017 creates exactly twelve credit routines"
+    );
+    assert(
+      Number(triggers.count) === 14,
+      "0017 creates exactly fourteen credit triggers"
+    );
+  });
+}
+
+async function testCreditWalletLeastPrivilegeProfiles(migrationPlan) {
+  await withDatabase(creditPrivilegeDatabase, connection =>
+    applyMigrationPrefix(connection, migrationPlan.through0016)
+  );
+  await admin.query(`CREATE USER \`${creditMigrationUser}\`@'%'`);
+  await admin.query(`GRANT SUPER ON *.* TO \`${creditMigrationUser}\`@'%'`);
+  const migrationPrivileges =
+    "CREATE, CREATE TEMPORARY TABLES, ALTER, INDEX, REFERENCES, SELECT, INSERT, UPDATE, TRIGGER";
+  await admin.query(
+    `GRANT ${migrationPrivileges} ON \`${creditPrivilegeDatabase}\`.* TO \`${creditMigrationUser}\`@'%'`
+  );
+  await expectFailure(
+    runProductionMigrationStage({
+      databaseUrl: databaseUrlForUser(
+        creditPrivilegeDatabase,
+        creditMigrationUser
+      ),
+      target: "credit-wallet",
+      verifyOnly: false,
+      privilegeProfile: "credit-expand",
+    }),
+    "credit migration principal without CREATE ROUTINE",
+    "missing CREATE ROUTINE"
+  );
+  await withDatabase(creditPrivilegeDatabase, async connection => {
+    const [[creditObjects]] = await connection.query(
+      "SELECT COUNT(*) AS count FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN ('credit_ledger','credit_reservations','credit_wallets')"
+    );
+    assert(
+      Number(creditObjects.count) === 0,
+      "credit privilege refusal occurs before permanent 0017 DDL"
+    );
+  });
+  await admin.query(
+    `GRANT CREATE ROUTINE ON \`${creditPrivilegeDatabase}\`.* TO \`${creditMigrationUser}\`@'%'`
+  );
+  const applied = await runProductionMigrationStage({
+    databaseUrl: databaseUrlForUser(
+      creditPrivilegeDatabase,
+      creditMigrationUser
+    ),
+    target: "credit-wallet",
+    verifyOnly: false,
+    privilegeProfile: "credit-expand",
+  });
+  assert(
+    applied.appliedCount === migrationPlan.through0017.length,
+    "least-privilege credit migration applies 0017"
+  );
+
+  await admin.query(`CREATE USER \`${creditRuntimeUser}\`@'%'`);
+  await admin.query(
+    `GRANT SELECT ON \`${creditPrivilegeDatabase}\`.* TO \`${creditRuntimeUser}\`@'%'`
+  );
+  for (const routine of creditWalletRoutineNames) {
+    await admin.query(
+      `GRANT EXECUTE ON PROCEDURE \`${creditPrivilegeDatabase}\`.\`${routine}\` TO \`${creditRuntimeUser}\`@'%'`
+    );
+  }
+  const verified = await runProductionMigrationStage({
+    databaseUrl: databaseUrlForUser(creditPrivilegeDatabase, creditRuntimeUser),
+    target: "credit-wallet",
+    verifyOnly: true,
+    privilegeProfile: "credit-runtime",
+  });
+  assert(
+    verified.appliedCount === migrationPlan.through0017.length,
+    "least-privilege runtime verifies exact 0017 schema"
+  );
+  const runtimeConnection = await mysql.createConnection(
+    databaseUrlForUser(creditPrivilegeDatabase, creditRuntimeUser)
+  );
+  try {
+    for (const [operation, statement] of [
+      [
+        "INSERT",
+        "INSERT INTO `credit_wallets` SELECT * FROM `credit_wallets` WHERE 1=0",
+      ],
+      [
+        "UPDATE",
+        "UPDATE `credit_wallets` SET `updated_at`=`updated_at` WHERE 1=0",
+      ],
+      ["DELETE", "DELETE FROM `credit_wallets` WHERE 1=0"],
+    ]) {
+      await expectFailure(
+        runtimeConnection.query(statement),
+        `credit runtime direct ${operation}`,
+        `${operation} command denied`
+      );
+    }
+  } finally {
+    await runtimeConnection.end();
+  }
+  await admin.query(
+    `REVOKE EXECUTE ON PROCEDURE \`${creditPrivilegeDatabase}\`.\`credit_create_wallet\` FROM \`${creditRuntimeUser}\`@'%'`
+  );
+  await expectFailure(
+    runProductionMigrationStage({
+      databaseUrl: databaseUrlForUser(
+        creditPrivilegeDatabase,
+        creditRuntimeUser
+      ),
+      target: "credit-wallet",
+      verifyOnly: true,
+      privilegeProfile: "credit-runtime",
+    }),
+    "credit runtime partial routine revoke",
+    "missing credit_create_wallet"
+  );
+}
+
+function databaseUrlForUser(database, user) {
+  const url = new URL(adminUrl);
+  url.username = user;
+  url.password = "";
+  url.pathname = `/${database}`;
+  return url.toString();
 }
 
 function databaseUrl(database) {
@@ -837,7 +1072,7 @@ async function testCompletedSchemaRefusals(database, migration0015Statements) {
   await expectRunnerRefusal(
     database,
     "complete schema malformed primary key",
-    "0016 schema fingerprint mismatch"
+    "0017 partial schema fingerprint mismatch"
   );
   await withDatabase(database, connection =>
     connection.query(
@@ -856,7 +1091,7 @@ async function testCompletedSchemaRefusals(database, migration0015Statements) {
   await expectRunnerRefusal(
     database,
     "complete schema altered check body",
-    "0016 schema fingerprint mismatch"
+    "0017 partial schema fingerprint mismatch"
   );
   await withDatabase(database, async connection => {
     await connection.query(
@@ -884,7 +1119,7 @@ async function testCompletedSchemaRefusals(database, migration0015Statements) {
   await expectRunnerRefusal(
     database,
     "complete schema altered trigger body",
-    "0016 schema fingerprint mismatch"
+    "0017 partial schema fingerprint mismatch"
   );
   await withDatabase(database, async connection => {
     await connection.query(
@@ -900,19 +1135,26 @@ async function testCompletedSchemaRefusals(database, migration0015Statements) {
     await connection.query(
       "CREATE PROCEDURE `unexpected_schema_routine`() SELECT 1"
     );
+  });
+  await expectRunnerRefusal(
+    database,
+    "complete schema extra table and routine",
+    "0017 partial schema fingerprint mismatch"
+  );
+  await withDatabase(database, async connection => {
+    await connection.query("DROP PROCEDURE `unexpected_schema_routine`");
+    await connection.query("DROP TABLE `unexpected_schema_object`");
     await connection.query(
       "CREATE EVENT `unexpected_schema_event` ON SCHEDULE AT CURRENT_TIMESTAMP + INTERVAL 1 DAY DO SET @unexpected_event = 1"
     );
   });
   await expectRunnerRefusal(
     database,
-    "complete schema extra objects",
-    "production schema contract requires no routines or events"
+    "complete schema extra event",
+    "production schema contract requires no events"
   );
   await withDatabase(database, async connection => {
     await connection.query("DROP EVENT `unexpected_schema_event`");
-    await connection.query("DROP PROCEDURE `unexpected_schema_routine`");
-    await connection.query("DROP TABLE `unexpected_schema_object`");
   });
 
   await withDatabase(database, connection =>
@@ -992,8 +1234,8 @@ async function testHistoryRefusals(database, migrationPlan) {
   );
   await expectRunnerRefusal(
     database,
-    "future migration history row on the 0016 runtime",
-    "database contains unknown applied migrations"
+    "invalid 0017 history row on the 0016 runtime",
+    "applied migration hash/order mismatch at index 17"
   );
   await withDatabase(database, connection =>
     connection.query(
@@ -1189,7 +1431,7 @@ async function testCleanupContracts() {
 function testStagedRolloutContracts() {
   assert(
     JSON.stringify(productionSchemaPhases) ===
-      JSON.stringify(["0015_base", "0016_expand"]),
+      JSON.stringify(["0015_base", "0016_expand", "0017_credit_wallet_expand"]),
     "schema phase names are stable"
   );
   const exactPlanRows = productionMigrationTags.map((tag, idx) => ({
@@ -1199,12 +1441,13 @@ function testStagedRolloutContracts() {
   const exactPlan = resolveProductionMigrationPlan(exactPlanRows);
   assert(
     exactPlan.expand0016.tag === "0016_static_epoch_scope_fks" &&
-      exactPlan.through0016.length === productionMigrationTags.length,
-    "exact named production migration plan terminates at 0016"
+      exactPlan.creditWallet0017.tag === "0017_credit_wallet_expand" &&
+      exactPlan.through0017.length === productionMigrationTags.length,
+    "exact named production migration plan terminates at 0017"
   );
   for (const [label, tail] of [
-    ["retired 0017", "0017_handoff_privacy_scope"],
     ["unreviewed future tail", "0018_unreviewed_future_tail"],
+    ["later future tail", "0019_unreviewed_future_tail"],
   ]) {
     const planWithFutureTail = resolveProductionMigrationPlan([
       ...exactPlanRows,
@@ -1213,6 +1456,8 @@ function testStagedRolloutContracts() {
     assert(
       planWithFutureTail.all.length === productionMigrationTags.length &&
         planWithFutureTail.through0016.length ===
+          productionMigrationTags.length - 1 &&
+        planWithFutureTail.through0017.length ===
           productionMigrationTags.length &&
         !planWithFutureTail.all.some(migration => migration.tag === tail),
       `${label} cannot alter the selected or bootstrapped migration count`
@@ -1231,7 +1476,7 @@ function testStagedRolloutContracts() {
       ],
     ],
     [
-      "future migration interleaved before 0016",
+      "different migration interleaved at 0017",
       exactPlanRows.map((row, index) =>
         index === exactPlanRows.length - 1
           ? { idx: index, tag: "0017_handoff_privacy_scope" }
@@ -1258,9 +1503,46 @@ function testStagedRolloutContracts() {
     "recovery inspection uses a read-only principal"
   );
   assert(
+    JSON.stringify(
+      productionMigrationOptionsForMode(
+        "apply-credit-wallet-expand",
+        "migration-bridge"
+      )
+    ) ===
+      JSON.stringify({
+        verifyOnly: false,
+        target: "credit-wallet",
+        privilegeProfile: "credit-expand",
+      }),
+    "credit-wallet apply mode requires the immutable bridge"
+  );
+  assert(
+    JSON.stringify(
+      productionMigrationOptionsForMode("verify-credit-wallet")
+    ) ===
+      JSON.stringify({
+        verifyOnly: true,
+        target: "credit-wallet",
+        privilegeProfile: "credit-runtime",
+      }),
+    "credit-wallet runtime verification uses exact procedure rights"
+  );
+  assert(
     productionMigrationOptionsForMode("inspect-expand-transition")
       ?.privilegeProfile === "expand",
     "schema-transition inspection retains the exact expand principal"
+  );
+  assert(
+    JSON.stringify(
+      productionMigrationOptionsForMode("apply-empty-credit-wallet-bootstrap")
+    ) ===
+      JSON.stringify({
+        verifyOnly: false,
+        target: "credit-wallet",
+        allowEmptyBootstrap: true,
+        privilegeProfile: "credit-bootstrap",
+      }),
+    "credit wallet empty bootstrap is bounded to the exact 0017 plan"
   );
   assert(
     JSON.stringify(
@@ -1311,6 +1593,10 @@ function testStagedRolloutContracts() {
       productionMigrationOptionsForMode("verify") === null &&
       productionMigrationOptionsForMode("apply-expand") === null &&
       productionMigrationOptionsForMode("apply-expand", "runtime") === null &&
+      productionMigrationOptionsForMode(
+        "apply-credit-wallet-expand",
+        "runtime"
+      ) === null &&
       productionMigrationOptionsForMode("verify-artifact") === null &&
       productionMigrationOptionsForMode("verify-artifact", "unknown") ===
         null &&
@@ -1368,6 +1654,52 @@ function testSchemaDigestContracts() {
     () => canonicalTriggerTuple(trigger, "other@localhost"),
     "mismatched trigger definer",
     "trigger definer does not match the migration principal"
+  );
+  const routine = {
+    definer: "migrator@localhost",
+    routineType: "PROCEDURE",
+    securityType: "DEFINER",
+    isDeterministic: "NO",
+    sqlDataAccess: "MODIFIES SQL DATA",
+    sqlMode: productionSchemaSqlMode,
+    characterSetClient: "utf8mb4",
+    collationConnection: "utf8mb4_0900_ai_ci",
+    databaseCollation: "utf8mb4_0900_ai_ci",
+  };
+  const routineTuple = canonicalRoutineTuple(
+    routine,
+    "CREATE DEFINER=`migrator`@`localhost` PROCEDURE `credit_probe`() SQL SECURITY DEFINER BEGIN SELECT 1; END",
+    "migrator@localhost"
+  );
+  assert(
+    routineTuple.definer === "$MIGRATION_USER" &&
+      routineTuple.createStatement.includes("SQL SECURITY DEFINER"),
+    "routine body and definer are fingerprinted canonically"
+  );
+  expectSynchronousFailure(
+    () =>
+      canonicalRoutineTuple(
+        routine,
+        "CREATE DEFINER=`migrator`@`localhost` PROCEDURE `credit_probe`() SELECT 1",
+        "other@localhost"
+      ),
+    "mismatched routine definer",
+    "routine definer does not match the migration principal"
+  );
+  assert0017PreDdlStatementOrder([
+    "CREATE TEMPORARY TABLE `credit_0017_legacy_effect_preflight` (`id` int)",
+    "DROP TEMPORARY TABLE `credit_0017_legacy_effect_preflight`",
+    "ALTER TABLE `payment_ledger` ADD INDEX `probe` (`id`)",
+  ]);
+  expectSynchronousFailure(
+    () =>
+      assert0017PreDdlStatementOrder([
+        "ALTER TABLE `payment_ledger` ADD INDEX `probe` (`id`)",
+        "CREATE TEMPORARY TABLE `credit_0017_legacy_effect_preflight` (`id` int)",
+        "DROP TEMPORARY TABLE `credit_0017_legacy_effect_preflight`",
+      ]),
+    "0017 permanent DDL before data preflight",
+    "data preflight must precede permanent DDL"
   );
   expectSynchronousFailure(
     () =>
@@ -1468,6 +1800,114 @@ function testSchemaDigestContracts() {
     ],
     "leaderbot"
   );
+  const creditMigrationGrant =
+    "GRANT CREATE, CREATE TEMPORARY TABLES, ALTER, INDEX, REFERENCES, SELECT, INSERT, UPDATE, TRIGGER, CREATE ROUTINE ON `leaderbot`.* TO `credit_migrator`@`%`";
+  assertCreditWalletMigrationGrantScope(
+    ["GRANT USAGE ON *.* TO `credit_migrator`@`%`", creditMigrationGrant],
+    "leaderbot"
+  );
+  assertCreditWalletMigrationGrantScope(
+    [
+      "GRANT USAGE ON *.* TO `credit_migrator`@`%`",
+      "GRANT SUPER ON *.* TO `credit_migrator`@`%`",
+      creditMigrationGrant,
+    ],
+    "leaderbot",
+    true
+  );
+  expectSynchronousFailure(
+    () =>
+      assertCreditWalletMigrationGrantScope(
+        [creditMigrationGrant],
+        "leaderbot",
+        true
+      ),
+    "credit migration missing conditional SUPER",
+    "lacks global SUPER for triggers"
+  );
+  expectSynchronousFailure(
+    () =>
+      assertCreditWalletMigrationGrantScope(
+        [
+          creditMigrationGrant,
+          "REVOKE CREATE ROUTINE ON `leaderbot`.* FROM `credit_migrator`@`%`",
+        ],
+        "leaderbot"
+      ),
+    "credit migration partial CREATE ROUTINE revoke",
+    "missing CREATE ROUTINE"
+  );
+  expectSynchronousFailure(
+    () =>
+      assertCreditWalletMigrationGrantScope(
+        [creditMigrationGrant.replace("`leaderbot`", "`otherdb`")],
+        "leaderbot"
+      ),
+    "credit migration wrong schema",
+    "credit wallet migration principal privilege boundary mismatch"
+  );
+  const creditRuntimeGrants = [
+    "GRANT USAGE ON *.* TO `credit_runtime`@`%`",
+    "GRANT SELECT ON `leaderbot`.* TO `credit_runtime`@`%`",
+    ...creditWalletRoutineNames.map(
+      name =>
+        `GRANT EXECUTE ON PROCEDURE \`leaderbot\`.\`${name}\` TO \`credit_runtime\`@\`%\``
+    ),
+  ];
+  assertCreditWalletRuntimeGrantScope(creditRuntimeGrants, "leaderbot");
+  for (const privilege of ["INSERT", "UPDATE", "DELETE"]) {
+    expectSynchronousFailure(
+      () =>
+        assertCreditWalletRuntimeGrantScope(
+          [
+            ...creditRuntimeGrants,
+            `GRANT ${privilege} ON \`leaderbot\`.* TO \`credit_runtime\`@\`%\``,
+          ],
+          "leaderbot"
+        ),
+      `credit runtime rejects direct ${privilege}`,
+      `excessive ${privilege}`
+    );
+  }
+  expectSynchronousFailure(
+    () =>
+      assertCreditWalletRuntimeGrantScope(
+        creditRuntimeGrants.slice(0, -1),
+        "leaderbot"
+      ),
+    "credit runtime missing exact routine",
+    "credit runtime procedure privilege boundary mismatch"
+  );
+  expectSynchronousFailure(
+    () =>
+      assertCreditWalletRuntimeGrantScope(
+        [
+          ...creditRuntimeGrants,
+          "REVOKE EXECUTE ON PROCEDURE `leaderbot`.`credit_create_wallet` FROM `credit_runtime`@`%`",
+        ],
+        "leaderbot"
+      ),
+    "credit runtime partial routine revoke",
+    "missing credit_create_wallet"
+  );
+  expectSynchronousFailure(
+    () =>
+      assertCreditWalletRuntimeGrantScope(
+        [
+          ...creditRuntimeGrants,
+          "GRANT EXECUTE ON *.* TO `credit_runtime`@`%`",
+        ],
+        "leaderbot"
+      ),
+    "credit runtime rejects global execute",
+    "credit runtime principal privilege boundary mismatch"
+  );
+  assertCreditWalletBinlogFormat({ binlogFormat: "ROW" });
+  expectSynchronousFailure(
+    () => assertCreditWalletBinlogFormat({ binlogFormat: "STATEMENT" }),
+    "credit migration statement binlog",
+    "requires ROW binary logging"
+  );
   expectSynchronousFailure(
     () =>
       assertExpandMigrationGrantScope(
@@ -1481,7 +1921,7 @@ function testSchemaDigestContracts() {
   );
   assertTriggerGrantScope(
     [
-      "GRANT CREATE, CREATE TEMPORARY TABLES, ALTER, INDEX, REFERENCES, SELECT, INSERT, UPDATE, TRIGGER ON `leaderbot`.* TO `migrator`@`%`",
+      "GRANT CREATE, CREATE TEMPORARY TABLES, ALTER, INDEX, REFERENCES, SELECT, INSERT, UPDATE, TRIGGER, CREATE ROUTINE ON `leaderbot`.* TO `migrator`@`%`",
     ],
     "leaderbot",
     false
@@ -1505,7 +1945,7 @@ function testSchemaDigestContracts() {
     () =>
       assertTriggerGrantScope(
         [
-          "GRANT CREATE, CREATE TEMPORARY TABLES, ALTER, INDEX, REFERENCES, SELECT, INSERT, UPDATE, TRIGGER ON `leaderbot`.* TO `migrator`@`%`",
+          "GRANT CREATE, CREATE TEMPORARY TABLES, ALTER, INDEX, REFERENCES, SELECT, INSERT, UPDATE, TRIGGER, CREATE ROUTINE ON `leaderbot`.* TO `migrator`@`%`",
         ],
         "leaderbot",
         true
@@ -1561,8 +2001,8 @@ async function testContractManifestBinding() {
     ...migrations,
     {
       idx: migrations.length,
-      tag: "0017_future_append_only",
-      when: Number(migrationPlan.expand0016.when) + 1,
+      tag: "0018_future_append_only",
+      when: Number(migrationPlan.creditWallet0017.when) + 1,
       sha256: "a".repeat(64),
     },
   ]);

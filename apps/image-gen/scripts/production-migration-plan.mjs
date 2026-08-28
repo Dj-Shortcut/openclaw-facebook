@@ -16,11 +16,13 @@ export const productionMigrationTags = Object.freeze([
   "0014_portal_handoff_delivery_idempotency",
   "0015_production_readiness_registry",
   "0016_static_epoch_scope_fks",
+  "0017_credit_wallet_expand",
 ]);
 
 const base0014Tag = "0014_portal_handoff_delivery_idempotency";
 const base0015Tag = "0015_production_readiness_registry";
 const expand0016Tag = "0016_static_epoch_scope_fks";
+const creditWallet0017Tag = "0017_credit_wallet_expand";
 
 export function resolveProductionMigrationPlan(migrations) {
   if (!Array.isArray(migrations)) {
@@ -43,7 +45,7 @@ export function resolveProductionMigrationPlan(migrations) {
     if (
       index >= productionMigrationTags.length &&
       (!/^\d{4}_.+/.test(migration.tag) ||
-        Number(migration.tag.slice(0, 4)) <= 16)
+        Number(migration.tag.slice(0, 4)) <= 17)
     ) {
       throw new Error(`production migration plan mismatch at index ${index}`);
     }
@@ -54,10 +56,14 @@ export function resolveProductionMigrationPlan(migrations) {
     }
   }
 
-  const supportedMigrations = migrations.slice(
-    0,
-    productionMigrationTags.length
+  const allByTag = new Map(
+    migrations.map(migration => [migration.tag, migration])
   );
+  const supportedMigrations = productionMigrationTags.map(tag => {
+    const migration = allByTag.get(tag);
+    if (!migration) throw new Error(`production migration ${tag} is missing`);
+    return migration;
+  });
   const byTag = new Map(
     supportedMigrations.map(migration => [migration.tag, migration])
   );
@@ -74,8 +80,10 @@ export function resolveProductionMigrationPlan(migrations) {
     through0014: throughTag(base0014Tag),
     through0015: throughTag(base0015Tag),
     through0016: throughTag(expand0016Tag),
+    through0017: throughTag(creditWallet0017Tag),
     base0014: byTag.get(base0014Tag),
     base0015: byTag.get(base0015Tag),
     expand0016: byTag.get(expand0016Tag),
+    creditWallet0017: byTag.get(creditWallet0017Tag),
   });
 }

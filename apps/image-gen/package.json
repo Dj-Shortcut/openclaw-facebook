@@ -18,6 +18,7 @@
     "db:test-production-migrator": "node scripts/test-production-migrator.mjs",
     "db:rehearse-0015": "node scripts/rehearse-0015-migration.mjs",
     "db:rehearse-0016": "node scripts/rehearse-0016-migration.mjs",
+    "db:rehearse-0017": "node scripts/rehearse-0017-credit-wallet-migration.mjs",
     "dev": "cross-env NODE_ENV=development tsx watch server/_core/index.ts",
     "deploy:check-docker": "node scripts/check-docker-host.mjs",
     "deploy:verify-portal": "node scripts/verify-portal-production.mjs",

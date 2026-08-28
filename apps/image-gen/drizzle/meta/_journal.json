@@ -120,6 +120,13 @@
       "when": 1787477710719,
       "tag": "0016_static_epoch_scope_fks",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "5",
+      "when": 1787881948952,
+      "tag": "0017_credit_wallet_expand",
+      "breakpoints": true
     }
   ]
 }

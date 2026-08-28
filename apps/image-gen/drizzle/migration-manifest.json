@@ -1,12 +1,12 @@
 {
   "version": 1,
-  "journalSha256": "b43d1644a369da8a4dd319533c8c27309e83fa1d90e0099cfa4d9528fa82502c",
+  "journalSha256": "a18d4b477022509c93b7302302e920e1f842e20114a7d0c4b931298427511a0d",
   "baseSchemaSnapshot": "meta/0014_snapshot.json",
   "baseSchemaSnapshotSha256": "e0102aad23d607b4b359d1a11458d56c63533d73f056f332076ba952b7468b35",
-  "schemaSnapshot": "meta/0016_snapshot.json",
-  "schemaSnapshotSha256": "b698a689dc2548f81335d65119a3da16f56a7a5281519d97d3144e992b2761ed",
+  "schemaSnapshot": "meta/0017_snapshot.json",
+  "schemaSnapshotSha256": "694d599ab7fb271b891c87af97fa27e083fadfee959efc56725c8da84f3aab70",
   "productionSchemaContract": "production-schema-contract.json",
-  "productionSchemaContractSha256": "9253baf31ff1e765b186bd8e9b37771b34259bde4011c16d164334e5f303e310",
+  "productionSchemaContractSha256": "e9c27ef4d365b9a45b3d34acea4e343ac118cd8965d72e8257000756ab0c5598",
   "migrations": [
     {
       "idx": 0,
@@ -109,6 +109,12 @@
       "when": 1787477710719,
       "tag": "0016_static_epoch_scope_fks",
       "sha256": "015e06e5c5831a71f7a7b1c1c98283c24257b8ff5e99e2c4c73364f0afc40a6b"
+    },
+    {
+      "idx": 17,
+      "when": 1787881948952,
+      "tag": "0017_credit_wallet_expand",
+      "sha256": "6385795ad7a3f11a026a8162e682b1261b824bfacf7621d22c1dd19bf30c487b"
     }
   ]
 }

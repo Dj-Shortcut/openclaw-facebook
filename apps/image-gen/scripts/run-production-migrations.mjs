@@ -15,7 +15,9 @@ const artifactKindPath = path.resolve(
   ".leaderbot-artifact-kind"
 );
 let artifactKind = "";
-if (migrationMode === "verify-artifact" || migrationMode === "apply-expand") {
+const legacyArtifactBoundMode =
+  migrationMode === "verify-artifact" || migrationMode === "apply-expand";
+if (legacyArtifactBoundMode || migrationMode === "apply-credit-wallet-expand") {
   try {
     artifactKind = fs.readFileSync(artifactKindPath, "utf8").trim();
   } catch {
@@ -25,7 +27,10 @@ if (migrationMode === "verify-artifact" || migrationMode === "apply-expand") {
 
 const options = productionMigrationOptionsForMode(migrationMode, artifactKind);
 const testOnlyBootstrapAllowed =
-  migrationMode !== "apply-empty-bootstrap" ||
+  !new Set([
+    "apply-empty-bootstrap",
+    "apply-empty-credit-wallet-bootstrap",
+  ]).has(migrationMode) ||
   (process.env.NODE_ENV === "test" &&
     process.env.LEADERBOT_ALLOW_TEST_SCHEMA_BOOTSTRAP === "1");
 
