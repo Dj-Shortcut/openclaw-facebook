@@ -6,8 +6,6 @@ const ENABLED = "true";
 const MAX_DATABASE_ID = 2_147_483_647;
 const SHA256_KEY_PATTERN = /^[0-9a-f]{64}$/;
 const HMAC_KEY_ID_PATTERN = /^k[1-9][0-9]{0,5}$/;
-const MAX_HMAC_KEYRING_SIZE = 4;
-const MAX_PREVIOUS_KEYS_LENGTH = 320;
 const PRIVACY_USER_KEY_PATTERN =
   /^(?:[0-9a-f]{64}|u2[.]k[1-9][0-9]{0,5}[.][0-9a-f]{64})$/;
 
@@ -37,6 +35,7 @@ export type CreditCheckoutPilotConfig = Readonly<{
   workspaceId: number | null;
   mode: MollieMode;
   testPilotScope: CreditCheckoutTestPilotScope | null;
+  paidImageProviderMaxCostUsd: number | null;
 }>;
 
 export class CreditCheckoutConfigError extends Error {
@@ -52,6 +51,20 @@ function readMode(env: NodeJS.ProcessEnv): MollieMode {
     throw new CreditCheckoutConfigError("MOLLIE_MODE must be test or live");
   }
   return mode;
+}
+
+function readPaidImageProviderMaxCostUsd(
+  env: NodeJS.ProcessEnv
+): number | null {
+  const value = env.MESSENGER_PAID_IMAGE_PROVIDER_MAX_COST_USD?.trim();
+  if (!value) return null;
+  const amount = Number(value);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw new CreditCheckoutConfigError(
+      "MESSENGER_PAID_IMAGE_PROVIDER_MAX_COST_USD must be a positive finite amount"
+    );
+  }
+  return amount;
 }
 
 function readDatabaseId(
@@ -127,6 +140,14 @@ function assertDedicatedCreditCheckoutShape(
     );
   }
   if (
+    config.paidCreditsEnabled &&
+    config.paidImageProviderMaxCostUsd === null
+  ) {
+    throw new CreditCheckoutConfigError(
+      "MESSENGER_PAID_IMAGE_PROVIDER_MAX_COST_USD is required before paid credits"
+    );
+  }
+  if (
     config.mode === "test" &&
     (config.checkoutEnabled || config.paidCreditsEnabled) &&
     config.testPilotScope === null
@@ -187,6 +208,7 @@ export function getCreditCheckoutPilotConfig(
     workspaceId: readDatabaseId(env, "MOLLIE_CREDIT_WORKSPACE_ID"),
     mode: readMode(env),
     testPilotScope: readTestPilotScope(env),
+    paidImageProviderMaxCostUsd: readPaidImageProviderMaxCostUsd(env),
   });
   assertDedicatedCreditCheckoutShape(env, config);
   return config;
@@ -279,18 +301,7 @@ function readHmacKeyring(env: NodeJS.ProcessEnv): CreditCheckoutHmacKey[] {
     );
   }
   const previous = env.CREDIT_CHECKOUT_HMAC_PREVIOUS_KEYS?.trim() ?? "";
-  if (previous.length > MAX_PREVIOUS_KEYS_LENGTH) {
-    throw new CreditCheckoutConfigError(
-      "CREDIT_CHECKOUT_HMAC_PREVIOUS_KEYS exceeds the bounded keyring"
-    );
-  }
-
   const encodedEntries = previous ? previous.split(",") : [];
-  if (encodedEntries.length + 1 > MAX_HMAC_KEYRING_SIZE) {
-    throw new CreditCheckoutConfigError(
-      "CREDIT_CHECKOUT_HMAC_PREVIOUS_KEYS exceeds the bounded keyring"
-    );
-  }
   const seenKeyIds = new Set([activeKeyId]);
   const seenSecrets = new Set([activeSecret]);
   const entries: CreditCheckoutHmacKey[] = [

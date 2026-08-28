@@ -56,6 +56,10 @@ kill_timeout = 300
   MESSENGER_PAID_CREDITS_ENABLED = "false"
   MOLLIE_CREDIT_CHECKOUT_ENABLED = "false"
   MOLLIE_CREDIT_WORKSPACE_ID = "1"
+  # Conservative spend reservation for one paid medium image. This is not
+  # booked as the provider's actual invoice cost and must be re-reviewed when
+  # the model, quality, size or source-image policy changes.
+  MESSENGER_PAID_IMAGE_PROVIDER_MAX_COST_USD = "1.00"
   # A reviewed Test Mode activation must fill all four values. The hash is
   # domain-separated from the pseudonymous Messenger user key; never configure
   # or expose the underlying key or PSID.

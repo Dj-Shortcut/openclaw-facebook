@@ -65,6 +65,7 @@ function dependencies(row: CreditCheckoutSessionRecord | null) {
       paidCreditsEnabled: true,
       workspaceId: 42,
       mode: "test" as const,
+      paidImageProviderMaxCostUsd: 1,
       testPilotScope: {
         channelConnectionId: 8,
         bindingEpoch: 3,

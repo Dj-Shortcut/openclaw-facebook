@@ -17,6 +17,7 @@ function enabledEnv(override: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
     MOLLIE_MODE: "test",
     MOLLIE_CREDIT_CHECKOUT_ENABLED: "true",
     MESSENGER_PAID_CREDITS_ENABLED: "true",
+    MESSENGER_PAID_IMAGE_PROVIDER_MAX_COST_USD: "1.00",
     MOLLIE_CREDIT_WORKSPACE_ID: "42",
     MOLLIE_CREDIT_TEST_CHANNEL_CONNECTION_ID: "8",
     MOLLIE_CREDIT_TEST_BINDING_EPOCH: "3",
@@ -39,6 +40,7 @@ describe("credit checkout rollout configuration", () => {
       paidCreditsEnabled: true,
       workspaceId: 42,
       mode: "test",
+      paidImageProviderMaxCostUsd: 1,
       testPilotScope: {
         channelConnectionId: 8,
         bindingEpoch: 3,
@@ -73,9 +75,21 @@ describe("credit checkout rollout configuration", () => {
       paidCreditsEnabled: false,
       workspaceId: null,
       mode: "test",
+      paidImageProviderMaxCostUsd: null,
       testPilotScope: null,
     });
   });
+
+  it.each(["", "0", "-1", "NaN", "Infinity"])(
+    "fails closed for an invalid paid-image provider maximum %j",
+    value => {
+      expect(() =>
+        getCreditCheckoutPilotConfig(
+          enabledEnv({ MESSENGER_PAID_IMAGE_PROVIDER_MAX_COST_USD: value })
+        )
+      ).toThrow(CreditCheckoutConfigError);
+    }
+  );
 
   it("allows only the exact pseudonymous tester on the pinned Page binding", () => {
     const config = getCreditCheckoutPilotConfig(enabledEnv());
@@ -128,6 +142,10 @@ describe("credit checkout rollout configuration", () => {
   it.each([
     ["pilot workspace", { MOLLIE_CREDIT_WORKSPACE_ID: "" }],
     ["provider drain", { MOLLIE_BILLING_DRAIN_ENABLED: "false" }],
+    [
+      "provider attempt maximum",
+      { MESSENGER_PAID_IMAGE_PROVIDER_MAX_COST_USD: "" },
+    ],
   ])(
     "keeps the %s boundary mandatory while paid-credit consumption remains enabled",
     (_label, override) => {
@@ -186,6 +204,34 @@ describe("credit checkout rollout configuration", () => {
     ).toBe(true);
   });
 
+  it("retains wallets across more than four HMAC key generations", () => {
+    const retainedKeys = [5, 4, 3, 2, 1].map(index => ({
+      keyId: `k${index}`,
+      secret: index.toString(16).padStart(2, "0").repeat(32),
+    }));
+    let observed:
+      readonly Readonly<{ keyId: string; secret: Uint8Array }>[] | undefined;
+
+    const ids = withCreditCheckoutHmacKeyring(
+      keys => {
+        observed = keys;
+        return keys.map(key => key.keyId);
+      },
+      enabledEnv({
+        CREDIT_CHECKOUT_HMAC_ACTIVE_KEY_ID: "k6",
+        CREDIT_CHECKOUT_HMAC_SECRET: "06".repeat(32),
+        CREDIT_CHECKOUT_HMAC_PREVIOUS_KEYS: retainedKeys
+          .map(key => `${key.keyId}=${key.secret}`)
+          .join(","),
+      })
+    );
+
+    expect(ids).toEqual(["k6", "k5", "k4", "k3", "k2", "k1"]);
+    expect(
+      observed?.every(key => Buffer.from(key.secret).equals(Buffer.alloc(32)))
+    ).toBe(true);
+  });
+
   it.each([
     ["missing active ID", { CREDIT_CHECKOUT_HMAC_ACTIVE_KEY_ID: "" }],
     ["malformed active ID", { CREDIT_CHECKOUT_HMAC_ACTIVE_KEY_ID: "current" }],
@@ -199,17 +245,6 @@ describe("credit checkout rollout configuration", () => {
       "duplicate secret",
       {
         CREDIT_CHECKOUT_HMAC_PREVIOUS_KEYS: `k2=${"ab".repeat(32)}`,
-      },
-    ],
-    [
-      "unbounded predecessor list",
-      {
-        CREDIT_CHECKOUT_HMAC_PREVIOUS_KEYS: [2, 3, 4, 5]
-          .map(
-            index =>
-              `k${index}=${index.toString(16).padStart(2, "0").repeat(32)}`
-          )
-          .join(","),
       },
     ],
   ])("rejects a %s", (_label, override) => {

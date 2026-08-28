@@ -527,6 +527,16 @@ export function createMessengerGenerationJobRunner(
                 | undefined;
 
               return Object.freeze({
+                ...(paidCreditReservation
+                  ? {
+                      providerSpendBudget: Object.freeze({
+                        estimatedCostUsd:
+                          paidCreditReservation.providerMaxCostUsd,
+                        estimateSource:
+                          "operator_conservative_paid_image_max_v1",
+                      }),
+                    }
+                  : {}),
                 markTransportStarted: async () => {
                   if (state === "started") return;
                   if (state === "terminal") {

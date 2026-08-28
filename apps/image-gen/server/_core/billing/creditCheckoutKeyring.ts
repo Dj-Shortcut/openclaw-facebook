@@ -18,7 +18,7 @@ export class CreditCheckoutKeyringError extends Error {
 }
 
 /**
- * Selects the active key for a new subject, or the one retained key that
+ * Selects the active key for a new subject, or the retained key that
  * exactly derives an already-persisted wallet. The secret is exposed only to
  * the synchronous callback owned by withCreditCheckoutHmacKeyring.
  */

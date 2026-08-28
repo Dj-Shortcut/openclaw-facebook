@@ -2537,7 +2537,9 @@ describe("messenger generation job safety", () => {
   it("keeps the free generation path unchanged while free quota remains", async () => {
     executeGenerationFlowMock.mockImplementationOnce(async input => {
       expect(input.imageQuality).toBeUndefined();
-      await (await input.onProviderAttempt())?.markTransportStarted();
+      const admission = await input.onProviderAttempt();
+      expect(admission?.providerSpendBudget).toBeUndefined();
+      await admission?.markTransportStarted();
       return successGenerationResult(
         "https://img.example/free-path-unchanged.png"
       );
@@ -2573,6 +2575,7 @@ describe("messenger generation job safety", () => {
       reservation: {
         reservationId: "11111111-1111-8111-8111-111111111111",
         imageQuality: "medium",
+        providerMaxCostUsd: 1,
         markTransportStarted: markCreditTransportStarted,
         commitProviderSuccess,
         releaseProviderRejected,
@@ -2586,6 +2589,10 @@ describe("messenger generation job safety", () => {
     executeGenerationFlowMock.mockImplementationOnce(async input => {
       expect(input.imageQuality).toBe("medium");
       const firstAttempt = await input.onProviderAttempt();
+      expect(firstAttempt?.providerSpendBudget).toEqual({
+        estimatedCostUsd: 1,
+        estimateSource: "operator_conservative_paid_image_max_v1",
+      });
       await firstAttempt?.markTransportStarted();
       await expect(input.onProviderAttempt?.()).rejects.toThrow(
         "Paid credit provider transport is already in progress"
@@ -2654,6 +2661,43 @@ describe("messenger generation job safety", () => {
     expect(markMessengerProviderAttemptStartedMock).not.toHaveBeenCalled();
     expect(executeGenerationFlowMock).toHaveBeenCalledOnce();
     expect(reserveMessengerCreditCheckoutMock).not.toHaveBeenCalled();
+    expect(sendImageMock).not.toHaveBeenCalled();
+  });
+
+  it("releases the paid hold when spend admission rejects before transport", async () => {
+    process.env.MESSENGER_FREE_DAILY_LIMIT = "0";
+    const markTransportStarted = vi.fn(async () => undefined);
+    const commitProviderSuccess = vi.fn(async () => undefined);
+    const releaseBeforeTransport = vi.fn(async () => undefined);
+    reservePaidCreditGenerationMock.mockResolvedValueOnce({
+      available: true,
+      reservation: paidCreditReservationFixture({
+        markTransportStarted,
+        commitProviderSuccess,
+        releaseBeforeTransport,
+      }),
+    });
+    executeGenerationFlowMock.mockImplementationOnce(async input => {
+      const admission = await input.onProviderAttempt();
+      expect(admission?.providerSpendBudget).toEqual({
+        estimatedCostUsd: 1,
+        estimateSource: "operator_conservative_paid_image_max_v1",
+      });
+      await admission?.abortBeforeTransport();
+      return failureGenerationResult(
+        new Error("Messenger spend budget reached")
+      );
+    });
+    const runner = createTestRunner();
+
+    await runner.processMessengerGenerationJob(
+      paidCreditGenerationJob("paid-spend-rejected")
+    );
+
+    expect(markTransportStarted).not.toHaveBeenCalled();
+    expect(commitProviderSuccess).not.toHaveBeenCalled();
+    expect(releaseBeforeTransport).toHaveBeenCalledOnce();
+    expect(markMessengerProviderAttemptStartedMock).not.toHaveBeenCalled();
     expect(sendImageMock).not.toHaveBeenCalled();
   });
 
@@ -3142,6 +3186,7 @@ function paidCreditGenerationJob(suffix: string) {
 }
 
 function paidCreditReservationFixture(input: {
+  markTransportStarted?: () => Promise<void>;
   commitProviderSuccess: () => Promise<void>;
   releaseBeforeTransport: () => Promise<void>;
   releaseProviderRejected?: (status: number) => Promise<void>;
@@ -3149,7 +3194,9 @@ function paidCreditReservationFixture(input: {
   return {
     reservationId: "11111111-1111-8111-8111-111111111111",
     imageQuality: "medium" as const,
-    markTransportStarted: vi.fn(async () => undefined),
+    providerMaxCostUsd: 1,
+    markTransportStarted:
+      input.markTransportStarted ?? vi.fn(async () => undefined),
     commitProviderSuccess: input.commitProviderSuccess,
     releaseProviderRejected:
       input.releaseProviderRejected ?? vi.fn(async () => undefined),

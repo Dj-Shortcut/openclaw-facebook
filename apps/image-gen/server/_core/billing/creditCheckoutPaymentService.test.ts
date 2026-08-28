@@ -24,6 +24,7 @@ const pilot: CreditCheckoutPilotConfig = Object.freeze({
   paidCreditsEnabled: true,
   workspaceId: 42,
   mode: "test",
+  paidImageProviderMaxCostUsd: 1,
   testPilotScope: {
     channelConnectionId: 7,
     bindingEpoch: 3,

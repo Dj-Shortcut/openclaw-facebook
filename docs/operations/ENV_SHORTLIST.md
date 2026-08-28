@@ -75,15 +75,15 @@ These variables control whether the OpenAI-backed parts of the bot actually run.
 | `MESSENGER_VIDEO_FLOW_TIMEOUT_MS`                     | Complete video-flow deadline                                                       | Must be a positive integer greater than the provider deadline; initial value is `300000`.                                                                                                                  |
 | `MESSENGER_OWNER_COST_ALERTS`                         | Optional owner notification for spend-cap blocks                                   | Set to `1` only when `BUILT_IN_FORGE_API_URL` and `BUILT_IN_FORGE_API_KEY` are configured; alerts include metadata-only budget details.                                                                    |
 
-Purchased-credit identity uses a bounded versioned keyring. Set the non-secret
+Purchased-credit identity uses a versioned keyring. Set the non-secret
 `CREDIT_CHECKOUT_HMAC_ACTIVE_KEY_ID` to `k1` initially and place the matching
 64-character lowercase hexadecimal secret only in
 `CREDIT_CHECKOUT_HMAC_SECRET`. On rotation, increment the active ID and move
 each predecessor into the secret `CREDIT_CHECKOUT_HMAC_PREVIOUS_KEYS` value as
-`k1=<64 hex>,k2=<64 hex>` (maximum three predecessors). Retain every predecessor
-while a non-erased wallet or pending provider-resolution proof depends on it.
-Removing a required predecessor makes checkout, paid spend, and recovery fail
-closed; it must never create a replacement wallet.
+`k1=<64 hex>,k2=<64 hex>`. There is no fixed predecessor count: retain every
+predecessor while a non-erased wallet or pending provider-resolution proof
+depends on it. Removing a required predecessor makes checkout, paid spend, and
+recovery fail closed; it must never create a replacement wallet.
 
 ## 4. Optional but easy to confuse
 
@@ -161,6 +161,13 @@ operator environment. Never copy the underlying user key or raw PSID into
 Fly config, docs, chat, logs or evidence. Startup and readiness reject missing,
 partial or stale pins; a Page reconnect, privacy-epoch change, or other user is
 therefore outside the pilot before any wallet, intent or provider work.
+
+`MESSENGER_PAID_IMAGE_PROVIDER_MAX_COST_USD` is also mandatory before paid
+credits can be enabled. It is the reviewed conservative maximum reserved
+against the global, monthly and per-user spend caps before one paid image
+provider request starts; it is not an invoice or accounting amount. The initial
+Test Mode value is `1.00`. Re-review it whenever the image model, quality, size
+or source-image policy changes.
 
 ## 7. Fast triage
 

@@ -27,6 +27,7 @@ function dependencies(
       paidCreditsEnabled: true,
       workspaceId: 42,
       mode: "test" as const,
+      paidImageProviderMaxCostUsd: 1,
       testPilotScope: {
         channelConnectionId: INPUT.channelConnectionId,
         bindingEpoch: INPUT.bindingEpoch,
@@ -99,7 +100,7 @@ describe("Messenger credit checkout reservation", () => {
     expect(second.actionUrl).toBe(first.actionUrl);
   });
 
-  it("keeps an existing wallet on its retained key after rotation", async () => {
+  it("keeps an existing wallet through more than four retained rotations", async () => {
     const oldSecret = Buffer.alloc(32, 1);
     const newSecret = Buffer.alloc(32, 2);
     const scope = {
@@ -123,7 +124,11 @@ describe("Messenger credit checkout reservation", () => {
       readWalletIdentity: vi.fn(async () => oldIdentity),
       withKeyring: callback =>
         callback([
-          { keyId: "k2", secret: newSecret },
+          { keyId: "k6", secret: newSecret },
+          { keyId: "k5", secret: Buffer.alloc(32, 5) },
+          { keyId: "k4", secret: Buffer.alloc(32, 4) },
+          { keyId: "k3", secret: Buffer.alloc(32, 3) },
+          { keyId: "k2", secret: Buffer.alloc(32, 7) },
           { keyId: "k1", secret: oldSecret },
         ]),
     });
@@ -199,6 +204,7 @@ describe("Messenger credit checkout reservation", () => {
       config: () => ({
         ...partial,
         mode: "test" as const,
+        paidImageProviderMaxCostUsd: 1,
         testPilotScope: {
           channelConnectionId: INPUT.channelConnectionId,
           bindingEpoch: INPUT.bindingEpoch,

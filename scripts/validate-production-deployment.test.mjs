@@ -4507,6 +4507,34 @@ describe("production deployment contract", () => {
     );
   });
 
+  it("requires atomic paid-image spend admission before provider transport", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      "apps/image-gen/server/_core/imageService.ts",
+      "await admitMessengerProviderSpend({",
+      "await Promise.resolve({",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "imageService.ts must atomically admit priced paid-image attempts before provider transport",
+    );
+  });
+
+  it("pins the reviewed paid-image provider maximum in production config", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      "apps/image-gen/fly.toml",
+      '  MESSENGER_PAID_IMAGE_PROVIDER_MAX_COST_USD = "1.00"\n',
+      '  MESSENGER_PAID_IMAGE_PROVIDER_MAX_COST_USD = "0.50"\n',
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "apps/image-gen/fly.toml must set MESSENGER_PAID_IMAGE_PROVIDER_MAX_COST_USD=1.00",
+    );
+  });
+
   it("requires the trusted image storage public origin", () => {
     const root = createRepositoryFixture();
     replaceFixtureText(

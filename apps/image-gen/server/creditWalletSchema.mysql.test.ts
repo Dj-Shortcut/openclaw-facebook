@@ -319,6 +319,7 @@ suite("0018 credit wallet MySQL 8.4 procedure boundary", () => {
       config: () => ({
         checkoutEnabled: true,
         paidCreditsEnabled: true,
+        paidImageProviderMaxCostUsd: 1,
         workspaceId: scope.workspaceId,
         mode: "test",
         testPilotScope: {

@@ -785,7 +785,7 @@ describe("image provider boundary", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("ignores removed image-price and global spend settings", async () => {
+  it("keeps unpriced calls unchanged without a provider spend policy", async () => {
     configureOpenAiImagesEnv("gpt-image-2");
     process.env.OPENAI_IMAGE_ESTIMATED_COST_USD = "999";
     process.env.MESSENGER_GLOBAL_DAILY_IMAGE_CAP = "1";
@@ -817,6 +817,98 @@ describe("image provider boundary", () => {
         status: "provider_attempt_succeeded",
         estimatedCostUsd: null,
         finalCostUsd: null,
+      }),
+    ]);
+  });
+
+  it("blocks a paid image before transport when its operator maximum exceeds the spend cap", async () => {
+    configureOpenAiImagesEnv("gpt-image-2");
+    process.env.MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD = "0.50";
+    process.env.MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD = "25";
+    process.env.MESSENGER_USER_DAILY_SPEND_CAP_USD = "2";
+    const fetchMock = vi.fn(async () => createGeneratedImageResponse());
+    const markTransportStarted = vi.fn(async () => undefined);
+    const abortBeforeTransport = vi.fn(async () => undefined);
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      new OpenAiImageGenerator().generate({
+        userKey: "paid-spend-user",
+        reqId: "req-paid-spend-rejected",
+        bypassBudgetLimits: true,
+        costLedgerChannel: "facebook_messenger",
+        costLedgerScope: {
+          workspaceId: 42,
+          channelConnectionId: 7,
+          bindingEpoch: 3,
+          privacyEpoch: 5,
+          userKey: "paid-spend-user",
+        },
+        onProviderAttempt: async () => ({
+          providerSpendBudget: {
+            estimatedCostUsd: 1,
+            estimateSource: "operator_conservative_paid_image_max_v1",
+          },
+          markTransportStarted,
+          abortBeforeTransport,
+        }),
+      })
+    ).rejects.toThrow("Messenger spend budget reached");
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(markTransportStarted).not.toHaveBeenCalled();
+    expect(abortBeforeTransport).toHaveBeenCalledOnce();
+    expect(
+      await readCostLedgerPeriod(new Date().toISOString().slice(0, 10))
+    ).toEqual([]);
+  });
+
+  it("records the exact operator maximum inside atomic paid spend admission", async () => {
+    configureOpenAiImagesEnv("gpt-image-2");
+    process.env.MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD = "5";
+    process.env.MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD = "25";
+    process.env.MESSENGER_USER_DAILY_SPEND_CAP_USD = "2";
+    const fetchMock = vi.fn(async () => createGeneratedImageResponse());
+    const markTransportStarted = vi.fn(async () => undefined);
+    const abortBeforeTransport = vi.fn(async () => undefined);
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      new OpenAiImageGenerator().generate({
+        userKey: "paid-spend-user",
+        reqId: "req-paid-spend-admitted",
+        costLedgerChannel: "facebook_messenger",
+        costLedgerScope: {
+          workspaceId: 42,
+          channelConnectionId: 7,
+          bindingEpoch: 3,
+          privacyEpoch: 5,
+          userKey: "paid-spend-user",
+        },
+        onProviderAttempt: async () => ({
+          providerSpendBudget: {
+            estimatedCostUsd: 1,
+            estimateSource: "operator_conservative_paid_image_max_v1",
+          },
+          markTransportStarted,
+          abortBeforeTransport,
+        }),
+      })
+    ).resolves.toBeDefined();
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(markTransportStarted).toHaveBeenCalledOnce();
+    expect(abortBeforeTransport).not.toHaveBeenCalled();
+    expect(
+      await readCostLedgerPeriod(new Date().toISOString().slice(0, 10))
+    ).toEqual([
+      expect.objectContaining({
+        status: "provider_attempt_succeeded",
+        estimatedCostUsd: 1,
+        estimatedOutputCostUsd: null,
+        costEstimateComplete: true,
+        estimateSource: "operator_conservative_paid_image_max_v1",
+        unpricedCostComponents: [],
       }),
     ]);
   });

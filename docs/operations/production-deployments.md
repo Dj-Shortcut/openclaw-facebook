@@ -474,10 +474,12 @@ Before paid-credit exposure, set the non-secret
 `CREDIT_CHECKOUT_HMAC_ACTIVE_KEY_ID=k1` beside the dedicated Fly secret. A later
 rotation must deploy the new active ID/key together with every still-required
 predecessor in `CREDIT_CHECKOUT_HMAC_PREVIOUS_KEYS`. Readiness rejects a
-malformed or unbounded keyring, and the runtime resolves an existing wallet by
-its exact persisted Messenger subject before selecting the retained key. Never
-remove a predecessor until no non-erased wallet or provider-resolution proof
-uses it; removal is a fail-closed incident, not a wallet migration.
+malformed or duplicate keyring entry, but does not impose a fixed predecessor
+count because purchased credits do not expire. The runtime resolves an existing
+wallet by its exact persisted Messenger subject before selecting the retained
+key. Never remove a predecessor until no non-erased wallet or
+provider-resolution proof uses it; removal is a fail-closed incident, not a
+wallet migration.
 
 Test Mode exposure is additionally limited to one approved pseudonymous
 Messenger subject on one exact Page binding. In the reviewed activation change,
@@ -491,6 +493,13 @@ place the source user key or PSID in config, documentation, evidence, chat or
 logs. `/readyz` must fail before database access when any part is absent or
 stale. A different user in the same owner workspace remains on the ordinary
 free-quota response and cannot create a wallet, intent or provider operation.
+
+Set the non-secret `MESSENGER_PAID_IMAGE_PROVIDER_MAX_COST_USD=1.00` in the same
+reviewed Test Mode activation. This is a conservative reservation against the
+global, monthly and per-user provider spend caps before a paid image request
+starts, not the provider's final invoice cost. Re-review the value whenever the
+model, quality, size or source-image policy changes; readiness fails closed if
+paid credits are enabled without a positive finite value.
 
 Do not type migration commands into a production shell and do not start an
 ad-hoc migration Machine. Normal releases use the image's compatibility check;

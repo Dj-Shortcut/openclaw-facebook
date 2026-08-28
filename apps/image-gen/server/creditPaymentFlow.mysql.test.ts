@@ -117,6 +117,7 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
       "CREDIT_CHECKOUT_HMAC_PREVIOUS_KEYS",
       "CREDIT_CHECKOUT_HMAC_SECRET",
       "MESSENGER_PAID_CREDITS_ENABLED",
+      "MESSENGER_PAID_IMAGE_PROVIDER_MAX_COST_USD",
       "MOLLIE_BILLING_DRAIN_ENABLED",
       "MOLLIE_BILLING_ENABLED",
       "MOLLIE_CREDIT_CHECKOUT_ENABLED",
@@ -140,6 +141,7 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
     delete process.env.CREDIT_CHECKOUT_HMAC_PREVIOUS_KEYS;
     process.env.CREDIT_CHECKOUT_HMAC_SECRET = TEST_CHECKOUT_SECRET;
     process.env.MESSENGER_PAID_CREDITS_ENABLED = "true";
+    process.env.MESSENGER_PAID_IMAGE_PROVIDER_MAX_COST_USD = "1";
     process.env.MOLLIE_BILLING_DRAIN_ENABLED = "true";
     process.env.MOLLIE_BILLING_ENABLED = "false";
     process.env.MOLLIE_CREDIT_CHECKOUT_ENABLED = "true";
@@ -684,6 +686,7 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
       pilotConfig: () => ({
         checkoutEnabled: true,
         paidCreditsEnabled: true,
+        paidImageProviderMaxCostUsd: 1,
         workspaceId: owner.workspaceId,
         mode: "test",
         testPilotScope: {
@@ -910,6 +913,7 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
         pilotConfig: () => ({
           checkoutEnabled: true,
           paidCreditsEnabled: true,
+          paidImageProviderMaxCostUsd: 1,
           workspaceId: owner.workspaceId,
           mode: "test",
           testPilotScope: {

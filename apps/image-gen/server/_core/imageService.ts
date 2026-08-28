@@ -28,7 +28,10 @@ import {
   GenerationTimeoutError,
   MissingOpenAiApiKeyError,
 } from "./image-generation/imageServiceErrors";
-import { getMessengerGenerationGlobalLimitConfig } from "./generationGuard";
+import {
+  admitMessengerProviderSpend,
+  getMessengerGenerationGlobalLimitConfig,
+} from "./generationGuard";
 import {
   isMessengerGenerationInlineFallbackEnabled,
   isMessengerGenerationQueueEnabled,
@@ -44,6 +47,10 @@ const OPENAI_IMAGES_PROVIDER = "openai-images" as const;
 export type ImageProvider = typeof OPENAI_IMAGES_PROVIDER;
 
 export type ProviderAttemptAdmission = Readonly<{
+  providerSpendBudget?: Readonly<{
+    estimatedCostUsd: number;
+    estimateSource: string;
+  }>;
   markTransportStarted: () => Promise<void>;
   abortBeforeTransport: () => Promise<void>;
 }>;
@@ -312,40 +319,61 @@ export class OpenAiImageGenerator implements ImageGenerator {
                 input.costLedgerScope
               );
             }
-            await appendCostLedgerEntry(
-              {
-                id: costLedgerEntryId,
-                channel: input.costLedgerChannel ?? "image_gen",
-                operation: "image_generation",
-                provider,
-                model: requestContext.model,
-                providerUsage: {
-                  generationKind: input.generationKind ?? null,
-                  hasSourceImage: preparedInput.hasSourceImage,
-                  size: imageRequestOptions.size,
-                  quality: imageRequestOptions.quality,
-                  inputFidelity: imageRequestOptions.inputFidelity ?? null,
-                  ...(input.bypassBudgetLimits
-                    ? { budgetBypassApplied: true }
-                    : {}),
+            const providerSpendBudget = admission?.providerSpendBudget;
+            const recordAttempt = async (): Promise<void> => {
+              await appendCostLedgerEntry(
+                {
+                  id: costLedgerEntryId,
+                  channel: input.costLedgerChannel ?? "image_gen",
+                  operation: "image_generation",
+                  provider,
+                  model: requestContext.model,
+                  providerUsage: {
+                    generationKind: input.generationKind ?? null,
+                    hasSourceImage: preparedInput.hasSourceImage,
+                    size: imageRequestOptions.size,
+                    quality: imageRequestOptions.quality,
+                    inputFidelity: imageRequestOptions.inputFidelity ?? null,
+                    ...(input.bypassBudgetLimits
+                      ? { budgetBypassApplied: true }
+                      : {}),
+                  },
+                  ...(input.costLedgerScope ?? {}),
+                  userKey: input.userKey,
+                  reqId: input.reqId,
+                  status: "provider_attempt_started",
+                  estimatedCostUsd:
+                    providerSpendBudget?.estimatedCostUsd ?? null,
+                  estimatedOutputCostUsd: null,
+                  finalCostUsd: null,
+                  costEstimateComplete: providerSpendBudget !== undefined,
+                  estimateSource: providerSpendBudget?.estimateSource ?? null,
+                  unpricedCostComponents: providerSpendBudget
+                    ? []
+                    : ["image_generation"],
                 },
-                ...(input.costLedgerScope ?? {}),
-                userKey: input.userKey,
+                attemptedAt
+              );
+              ledgerEntryRecorded = true;
+              lastCostLedgerEntryId = costLedgerEntryId;
+              lastCostLedgerEntryRecordedAt = attemptedAt;
+              await admission?.markTransportStarted();
+            };
+            if (providerSpendBudget) {
+              await admitMessengerProviderSpend({
                 reqId: input.reqId,
-                status: "provider_attempt_started",
-                estimatedCostUsd: null,
+                attemptId: costLedgerEntryId,
+                userKey: input.userKey,
+                tenantScope: input.costLedgerScope,
+                estimatedCostUsd: providerSpendBudget.estimatedCostUsd,
                 estimatedOutputCostUsd: null,
-                finalCostUsd: null,
-                costEstimateComplete: false,
-                estimateSource: null,
-                unpricedCostComponents: ["image_generation"],
-              },
-              attemptedAt
-            );
-            ledgerEntryRecorded = true;
-            lastCostLedgerEntryId = costLedgerEntryId;
-            lastCostLedgerEntryRecordedAt = attemptedAt;
-            await admission?.markTransportStarted();
+                costEstimateComplete: true,
+                now: attemptedAt,
+                recordAttempt,
+              });
+            } else {
+              await recordAttempt();
+            }
           } catch (error) {
             const cleanupErrors: unknown[] = [];
             if (ledgerEntryRecorded) {

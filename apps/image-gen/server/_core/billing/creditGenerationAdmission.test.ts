@@ -20,6 +20,7 @@ const CONFIG: CreditCheckoutPilotConfig = Object.freeze({
   paidCreditsEnabled: true,
   workspaceId: 42,
   mode: "test",
+  paidImageProviderMaxCostUsd: 1,
   testPilotScope: {
     channelConnectionId: 12,
     bindingEpoch: 3,
@@ -119,6 +120,25 @@ describe("paid credit generation admission", () => {
     expect(readWallet).not.toHaveBeenCalled();
   });
 
+  it.each([null, 0, -1, Number.NaN, Number.POSITIVE_INFINITY])(
+    "fails closed for an invalid provider maximum %s before reading a wallet",
+    async providerMaxCostUsd => {
+      const readWalletIdentity = vi.fn();
+      const deps = dependencies({
+        config: () => ({
+          ...CONFIG,
+          paidImageProviderMaxCostUsd: providerMaxCostUsd,
+        }),
+        readWalletIdentity,
+      });
+
+      await expect(
+        reservePaidCreditGeneration(INPUT, deps)
+      ).rejects.toBeInstanceOf(PaidCreditGenerationAdmissionError);
+      expect(readWalletIdentity).not.toHaveBeenCalled();
+    }
+  );
+
   it("rejects another Messenger user in the same workspace before reading or reserving a wallet", async () => {
     const readWalletIdentity = vi.fn();
     const readWallet = vi.fn();
@@ -200,6 +220,7 @@ describe("paid credit generation admission", () => {
       reservationId: first.reservation.reservationId,
       imageQuality: "medium",
     });
+    expect(first.reservation.providerMaxCostUsd).toBe(1);
     expect(JSON.stringify(first.reservation)).not.toContain(USER_KEY);
   });
 

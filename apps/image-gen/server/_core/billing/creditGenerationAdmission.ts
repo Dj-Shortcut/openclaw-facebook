@@ -46,6 +46,7 @@ export type PaidCreditGenerationInput = Readonly<{
 export type PaidCreditGenerationReservation = Readonly<{
   reservationId: string;
   imageQuality: "medium";
+  providerMaxCostUsd: number;
   markTransportStarted: () => Promise<void>;
   commitProviderSuccess: () => Promise<void>;
   releaseProviderRejected: (status: number) => Promise<void>;
@@ -476,6 +477,14 @@ export async function reservePaidCreditGeneration(
   if (!isCreditCheckoutMessengerScopeAllowed(config, input)) {
     return { available: false, reason: "outside_pilot" };
   }
+  const providerMaxCostUsd = config.paidImageProviderMaxCostUsd;
+  if (
+    typeof providerMaxCostUsd !== "number" ||
+    !Number.isFinite(providerMaxCostUsd) ||
+    providerMaxCostUsd <= 0
+  ) {
+    fail();
+  }
 
   const subjectScope = messengerScope({ ...input, mode: config.mode });
   const persistedIdentity = await dependencies.readWalletIdentity(subjectScope);
@@ -559,6 +568,7 @@ export async function reservePaidCreditGeneration(
   const reservation: PaidCreditGenerationReservation = Object.freeze({
     reservationId: derived.material.reservationId,
     imageQuality: "medium" as const,
+    providerMaxCostUsd,
     markTransportStarted: async () => {
       if (
         state === "transport_started" ||

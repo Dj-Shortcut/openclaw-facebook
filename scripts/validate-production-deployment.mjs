@@ -6840,6 +6840,7 @@ export function validateProductionRepository(rootDir = process.cwd()) {
         ["MESSENGER_FREE_MONTHLY_LIMIT", "20"],
         ["MESSENGER_IMAGE_QUOTA_TIME_ZONE", "Europe/Brussels"],
         ["MESSENGER_PAID_CREDITS_ENABLED", "false"],
+        ["MESSENGER_PAID_IMAGE_PROVIDER_MAX_COST_USD", "1.00"],
         ["MOLLIE_CREDIT_CHECKOUT_ENABLED", "false"],
         ["MOLLIE_CREDIT_WORKSPACE_ID", "1"],
         ["OPENAI_IMAGE_MAX_RETRIES", "0"],
@@ -6909,7 +6910,6 @@ export function validateProductionRepository(rootDir = process.cwd()) {
       );
       for (const forbiddenAdmissionCall of [
         "assertMessengerDailyImageBudgetAvailable(",
-        "admitMessengerProviderSpend(",
         "estimateOpenAiImageRequestCost(",
         'safeLog("image_generation_cost_estimate"',
       ]) {
@@ -6918,6 +6918,11 @@ export function validateProductionRepository(rootDir = process.cwd()) {
             `imageService.ts must not calculate or gate on internal image prices`,
           );
         }
+      }
+      if (!imageService.includes("await admitMessengerProviderSpend({")) {
+        fail(
+          `imageService.ts must atomically admit priced paid-image attempts before provider transport`,
+        );
       }
 
       if (

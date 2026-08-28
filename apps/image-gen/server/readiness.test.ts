@@ -37,6 +37,7 @@ const READINESS_ENV_KEYS = [
   "MOLLIE_BILLING_SCHEDULER_MODE",
   "MOLLIE_CREDIT_CHECKOUT_ENABLED",
   "MESSENGER_PAID_CREDITS_ENABLED",
+  "MESSENGER_PAID_IMAGE_PROVIDER_MAX_COST_USD",
   "MOLLIE_CREDIT_WORKSPACE_ID",
   "MOLLIE_CREDIT_TEST_CHANNEL_CONNECTION_ID",
   "MOLLIE_CREDIT_TEST_BINDING_EPOCH",
@@ -274,6 +275,7 @@ describe("readiness", () => {
       MOLLIE_MODE: "test",
       MOLLIE_CREDIT_CHECKOUT_ENABLED: "true",
       MESSENGER_PAID_CREDITS_ENABLED: "true",
+      MESSENGER_PAID_IMAGE_PROVIDER_MAX_COST_USD: "1",
       MOLLIE_CREDIT_WORKSPACE_ID: "42",
       MOLLIE_CREDIT_TEST_CHANNEL_CONNECTION_ID: "8",
       MOLLIE_CREDIT_TEST_BINDING_EPOCH: "3",
@@ -305,11 +307,60 @@ describe("readiness", () => {
     });
   });
 
+  it.each([
+    ["missing", undefined, "is required before paid credits"],
+    ["nonpositive", "0", "must be a positive finite amount"],
+  ] as const)(
+    "fails paid-credit readiness before database access for a %s provider maximum",
+    async (_case, providerMaximum, expectedMessage) => {
+      for (const [name, value] of Object.entries({
+        MOLLIE_MODE: "test",
+        MOLLIE_CREDIT_CHECKOUT_ENABLED: "true",
+        MESSENGER_PAID_CREDITS_ENABLED: "true",
+        MOLLIE_CREDIT_WORKSPACE_ID: "42",
+        MOLLIE_CREDIT_TEST_CHANNEL_CONNECTION_ID: "8",
+        MOLLIE_CREDIT_TEST_BINDING_EPOCH: "3",
+        MOLLIE_CREDIT_TEST_PRIVACY_EPOCH: "5",
+        MOLLIE_CREDIT_TEST_USER_KEY_HASH: deriveCreditCheckoutTestUserKeyHash(
+          "a".repeat(64)
+        ),
+        MOLLIE_BILLING_DRAIN_ENABLED: "true",
+        BILLING_NOTIFICATION_PLANE_ENABLED: "true",
+        MOLLIE_BILLING_ENABLED: "false",
+        MOLLIE_LIVE_BILLING_ENABLED: "false",
+        CREDIT_CHECKOUT_HMAC_ACTIVE_KEY_ID: "k1",
+        CREDIT_CHECKOUT_HMAC_SECRET: "ab".repeat(32),
+      })) {
+        vi.stubEnv(name, value);
+      }
+      if (providerMaximum === undefined) {
+        delete process.env.MESSENGER_PAID_IMAGE_PROVIDER_MAX_COST_USD;
+      } else {
+        vi.stubEnv(
+          "MESSENGER_PAID_IMAGE_PROVIDER_MAX_COST_USD",
+          providerMaximum
+        );
+      }
+      const databaseCheck = vi
+        .spyOn(creditCheckoutReadiness, "assertCreditCheckoutDatabaseReadiness")
+        .mockResolvedValue();
+      const check = buildRuntimeReadinessChecks().find(
+        item => item.name === "credit_checkout"
+      );
+
+      await expect(check?.check()).rejects.toThrow(
+        `MESSENGER_PAID_IMAGE_PROVIDER_MAX_COST_USD ${expectedMessage}`
+      );
+      expect(databaseCheck).not.toHaveBeenCalled();
+    }
+  );
+
   it("fails Test Mode readiness before database access without the exact tester pin", async () => {
     for (const [name, value] of Object.entries({
       MOLLIE_MODE: "test",
       MOLLIE_CREDIT_CHECKOUT_ENABLED: "true",
       MESSENGER_PAID_CREDITS_ENABLED: "true",
+      MESSENGER_PAID_IMAGE_PROVIDER_MAX_COST_USD: "1",
       MOLLIE_CREDIT_WORKSPACE_ID: "42",
       MOLLIE_CREDIT_TEST_CHANNEL_CONNECTION_ID: "8",
       MOLLIE_CREDIT_TEST_BINDING_EPOCH: "3",
@@ -342,6 +393,7 @@ describe("readiness", () => {
       MOLLIE_MODE: "test",
       MOLLIE_CREDIT_CHECKOUT_ENABLED: "true",
       MESSENGER_PAID_CREDITS_ENABLED: "true",
+      MESSENGER_PAID_IMAGE_PROVIDER_MAX_COST_USD: "1",
       MOLLIE_CREDIT_WORKSPACE_ID: "42",
       MOLLIE_CREDIT_TEST_CHANNEL_CONNECTION_ID: "8",
       MOLLIE_CREDIT_TEST_BINDING_EPOCH: "3",
