@@ -87,7 +87,10 @@ export function registerCreditCheckoutRoutes(
         const session = await readSession(cookieValue, {
           requireUnexpired: true,
         });
-        if (session.intentId !== intentId) throw new Error("Intent mismatch");
+        if (session.intentId !== intentId) {
+          unavailable(res);
+          return;
+        }
         noStore(res).status(200).json({ offer: session.offer });
       } catch {
         unavailable(res);
@@ -117,7 +120,10 @@ export function registerCreditCheckoutRoutes(
         const session = await readSession(cookieValue, {
           requireUnexpired: true,
         });
-        if (session.intentId !== intentId) throw new Error("Intent mismatch");
+        if (session.intentId !== intentId) {
+          unavailable(res);
+          return;
+        }
         const result = await dependencies.confirm(session);
         noStore(res)
           .status(200)

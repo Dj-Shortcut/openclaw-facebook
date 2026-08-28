@@ -104,7 +104,9 @@ describe("legal routes", () => {
     );
     expect(terms).toContain("signed checkout link opened from Messenger");
     expect(terms).toContain("Credits do not expire");
-    expect(terms).toContain("does not consume a credit");
+    expect(terms).toContain(
+      "Provider, publication, or delivery failures do not consume a credit"
+    );
     expect(billingPolicy).toContain(
       `${displayedPrice} once in ${offer.amount.currency}`
     );
@@ -113,7 +115,7 @@ describe("legal routes", () => {
     expect(billingPolicy).toContain("Credits do not expire");
     expect(billingPolicy).toContain("No renewal, top-up or overage");
     expect(billingPolicy).toContain(
-      "a retry of the same accepted request does not consume another credit"
+      "a retry of the same delivered request does not consume another credit"
     );
     expect(billingPolicy).not.toContain("Startpilot");
     expect(billingPolicy).not.toContain("30-day");

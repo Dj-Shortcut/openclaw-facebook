@@ -311,7 +311,7 @@ describe("OAuth callback security", () => {
         externalId: "page-42",
         encryptedAccessToken: expect.stringMatching(/^v1:/),
       }),
-      { updatePolicy: "preserve_exact_facebook_page_binding" }
+      { updatePolicy: "preserve_exact_facebook_binding" }
     );
     expect(
       mocks.upsertChannelConnection.mock.calls[0]?.[0]?.encryptedAccessToken

@@ -8,6 +8,7 @@ const {
   reserveMessengerProviderAttemptFenceMock,
   admitStartpilotImageProviderAttemptMock,
   recoverStartpilotImageProviderAdmissionMock,
+  commitDeliveredPaidCreditGenerationMock,
   reservePaidCreditGenerationMock,
   reserveMessengerCreditCheckoutMock,
   assertMessengerPrivacySubjectMock,
@@ -26,6 +27,7 @@ const {
   reserveMessengerProviderAttemptFenceMock: vi.fn(),
   admitStartpilotImageProviderAttemptMock: vi.fn(),
   recoverStartpilotImageProviderAdmissionMock: vi.fn(),
+  commitDeliveredPaidCreditGenerationMock: vi.fn(),
   reservePaidCreditGenerationMock: vi.fn(),
   reserveMessengerCreditCheckoutMock: vi.fn(),
   assertMessengerPrivacySubjectMock: vi.fn(),
@@ -59,6 +61,8 @@ vi.mock("./_core/billing/creditGenerationAdmission", async importOriginal => {
     >();
   return {
     ...actual,
+    commitDeliveredPaidCreditGeneration:
+      commitDeliveredPaidCreditGenerationMock,
     reservePaidCreditGeneration: reservePaidCreditGenerationMock,
   };
 });
@@ -149,7 +153,11 @@ vi.mock("./_core/logger", async importOriginal => {
 });
 
 import { createHandlerContext } from "./_core/webhookHandlerContext";
-import { createMessengerGenerationJobRunner } from "./_core/webhookGenerationJobs";
+import {
+  commitPaidCreditFromDeliveredCompletion,
+  createMessengerGenerationJobRunner,
+} from "./_core/webhookGenerationJobs";
+import { CreditCheckoutReservationError } from "./_core/billing/creditCheckoutReservationService";
 import * as messengerGenerationQueue from "./_core/messengerGenerationQueue";
 import {
   getState,
@@ -164,6 +172,7 @@ import {
 } from "./_core/stateStore";
 import { t } from "./_core/i18n";
 import {
+  confirmMessengerGenerationDeliveryReceipts,
   getMessengerGenerationCompletion,
   markMessengerGenerationCompleted,
   markMessengerGenerationDeliveryStarted,
@@ -248,6 +257,8 @@ beforeEach(() => {
   });
   recoverStartpilotImageProviderAdmissionMock.mockReset();
   recoverStartpilotImageProviderAdmissionMock.mockResolvedValue(undefined);
+  commitDeliveredPaidCreditGenerationMock.mockReset();
+  commitDeliveredPaidCreditGenerationMock.mockResolvedValue(undefined);
   reservePaidCreditGenerationMock.mockReset();
   reservePaidCreditGenerationMock.mockResolvedValue({
     available: false,
@@ -2567,17 +2578,20 @@ describe("messenger generation job safety", () => {
   it("blocks a second provider transport after a paid credit transport starts", async () => {
     process.env.MESSENGER_FREE_DAILY_LIMIT = "0";
     const markCreditTransportStarted = vi.fn(async () => undefined);
-    const commitProviderSuccess = vi.fn(async () => undefined);
+    const markProviderAccepted = vi.fn(async () => undefined);
+    const commitDeliveredOutput = vi.fn(async () => undefined);
     const releaseProviderRejected = vi.fn(async () => undefined);
     const releaseBeforeTransport = vi.fn(async () => undefined);
     reservePaidCreditGenerationMock.mockResolvedValueOnce({
       available: true,
       reservation: {
         reservationId: "11111111-1111-8111-8111-111111111111",
+        mode: "test",
         imageQuality: "medium",
         providerMaxCostUsd: 1,
         markTransportStarted: markCreditTransportStarted,
-        commitProviderSuccess,
+        markProviderAccepted,
+        commitDeliveredOutput,
         releaseProviderRejected,
         releaseBeforeTransport,
         toJSON: () => ({
@@ -2613,7 +2627,8 @@ describe("messenger generation job safety", () => {
       userKey: job.userId,
       requestId: job.reqId,
     });
-    expect(commitProviderSuccess).not.toHaveBeenCalled();
+    expect(markProviderAccepted).not.toHaveBeenCalled();
+    expect(commitDeliveredOutput).not.toHaveBeenCalled();
     expect(releaseProviderRejected).not.toHaveBeenCalled();
     expect(markCreditTransportStarted).toHaveBeenCalledOnce();
     expect(releaseBeforeTransport).not.toHaveBeenCalled();
@@ -2631,15 +2646,305 @@ describe("messenger generation job safety", () => {
     ).resolves.toMatchObject({ daily: { used: 0 }, monthly: { used: 0 } });
   });
 
+  it.each([
+    ["malformed provider 2xx", new SyntaxError("provider body was malformed")],
+    ["published output failure", new Error("storage publication failed")],
+  ])(
+    "records acceptance but does not debit or deliver after %s",
+    async (_scenario, providerOutputError) => {
+      process.env.MESSENGER_FREE_DAILY_LIMIT = "0";
+      const markProviderAccepted = vi.fn(async () => undefined);
+      const commitDeliveredOutput = vi.fn(async () => undefined);
+      const releaseBeforeTransport = vi.fn(async () => undefined);
+      reservePaidCreditGenerationMock.mockResolvedValueOnce({
+        available: true,
+        reservation: paidCreditReservationFixture({
+          markProviderAccepted,
+          commitDeliveredOutput,
+          releaseBeforeTransport,
+        }),
+      });
+      executeGenerationFlowMock.mockImplementationOnce(async input => {
+        await (await input.onProviderAttempt())?.markTransportStarted();
+        await input.onProviderSuccess?.();
+        return failureGenerationResult(providerOutputError);
+      });
+
+      await createTestRunner().processMessengerGenerationJob(
+        paidCreditGenerationJob(`paid-${_scenario.replaceAll(" ", "-")}`)
+      );
+
+      expect(markProviderAccepted).toHaveBeenCalledOnce();
+      expect(commitDeliveredOutput).not.toHaveBeenCalled();
+      expect(releaseBeforeTransport).not.toHaveBeenCalled();
+      expect(sendImageMock).not.toHaveBeenCalled();
+      expect(finalizeMessengerProviderAttemptFenceMock).toHaveBeenCalledWith(
+        expect.any(Object),
+        "ambiguous"
+      );
+    }
+  );
+
+  it("debits a paid credit exactly once only after durable image delivery", async () => {
+    process.env.MESSENGER_FREE_DAILY_LIMIT = "0";
+    const job = paidCreditGenerationJob("paid-delivered-once");
+    const markProviderAccepted = vi.fn(async () => undefined);
+    const commitDeliveredOutput = vi.fn(async () => {
+      await expect(
+        getMessengerGenerationCompletion(
+          job.reqId,
+          paidCreditCompletionFence(job)
+        )
+      ).resolves.toMatchObject({ deliveryStatus: "delivered" });
+    });
+    reservePaidCreditGenerationMock.mockResolvedValueOnce({
+      available: true,
+      reservation: paidCreditReservationFixture({
+        markProviderAccepted,
+        commitDeliveredOutput,
+      }),
+    });
+    executeGenerationFlowMock.mockImplementationOnce(async input => {
+      await (await input.onProviderAttempt())?.markTransportStarted();
+      await input.onProviderSuccess?.();
+      await input.onProviderSuccess?.();
+      expect(commitDeliveredOutput).not.toHaveBeenCalled();
+      return successGenerationResult();
+    });
+    sendImageMock.mockResolvedValueOnce({
+      sent: true,
+      messageId: "mid-paid-delivered-once",
+    });
+
+    await createTestRunner().processMessengerGenerationJob(job);
+
+    expect(sendImageMock).toHaveBeenCalledOnce();
+    expect(markProviderAccepted).toHaveBeenCalledOnce();
+    expect(commitDeliveredOutput).not.toHaveBeenCalled();
+    await expect(
+      getMessengerGenerationCompletion(
+        job.reqId,
+        paidCreditCompletionFence(job)
+      )
+    ).resolves.toMatchObject({ deliveryStatus: "receipt_pending" });
+
+    await confirmMessengerGenerationDeliveryReceipts(
+      ["mid-paid-delivered-once"],
+      paidCreditCompletionFence(job)
+    );
+    await commitPaidCreditFromDeliveredCompletion({
+      reqId: job.reqId,
+      userId: job.userId,
+      imageUrl: "https://img.example/generated.png",
+      completionFence: paidCreditCompletionFence(job),
+      paidCreditMode: "test",
+    });
+
+    expect(commitDeliveredPaidCreditGenerationMock).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a generic delivered marker without exact Meta receipt provenance", async () => {
+    process.env.MESSENGER_FREE_DAILY_LIMIT = "0";
+    const job = paidCreditGenerationJob("paid-generic-delivered-marker");
+    reservePaidCreditGenerationMock.mockResolvedValueOnce({
+      available: true,
+      reservation: paidCreditReservationFixture({}),
+    });
+    executeGenerationFlowMock.mockImplementationOnce(async input => {
+      await (await input.onProviderAttempt())?.markTransportStarted();
+      await input.onProviderSuccess?.();
+      return successGenerationResult();
+    });
+    sendImageMock.mockResolvedValueOnce({
+      sent: true,
+      messageId: "mid-paid-generic-delivered-marker",
+    });
+
+    await createTestRunner().processMessengerGenerationJob(job);
+    await markMessengerGenerationDelivered(
+      job.reqId,
+      "https://img.example/generated.png",
+      job.userId,
+      Date.now(),
+      paidCreditCompletionFence(job)
+    );
+
+    await expect(
+      commitPaidCreditFromDeliveredCompletion({
+        reqId: job.reqId,
+        userId: job.userId,
+        imageUrl: "https://img.example/generated.png",
+        completionFence: paidCreditCompletionFence(job),
+        paidCreditMode: "test",
+      })
+    ).rejects.toThrow();
+    expect(commitDeliveredPaidCreditGenerationMock).not.toHaveBeenCalled();
+    const genericDelivered = await getMessengerGenerationCompletion(
+      job.reqId,
+      paidCreditCompletionFence(job)
+    );
+    expect(genericDelivered).toMatchObject({ deliveryStatus: "delivered" });
+    expect(genericDelivered).not.toHaveProperty("deliveryProof");
+    expect(genericDelivered).not.toHaveProperty("receiptConfirmedAt");
+  });
+
+  it("commits through durable receipt validation when the receipt beats the Graph response", async () => {
+    process.env.MESSENGER_FREE_DAILY_LIMIT = "0";
+    const job = paidCreditGenerationJob("paid-receipt-before-response");
+    const commitDeliveredOutput = vi.fn(async () => undefined);
+    reservePaidCreditGenerationMock.mockResolvedValueOnce({
+      available: true,
+      reservation: paidCreditReservationFixture({ commitDeliveredOutput }),
+    });
+    executeGenerationFlowMock.mockImplementationOnce(async input => {
+      await (await input.onProviderAttempt())?.markTransportStarted();
+      await input.onProviderSuccess?.();
+      return successGenerationResult();
+    });
+    sendImageMock.mockImplementationOnce(async () => {
+      await confirmMessengerGenerationDeliveryReceipts(
+        ["mid-paid-receipt-before-response"],
+        paidCreditCompletionFence(job)
+      );
+      return { sent: true, messageId: "mid-paid-receipt-before-response" };
+    });
+
+    await createTestRunner().processMessengerGenerationJob(job);
+
+    expect(commitDeliveredOutput).not.toHaveBeenCalled();
+    expect(commitDeliveredPaidCreditGenerationMock).toHaveBeenCalledOnce();
+    await expect(
+      getMessengerGenerationCompletion(
+        job.reqId,
+        paidCreditCompletionFence(job)
+      )
+    ).resolves.toMatchObject({
+      deliveryStatus: "delivered",
+      deliveryProof: "meta_delivery_receipt_v1",
+      messengerMessageIdHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+    });
+  });
+
+  it("keeps a paid credit held when image delivery is known to have failed", async () => {
+    process.env.MESSENGER_FREE_DAILY_LIMIT = "0";
+    const markProviderAccepted = vi.fn(async () => undefined);
+    const commitDeliveredOutput = vi.fn(async () => undefined);
+    reservePaidCreditGenerationMock.mockResolvedValueOnce({
+      available: true,
+      reservation: paidCreditReservationFixture({
+        markProviderAccepted,
+        commitDeliveredOutput,
+      }),
+    });
+    executeGenerationFlowMock.mockImplementationOnce(async input => {
+      await (await input.onProviderAttempt())?.markTransportStarted();
+      await input.onProviderSuccess?.();
+      return successGenerationResult();
+    });
+    sendImageMock.mockRejectedValueOnce(
+      new Error("Messenger rejected image before delivery")
+    );
+    const job = paidCreditGenerationJob("paid-delivery-known-failed");
+
+    await createTestRunner().processMessengerGenerationJob(job);
+
+    expect(markProviderAccepted).toHaveBeenCalledOnce();
+    expect(commitDeliveredOutput).not.toHaveBeenCalled();
+    await expect(
+      getMessengerGenerationCompletion(
+        job.reqId,
+        paidCreditCompletionFence(job)
+      )
+    ).resolves.toMatchObject({ deliveryStatus: "pending" });
+
+    commitDeliveredPaidCreditGenerationMock.mockImplementationOnce(async () => {
+      await expect(
+        getMessengerGenerationCompletion(
+          job.reqId,
+          paidCreditCompletionFence(job)
+        )
+      ).resolves.toMatchObject({
+        deliveryStatus: "delivered",
+        quotaAccountingMode: "paid_credit_delivery_v1",
+        paidCreditMode: "test",
+      });
+    });
+    sendImageMock.mockResolvedValueOnce({
+      sent: true,
+      messageId: "mid-paid-known-failed-recovery",
+    });
+    await createTestRunner().processMessengerGenerationJob(job);
+    await confirmMessengerGenerationDeliveryReceipts(
+      ["mid-paid-known-failed-recovery"],
+      paidCreditCompletionFence(job)
+    );
+    await commitPaidCreditFromDeliveredCompletion({
+      reqId: job.reqId,
+      userId: job.userId,
+      imageUrl: "https://img.example/generated.png",
+      completionFence: paidCreditCompletionFence(job),
+      paidCreditMode: "test",
+    });
+
+    expect(executeGenerationFlowMock).toHaveBeenCalledOnce();
+    expect(sendImageMock).toHaveBeenCalledTimes(2);
+    expect(commitDeliveredOutput).not.toHaveBeenCalled();
+    expect(commitDeliveredPaidCreditGenerationMock).toHaveBeenCalledOnce();
+    expect(commitDeliveredPaidCreditGenerationMock).toHaveBeenCalledWith({
+      workspaceId: 42,
+      channelConnectionId: 8,
+      bindingEpoch: 3,
+      privacyEpoch: 5,
+      userKey: job.userId,
+      requestId: job.reqId,
+      mode: "test",
+    });
+  });
+
+  it("keeps a paid credit held when image delivery is ambiguous", async () => {
+    process.env.MESSENGER_FREE_DAILY_LIMIT = "0";
+    const markProviderAccepted = vi.fn(async () => undefined);
+    const commitDeliveredOutput = vi.fn(async () => undefined);
+    reservePaidCreditGenerationMock.mockResolvedValueOnce({
+      available: true,
+      reservation: paidCreditReservationFixture({
+        markProviderAccepted,
+        commitDeliveredOutput,
+      }),
+    });
+    executeGenerationFlowMock.mockImplementationOnce(async input => {
+      await (await input.onProviderAttempt())?.markTransportStarted();
+      await input.onProviderSuccess?.();
+      return successGenerationResult();
+    });
+    sendImageMock.mockRejectedValueOnce(
+      Object.assign(new Error("Messenger response lost"), {
+        messengerDeliveryAmbiguous: true,
+      })
+    );
+    const job = paidCreditGenerationJob("paid-delivery-ambiguous");
+
+    await createTestRunner().processMessengerGenerationJob(job);
+
+    expect(markProviderAccepted).toHaveBeenCalledOnce();
+    expect(commitDeliveredOutput).not.toHaveBeenCalled();
+    await expect(
+      getMessengerGenerationCompletion(
+        job.reqId,
+        paidCreditCompletionFence(job)
+      )
+    ).resolves.toMatchObject({ deliveryStatus: "transport_started" });
+  });
+
   it("releases a paid hold when generation stops before provider transport", async () => {
     process.env.MESSENGER_FREE_DAILY_LIMIT = "0";
-    const commitProviderSuccess = vi.fn(async () => undefined);
+    const commitDeliveredOutput = vi.fn(async () => undefined);
     const releaseBeforeTransport = vi.fn(async () => undefined);
     reservePaidCreditGenerationMock
       .mockResolvedValueOnce({
         available: true,
         reservation: paidCreditReservationFixture({
-          commitProviderSuccess,
+          commitDeliveredOutput,
           releaseBeforeTransport,
         }),
       })
@@ -2657,7 +2962,7 @@ describe("messenger generation job safety", () => {
     await runner.processMessengerGenerationJob(job);
 
     expect(releaseBeforeTransport).toHaveBeenCalledOnce();
-    expect(commitProviderSuccess).not.toHaveBeenCalled();
+    expect(commitDeliveredOutput).not.toHaveBeenCalled();
     expect(markMessengerProviderAttemptStartedMock).not.toHaveBeenCalled();
     expect(executeGenerationFlowMock).toHaveBeenCalledOnce();
     expect(reserveMessengerCreditCheckoutMock).not.toHaveBeenCalled();
@@ -2667,13 +2972,13 @@ describe("messenger generation job safety", () => {
   it("releases the paid hold when spend admission rejects before transport", async () => {
     process.env.MESSENGER_FREE_DAILY_LIMIT = "0";
     const markTransportStarted = vi.fn(async () => undefined);
-    const commitProviderSuccess = vi.fn(async () => undefined);
+    const commitDeliveredOutput = vi.fn(async () => undefined);
     const releaseBeforeTransport = vi.fn(async () => undefined);
     reservePaidCreditGenerationMock.mockResolvedValueOnce({
       available: true,
       reservation: paidCreditReservationFixture({
         markTransportStarted,
-        commitProviderSuccess,
+        commitDeliveredOutput,
         releaseBeforeTransport,
       }),
     });
@@ -2695,7 +3000,7 @@ describe("messenger generation job safety", () => {
     );
 
     expect(markTransportStarted).not.toHaveBeenCalled();
-    expect(commitProviderSuccess).not.toHaveBeenCalled();
+    expect(commitDeliveredOutput).not.toHaveBeenCalled();
     expect(releaseBeforeTransport).toHaveBeenCalledOnce();
     expect(markMessengerProviderAttemptStartedMock).not.toHaveBeenCalled();
     expect(sendImageMock).not.toHaveBeenCalled();
@@ -2703,12 +3008,12 @@ describe("messenger generation job safety", () => {
 
   it("keeps a paid hold for reconciliation after transport becomes ambiguous", async () => {
     process.env.MESSENGER_FREE_DAILY_LIMIT = "0";
-    const commitProviderSuccess = vi.fn(async () => undefined);
+    const commitDeliveredOutput = vi.fn(async () => undefined);
     const releaseBeforeTransport = vi.fn(async () => undefined);
     reservePaidCreditGenerationMock.mockResolvedValueOnce({
       available: true,
       reservation: paidCreditReservationFixture({
-        commitProviderSuccess,
+        commitDeliveredOutput,
         releaseBeforeTransport,
       }),
     });
@@ -2722,7 +3027,7 @@ describe("messenger generation job safety", () => {
     await runner.processMessengerGenerationJob(job);
 
     expect(releaseBeforeTransport).not.toHaveBeenCalled();
-    expect(commitProviderSuccess).not.toHaveBeenCalled();
+    expect(commitDeliveredOutput).not.toHaveBeenCalled();
     expect(finalizeMessengerProviderAttemptFenceMock).toHaveBeenCalledWith(
       expect.any(Object),
       "ambiguous"
@@ -2732,12 +3037,15 @@ describe("messenger generation job safety", () => {
 
   it("releases a paid hold only after an exact provider 400", async () => {
     process.env.MESSENGER_FREE_DAILY_LIMIT = "0";
+    const markProviderAccepted = vi.fn(async () => undefined);
+    const commitDeliveredOutput = vi.fn(async () => undefined);
     const releaseProviderRejected = vi.fn(async () => undefined);
     const releaseBeforeTransport = vi.fn(async () => undefined);
     reservePaidCreditGenerationMock.mockResolvedValueOnce({
       available: true,
       reservation: paidCreditReservationFixture({
-        commitProviderSuccess: vi.fn(async () => undefined),
+        markProviderAccepted,
+        commitDeliveredOutput,
         releaseBeforeTransport,
         releaseProviderRejected,
       }),
@@ -2754,6 +3062,8 @@ describe("messenger generation job safety", () => {
 
     expect(releaseProviderRejected).toHaveBeenCalledOnce();
     expect(releaseProviderRejected).toHaveBeenCalledWith(400);
+    expect(markProviderAccepted).not.toHaveBeenCalled();
+    expect(commitDeliveredOutput).not.toHaveBeenCalled();
     expect(releaseBeforeTransport).not.toHaveBeenCalled();
     expect(finalizeMessengerProviderAttemptFenceMock).toHaveBeenCalledWith(
       expect.any(Object),
@@ -2857,6 +3167,29 @@ describe("messenger generation job safety", () => {
         }
       )
     ).resolves.toBe("AWAITING_EDIT_PROMPT");
+  });
+
+  it("falls back to the free-quota notice when a pending refund blocks checkout", async () => {
+    process.env.MESSENGER_FREE_DAILY_LIMIT = "0";
+    reservePaidCreditGenerationMock.mockResolvedValueOnce({
+      available: false,
+      reason: "empty",
+    });
+    reserveMessengerCreditCheckoutMock.mockRejectedValueOnce(
+      new CreditCheckoutReservationError()
+    );
+    const runner = createTestRunner();
+    const job = paidCreditGenerationJob("refund-pending-checkout");
+
+    await expect(runner.processMessengerGenerationJob(job)).resolves.toEqual({
+      sent: true,
+    });
+
+    expect(reserveMessengerCreditCheckoutMock).toHaveBeenCalledOnce();
+    expect(sendQuickRepliesMock).toHaveBeenCalledOnce();
+    expect(sendButtonTemplateMock).not.toHaveBeenCalled();
+    expect(executeGenerationFlowMock).not.toHaveBeenCalled();
+    expect(reserveMessengerProviderAttemptFenceMock).not.toHaveBeenCalled();
   });
 
   it("shows only the free-quota notice to another user in the same Test Mode workspace", async () => {
@@ -3185,22 +3518,42 @@ function paidCreditGenerationJob(suffix: string) {
   };
 }
 
+function paidCreditCompletionFence(
+  job: ReturnType<typeof paidCreditGenerationJob>
+) {
+  return {
+    workspaceId: job.workspaceId,
+    channelConnectionId: job.channelConnectionId,
+    bindingEpoch: job.bindingEpoch,
+    privacyEpoch: job.privacyEpoch,
+    userKey: job.userId,
+    pageId: job.pageId,
+    channel: "facebook_messenger" as const,
+  };
+}
+
 function paidCreditReservationFixture(input: {
   markTransportStarted?: () => Promise<void>;
-  commitProviderSuccess: () => Promise<void>;
-  releaseBeforeTransport: () => Promise<void>;
+  markProviderAccepted?: () => Promise<void>;
+  commitDeliveredOutput?: () => Promise<void>;
+  releaseBeforeTransport?: () => Promise<void>;
   releaseProviderRejected?: (status: number) => Promise<void>;
 }) {
   return {
     reservationId: "11111111-1111-8111-8111-111111111111",
+    mode: "test" as const,
     imageQuality: "medium" as const,
     providerMaxCostUsd: 1,
     markTransportStarted:
       input.markTransportStarted ?? vi.fn(async () => undefined),
-    commitProviderSuccess: input.commitProviderSuccess,
+    markProviderAccepted:
+      input.markProviderAccepted ?? vi.fn(async () => undefined),
+    commitDeliveredOutput:
+      input.commitDeliveredOutput ?? vi.fn(async () => undefined),
     releaseProviderRejected:
       input.releaseProviderRejected ?? vi.fn(async () => undefined),
-    releaseBeforeTransport: input.releaseBeforeTransport,
+    releaseBeforeTransport:
+      input.releaseBeforeTransport ?? vi.fn(async () => undefined),
     toJSON: () => ({
       reservationId: "11111111-1111-8111-8111-111111111111",
       imageQuality: "medium" as const,

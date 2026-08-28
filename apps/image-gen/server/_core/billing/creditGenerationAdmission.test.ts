@@ -6,7 +6,9 @@ import {
 } from "./creditCheckoutConfig";
 import { deriveCreditWalletIdentity } from "./creditCheckoutIdentity";
 import {
+  commitDeliveredPaidCreditGeneration,
   deriveCreditReservationCommitRecovery,
+  deriveCreditReservationOutputNotDeliveredRecovery,
   deriveCreditReservationProviderRejectedRecovery,
   PaidCreditGenerationAdmissionError,
   reservePaidCreditGeneration,
@@ -42,18 +44,21 @@ function walletIdentity(
   secret: Uint8Array = ACTIVE_SECRET,
   input: PaidCreditGenerationInput = INPUT
 ) {
-  return deriveCreditWalletIdentity({
-    dedicatedSecret: secret,
-    scope: {
-      workspaceId: input.workspaceId,
-      mode: CONFIG.mode,
-      channel: "facebook_messenger",
-      channelConnectionId: input.channelConnectionId,
-      bindingEpoch: input.bindingEpoch,
-      privacyEpoch: input.privacyEpoch,
-      userKey: input.userKey,
-    },
-  });
+  return {
+    ...deriveCreditWalletIdentity({
+      dedicatedSecret: secret,
+      scope: {
+        workspaceId: input.workspaceId,
+        mode: CONFIG.mode,
+        channel: "facebook_messenger",
+        channelConnectionId: input.channelConnectionId,
+        bindingEpoch: input.bindingEpoch,
+        privacyEpoch: input.privacyEpoch,
+        userKey: input.userKey,
+      },
+    }),
+    checkoutAvailable: true,
+  };
 }
 
 function dependencies(
@@ -221,6 +226,7 @@ describe("paid credit generation admission", () => {
       imageQuality: "medium",
     });
     expect(first.reservation.providerMaxCostUsd).toBe(1);
+    expect(first.reservation.mode).toBe("test");
     expect(JSON.stringify(first.reservation)).not.toContain(USER_KEY);
   });
 
@@ -272,6 +278,12 @@ describe("paid credit generation admission", () => {
       evidenceHash: expect.stringMatching(/^[0-9a-f]{64}$/),
     });
     expect(
+      deriveCreditReservationOutputNotDeliveredRecovery(hold, deps)
+    ).toMatchObject({
+      entryId: expect.stringMatching(/^[0-9a-f-]{36}$/),
+      evidenceHash: expect.stringMatching(/^[0-9a-f]{64}$/),
+    });
+    expect(
       deriveCreditReservationCommitRecovery(hold, {
         withKeyring: callback => callback([{ keyId: "k2", secret: newSecret }]),
       })
@@ -295,7 +307,7 @@ describe("paid credit generation admission", () => {
     expect(reserve).not.toHaveBeenCalled();
   });
 
-  it("commits a known provider success exactly once and never releases it", async () => {
+  it("records provider acceptance separately and commits delivered output exactly once", async () => {
     const markTransportStarted = vi.fn(async input => ({
       result: "applied" as const,
       reservationId: input.reservationId,
@@ -325,12 +337,16 @@ describe("paid credit generation admission", () => {
 
     await decision.reservation.markTransportStarted();
     await decision.reservation.markTransportStarted();
-    await decision.reservation.commitProviderSuccess();
-    await decision.reservation.commitProviderSuccess();
+    await decision.reservation.markProviderAccepted();
+    await decision.reservation.markProviderAccepted();
+    expect(markProviderAccepted).toHaveBeenCalledOnce();
+    expect(commit).not.toHaveBeenCalled();
+
+    await decision.reservation.commitDeliveredOutput();
+    await decision.reservation.commitDeliveredOutput();
     await decision.reservation.releaseBeforeTransport();
 
     expect(markTransportStarted).toHaveBeenCalledOnce();
-    expect(markProviderAccepted).toHaveBeenCalledOnce();
     expect(commit).toHaveBeenCalledOnce();
     expect(commit).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -341,6 +357,41 @@ describe("paid credit generation admission", () => {
       })
     );
     expect(release).not.toHaveBeenCalled();
+  });
+
+  it("reconstructs and commits a delivered completion exactly once after restart", async () => {
+    const readReservation = vi
+      .fn()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValue({ status: "reserved" as const });
+    const markProviderAccepted = vi.fn(async input => ({
+      result: "applied" as const,
+      reservationId: input.reservationId,
+    }));
+    const commit = vi.fn(async input => ({
+      result: "applied" as const,
+      reservationId: input.reservationId,
+    }));
+    const deps = dependencies({
+      readReservation,
+      markProviderAccepted,
+      commit,
+    });
+    const decision = await reservePaidCreditGeneration(INPUT, deps);
+    if (!decision.available) throw new Error("unreachable");
+    await decision.reservation.markTransportStarted();
+    await decision.reservation.markProviderAccepted();
+
+    await commitDeliveredPaidCreditGeneration({ ...INPUT, mode: "test" }, deps);
+
+    expect(readReservation).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        reservationId: decision.reservation.reservationId,
+        reservedCreditCount: 1,
+      })
+    );
+    expect(markProviderAccepted).toHaveBeenCalledTimes(2);
+    expect(commit).toHaveBeenCalledOnce();
   });
 
   it("releases exactly one started hold for an exact non-retryable 4xx", async () => {
@@ -413,11 +464,12 @@ describe("paid credit generation admission", () => {
     if (!decision.available) throw new Error("unreachable");
 
     await decision.reservation.markTransportStarted();
-    await expect(decision.reservation.commitProviderSuccess()).rejects.toThrow(
+    await decision.reservation.markProviderAccepted();
+    await expect(decision.reservation.commitDeliveredOutput()).rejects.toThrow(
       "database interrupted after acceptance"
     );
     await decision.reservation.releaseBeforeTransport();
-    await decision.reservation.commitProviderSuccess();
+    await decision.reservation.commitDeliveredOutput();
 
     expect(markTransportStarted).toHaveBeenCalledOnce();
     expect(markProviderAccepted).toHaveBeenCalledOnce();
@@ -458,7 +510,8 @@ describe("paid credit generation admission", () => {
     );
 
     await decision.reservation.markTransportStarted();
-    await decision.reservation.commitProviderSuccess();
+    await decision.reservation.markProviderAccepted();
+    await decision.reservation.commitDeliveredOutput();
     expect(recovered).toEqual({
       entryId: commit.mock.calls[0]?.[0]?.entryId,
       evidenceHash: commit.mock.calls[0]?.[0]?.evidenceHash,
@@ -529,7 +582,7 @@ describe("paid credit generation admission", () => {
     await decision.reservation.releaseBeforeTransport();
     await decision.reservation.releaseBeforeTransport();
     await expect(
-      decision.reservation.commitProviderSuccess()
+      decision.reservation.commitDeliveredOutput()
     ).rejects.toBeInstanceOf(PaidCreditGenerationAdmissionError);
 
     expect(release).toHaveBeenCalledOnce();

@@ -133,6 +133,7 @@ type HarnessOptions = Readonly<{
   commercialEnabled?: boolean;
   controlEpoch?: number;
   schedulerEpoch?: number;
+  refundAdjustmentEntryId?: string | null;
   intent?: Record<string, unknown>;
   operation?: Record<string, unknown> | null;
   route?: Readonly<{ workspaceId: number; intentId: string }> | null;
@@ -185,6 +186,7 @@ function createHarness(options: HarnessOptions = {}) {
           privacyEpoch: PRIVACY_EPOCH,
           currentUserKeyHash: USER_KEY,
           financialSubjectRef: FINANCIAL_REF,
+          refundAdjustmentEntryId: options.refundAdjustmentEntryId ?? null,
           status: "active",
         },
       ];
@@ -403,6 +405,20 @@ describe("customerless credit checkout provider store", () => {
     expect(harness.updates).toEqual([]);
   });
 
+  it("refuses a provider claim while the wallet has a pending refund", async () => {
+    const harness = createHarness({
+      operation: null,
+      refundAdjustmentEntryId: "55555555-5555-4555-8555-555555555555",
+    });
+    getDatabaseOrThrowMock.mockResolvedValue(harness.database);
+
+    await expect(claimCreditPaymentCreation(scope, NOW)).resolves.toEqual({
+      claimed: false,
+    });
+    expect(harness.inserts).toEqual([]);
+    expect(harness.updates).toEqual([]);
+  });
+
   it("marks transport started only under the exact active lease and epoch", async () => {
     const harness = createHarness({
       intent: intent({ status: "creating_payment" }),
@@ -426,6 +442,56 @@ describe("customerless credit checkout provider store", () => {
         firstStartedAt: NOW,
       }),
     });
+  });
+
+  it("does not start provider transport after a refund marker wins the wallet lock", async () => {
+    const harness = createHarness({
+      refundAdjustmentEntryId: "55555555-5555-4555-8555-555555555555",
+      intent: intent({ status: "creating_payment" }),
+      operation: providerOperation({
+        state: "reserved",
+        firstStartedAt: null,
+      }),
+    });
+    getDatabaseOrThrowMock.mockResolvedValue(harness.database);
+
+    await expect(
+      markCreditPaymentTransportStarted(
+        { ...scope, operationId: OPERATION_ID, leaseToken: LEASE_TOKEN },
+        NOW
+      )
+    ).resolves.toBe(false);
+    expect(harness.updates).toEqual([]);
+  });
+
+  it("records but contains a provider result after a pending refund revokes authorization", async () => {
+    const harness = createHarness({
+      refundAdjustmentEntryId: "55555555-5555-4555-8555-555555555555",
+      intent: intent({ status: "creating_payment" }),
+    });
+    getDatabaseOrThrowMock.mockResolvedValue(harness.database);
+
+    await expect(
+      finalizeCreditPaymentProviderOperation(
+        {
+          ...scope,
+          operationId: OPERATION_ID,
+          leaseToken: LEASE_TOKEN,
+          outcome: { kind: "known_succeeded", paymentId: PAYMENT_ID },
+        },
+        NOW
+      )
+    ).resolves.toEqual({
+      recorded: true,
+      authorized: false,
+      revokedAuthorizationEpoch: AUTHORIZATION_EPOCH,
+    });
+    expect(harness.updates[0]?.value).toEqual(
+      expect.objectContaining({
+        state: "contained",
+        providerResourceId: PAYMENT_ID,
+      })
+    );
   });
 
   it("records a known result before any domain or outbox mutation", async () => {
@@ -739,5 +805,37 @@ describe("customerless credit checkout provider store", () => {
     ).resolves.toBe(true);
     expect(replay.updates).toEqual([]);
     expect(replay.inserts).toEqual([]);
+  });
+
+  it("never exposes a known payment while the wallet refund marker is pending", async () => {
+    const harness = createHarness({
+      refundAdjustmentEntryId: "55555555-5555-4555-8555-555555555555",
+      intent: intent({ status: "creating_payment" }),
+      operation: providerOperation({
+        state: "succeeded",
+        providerResourceId: PAYMENT_ID,
+      }),
+    });
+    getDatabaseOrThrowMock.mockResolvedValue(harness.database);
+
+    await expect(
+      exposeCreditPaymentCheckout(
+        {
+          ...scope,
+          operationId: OPERATION_ID,
+          leaseToken: LEASE_TOKEN,
+          paymentId: PAYMENT_ID,
+        },
+        NOW
+      )
+    ).resolves.toBe(false);
+    expect(harness.updates).not.toContainEqual({
+      table: billingIntents,
+      value: expect.objectContaining({ status: "open", urlExposedAt: NOW }),
+    });
+    expect(harness.updates[0]).toEqual({
+      table: billingProviderOperations,
+      value: expect.objectContaining({ state: "contained" }),
+    });
   });
 });

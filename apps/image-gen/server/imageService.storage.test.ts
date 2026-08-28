@@ -125,6 +125,55 @@ describe("OpenAi image delivery via object storage", () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
   }, 10_000);
 
+  it("keeps provider acceptance separate when durable publication fails", async () => {
+    process.env.OPENAI_API_KEY = "dummy-key";
+    process.env.OPENAI_IMAGE_OUTPUT_FORMAT = "jpeg";
+    process.env.SOURCE_IMAGE_ALLOWED_HOSTS = "leaderbot-fb-image-gen.fly.dev";
+    process.env.BUILT_IN_FORGE_API_URL = "https://forge.example";
+    process.env.BUILT_IN_FORGE_API_KEY = "forge-secret";
+    process.env.PUBLIC_BASE_URL = "https://cdn.example";
+
+    const { OpenAiImageGenerator } = await import("./_core/imageService");
+    const onProviderSuccess = vi.fn(async () => undefined);
+    const fetchMock = vi.fn(async (url: string | URL) => {
+      if (toUrlString(url) === "https://api.openai.com/v1/responses") {
+        return {
+          ok: true,
+          json: async () => ({
+            output: [
+              { type: "image_generation_call", result: GENERATED_IMAGE_BASE64 },
+            ],
+          }),
+        } as Response;
+      }
+      if (
+        toUrlString(url).startsWith(
+          "https://forge.example/v1/storage/upload?path=generated%2Fimages%2F"
+        )
+      ) {
+        return {
+          ok: false,
+          status: 503,
+          text: async () => "temporarily unavailable",
+        } as Response;
+      }
+      throw new Error(`Unexpected fetch url: ${toUrlString(url)}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const generator = new OpenAiImageGenerator();
+    await expect(
+      generator.generate({
+        userKey: "user-publication-failure",
+        reqId: "req-storage-publication-failure",
+        onProviderSuccess,
+      })
+    ).rejects.toThrow();
+
+    expect(onProviderSuccess).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  }, 10_000);
+
   it("fails clearly in production when durable storage config is missing", async () => {
     process.env.NODE_ENV = "production";
 

@@ -13,10 +13,13 @@ import {
   finishCreditPaymentGrant,
   persistCreditPaymentWebhookSnapshot,
   resolveCreditGrantFailure,
+  createDeterministicCreditAdjustmentEntryId,
   type CreditPaymentAdjustmentEvidence,
   type CreditPaymentGrantEvidence,
   type CreditPaymentPersistenceResult,
 } from "./creditPaymentWebhookStore";
+
+export { createDeterministicCreditAdjustmentEntryId };
 
 export type CreditPaymentWebhookResult =
   "unknown" | "mismatch" | "processed" | "duplicate";
@@ -202,32 +205,6 @@ export function createDeterministicCreditGrantEntryId(
   const digest = createHash("sha256")
     .update(
       `credit-grant-entry-v1\n${input.mode}\n${input.intentId}\n${input.providerPaymentId}`
-    )
-    .digest();
-  const bytes = Buffer.from(digest.subarray(0, 16));
-  bytes[6] = (bytes[6] & 0x0f) | 0x50;
-  bytes[8] = (bytes[8] & 0x3f) | 0x80;
-  const hex = bytes.toString("hex");
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
-}
-
-/** Stable UUID for one exact financial adjustment and provider snapshot. */
-export function createDeterministicCreditAdjustmentEntryId(
-  input: Pick<
-    CreditPaymentAdjustmentEvidence,
-    "kind" | "mode" | "rootGrantEntryId" | "evidenceHash"
-  > & { readonly providerEffectId?: string }
-): string {
-  const digest = createHash("sha256")
-    .update(
-      [
-        "credit-adjustment-entry-v1",
-        input.mode,
-        input.rootGrantEntryId,
-        input.kind,
-        input.providerEffectId ?? "refund-set",
-        input.evidenceHash,
-      ].join("\n")
     )
     .digest();
   const bytes = Buffer.from(digest.subarray(0, 16));

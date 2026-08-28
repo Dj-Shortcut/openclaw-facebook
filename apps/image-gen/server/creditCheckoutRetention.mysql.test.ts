@@ -100,6 +100,31 @@ suite("expired pristine credit checkout retention", () => {
     return Number(row.expiresAt) + 1;
   }
 
+  async function createAdditionalCheckout(value: Checkout): Promise<Checkout> {
+    const suffix = randomUUID();
+    const next = {
+      ...value,
+      intentId: randomUUID(),
+      capabilityHash: hash(`capability:${suffix}`),
+    };
+    await connection.query(
+      "CALL `credit_reserve_checkout_intent`(?,?,?,'test',?,1,1,?,?,2,'premium_images_8_medium_v1','4.99',8,'Leaderbot - 8 premium beeldcredits',?,?,?, ?,TIMESTAMPADD(MINUTE,10,CURRENT_TIMESTAMP))",
+      [
+        next.intentId,
+        next.walletId,
+        next.workspaceId,
+        next.channelConnectionId,
+        USER_KEY,
+        next.financialSubjectRef,
+        hash(`metadata:${suffix}`),
+        `credit-payment:${next.intentId}`,
+        `credit-checkout:v1:${hash(`scope:${suffix}`)}`,
+        next.capabilityHash,
+      ]
+    );
+    return next;
+  }
+
   async function cleanup(client: Connection, value: Checkout) {
     const [rows] = await client.query<RowDataPacket[][]>(
       "CALL `credit_expire_pristine_checkout`(?, 'test', ?, 1, 1, ?, ?, ?, ?)",
@@ -174,7 +199,7 @@ suite("expired pristine credit checkout retention", () => {
     await connection.query("SET timestamp=DEFAULT");
   });
 
-  it("preserves a consumed checkout after its capability expires", async () => {
+  it("removes a claimed but unconfirmed checkout after its capability expires", async () => {
     const value = await createCheckout();
     await connection.query(
       "CALL `credit_consume_checkout_capability`(?, 'test', ?, 1, 1, ?, ?, ?, ?, ?, ?)",
@@ -189,13 +214,51 @@ suite("expired pristine credit checkout retention", () => {
         hash(`retention-browser-session:${value.intentId}`),
       ]
     );
-    await connection.query("SET timestamp=?", [
-      await expireAt(connection, value),
-    ]);
+    const expiredAt = await expireAt(connection, value);
+    const candidates = await listExpiredPristineCreditCheckouts(
+      "test",
+      new Date(expiredAt * 1_000),
+      100
+    );
+    expect(candidates).toContainEqual(
+      expect.objectContaining({ intentId: value.intentId })
+    );
+    await connection.query("SET timestamp=?", [expiredAt]);
     await expect(cleanup(connection, value)).resolves.toMatchObject({
-      result: "skipped",
+      result: "applied",
     });
-    expect(await counts(value)).toEqual({ intents: 1, wallets: 1 });
+    expect(await counts(value)).toEqual({ intents: 0, wallets: 0 });
+    await connection.query("SET timestamp=DEFAULT");
+  });
+
+  it("removes each expired intent while retaining the shared wallet until it is orphaned", async () => {
+    const first = await createCheckout();
+    const second = await createAdditionalCheckout(first);
+    const expiredAt = Math.max(
+      await expireAt(connection, first),
+      await expireAt(connection, second)
+    );
+    const candidates = await listExpiredPristineCreditCheckouts(
+      "test",
+      new Date(expiredAt * 1_000),
+      100
+    );
+    expect(candidates).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ intentId: first.intentId }),
+        expect.objectContaining({ intentId: second.intentId }),
+      ])
+    );
+
+    await connection.query("SET timestamp=?", [expiredAt]);
+    await expect(cleanup(connection, first)).resolves.toMatchObject({
+      result: "applied",
+    });
+    expect(await counts(first)).toEqual({ intents: 0, wallets: 1 });
+    await expect(cleanup(connection, second)).resolves.toMatchObject({
+      result: "applied",
+    });
+    expect(await counts(second)).toEqual({ intents: 0, wallets: 0 });
     await connection.query("SET timestamp=DEFAULT");
   });
 
@@ -243,7 +306,7 @@ suite("expired pristine credit checkout retention", () => {
     await connection.query("SET timestamp=DEFAULT");
   });
 
-  it("serializes capability consumption against expiry without deletion or deadlock", async () => {
+  it("serializes capability consumption against expiry and removes the expired session without deadlock", async () => {
     const value = await createCheckout();
     const expiry = (await expireAt(connection, value)) - 1;
     const blocker = await peer();
@@ -275,9 +338,9 @@ suite("expired pristine credit checkout retention", () => {
       await blocker.commit();
       await expect(consumePromise).resolves.toBeDefined();
       await expect(cleanupPromise).resolves.toMatchObject({
-        result: "skipped",
+        result: "applied",
       });
-      expect(await counts(value)).toEqual({ intents: 1, wallets: 1 });
+      expect(await counts(value)).toEqual({ intents: 0, wallets: 0 });
     } finally {
       await Promise.allSettled([
         blocker.rollback(),

@@ -124,13 +124,17 @@ describe("current credit wallet identity lookup", () => {
     const identity = {
       walletId: scope.walletId,
       financialSubjectRef: scope.financialSubjectRef,
+      status: "active",
+      refundAdjustmentEntryId: null,
     };
     const harness = databaseReturning([identity]);
     getDatabaseOrThrowMock.mockResolvedValue(harness.database);
 
-    await expect(readCurrentCreditWalletIdentity(subject)).resolves.toEqual(
-      identity
-    );
+    await expect(readCurrentCreditWalletIdentity(subject)).resolves.toEqual({
+      walletId: identity.walletId,
+      financialSubjectRef: identity.financialSubjectRef,
+      checkoutAvailable: true,
+    });
     expect(harness.limit).toHaveBeenCalledWith(2);
     const predicate = harness.where.mock.calls[0]?.[0];
     const compiled = new MySqlDialect().sqlToQuery(predicate);
@@ -159,6 +163,35 @@ describe("current credit wallet identity lookup", () => {
     );
   });
 
+  it.each([
+    {
+      label: "an exact refund adjustment is pending",
+      status: "active",
+      refundAdjustmentEntryId: "44444444-4444-4444-8444-444444444444",
+    },
+    {
+      label: "the wallet is frozen",
+      status: "frozen",
+      refundAdjustmentEntryId: null,
+    },
+  ])("keeps identity but blocks checkout when $label", async row => {
+    const harness = databaseReturning([
+      {
+        walletId: scope.walletId,
+        financialSubjectRef: scope.financialSubjectRef,
+        status: row.status,
+        refundAdjustmentEntryId: row.refundAdjustmentEntryId,
+      },
+    ]);
+    getDatabaseOrThrowMock.mockResolvedValue(harness.database);
+
+    await expect(readCurrentCreditWalletIdentity(subject)).resolves.toEqual({
+      walletId: scope.walletId,
+      financialSubjectRef: scope.financialSubjectRef,
+      checkoutAvailable: false,
+    });
+  });
+
   it("returns no identity for a new subject and rejects ambiguity", async () => {
     const empty = databaseReturning([]);
     getDatabaseOrThrowMock.mockResolvedValueOnce(empty.database);
@@ -168,10 +201,14 @@ describe("current credit wallet identity lookup", () => {
       {
         walletId: scope.walletId,
         financialSubjectRef: scope.financialSubjectRef,
+        status: "active",
+        refundAdjustmentEntryId: null,
       },
       {
         walletId: "33333333-3333-3333-3333-333333333333",
         financialSubjectRef: "e".repeat(64),
+        status: "active",
+        refundAdjustmentEntryId: null,
       },
     ]);
     getDatabaseOrThrowMock.mockResolvedValueOnce(duplicate.database);

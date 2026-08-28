@@ -626,7 +626,7 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
         reservations: Number(state.reservations),
         retries: Number(state.retries),
       }).toEqual({
-        walletStatus: "frozen",
+        walletStatus: kind === "refund" ? "active" : "frozen",
         balance: 8,
         reserved: 0,
         reservations: 0,
@@ -1283,11 +1283,14 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
                   WHERE BINARY \`wallet_id\`=BINARY ? AND \`entry_kind\`='refund_debit') AS refundDebits,
                 (SELECT \`status\` FROM \`credit_wallets\`
                   WHERE BINARY \`wallet_id\`=BINARY ?) AS walletStatus,
+                (SELECT \`refund_adjustment_entry_id\` FROM \`credit_wallets\`
+                  WHERE BINARY \`wallet_id\`=BINARY ?) AS refundAdjustmentEntryId,
                 (SELECT \`credit_balance\` FROM \`credit_wallets\`
                   WHERE BINARY \`wallet_id\`=BINARY ?) AS balance`,
               [
                 owner.workspaceId,
                 fixture.paymentId,
+                fixture.providerScope.walletId,
                 fixture.providerScope.walletId,
                 fixture.providerScope.walletId,
                 fixture.providerScope.walletId,
@@ -1297,11 +1300,13 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
               pendingDeliveries: Number(before.pendingDeliveries),
               refundDebits: Number(before.refundDebits),
               walletStatus: before.walletStatus,
+              refundAdjustmentEntryId: before.refundAdjustmentEntryId,
               balance: Number(before.balance),
             }).toEqual({
               pendingDeliveries: 1,
               refundDebits: 0,
-              walletStatus: "frozen",
+              walletStatus: "active",
+              refundAdjustmentEntryId: input.entryId,
               balance: 8,
             });
             observedPendingBeforeDebit = true;
@@ -1382,7 +1387,7 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
       completedDeliveries: Number(completed.completedDeliveries),
       pendingDeliveries: Number(completed.pendingDeliveries),
     }).toEqual({
-      walletStatus: "frozen",
+      walletStatus: "active",
       balance: 0,
       refundDebits: 1,
       refundDelta: -8,
@@ -1785,6 +1790,7 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
     const [[completed]] = await connection.query<RowDataPacket[]>(
       `SELECT
         (SELECT \`status\` FROM \`credit_wallets\` WHERE BINARY \`wallet_id\`=BINARY ?) AS walletStatus,
+        (SELECT \`refund_adjustment_entry_id\` FROM \`credit_wallets\` WHERE BINARY \`wallet_id\`=BINARY ?) AS refundAdjustmentEntryId,
         (SELECT \`credit_balance\` FROM \`credit_wallets\` WHERE BINARY \`wallet_id\`=BINARY ?) AS balance,
         (SELECT \`reserved_credits\` FROM \`credit_wallets\` WHERE BINARY \`wallet_id\`=BINARY ?) AS reserved,
         (SELECT COUNT(*) FROM \`credit_ledger\`
@@ -1800,6 +1806,7 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
         fixture.providerScope.walletId,
         fixture.providerScope.walletId,
         fixture.providerScope.walletId,
+        fixture.providerScope.walletId,
         owner.workspaceId,
         owner.workspaceId,
         fixture.paymentId,
@@ -1807,13 +1814,15 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
     );
     expect({
       walletStatus: completed.walletStatus,
+      refundAdjustmentEntryId: completed.refundAdjustmentEntryId,
       balance: Number(completed.balance),
       reserved: Number(completed.reserved),
       debits: Number(completed.debits),
       completedRetries: Number(completed.completedRetries),
       completedDeliveries: Number(completed.completedDeliveries),
     }).toEqual({
-      walletStatus: "frozen",
+      walletStatus: "active",
+      refundAdjustmentEntryId: null,
       balance: 0,
       reserved: 0,
       debits: 1,

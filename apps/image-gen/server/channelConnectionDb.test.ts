@@ -23,6 +23,7 @@ vi.mock("drizzle-orm/mysql2", () => ({
 import {
   ChannelConnectionAuthorizationError,
   ChannelConnectionClaimConflictError,
+  FacebookChannelConnectionMigrationRequiredError,
   WhatsAppChannelConnectionMigrationRequiredError,
   disconnectChannelConnection,
   getConnectedMetaChannelConnection,
@@ -202,11 +203,12 @@ describe("channel connection database claims", () => {
     expect(dbMock.insert).not.toHaveBeenCalled();
   });
 
-  it("updates credentials only after the Page claim and workspace row are locked", async () => {
+  it("keeps the legacy Page epoch bump when no credit wallet exists", async () => {
     const pageClaim = lockedSelect([{ id: 7, workspaceId: 42 }]);
     const workspaceConnection = lockedSelect([{ id: 7 }]);
     const activeAttempts = lockedSelect([]);
     const activeAiDeliveries = lockedSelect([]);
+    const retainedCreditWallets = lockedSelect([]);
     const listed = [{ id: 7, ...connection }];
     const list = listSelect(listed);
     dbMock.select
@@ -214,6 +216,7 @@ describe("channel connection database claims", () => {
       .mockReturnValueOnce({ from: workspaceConnection.from })
       .mockReturnValueOnce({ from: activeAttempts.from })
       .mockReturnValueOnce({ from: activeAiDeliveries.from })
+      .mockReturnValueOnce({ from: retainedCreditWallets.from })
       .mockReturnValueOnce({ from: list.from });
     const updateWhere = vi.fn(async () => undefined);
     const set = vi.fn(() => ({ where: updateWhere }));
@@ -230,11 +233,151 @@ describe("channel connection database claims", () => {
         providerAccountExternalId: null,
         encryptedAccessToken: "sealed-tenant-token",
         lastCheckedAt: expect.any(Date),
+        bindingEpoch: expect.anything(),
       })
     );
     expect(set).not.toHaveBeenCalledWith(
       expect.objectContaining({ workspaceId: expect.anything() })
     );
+    expect(dbMock.insert).not.toHaveBeenCalled();
+    expect(retainedCreditWallets.lock).toHaveBeenCalledWith("update");
+  });
+
+  it("rotates an exact Facebook Page credential without advancing its binding epoch", async () => {
+    const pageClaim = lockedSelect([{ id: 7, workspaceId: 42 }]);
+    const workspaceConnection = lockedSelect([
+      {
+        id: 7,
+        status: "connected",
+        externalId: connection.externalId,
+        providerAccountExternalId: null,
+      },
+    ]);
+    const rotatedConnection = {
+      ...connection,
+      encryptedAccessToken: "sealed-rotated-page-token",
+      grantedScopes: ["pages_messaging", "pages_manage_metadata"],
+    };
+    const listed = [{ id: 7, bindingEpoch: 5, ...rotatedConnection }];
+    const list = listSelect(listed);
+    dbMock.select
+      .mockReturnValueOnce({ from: pageClaim.from })
+      .mockReturnValueOnce({ from: workspaceConnection.from })
+      .mockReturnValueOnce({ from: list.from });
+    const updateWhere = vi.fn(async () => undefined);
+    const set = vi.fn(() => ({ where: updateWhere }));
+    dbMock.update.mockReturnValue({ set });
+
+    await expect(
+      upsertChannelConnection(rotatedConnection, {
+        updatePolicy: "preserve_exact_facebook_binding",
+      })
+    ).resolves.toEqual(listed);
+
+    expect(set).toHaveBeenCalledOnce();
+    expect(set).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "connected",
+        displayName: "Tenant Page",
+        encryptedAccessToken: "sealed-rotated-page-token",
+        grantedScopes: ["pages_messaging", "pages_manage_metadata"],
+        lastCheckedAt: expect.any(Date),
+      })
+    );
+    const credentialUpdate = set.mock.calls[0]?.[0];
+    expect(credentialUpdate).not.toHaveProperty("bindingEpoch");
+    expect(credentialUpdate).not.toHaveProperty("externalId");
+    expect(credentialUpdate).not.toHaveProperty("providerAccountExternalId");
+    expect(workspaceConnection.lock).toHaveBeenCalledWith("update");
+  });
+
+  it("refuses to replace an existing Facebook Page under the preserving policy", async () => {
+    const pageClaim = lockedSelect([]);
+    const workspaceConnection = lockedSelect([
+      {
+        id: 7,
+        status: "connected",
+        externalId: connection.externalId,
+        providerAccountExternalId: null,
+      },
+    ]);
+    dbMock.select
+      .mockReturnValueOnce({ from: pageClaim.from })
+      .mockReturnValueOnce({ from: workspaceConnection.from });
+
+    await expect(
+      upsertChannelConnection(
+        { ...connection, externalId: "223456789012345" },
+        { updatePolicy: "preserve_exact_facebook_binding" }
+      )
+    ).rejects.toBeInstanceOf(FacebookChannelConnectionMigrationRequiredError);
+
+    expect(dbMock.update).not.toHaveBeenCalled();
+    expect(dbMock.insert).not.toHaveBeenCalled();
+  });
+
+  it("reconnects a disconnected walletless Facebook binding with a fresh epoch", async () => {
+    const pageClaim = lockedSelect([]);
+    const workspaceConnection = lockedSelect([
+      {
+        id: 7,
+        status: "disconnected",
+        externalId: null,
+        providerAccountExternalId: null,
+      },
+    ]);
+    const retainedCreditWallets = lockedSelect([]);
+    const listed = [{ id: 7, bindingEpoch: 8, ...connection }];
+    const list = listSelect(listed);
+    dbMock.select
+      .mockReturnValueOnce({ from: pageClaim.from })
+      .mockReturnValueOnce({ from: workspaceConnection.from })
+      .mockReturnValueOnce({ from: retainedCreditWallets.from })
+      .mockReturnValueOnce({ from: list.from });
+    const updateWhere = vi.fn(async () => undefined);
+    const set = vi.fn(() => ({ where: updateWhere }));
+    dbMock.update.mockReturnValue({ set });
+
+    await expect(
+      upsertChannelConnection(connection, {
+        updatePolicy: "preserve_exact_facebook_binding",
+      })
+    ).resolves.toEqual(listed);
+
+    expect(retainedCreditWallets.lock).toHaveBeenCalledWith("update");
+    expect(set).toHaveBeenCalledOnce();
+    expect(set).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "connected",
+        externalId: connection.externalId,
+        bindingEpoch: expect.anything(),
+      })
+    );
+  });
+
+  it("blocks a disconnected Facebook reconnect when a retained wallet exists", async () => {
+    const pageClaim = lockedSelect([]);
+    const workspaceConnection = lockedSelect([
+      {
+        id: 7,
+        status: "disconnected",
+        externalId: null,
+        providerAccountExternalId: null,
+      },
+    ]);
+    const retainedCreditWallets = lockedSelect([{ walletId: "wallet-7" }]);
+    dbMock.select
+      .mockReturnValueOnce({ from: pageClaim.from })
+      .mockReturnValueOnce({ from: workspaceConnection.from })
+      .mockReturnValueOnce({ from: retainedCreditWallets.from });
+
+    await expect(
+      upsertChannelConnection(connection, {
+        updatePolicy: "preserve_exact_facebook_binding",
+      })
+    ).rejects.toBeInstanceOf(FacebookChannelConnectionMigrationRequiredError);
+
+    expect(dbMock.update).not.toHaveBeenCalled();
     expect(dbMock.insert).not.toHaveBeenCalled();
   });
 
@@ -243,6 +386,7 @@ describe("channel connection database claims", () => {
     const workspaceConnection = lockedSelect([{ id: 7 }]);
     const activeAttempts = lockedSelect([]);
     const activeAiDeliveries = lockedSelect([]);
+    const retainedCreditWallets = lockedSelect([]);
     const listed = [{ id: 7, ...connection }];
     const list = listSelect(listed);
     dbMock.select
@@ -250,6 +394,7 @@ describe("channel connection database claims", () => {
       .mockReturnValueOnce({ from: workspaceConnection.from })
       .mockReturnValueOnce({ from: activeAttempts.from })
       .mockReturnValueOnce({ from: activeAiDeliveries.from })
+      .mockReturnValueOnce({ from: retainedCreditWallets.from })
       .mockReturnValueOnce({ from: list.from });
     const updateWhere = vi.fn(async () => undefined);
     const set = vi.fn(() => ({ where: updateWhere }));
@@ -317,6 +462,39 @@ describe("channel connection database claims", () => {
     expect(dbMock.insert).not.toHaveBeenCalled();
   });
 
+  it("blocks a default Facebook epoch bump while a non-erased credit wallet exists", async () => {
+    const pageClaim = lockedSelect([{ id: 7, workspaceId: 42 }]);
+    const workspaceConnection = lockedSelect([{ id: 7 }]);
+    const activeAttempts = lockedSelect([]);
+    const activeAiDeliveries = lockedSelect([]);
+    const retainedCreditWallets = lockedSelect([{ walletId: "wallet-7" }]);
+    dbMock.select
+      .mockReturnValueOnce({ from: pageClaim.from })
+      .mockReturnValueOnce({ from: workspaceConnection.from })
+      .mockReturnValueOnce({ from: activeAttempts.from })
+      .mockReturnValueOnce({ from: activeAiDeliveries.from })
+      .mockReturnValueOnce({ from: retainedCreditWallets.from });
+    const updateWhere = vi.fn(async () => undefined);
+    const set = vi.fn(() => ({ where: updateWhere }));
+    dbMock.update.mockReturnValue({ set });
+
+    await expect(upsertChannelConnection(connection)).rejects.toBeInstanceOf(
+      FacebookChannelConnectionMigrationRequiredError
+    );
+
+    expect(retainedCreditWallets.lock).toHaveBeenCalledWith("update");
+    const walletQuery = new MySqlDialect().sqlToQuery(
+      retainedCreditWallets.where.mock.calls[0]?.[0]
+    );
+    expect(walletQuery.params).toEqual(
+      expect.arrayContaining([42, 7, "active", "frozen"])
+    );
+    expect(set).toHaveBeenCalledOnce();
+    expect(set).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "contained" })
+    );
+  });
+
   it("blocks Page disconnect while an AI answer delivery is in flight", async () => {
     const workspaceConnection = lockedSelect([{ id: 7 }]);
     const activeAttempts = lockedSelect([]);
@@ -337,6 +515,61 @@ describe("channel connection database claims", () => {
 
     expect(workspaceConnection.lock).toHaveBeenCalledWith("update");
     expect(activeAiDeliveries.lock).toHaveBeenCalledWith("update");
+  });
+
+  it("blocks Page disconnect while a non-erased credit wallet exists", async () => {
+    const workspaceConnection = lockedSelect([{ id: 7 }]);
+    const activeAttempts = lockedSelect([]);
+    const activeAiDeliveries = lockedSelect([]);
+    const retainedCreditWallets = lockedSelect([{ walletId: "wallet-7" }]);
+    dbMock.select
+      .mockReturnValueOnce({ from: workspaceConnection.from })
+      .mockReturnValueOnce({ from: activeAttempts.from })
+      .mockReturnValueOnce({ from: activeAiDeliveries.from })
+      .mockReturnValueOnce({ from: retainedCreditWallets.from });
+    const updateWhere = vi.fn(async () => undefined);
+    const set = vi.fn(() => ({ where: updateWhere }));
+    dbMock.update.mockReturnValue({ set });
+
+    await expect(
+      disconnectChannelConnection(42, "facebook_messenger")
+    ).rejects.toBeInstanceOf(FacebookChannelConnectionMigrationRequiredError);
+
+    expect(retainedCreditWallets.lock).toHaveBeenCalledWith("update");
+    expect(set).toHaveBeenCalledOnce();
+    expect(set).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "contained" })
+    );
+  });
+
+  it("keeps the legacy Page disconnect when no credit wallet exists", async () => {
+    const workspaceConnection = lockedSelect([{ id: 7 }]);
+    const activeAttempts = lockedSelect([]);
+    const activeAiDeliveries = lockedSelect([]);
+    const retainedCreditWallets = lockedSelect([]);
+    const list = listSelect([]);
+    dbMock.select
+      .mockReturnValueOnce({ from: workspaceConnection.from })
+      .mockReturnValueOnce({ from: activeAttempts.from })
+      .mockReturnValueOnce({ from: activeAiDeliveries.from })
+      .mockReturnValueOnce({ from: retainedCreditWallets.from })
+      .mockReturnValueOnce({ from: list.from });
+    const updateWhere = vi.fn(async () => undefined);
+    const set = vi.fn(() => ({ where: updateWhere }));
+    dbMock.update.mockReturnValue({ set });
+
+    await expect(
+      disconnectChannelConnection(42, "facebook_messenger")
+    ).resolves.toEqual([]);
+
+    expect(set).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        status: "disconnected",
+        externalId: null,
+        bindingEpoch: expect.anything(),
+      })
+    );
   });
 
   it.each(["whatsapp_openai_image", "whatsapp_graph_erasure_control_text"])(
@@ -724,6 +957,7 @@ describe("channel connection database claims", () => {
       const retriedWorkspaceConnection = lockedSelect([{ id: 7 }]);
       const activeAttempts = lockedSelect([]);
       const activeAiDeliveries = lockedSelect([]);
+      const retainedCreditWallets = lockedSelect([]);
       const listed = [{ id: 7, ...connection }];
       const list = listSelect(listed);
       dbMock.select
@@ -733,6 +967,7 @@ describe("channel connection database claims", () => {
         .mockReturnValueOnce({ from: retriedWorkspaceConnection.from })
         .mockReturnValueOnce({ from: activeAttempts.from })
         .mockReturnValueOnce({ from: activeAiDeliveries.from })
+        .mockReturnValueOnce({ from: retainedCreditWallets.from })
         .mockReturnValueOnce({ from: list.from });
       const values = vi.fn().mockRejectedValueOnce(
         Object.assign(new Error(`Duplicate entry for ${constraint}`), {

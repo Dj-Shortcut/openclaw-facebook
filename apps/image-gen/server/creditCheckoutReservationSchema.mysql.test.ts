@@ -167,6 +167,36 @@ suite("0018 atomic credit checkout reservation", () => {
     await connection.query("SET timestamp=0");
   });
 
+  it("does not reserve another checkout while an exact refund adjustment is pending", async () => {
+    const scope = await createScope();
+    const original = request(scope, `refund-fence-original-${randomUUID()}`);
+    await reserve(connection, original);
+    const adjustmentEntryId = randomUUID();
+    await connection.query(
+      "UPDATE `credit_wallets` SET `refund_adjustment_entry_id`=? WHERE `wallet_id`=?",
+      [adjustmentEntryId, original.walletId]
+    );
+    const retry = {
+      ...request(scope, `refund-fence-retry-${randomUUID()}`),
+      walletId: original.walletId,
+    };
+
+    await expect(reserve(connection, retry)).rejects.toMatchObject({
+      code: "ER_SIGNAL_EXCEPTION",
+      sqlMessage: "credit checkout wallet scope conflicts",
+    });
+    const [[state]] = await connection.query<RowDataPacket[]>(
+      `SELECT wallet.\`refund_adjustment_entry_id\` AS refundAdjustmentEntryId,
+        (SELECT COUNT(*) FROM \`billing_intents\` WHERE \`intent_id\`=?) AS retryIntents
+       FROM \`credit_wallets\` wallet WHERE wallet.\`wallet_id\`=?`,
+      [retry.intentId, original.walletId]
+    );
+    expect(state).toMatchObject({
+      refundAdjustmentEntryId: adjustmentEntryId,
+      retryIntents: 0,
+    });
+  });
+
   it("rolls back a newly inserted wallet when intent insertion faults", async () => {
     const value = request(await createScope());
     await connection.query(

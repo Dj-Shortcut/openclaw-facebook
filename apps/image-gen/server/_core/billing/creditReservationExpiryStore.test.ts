@@ -13,6 +13,7 @@ import {
   enqueueCreditReservationTransportReview,
   listDueCreditReservationResolutions,
   listExpiredCreditReservations,
+  listTerminalCreditReservationsForScrub,
   type DueCreditReservationResolution,
 } from "./creditReservationExpiryStore";
 
@@ -86,6 +87,47 @@ describe("credit reservation expiry store", () => {
     expect(compiled.sql).toContain("NOT EXISTS");
     expect(compiled.sql).toContain("`credit_transport_reviews`");
     expect(compiled.sql).toContain("credit_reservation_transport_review:");
+    expect(limit).toHaveBeenCalledWith(25);
+  });
+
+  it("selects only bounded terminal reservations whose operational hashes are due for scrub", async () => {
+    let capturedWhere: unknown;
+    const limit = vi.fn(async () => []);
+    const orderBy = vi.fn(() => ({ limit }));
+    const where = vi.fn(predicate => {
+      capturedWhere = predicate;
+      return { orderBy };
+    });
+    const from = vi.fn(() => ({ where }));
+    getDatabaseOrThrowMock.mockResolvedValue({
+      select: vi.fn(() => ({ from })),
+    });
+
+    await expect(
+      listTerminalCreditReservationsForScrub(
+        "test",
+        new Date("2026-08-30T12:00:00.000Z"),
+        25
+      )
+    ).resolves.toEqual([]);
+
+    if (!capturedWhere) throw new Error("scrub predicate was not captured");
+    const compiled = new MySqlDialect().sqlToQuery(capturedWhere as never);
+    expect(compiled.params).toEqual(
+      expect.arrayContaining(["committed", "released", "expired"])
+    );
+    expect(compiled.sql).toContain(
+      "`credit_reservations`.`resolution_due_at` <= ?"
+    );
+    expect(compiled.sql).toContain(
+      "`credit_reservations`.`operational_scrubbed_at` is null"
+    );
+    expect(compiled.sql).toContain(
+      "`credit_reservations`.`generation_request_key_hash` is not null"
+    );
+    expect(compiled.sql).toContain(
+      "`credit_reservations`.`owner_token_hash` is not null"
+    );
     expect(limit).toHaveBeenCalledWith(25);
   });
 

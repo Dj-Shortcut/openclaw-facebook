@@ -64,7 +64,12 @@ export type PurchaseGrantResult = AppliedResult & Readonly<{ entryId: string }>;
 export type ReservationResult = AppliedResult &
   Readonly<{ reservationId: string }>;
 export type WalletErasureResult = Readonly<{
-  result: "already_applied" | "erased" | "pending_holds" | "pending_provider";
+  result:
+    | "already_applied"
+    | "erased"
+    | "pending_adjustment"
+    | "pending_holds"
+    | "pending_provider";
   walletId: string;
 }>;
 export type PrivacySubjectWalletErasureResult = Readonly<{
@@ -592,14 +597,15 @@ async function executeReservationTerminal(
     | "credit_commit_reservation"
     | "credit_release_reservation"
     | "credit_expire_reservation",
-  input: ReservationTerminalInput
+  input: ReservationTerminalInput,
+  releaseKind: "pretransport" | "output_not_delivered" = "pretransport"
 ): Promise<ReservationResult> {
   validateReservationTerminalInput(input);
   const query =
     procedure === "credit_commit_reservation"
       ? sql`CALL \`credit_commit_reservation\`(${input.workspaceId}, ${input.mode}, ${input.channelConnectionId}, ${input.bindingEpoch}, ${input.privacyEpoch}, ${input.userKey}, ${input.walletId}, ${input.financialSubjectRef}, ${input.reservationId}, ${input.ownerTokenHash}, ${input.entryId}, ${input.evidenceHash})`
       : procedure === "credit_release_reservation"
-        ? sql`CALL \`credit_release_reservation\`(${input.workspaceId}, ${input.mode}, ${input.channelConnectionId}, ${input.bindingEpoch}, ${input.privacyEpoch}, ${input.userKey}, ${input.walletId}, ${input.financialSubjectRef}, ${input.reservationId}, ${input.ownerTokenHash}, ${input.entryId}, ${input.evidenceHash})`
+        ? sql`CALL \`credit_release_reservation\`(${input.workspaceId}, ${input.mode}, ${input.channelConnectionId}, ${input.bindingEpoch}, ${input.privacyEpoch}, ${input.userKey}, ${input.walletId}, ${input.financialSubjectRef}, ${input.reservationId}, ${input.ownerTokenHash}, ${releaseKind}, ${input.entryId}, ${input.evidenceHash})`
         : sql`CALL \`credit_expire_reservation\`(${input.workspaceId}, ${input.mode}, ${input.channelConnectionId}, ${input.bindingEpoch}, ${input.privacyEpoch}, ${input.userKey}, ${input.walletId}, ${input.financialSubjectRef}, ${input.reservationId}, ${input.ownerTokenHash}, ${input.entryId}, ${input.evidenceHash})`;
   const row = await executeProcedure(
     query,
@@ -625,6 +631,17 @@ export function releaseCreditReservation(
   input: ReservationTerminalInput
 ): Promise<ReservationResult> {
   return executeReservationTerminal("credit_release_reservation", input);
+}
+
+/** Releases started or accepted work only after proven non-delivery. */
+export function releaseCreditReservationOutputNotDelivered(
+  input: ReservationTerminalInput
+): Promise<ReservationResult> {
+  return executeReservationTerminal(
+    "credit_release_reservation",
+    input,
+    "output_not_delivered"
+  );
 }
 
 /** Releases an already-started hold only with an exact non-retryable 4xx. */
@@ -682,6 +699,7 @@ export async function eraseCreditWallet(
   const statuses = [
     "already_applied",
     "erased",
+    "pending_adjustment",
     "pending_holds",
     "pending_provider",
   ] as const;
@@ -757,6 +775,7 @@ export async function eraseCreditWalletsForPrivacySubject(input: {
       financialSubjectRef: wallet.financialSubjectRef,
     });
     if (
+      outcome.result === "pending_adjustment" ||
       outcome.result === "pending_holds" ||
       outcome.result === "pending_provider"
     ) {

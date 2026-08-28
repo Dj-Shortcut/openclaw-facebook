@@ -67,6 +67,7 @@ describe("0018 credit checkout reservation migration", () => {
     expect(body).toContain("`authorization_epoch`=p_authorization_epoch");
     expect(body).toContain("`status`='connected'");
     expect(body).toContain("`status`='active' FOR UPDATE");
+    expect(body).toContain("`refund_adjustment_entry_id` IS NULL");
     expect(body).toContain("'premium_images_8_medium_v1'");
     expect(body).toContain("p_expected_amount=4.99");
     expect(body).toContain("p_credit_count=8");

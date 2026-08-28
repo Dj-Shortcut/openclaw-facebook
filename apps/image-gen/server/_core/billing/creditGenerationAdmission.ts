@@ -45,10 +45,12 @@ export type PaidCreditGenerationInput = Readonly<{
 
 export type PaidCreditGenerationReservation = Readonly<{
   reservationId: string;
+  mode: CreditWalletScope["mode"];
   imageQuality: "medium";
   providerMaxCostUsd: number;
   markTransportStarted: () => Promise<void>;
-  commitProviderSuccess: () => Promise<void>;
+  markProviderAccepted: () => Promise<void>;
+  commitDeliveredOutput: () => Promise<void>;
   releaseProviderRejected: (status: number) => Promise<void>;
   releaseBeforeTransport: () => Promise<void>;
   toJSON: () => Readonly<{
@@ -83,11 +85,13 @@ type ReservationMaterial = Readonly<{
   releaseEntryId: string;
   releaseEvidenceHash: string;
   providerRejectedEntryId: string;
+  outputNotDeliveredEntryId: string;
+  outputNotDeliveredEvidenceHash: string;
 }>;
 
 /**
- * Immutable proof needed to settle a provider response that was accepted
- * before the process could debit the held credit.
+ * Immutable proof needed to settle a provider response after an operator has
+ * independently confirmed the documented delivered-output success boundary.
  */
 export type CreditReservationCommitRecoveryInput = CreditWalletScope &
   Readonly<{
@@ -210,7 +214,12 @@ function hmac(
 }
 
 function evidenceHash(
-  purpose: "hold" | "commit" | "release" | "provider_rejected",
+  purpose:
+    | "hold"
+    | "commit"
+    | "release"
+    | "provider_rejected"
+    | "output_not_delivered",
   reservationId: string,
   requestHash: string,
   providerStatus?: number
@@ -272,6 +281,11 @@ function deriveReservationMaterialFromRequestHash(
     "leaderbot.premium-credit-provider-rejected-entry.v1\0",
     fields
   );
+  const outputNotDeliveredDigest = hmac(
+    secret,
+    "leaderbot.premium-credit-output-not-delivered-entry.v1\0",
+    fields
+  );
   try {
     const reservationId = uuidV8FromDigest(reservationDigest);
     return Object.freeze({
@@ -285,6 +299,12 @@ function deriveReservationMaterialFromRequestHash(
       releaseEntryId: uuidV8FromDigest(releaseDigest),
       releaseEvidenceHash: evidenceHash("release", reservationId, requestHash),
       providerRejectedEntryId: uuidV8FromDigest(providerRejectedDigest),
+      outputNotDeliveredEntryId: uuidV8FromDigest(outputNotDeliveredDigest),
+      outputNotDeliveredEvidenceHash: evidenceHash(
+        "output_not_delivered",
+        reservationId,
+        requestHash
+      ),
     });
   } finally {
     reservationDigest.fill(0);
@@ -293,6 +313,7 @@ function deriveReservationMaterialFromRequestHash(
     commitDigest.fill(0);
     releaseDigest.fill(0);
     providerRejectedDigest.fill(0);
+    outputNotDeliveredDigest.fill(0);
   }
 }
 
@@ -372,10 +393,11 @@ function deriveMatchingRecoveryMaterial(
 }
 
 /**
- * Rebuilds only the deterministic commit proof for a persisted, known-2xx
- * reservation. It returns null when the current secret no longer proves the
- * stored owner/reservation binding; callers must contain that case for review
- * rather than guessing whether a provider charge occurred.
+ * Rebuilds only the deterministic commit proof for a persisted reservation.
+ * A valid proof is not evidence that output was delivered; callers may use it
+ * only after independently confirming the documented success boundary. It
+ * returns null when the current secret no longer proves the stored
+ * owner/reservation binding.
  */
 export function deriveCreditReservationCommitRecovery(
   input: CreditReservationCommitRecoveryInput,
@@ -462,6 +484,99 @@ export function deriveCreditReservationProviderRejectedRecovery(
       input.generationRequestKeyHash,
       input.rejectionStatus
     ),
+  });
+}
+
+/**
+ * Rebuilds the distinct terminal proof for an operator-confirmed output that
+ * was not delivered. This proof releases the held credit without rewriting
+ * the provider outcome as a rejection.
+ */
+export function deriveCreditReservationOutputNotDeliveredRecovery(
+  input: CreditReservationCommitRecoveryInput,
+  dependencies: Pick<
+    CreditGenerationAdmissionDependencies,
+    "withKeyring"
+  > = defaultDependencies
+): Readonly<{ entryId: string; evidenceHash: string }> | null {
+  const commitProof = deriveCreditReservationCommitRecovery(
+    input,
+    dependencies
+  );
+  if (!commitProof) return null;
+  const material = deriveMatchingRecoveryMaterial(input, dependencies);
+  if (!material) return null;
+  return Object.freeze({
+    entryId: material.outputNotDeliveredEntryId,
+    evidenceHash: material.outputNotDeliveredEvidenceHash,
+  });
+}
+
+export type DeliveredPaidCreditGenerationRecoveryInput =
+  PaidCreditGenerationInput &
+    Readonly<{
+      mode: CreditWalletScope["mode"];
+    }>;
+
+/**
+ * Commits an existing paid hold only after its caller has re-read exact,
+ * durable completion evidence with deliveryStatus="delivered". This function
+ * reconstructs the original wallet/reservation binding and cannot reserve or
+ * start provider work.
+ */
+export async function commitDeliveredPaidCreditGeneration(
+  input: DeliveredPaidCreditGenerationRecoveryInput,
+  dependencies: CreditGenerationAdmissionDependencies = defaultDependencies
+): Promise<void> {
+  assertInput(input);
+  if (input.mode !== "test" && input.mode !== "live") fail();
+  const subjectScope = messengerScope(input);
+  const persistedIdentity = await dependencies.readWalletIdentity(subjectScope);
+  if (!persistedIdentity) fail();
+  const derived = dependencies.withKeyring(keys =>
+    withSelectedCreditCheckoutHmacKey({
+      keys,
+      scope: subjectScope,
+      persistedIdentity,
+      callback: ({ key, identity }) => {
+        const scope = walletScope(subjectScope, identity);
+        return Object.freeze({
+          scope,
+          material: deriveReservationMaterial(
+            key.secret,
+            scope,
+            input.requestId
+          ),
+        });
+      },
+    })
+  );
+  const existing = await dependencies.readReservation({
+    scope: derived.scope,
+    reservationId: derived.material.reservationId,
+    generationRequestKeyHash: derived.material.generationRequestKeyHash,
+    ownerTokenHash: derived.material.ownerTokenHash,
+    reservedCreditCount: 1,
+  });
+  if (
+    !existing ||
+    existing.status === "initializing" ||
+    existing.status === "released" ||
+    existing.status === "expired"
+  ) {
+    fail();
+  }
+  await dependencies.markProviderAccepted({
+    ...derived.scope,
+    reservationId: derived.material.reservationId,
+    ownerTokenHash: derived.material.ownerTokenHash,
+  });
+  await dependencies.commit({
+    ...derived.scope,
+    reservationId: derived.material.reservationId,
+    ownerTokenHash: derived.material.ownerTokenHash,
+    entryId: derived.material.commitEntryId,
+    evidenceHash: derived.material.commitEvidenceHash,
   });
 }
 
@@ -567,6 +682,7 @@ export async function reservePaidCreditGeneration(
   });
   const reservation: PaidCreditGenerationReservation = Object.freeze({
     reservationId: derived.material.reservationId,
+    mode: config.mode,
     imageQuality: "medium" as const,
     providerMaxCostUsd,
     markTransportStarted: async () => {
@@ -585,7 +701,17 @@ export async function reservePaidCreditGeneration(
       });
       state = "transport_started";
     },
-    commitProviderSuccess: async () => {
+    markProviderAccepted: async () => {
+      if (state === "provider_accepted" || state === "committed") return;
+      if (state !== "transport_started") fail();
+      await dependencies.markProviderAccepted({
+        ...derived.scope,
+        reservationId: derived.material.reservationId,
+        ownerTokenHash: derived.material.ownerTokenHash,
+      });
+      state = "provider_accepted";
+    },
+    commitDeliveredOutput: async () => {
       if (state === "committed") return;
       if (state !== "transport_started" && state !== "provider_accepted") {
         fail();

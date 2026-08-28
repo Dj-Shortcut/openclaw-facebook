@@ -85,6 +85,7 @@ type Boundary = Readonly<{
         privacyEpoch: number;
         currentUserKeyHash: string | null;
         financialSubjectRef: string;
+        refundAdjustmentEntryId: string | null;
         status: string;
       }>
     | undefined;
@@ -622,6 +623,7 @@ async function lockCreditProviderBoundary(
       privacyEpoch: creditWallets.privacyEpoch,
       currentUserKeyHash: creditWallets.currentUserKeyHash,
       financialSubjectRef: creditWallets.financialSubjectRef,
+      refundAdjustmentEntryId: creditWallets.refundAdjustmentEntryId,
       status: creditWallets.status,
     })
     .from(creditWallets)
@@ -685,6 +687,7 @@ function isActiveBoundary(
     boundary.privacy?.status === "active" &&
     boundary.privacy.privacyEpoch === input.privacyEpoch &&
     boundary.wallet?.status === "active" &&
+    boundary.wallet.refundAdjustmentEntryId === null &&
     boundary.wallet.channelConnectionId === input.channelConnectionId &&
     boundary.wallet.bindingEpoch === input.bindingEpoch &&
     boundary.wallet.privacyEpoch === input.privacyEpoch &&

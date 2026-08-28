@@ -90,7 +90,7 @@ export function registerLegalRoutes(app: express.Express) {
         sections: [
           {
             heading: "Premium image credits",
-            html: `<p>Leaderbot premium credits cost ${premiumCreditPrice} as a single payment for eight medium-quality image generations. Credits do not expire. One credit is consumed only after the image provider accepts that generation successfully; a failure before the provider call does not consume a credit. Purchase starts only from a signed checkout link opened from Messenger and requires explicit confirmation before continuing to Mollie.</p>`,
+            html: `<p>Leaderbot premium credits cost ${premiumCreditPrice} as a single payment for eight medium-quality image generations. Credits do not expire. One credit is consumed only after a usable generated image is successfully delivered through Messenger. Provider, publication, or delivery failures do not consume a credit. Purchase starts only from a signed checkout link opened from Messenger and requires explicit confirmation before continuing to Mollie.</p>`,
           },
           {
             heading: "No subscription or overage",
@@ -136,7 +136,7 @@ export function registerLegalRoutes(app: express.Express) {
           },
           {
             heading: "Included usage",
-            html: "<p>The pack adds eight medium-quality image credits. Credits do not expire. One credit is permanently consumed only after the image provider accepts that generation successfully; a pre-provider failure does not consume a credit, and a retry of the same accepted request does not consume another credit.</p>",
+            html: "<p>The pack adds eight medium-quality image credits. Credits do not expire. One credit is permanently consumed only after a usable generated image is successfully delivered through Messenger. Provider, publication, or delivery failures do not consume a credit, and a retry of the same delivered request does not consume another credit.</p>",
           },
           {
             heading: "No renewal, top-up or overage",

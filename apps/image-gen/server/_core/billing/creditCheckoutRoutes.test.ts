@@ -11,7 +11,9 @@ import type { CreditCheckoutSessionRecord } from "./creditCheckoutSessionStore";
 import { registerCreditCheckoutRoutes } from "./creditCheckoutRoutes";
 
 const INTENT_ID = "11111111-1111-8111-8111-111111111111";
+const OTHER_INTENT_ID = "99999999-9999-4999-8999-999999999999";
 const COOKIE_VALUE = `${INTENT_ID}.${"A".repeat(43)}`;
+const OTHER_COOKIE_VALUE = `${OTHER_INTENT_ID}.${"B".repeat(43)}`;
 const OFFER: CreditCheckoutPublicOffer = Object.freeze({
   mode: "test",
   amount: "4.99",
@@ -43,9 +45,13 @@ async function close(server: Server): Promise<void> {
   });
 }
 
-function session(status = "created") {
+function session(
+  status = "created",
+  options: Readonly<{ intentId?: string; userKey?: string }> = {}
+) {
+  const intentId = options.intentId ?? INTENT_ID;
   const record: CreditCheckoutSessionRecord = {
-    intentId: INTENT_ID,
+    intentId,
     workspaceId: 42,
     mode: "test",
     planCode: "premium_image_credits_8_v1",
@@ -57,7 +63,7 @@ function session(status = "created") {
     mollieDescription: "Leaderbot - 8 premium beeldcredits",
     status,
     molliePaymentId: status === "paid" ? "tr_payment123" : null,
-    messengerSenderUserKey: "a".repeat(64),
+    messengerSenderUserKey: options.userKey ?? "a".repeat(64),
     messengerChannelConnectionId: 7,
     messengerBindingEpoch: 3,
     messengerPrivacyEpoch: 5,
@@ -77,7 +83,7 @@ function session(status = "created") {
     paidAt: status === "paid" ? new Date("2026-08-28T13:03:00.000Z") : null,
   };
   return {
-    intentId: INTENT_ID,
+    intentId,
     offer: OFFER,
     record,
   };
@@ -251,6 +257,98 @@ describe("credit checkout public routes", () => {
       checkoutUrl: "https://www.mollie.com/checkout/test-payment",
     });
     expect(confirm).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a cookie session that belongs to another visible checkout intent", async () => {
+    const target = await start();
+    const read = await fetch(
+      `${target.baseUrl}/api/credits/checkout/${OTHER_INTENT_ID}/session`,
+      {
+        headers: {
+          Cookie: `${CREDIT_CHECKOUT_SESSION_COOKIE}=${COOKIE_VALUE}`,
+        },
+      }
+    );
+    const confirmResponse = await fetch(
+      `${target.baseUrl}/api/credits/checkout/${OTHER_INTENT_ID}/confirm`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Origin: target.baseUrl,
+          "Sec-Fetch-Site": "same-origin",
+          Cookie: `${CREDIT_CHECKOUT_SESSION_COOKIE}=${COOKIE_VALUE}`,
+        },
+        body: "{}",
+      }
+    );
+
+    expect(read.status).toBe(404);
+    expect(confirmResponse.status).toBe(404);
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it("keeps two checkout tabs bound to their visible identity after the shared cookie is overwritten", async () => {
+    const firstSession = session("created", {
+      intentId: INTENT_ID,
+      userKey: "a".repeat(64),
+    });
+    const secondSession = session("created", {
+      intentId: OTHER_INTENT_ID,
+      userKey: "f".repeat(64),
+    });
+    readSession.mockImplementation(async cookieValue => {
+      if (cookieValue === COOKIE_VALUE) return firstSession;
+      if (cookieValue === OTHER_COOKIE_VALUE) return secondSession;
+      throw new Error("unknown checkout session");
+    });
+    const target = await start();
+
+    // Both tabs share one origin cookie. Claiming the second identity replaces
+    // the first tab's cookie, but must not let that tab load or confirm it.
+    const staleTabRead = await fetch(
+      `${target.baseUrl}/api/credits/checkout/${INTENT_ID}/session`,
+      {
+        headers: {
+          Cookie: `${CREDIT_CHECKOUT_SESSION_COOKIE}=${OTHER_COOKIE_VALUE}`,
+        },
+      }
+    );
+    const staleTabConfirm = await fetch(
+      `${target.baseUrl}/api/credits/checkout/${INTENT_ID}/confirm`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Origin: target.baseUrl,
+          "Sec-Fetch-Site": "same-origin",
+          Cookie: `${CREDIT_CHECKOUT_SESSION_COOKIE}=${OTHER_COOKIE_VALUE}`,
+        },
+        body: "{}",
+      }
+    );
+
+    expect(staleTabRead.status).toBe(404);
+    expect(staleTabConfirm.status).toBe(404);
+    expect(confirm).not.toHaveBeenCalled();
+
+    const currentTabConfirm = await fetch(
+      `${target.baseUrl}/api/credits/checkout/${OTHER_INTENT_ID}/confirm`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Origin: target.baseUrl,
+          "Sec-Fetch-Site": "same-origin",
+          Cookie: `${CREDIT_CHECKOUT_SESSION_COOKIE}=${OTHER_COOKIE_VALUE}`,
+        },
+        body: "{}",
+      }
+    );
+
+    expect(currentTabConfirm.status).toBe(200);
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(confirm).toHaveBeenCalledWith(secondSession);
   });
 
   it("rejects a non-Mollie redirect returned by the provider service", async () => {

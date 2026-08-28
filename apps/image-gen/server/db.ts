@@ -18,6 +18,7 @@ import {
   billingHandoffRecoveryEvents,
   billingOutbox,
   channelConnections,
+  creditWallets,
   dailyQuota,
   InsertAiIdentity,
   InsertAuditLog,
@@ -2167,6 +2168,13 @@ export class WhatsAppChannelConnectionMigrationRequiredError extends Error {
   }
 }
 
+export class FacebookChannelConnectionMigrationRequiredError extends Error {
+  constructor() {
+    super("Facebook Page binding change requires an explicit credit migration");
+    this.name = "FacebookChannelConnectionMigrationRequiredError";
+  }
+}
+
 function normalizeChannelConnectionEndpoint(
   values: InsertChannelConnection
 ): Readonly<{
@@ -2260,20 +2268,21 @@ export async function upsertChannelConnection(
       allowedRoles: readonly WorkspaceMember["role"][];
     }>;
     updatePolicy?:
-      | "preserve_exact_whatsapp_binding"
-      | "preserve_exact_facebook_page_binding";
+      "preserve_exact_whatsapp_binding" | "preserve_exact_facebook_binding";
   }> = {}
 ) {
   const { externalId, providerAccountExternalId } =
     normalizeChannelConnectionEndpoint(values);
   const preservesExactWhatsAppBinding =
     options.updatePolicy === "preserve_exact_whatsapp_binding";
-  const preservesExactFacebookBinding =
-    options.updatePolicy === "preserve_exact_facebook_page_binding";
   const exactWhatsAppEndpoint =
     preservesExactWhatsAppBinding && externalId && providerAccountExternalId
       ? Object.freeze({ externalId, providerAccountExternalId })
       : null;
+  const preservesExactFacebookBinding =
+    options.updatePolicy === "preserve_exact_facebook_binding";
+  const exactFacebookPageId =
+    preservesExactFacebookBinding && externalId ? externalId : null;
   if (
     preservesExactWhatsAppBinding &&
     (values.channel !== "whatsapp" ||
@@ -2284,9 +2293,11 @@ export async function upsertChannelConnection(
   }
   if (
     preservesExactFacebookBinding &&
-    (values.channel !== "facebook_messenger" || !externalId)
+    (values.channel !== "facebook_messenger" ||
+      values.status === "disconnected" ||
+      !exactFacebookPageId)
   ) {
-    throw new Error("Exact Facebook Page binding is required");
+    throw new FacebookChannelConnectionMigrationRequiredError();
   }
   if (options.auditLog && options.auditLog.workspaceId !== values.workspaceId) {
     throw new Error("Channel connection audit workspace does not match");
@@ -2404,11 +2415,6 @@ export async function upsertChannelConnection(
         )
         .limit(1)
         .for("update");
-      const preservesCurrentFacebookPage =
-        preservesExactFacebookBinding &&
-        existing.length === 1 &&
-        existing[0].externalId === externalId;
-
       if (existing[0]) {
         if (preservesExactWhatsAppBinding) {
           if (!exactWhatsAppEndpoint) {
@@ -2445,28 +2451,75 @@ export async function upsertChannelConnection(
                 )
               )
             );
-        } else if (preservesCurrentFacebookPage) {
-          // A credential refresh for the identical Page keeps the durable
-          // privacy/billing binding. A different Page still takes the fenced
-          // epoch-rotation path below and can never inherit its wallets.
-          await tx
-            .update(channelConnections)
-            .set({
-              status: values.status,
-              displayName: values.displayName ?? null,
-              encryptedAccessToken: values.encryptedAccessToken ?? null,
-              grantedScopes: values.grantedScopes ?? null,
-              lastCheckedAt,
-            })
-            .where(
-              and(
-                eq(channelConnections.id, existing[0].id),
-                eq(channelConnections.workspaceId, values.workspaceId),
-                eq(channelConnections.channel, "facebook_messenger"),
-                eq(channelConnections.externalId, externalId!),
-                eq(channelConnections.bindingEpoch, existing[0].bindingEpoch)
+        } else if (preservesExactFacebookBinding) {
+          if (!exactFacebookPageId) {
+            throw new FacebookChannelConnectionMigrationRequiredError();
+          }
+          if (
+            existing[0].status === "disconnected" &&
+            existing[0].externalId === null &&
+            existing[0].providerAccountExternalId === null
+          ) {
+            // A completed disconnect already advanced the epoch and removed
+            // the Page identity. Permit a fresh claim only while no retained
+            // paid balance still depends on this connection. The Page claim
+            // above is locked before this row is rebound.
+            const retainedCreditWallets = await tx
+              .select({ walletId: creditWallets.walletId })
+              .from(creditWallets)
+              .where(
+                and(
+                  eq(creditWallets.workspaceId, values.workspaceId),
+                  eq(creditWallets.channelConnectionId, existing[0].id),
+                  inArray(creditWallets.status, ["active", "frozen"])
+                )
               )
-            );
+              .limit(1)
+              .for("update");
+            if (retainedCreditWallets[0]) {
+              throw new FacebookChannelConnectionMigrationRequiredError();
+            }
+            await tx
+              .update(channelConnections)
+              .set(updateSet)
+              .where(
+                and(
+                  eq(channelConnections.id, existing[0].id),
+                  eq(channelConnections.workspaceId, values.workspaceId),
+                  eq(channelConnections.channel, "facebook_messenger"),
+                  eq(channelConnections.status, "disconnected"),
+                  isNull(channelConnections.externalId),
+                  isNull(channelConnections.providerAccountExternalId)
+                )
+              );
+          } else {
+            if (
+              existing[0].status === "disconnected" ||
+              existing[0].externalId !== exactFacebookPageId ||
+              existing[0].providerAccountExternalId !== null
+            ) {
+              throw new FacebookChannelConnectionMigrationRequiredError();
+            }
+            await tx
+              .update(channelConnections)
+              .set({
+                status: values.status,
+                displayName: values.displayName ?? null,
+                encryptedAccessToken: values.encryptedAccessToken ?? null,
+                grantedScopes: values.grantedScopes ?? null,
+                lastCheckedAt,
+              })
+              .where(
+                and(
+                  eq(channelConnections.id, existing[0].id),
+                  eq(channelConnections.workspaceId, values.workspaceId),
+                  eq(channelConnections.channel, "facebook_messenger"),
+                  eq(channelConnections.externalId, exactFacebookPageId),
+                  isNull(channelConnections.providerAccountExternalId),
+                  eq(channelConnections.bindingEpoch, existing[0].bindingEpoch)
+                )
+              );
+          }
         } else {
           const providerFenceNow = new Date();
           // Every external provider call is hard-bounded below the 15-minute
@@ -2557,6 +2610,22 @@ export async function upsertChannelConnection(
                 "Channel connection has an active AI delivery; retry later"
               );
             }
+
+            const retainedCreditWallets = await tx
+              .select({ walletId: creditWallets.walletId })
+              .from(creditWallets)
+              .where(
+                and(
+                  eq(creditWallets.workspaceId, values.workspaceId),
+                  eq(creditWallets.channelConnectionId, existing[0].id),
+                  inArray(creditWallets.status, ["active", "frozen"])
+                )
+              )
+              .limit(1)
+              .for("update");
+            if (retainedCreditWallets[0]) {
+              throw new FacebookChannelConnectionMigrationRequiredError();
+            }
           }
           await tx
             .update(channelConnections)
@@ -2592,7 +2661,8 @@ export async function upsertChannelConnection(
     } catch (error) {
       if (
         error instanceof ChannelConnectionClaimConflictError ||
-        error instanceof WhatsAppChannelConnectionMigrationRequiredError
+        error instanceof WhatsAppChannelConnectionMigrationRequiredError ||
+        error instanceof FacebookChannelConnectionMigrationRequiredError
       ) {
         throw error;
       }
@@ -2735,6 +2805,22 @@ export async function disconnectChannelConnection(
         throw new Error(
           "Channel connection has an active AI delivery; retry later"
         );
+      }
+
+      const retainedCreditWallets = await tx
+        .select({ walletId: creditWallets.walletId })
+        .from(creditWallets)
+        .where(
+          and(
+            eq(creditWallets.workspaceId, workspaceId),
+            eq(creditWallets.channelConnectionId, existing[0].id),
+            inArray(creditWallets.status, ["active", "frozen"])
+          )
+        )
+        .limit(1)
+        .for("update");
+      if (retainedCreditWallets[0]) {
+        throw new FacebookChannelConnectionMigrationRequiredError();
       }
     }
 

@@ -19,6 +19,7 @@ import {
   createCreditReservationHold,
   CreditWalletStoreError,
   eraseCreditWallet,
+  eraseCreditWalletsForPrivacySubject,
   expirePristineCreditCheckout,
   expireCreditReservation,
   freezeCreditWalletForReview,
@@ -27,6 +28,7 @@ import {
   markCreditReservationTransportStarted,
   releaseCreditReservation,
   releaseCreditReservationAfterProviderRejection,
+  releaseCreditReservationOutputNotDelivered,
   reserveCreditCheckoutIntent,
   scrubTerminalCreditReservation,
 } from "./creditWalletStore";
@@ -146,7 +148,7 @@ describe("creditWalletStore procedure boundary", () => {
     getDatabaseOrThrowMock.mockResolvedValue({ execute: executeMock });
   });
 
-  it("calls all sixteen direct frozen procedures with the exact parameter order", async () => {
+  it("calls every direct frozen procedure variant with the exact parameter order", async () => {
     const cases = [
       {
         procedure: "credit_reserve_checkout_intent",
@@ -275,6 +277,30 @@ describe("creditWalletStore procedure boundary", () => {
             evidenceHash: EVIDENCE_HASH,
           }),
       },
+      {
+        procedure: "credit_release_reservation",
+        params: [
+          11,
+          "test",
+          12,
+          13,
+          14,
+          USER_KEY,
+          WALLET_ID,
+          FINANCIAL_REF,
+          RESERVATION_ID,
+          OWNER_HASH,
+          "output_not_delivered",
+          ENTRY_ID,
+          EVIDENCE_HASH,
+        ],
+        response: procedureResponse(
+          "applied",
+          "reservation_id",
+          RESERVATION_ID
+        ),
+        invoke: () => releaseCreditReservationOutputNotDelivered(terminalInput),
+      },
       ...[
         [
           "credit_mark_reservation_transport_started",
@@ -355,6 +381,9 @@ describe("creditWalletStore procedure boundary", () => {
           FINANCIAL_REF,
           RESERVATION_ID,
           OWNER_HASH,
+          ...(procedure === "credit_release_reservation"
+            ? ["pretransport"]
+            : []),
           ENTRY_ID,
           EVIDENCE_HASH,
         ],
@@ -468,7 +497,7 @@ describe("creditWalletStore procedure boundary", () => {
       await testCase.invoke();
     }
 
-    expect(executeMock).toHaveBeenCalledTimes(16);
+    expect(executeMock).toHaveBeenCalledTimes(cases.length);
     cases.forEach((testCase, index) => {
       const call = compiledCall(index);
       expect(call.sql).toBe(
@@ -529,6 +558,9 @@ describe("creditWalletStore procedure boundary", () => {
         procedureResponse("pending_provider", "wallet_id", WALLET_ID)
       )
       .mockResolvedValueOnce(
+        procedureResponse("pending_adjustment", "wallet_id", WALLET_ID)
+      )
+      .mockResolvedValueOnce(
         procedureResponse("already_applied", "entry_id", ENTRY_ID)
       );
 
@@ -544,9 +576,43 @@ describe("creditWalletStore procedure boundary", () => {
       result: "pending_provider",
       walletId: WALLET_ID,
     });
+    await expect(eraseCreditWallet(erasureScope)).resolves.toEqual({
+      result: "pending_adjustment",
+      walletId: WALLET_ID,
+    });
     await expect(
       applyCreditChargebackRestore(adjustmentInput)
     ).resolves.toEqual({ result: "already_applied", entryId: ENTRY_ID });
+  });
+
+  it("keeps a privacy-subject wallet phase pending for an exact adjustment", async () => {
+    const limit = vi.fn().mockResolvedValue([
+      {
+        financialSubjectRef: FINANCIAL_REF,
+        mode: "test",
+        walletId: WALLET_ID,
+      },
+    ]);
+    const where = vi.fn(() => ({ limit }));
+    const from = vi.fn(() => ({ where }));
+    const select = vi.fn(() => ({ from }));
+    getDatabaseOrThrowMock.mockResolvedValue({ execute: executeMock, select });
+    executeMock.mockResolvedValueOnce(
+      procedureResponse("pending_adjustment", "wallet_id", WALLET_ID)
+    );
+
+    await expect(
+      eraseCreditWalletsForPrivacySubject({
+        workspaceId: 11,
+        channelConnectionId: 12,
+        bindingEpoch: 13,
+        dataPrivacyEpoch: 14,
+        erasurePrivacyEpoch: 15,
+        userKey: USER_KEY,
+      })
+    ).resolves.toEqual({ result: "pending", walletCount: 1 });
+    expect(select).toHaveBeenCalledOnce();
+    expect(executeMock).toHaveBeenCalledOnce();
   });
 
   it("rejects invalid input before obtaining a database connection", async () => {

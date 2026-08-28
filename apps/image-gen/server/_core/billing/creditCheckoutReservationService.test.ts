@@ -100,6 +100,53 @@ describe("Messenger credit checkout reservation", () => {
     expect(second.actionUrl).toBe(first.actionUrl);
   });
 
+  it("fails closed before reservation when an existing wallet cannot accept checkout", async () => {
+    const deps = dependencies({
+      readWalletIdentity: vi.fn(async () => ({
+        walletId: "11111111-1111-1111-1111-111111111111",
+        financialSubjectRef: "b".repeat(64),
+        checkoutAvailable: false,
+      })),
+    });
+
+    await expect(
+      reserveMessengerCreditCheckout(INPUT, deps)
+    ).rejects.toBeInstanceOf(CreditCheckoutReservationError);
+    expect(deps.reserve).not.toHaveBeenCalled();
+  });
+
+  it("maps only the locked refund race to an unavailable checkout", async () => {
+    const walletConflict = Object.assign(new Error("redacted database error"), {
+      code: "ER_SIGNAL_EXCEPTION",
+      sqlState: "45000",
+      sqlMessage: "credit checkout wallet scope conflicts",
+    });
+    const wrappedConflict = new Error("Failed query", {
+      cause: walletConflict,
+    });
+    const deps = dependencies({
+      reserve: vi.fn(async () => {
+        throw wrappedConflict;
+      }),
+    });
+
+    await expect(
+      reserveMessengerCreditCheckout(INPUT, deps)
+    ).rejects.toBeInstanceOf(CreditCheckoutReservationError);
+
+    const databaseOutage = Object.assign(new Error("database unavailable"), {
+      code: "ECONNRESET",
+    });
+    const retryableDeps = dependencies({
+      reserve: vi.fn(async () => {
+        throw databaseOutage;
+      }),
+    });
+    await expect(
+      reserveMessengerCreditCheckout(INPUT, retryableDeps)
+    ).rejects.toBe(databaseOutage);
+  });
+
   it("keeps an existing wallet through more than four retained rotations", async () => {
     const oldSecret = Buffer.alloc(32, 1);
     const newSecret = Buffer.alloc(32, 2);
@@ -121,7 +168,10 @@ describe("Messenger credit checkout reservation", () => {
       scope,
     });
     const deps = dependencies({
-      readWalletIdentity: vi.fn(async () => oldIdentity),
+      readWalletIdentity: vi.fn(async () => ({
+        ...oldIdentity,
+        checkoutAvailable: true,
+      })),
       withKeyring: callback =>
         callback([
           { keyId: "k6", secret: newSecret },
@@ -160,7 +210,10 @@ describe("Messenger credit checkout reservation", () => {
       },
     });
     const deps = dependencies({
-      readWalletIdentity: vi.fn(async () => oldIdentity),
+      readWalletIdentity: vi.fn(async () => ({
+        ...oldIdentity,
+        checkoutAvailable: true,
+      })),
       withKeyring: callback =>
         callback([{ keyId: "k2", secret: Buffer.alloc(32, 2) }]),
     });

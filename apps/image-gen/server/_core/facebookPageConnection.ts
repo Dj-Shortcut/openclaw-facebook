@@ -27,7 +27,7 @@ export async function connectAuthorizedFacebookPage(input: {
       encryptedAccessToken: sealFacebookPageToken(input.page.accessToken),
       lastCheckedAt: new Date(),
     },
-    { updatePolicy: "preserve_exact_facebook_page_binding" }
+    { updatePolicy: "preserve_exact_facebook_binding" }
   );
   await db.insertAuditLog({
     workspaceId: input.workspaceId,

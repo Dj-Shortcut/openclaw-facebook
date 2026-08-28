@@ -1,4 +1,4 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 
 import { creditReservations, creditWallets } from "../../../drizzle/schema";
 import { getDatabaseOrThrow } from "../../db";
@@ -16,6 +16,7 @@ export type CreditGenerationReservationState = Readonly<{
 export type CurrentCreditWalletIdentity = Readonly<{
   walletId: string;
   financialSubjectRef: string;
+  checkoutAvailable: boolean;
 }>;
 
 /**
@@ -36,6 +37,8 @@ export async function readCurrentCreditWalletIdentity(input: {
     .select({
       walletId: creditWallets.walletId,
       financialSubjectRef: creditWallets.financialSubjectRef,
+      status: creditWallets.status,
+      refundAdjustmentEntryId: creditWallets.refundAdjustmentEntryId,
     })
     .from(creditWallets)
     .where(
@@ -53,7 +56,14 @@ export async function readCurrentCreditWalletIdentity(input: {
   if (rows.length > 1) {
     throw new Error("Credit wallet identity is ambiguous");
   }
-  return rows[0] ?? null;
+  const row = rows[0];
+  if (!row) return null;
+  return Object.freeze({
+    walletId: row.walletId,
+    financialSubjectRef: row.financialSubjectRef,
+    checkoutAvailable:
+      row.status === "active" && row.refundAdjustmentEntryId === null,
+  });
 }
 
 /**
@@ -80,7 +90,8 @@ export async function readSpendableCreditWallet(
         eq(creditWallets.privacyEpoch, scope.privacyEpoch),
         eq(creditWallets.currentUserKeyHash, scope.userKey),
         eq(creditWallets.financialSubjectRef, scope.financialSubjectRef),
-        eq(creditWallets.status, "active")
+        eq(creditWallets.status, "active"),
+        isNull(creditWallets.refundAdjustmentEntryId)
       )
     )
     .limit(2);

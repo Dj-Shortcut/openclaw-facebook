@@ -4,9 +4,9 @@
   "baseSchemaSnapshot": "meta/0014_snapshot.json",
   "baseSchemaSnapshotSha256": "e0102aad23d607b4b359d1a11458d56c63533d73f056f332076ba952b7468b35",
   "schemaSnapshot": "meta/0018_snapshot.json",
-  "schemaSnapshotSha256": "9fb254700f37c33b87dffbe3d5b7c2fe7e6616156c1e8e3b540a39b95f617127",
+  "schemaSnapshotSha256": "7b1440a644d2e30a1beb79a21dbeadf5d97252857226a919e78c0c0a20a17a64",
   "productionSchemaContract": "production-schema-contract.json",
-  "productionSchemaContractSha256": "3fba9957e4f3be99a9c11f8cc12413c03ed4f83409515807479077afaf24f6bd",
+  "productionSchemaContractSha256": "6bdef47572ba32b6e6dca20ac421037f80cb690bd68bd195c817b8864989ff8e",
   "migrations": [
     {
       "idx": 0,
@@ -114,13 +114,13 @@
       "idx": 17,
       "when": 1787881948952,
       "tag": "0017_credit_wallet_expand",
-      "sha256": "6bf02b11e9ffcbdde2336ca241c464baea784d7d9e53fd84e891c05ef604bb36"
+      "sha256": "e37de0afd5b4d930b34853b423281aa33f073e961e306c64b2e53e08f0172b2a"
     },
     {
       "idx": 18,
       "when": 1787886000000,
       "tag": "0018_credit_checkout_reservation",
-      "sha256": "195ae01863ad270fcf8baa41430442d1caa298af4bd7dec9fa145b082a48c9bf"
+      "sha256": "039eb055fbcf83b9988ae5c428ebe1d884c525b1608913e9e597f7938ee6c7c2"
     }
   ]
 }

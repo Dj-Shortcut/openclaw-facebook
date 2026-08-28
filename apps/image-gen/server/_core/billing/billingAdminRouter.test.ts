@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   disableSchedulerTenant: vi.fn(),
   listOperatorNotifications: vi.fn(),
   acknowledgeOperatorNotification: vi.fn(),
+  listCreditReservationTransportReviews: vi.fn(),
   resolveCreditReservationTransport: vi.fn(),
 }));
 
@@ -32,6 +33,8 @@ vi.mock("./billingNotificationInboxStore", () => ({
 }));
 
 vi.mock("./creditReservationOperatorResolution", () => ({
+  listOpenCreditReservationTransportReviews:
+    mocks.listCreditReservationTransportReviews,
   resolveAmbiguousPaidCreditReservation:
     mocks.resolveCreditReservationTransport,
 }));
@@ -130,6 +133,15 @@ describe("platform operator billing incidents", () => {
     mocks.acknowledgeOperatorNotification.mockResolvedValue({
       acknowledgedAt: new Date("2026-08-24T12:00:00.000Z"),
     });
+    mocks.listCreditReservationTransportReviews.mockResolvedValue([
+      {
+        caseRef: "66666666-6666-4666-8666-666666666666",
+        mode: "test",
+        reservationId: "11111111-1111-8111-8111-111111111111",
+        walletId: "22222222-2222-8222-8222-222222222222",
+        reason: "credit_reservation_transport_ambiguous",
+      },
+    ]);
     mocks.resolveCreditReservationTransport.mockResolvedValue({
       result: "applied",
       reservationId: "11111111-1111-8111-8111-111111111111",
@@ -180,11 +192,67 @@ describe("platform operator billing incidents", () => {
     expect(mocks.acknowledgeOperatorNotification).not.toHaveBeenCalled();
   });
 
+  it("lists an opaque mode-scoped review and resolves that exact reservation", async () => {
+    const caller = createCaller();
+    const reviews = await caller.creditReservationTransportReviews({
+      workspaceId: 42,
+      mode: "test",
+      limit: 10,
+    });
+    const review = reviews[0]!;
+
+    expect(reviews).toEqual([
+      {
+        caseRef: "66666666-6666-4666-8666-666666666666",
+        mode: "test",
+        reservationId: "11111111-1111-8111-8111-111111111111",
+        walletId: "22222222-2222-8222-8222-222222222222",
+        reason: "credit_reservation_transport_ambiguous",
+      },
+    ]);
+    expect(mocks.listCreditReservationTransportReviews).toHaveBeenCalledWith({
+      workspaceId: 42,
+      mode: "test",
+      limit: 10,
+    });
+
+    const resolution = {
+      requestId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      workspaceId: 42,
+      mode: review.mode,
+      reservationId: review.reservationId,
+      walletId: review.walletId,
+      decision: "output_not_delivered" as const,
+      evidenceReference: `review-case:${review.caseRef}`,
+    };
+    await expect(
+      caller.resolveCreditReservationTransport(resolution)
+    ).resolves.toMatchObject({ result: "applied" });
+    expect(mocks.resolveCreditReservationTransport).toHaveBeenCalledWith({
+      ...resolution,
+      actorUserId: admin.id,
+    });
+  });
+
+  it("forbids a non-admin before listing transport reviews", async () => {
+    await expect(
+      createCaller({
+        ...admin,
+        role: "user",
+      }).creditReservationTransportReviews({
+        workspaceId: 42,
+        mode: "test",
+      })
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(mocks.listCreditReservationTransportReviews).not.toHaveBeenCalled();
+  });
+
   it("resolves one reviewed transport without accepting hidden user scope", async () => {
     const caller = createCaller();
     const input = {
       requestId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
       workspaceId: 42,
+      mode: "test" as const,
       reservationId: "11111111-1111-8111-8111-111111111111",
       walletId: "22222222-2222-8222-8222-222222222222",
       decision: "provider_rejected" as const,
@@ -219,6 +287,7 @@ describe("platform operator billing incidents", () => {
         createCaller().resolveCreditReservationTransport({
           requestId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
           workspaceId: 42,
+          mode: "test",
           reservationId: "11111111-1111-8111-8111-111111111111",
           walletId: "22222222-2222-8222-8222-222222222222",
           decision: "provider_rejected",
@@ -230,6 +299,26 @@ describe("platform operator billing incidents", () => {
     }
   );
 
+  it("accepts a reviewed output non-delivery without inventing a provider status", async () => {
+    const input = {
+      requestId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      workspaceId: 42,
+      mode: "test" as const,
+      reservationId: "11111111-1111-8111-8111-111111111111",
+      walletId: "22222222-2222-8222-8222-222222222222",
+      decision: "output_not_delivered" as const,
+      evidenceReference: "messenger-nondelivery:network-ambiguous",
+    };
+
+    await expect(
+      createCaller().resolveCreditReservationTransport(input)
+    ).resolves.toMatchObject({ result: "applied" });
+    expect(mocks.resolveCreditReservationTransport).toHaveBeenCalledWith({
+      ...input,
+      actorUserId: admin.id,
+    });
+  });
+
   it("forbids a non-admin before resolving a reviewed transport", async () => {
     await expect(
       createCaller({
@@ -238,9 +327,10 @@ describe("platform operator billing incidents", () => {
       }).resolveCreditReservationTransport({
         requestId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
         workspaceId: 42,
+        mode: "test",
         reservationId: "11111111-1111-8111-8111-111111111111",
         walletId: "22222222-2222-8222-8222-222222222222",
-        decision: "provider_accepted",
+        decision: "delivered_output",
         providerStatus: 200,
         evidenceReference: "openai-response:case-200",
       })

@@ -1,12 +1,13 @@
 import { createHash, createHmac } from "node:crypto";
 
-import { and, eq, inArray, or, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, or, sql } from "drizzle-orm";
 
 import {
   auditLog,
   billingExecutionControls,
   billingOutbox,
   channelConnections,
+  creditLedger,
   creditReservations,
   creditWallets,
   messengerPrivacySubjects,
@@ -15,12 +16,14 @@ import {
 import { getDatabaseOrThrow, type ImageGenTransaction } from "../../db";
 import {
   deriveCreditReservationCommitRecovery,
+  deriveCreditReservationOutputNotDeliveredRecovery,
   deriveCreditReservationProviderRejectedRecovery,
 } from "./creditGenerationAdmission";
-import { getConfiguredBillingMode, type MollieMode } from "./config";
+import type { MollieMode } from "./config";
 import {
   commitCreditReservation,
   markCreditReservationProviderAccepted,
+  releaseCreditReservationOutputNotDelivered,
   releaseCreditReservationAfterProviderRejection,
   type CreditWalletScope,
 } from "./creditWalletStore";
@@ -30,18 +33,20 @@ const UUID_PATTERN =
 const EVIDENCE_REFERENCE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/-]{7,255}$/;
 const REQUESTED_EVENT = "credit_reservation.operator_resolution_requested";
 const COMPLETED_EVENT = "credit_reservation.operator_resolution_completed";
+const TRANSPORT_REVIEW_REASON = "credit_reservation_transport_ambiguous";
 
 export type CreditReservationOperatorDecision =
-  "provider_accepted" | "provider_rejected";
+  "delivered_output" | "output_not_delivered" | "provider_rejected";
 
 export type CreditReservationOperatorResolutionInput = Readonly<{
   requestId: string;
   workspaceId: number;
+  mode: MollieMode;
   reservationId: string;
   walletId: string;
   actorUserId: number;
   decision: CreditReservationOperatorDecision;
-  providerStatus: number;
+  providerStatus?: number;
   evidenceReference: string;
 }>;
 
@@ -49,6 +54,14 @@ export type CreditReservationOperatorResolutionResult = Readonly<{
   result: "applied" | "already_applied";
   reservationId: string;
   decision: CreditReservationOperatorDecision;
+}>;
+
+export type OpenCreditReservationTransportReview = Readonly<{
+  caseRef: string;
+  mode: MollieMode;
+  reservationId: string;
+  walletId: string;
+  reason: typeof TRANSPORT_REVIEW_REASON;
 }>;
 
 type LockedResolutionScope = CreditWalletScope &
@@ -61,6 +74,10 @@ type LockedResolutionScope = CreditWalletScope &
 type AuditMaterial = Readonly<{
   evidenceReferenceHash: string;
   requestFingerprint: string;
+  legacyV1?: Readonly<{
+    decision: "provider_accepted" | "provider_rejected";
+    requestFingerprint: string;
+  }>;
 }>;
 
 type PreparedResolution = Readonly<{
@@ -77,23 +94,25 @@ export class CreditReservationOperatorResolutionError extends Error {
 }
 
 export type CreditReservationOperatorResolutionDependencies = Readonly<{
-  mode: typeof getConfiguredBillingMode;
   database: typeof getDatabaseOrThrow;
   markProviderAccepted: typeof markCreditReservationProviderAccepted;
   commit: typeof commitCreditReservation;
   releaseProviderRejected: typeof releaseCreditReservationAfterProviderRejection;
+  releaseOutputNotDelivered: typeof releaseCreditReservationOutputNotDelivered;
   deriveCommit: typeof deriveCreditReservationCommitRecovery;
+  deriveOutputNotDelivered: typeof deriveCreditReservationOutputNotDeliveredRecovery;
   deriveProviderRejected: typeof deriveCreditReservationProviderRejectedRecovery;
 }>;
 
 const defaultDependencies: CreditReservationOperatorResolutionDependencies =
   Object.freeze({
-    mode: getConfiguredBillingMode,
     database: getDatabaseOrThrow,
     markProviderAccepted: markCreditReservationProviderAccepted,
     commit: commitCreditReservation,
     releaseProviderRejected: releaseCreditReservationAfterProviderRejection,
+    releaseOutputNotDelivered: releaseCreditReservationOutputNotDelivered,
     deriveCommit: deriveCreditReservationCommitRecovery,
+    deriveOutputNotDelivered: deriveCreditReservationOutputNotDeliveredRecovery,
     deriveProviderRejected: deriveCreditReservationProviderRejectedRecovery,
   });
 
@@ -102,7 +121,7 @@ export async function resolveAmbiguousPaidCreditReservation(
   dependencies: CreditReservationOperatorResolutionDependencies = defaultDependencies
 ): Promise<CreditReservationOperatorResolutionResult> {
   const input = validateInput(rawInput);
-  const mode = dependencies.mode();
+  const mode = input.mode;
   const auditMaterial = deriveAuditMaterial(input);
   const database = await dependencies.database();
   const prepared = await database.transaction(tx =>
@@ -125,7 +144,7 @@ export async function resolveAmbiguousPaidCreditReservation(
 
   let result: "applied" | "already_applied";
   let terminalEntryId: string;
-  if (input.decision === "provider_accepted") {
+  if (input.decision === "delivered_output") {
     const terminal = dependencies.deriveCommit(scope);
     if (!terminal) {
       throw new CreditReservationOperatorResolutionError(
@@ -136,10 +155,29 @@ export async function resolveAmbiguousPaidCreditReservation(
     const committed = await dependencies.commit({ ...scope, ...terminal });
     result = committed.result;
     terminalEntryId = terminal.entryId;
+  } else if (input.decision === "output_not_delivered") {
+    const terminal = dependencies.deriveOutputNotDelivered(scope);
+    if (!terminal) {
+      throw new CreditReservationOperatorResolutionError(
+        "credit_reservation_operator_proof_unavailable"
+      );
+    }
+    const released = await dependencies.releaseOutputNotDelivered({
+      ...scope,
+      ...terminal,
+    });
+    result = released.result;
+    terminalEntryId = terminal.entryId;
   } else {
+    const rejectionStatus = input.providerStatus;
+    if (rejectionStatus === undefined) {
+      throw new CreditReservationOperatorResolutionError(
+        "credit_reservation_operator_provider_proof_invalid"
+      );
+    }
     const terminal = dependencies.deriveProviderRejected({
       ...scope,
-      rejectionStatus: input.providerStatus,
+      rejectionStatus,
     });
     if (!terminal) {
       throw new CreditReservationOperatorResolutionError(
@@ -148,7 +186,7 @@ export async function resolveAmbiguousPaidCreditReservation(
     }
     const released = await dependencies.releaseProviderRejected({
       ...scope,
-      rejectionStatus: input.providerStatus,
+      rejectionStatus,
       ...terminal,
     });
     result = released.result;
@@ -169,6 +207,67 @@ export async function resolveAmbiguousPaidCreditReservation(
   });
 }
 
+/**
+ * Lists only the opaque identifiers an administrator needs to resolve an open
+ * paid-credit transport review. The notification transport deliberately stays
+ * metadata-only; exact reservation scope remains behind this admin boundary.
+ */
+export async function listOpenCreditReservationTransportReviews(
+  input: Readonly<{
+    workspaceId: number;
+    mode: MollieMode;
+    limit?: number;
+  }>,
+  databaseProvider: typeof getDatabaseOrThrow = getDatabaseOrThrow
+): Promise<readonly OpenCreditReservationTransportReview[]> {
+  const limit = input.limit ?? 25;
+  if (
+    !Number.isSafeInteger(input.workspaceId) ||
+    input.workspaceId < 1 ||
+    (input.mode !== "test" && input.mode !== "live") ||
+    !Number.isSafeInteger(limit) ||
+    limit < 1 ||
+    limit > 50
+  ) {
+    throw new CreditReservationOperatorResolutionError(
+      "credit_reservation_operator_list_input_invalid"
+    );
+  }
+
+  const database = await databaseProvider();
+  const rows = await database
+    .select({
+      caseRef: billingOutbox.deliveryId,
+      mode: billingOutbox.mode,
+      deduplicationKey: billingOutbox.deduplicationKey,
+      payload: billingOutbox.payload,
+    })
+    .from(billingOutbox)
+    .where(
+      and(
+        eq(billingOutbox.workspaceId, input.workspaceId),
+        eq(billingOutbox.mode, input.mode),
+        eq(billingOutbox.eventType, "manual_review"),
+        sql`JSON_UNQUOTE(JSON_EXTRACT(${billingOutbox.payload}, '$.reason')) = ${TRANSPORT_REVIEW_REASON}`,
+        sql`NOT EXISTS (
+          SELECT 1
+          FROM ${auditLog} AS completed_review
+          WHERE completed_review.\`workspaceId\` = ${billingOutbox.workspaceId}
+            AND completed_review.\`event\` = ${COMPLETED_EVENT}
+            AND JSON_UNQUOTE(JSON_EXTRACT(completed_review.\`metadata\`, '$.mode')) = ${billingOutbox.mode}
+            AND JSON_UNQUOTE(JSON_EXTRACT(completed_review.\`metadata\`, '$.reservationId')) =
+              JSON_UNQUOTE(JSON_EXTRACT(${billingOutbox.payload}, '$.reservationId'))
+            AND JSON_UNQUOTE(JSON_EXTRACT(completed_review.\`metadata\`, '$.walletId')) =
+              JSON_UNQUOTE(JSON_EXTRACT(${billingOutbox.payload}, '$.walletId'))
+        )`
+      )
+    )
+    .orderBy(asc(billingOutbox.id))
+    .limit(limit);
+
+  return Object.freeze(rows.map(parseOpenTransportReview));
+}
+
 function validateInput(
   input: CreditReservationOperatorResolutionInput
 ): CreditReservationOperatorResolutionInput {
@@ -179,6 +278,7 @@ function validateInput(
     !UUID_PATTERN.test(input.requestId) ||
     !Number.isSafeInteger(input.workspaceId) ||
     input.workspaceId < 1 ||
+    (input.mode !== "test" && input.mode !== "live") ||
     !UUID_PATTERN.test(input.reservationId) ||
     !UUID_PATTERN.test(input.walletId) ||
     !Number.isSafeInteger(input.actorUserId) ||
@@ -189,19 +289,28 @@ function validateInput(
       "credit_reservation_operator_input_invalid"
     );
   }
-  const accepted =
-    input.decision === "provider_accepted" &&
+  const delivered =
+    input.decision === "delivered_output" &&
+    typeof input.providerStatus === "number" &&
     Number.isSafeInteger(input.providerStatus) &&
     input.providerStatus >= 200 &&
     input.providerStatus <= 299;
+  const outputNotDelivered =
+    input.decision === "output_not_delivered" &&
+    (input.providerStatus === undefined ||
+      (Number.isSafeInteger(input.providerStatus) &&
+        typeof input.providerStatus === "number" &&
+        input.providerStatus >= 200 &&
+        input.providerStatus <= 299));
   const rejected =
     input.decision === "provider_rejected" &&
+    typeof input.providerStatus === "number" &&
     Number.isSafeInteger(input.providerStatus) &&
     input.providerStatus >= 400 &&
     input.providerStatus <= 499 &&
     input.providerStatus !== 408 &&
     input.providerStatus !== 429;
-  if (!accepted && !rejected) {
+  if (!delivered && !outputNotDelivered && !rejected) {
     throw new CreditReservationOperatorResolutionError(
       "credit_reservation_operator_provider_proof_invalid"
     );
@@ -222,16 +331,46 @@ function deriveAuditMaterial(
       JSON.stringify({
         requestId: input.requestId,
         workspaceId: input.workspaceId,
+        mode: input.mode,
         reservationId: input.reservationId,
         walletId: input.walletId,
         actorUserId: input.actorUserId,
         decision: input.decision,
-        providerStatus: input.providerStatus,
+        providerStatus: input.providerStatus ?? null,
         evidenceReferenceHash,
       })
     )
     .digest("hex");
-  return Object.freeze({ evidenceReferenceHash, requestFingerprint });
+  const legacyDecision =
+    input.decision === "delivered_output"
+      ? "provider_accepted"
+      : input.decision === "provider_rejected"
+        ? "provider_rejected"
+        : null;
+  const legacyV1 = legacyDecision
+    ? Object.freeze({
+        decision: legacyDecision,
+        requestFingerprint: createHash("sha256")
+          .update(
+            JSON.stringify({
+              requestId: input.requestId,
+              workspaceId: input.workspaceId,
+              reservationId: input.reservationId,
+              walletId: input.walletId,
+              actorUserId: input.actorUserId,
+              decision: legacyDecision,
+              providerStatus: input.providerStatus,
+              evidenceReferenceHash,
+            })
+          )
+          .digest("hex"),
+      })
+    : undefined;
+  return Object.freeze({
+    evidenceReferenceHash,
+    requestFingerprint,
+    ...(legacyV1 ? { legacyV1 } : {}),
+  });
 }
 
 async function prepareResolution(
@@ -244,6 +383,21 @@ async function prepareResolution(
   const existingAudits = await findResolutionAudits(tx, input);
   assertMatchingAudits(existingAudits, input, auditMaterial);
   if (existingAudits.some(row => row.event === COMPLETED_EVENT)) {
+    return Object.freeze({ replayed: true });
+  }
+  const existingRequest = existingAudits.find(
+    row => row.event === REQUESTED_EVENT
+  );
+  if (
+    existingRequest &&
+    (await completeRecoveredTerminalResolution(
+      tx,
+      input,
+      mode,
+      auditMaterial,
+      existingRequest
+    ))
+  ) {
     return Object.freeze({ replayed: true });
   }
 
@@ -483,6 +637,115 @@ async function prepareResolution(
   return Object.freeze({ replayed: false, scope, scopeFingerprint });
 }
 
+async function completeRecoveredTerminalResolution(
+  tx: ImageGenTransaction,
+  input: CreditReservationOperatorResolutionInput,
+  mode: MollieMode,
+  auditMaterial: AuditMaterial,
+  requestedAudit: Awaited<ReturnType<typeof findResolutionAudits>>[number]
+): Promise<boolean> {
+  const requestedMetadata = readMetadata(requestedAudit.metadata);
+  const scopeFingerprint = requestedMetadata.scopeFingerprint;
+  if (
+    typeof scopeFingerprint !== "string" ||
+    !/^[0-9a-f]{64}$/.test(scopeFingerprint)
+  ) {
+    throw new CreditReservationOperatorResolutionError(
+      "credit_reservation_operator_audit_malformed"
+    );
+  }
+
+  const reservations = await tx
+    .select({
+      channelConnectionId: creditReservations.channelConnectionId,
+      bindingEpoch: creditReservations.bindingEpoch,
+      privacyEpoch: creditReservations.privacyEpoch,
+      financialSubjectRef: creditReservations.financialSubjectRef,
+      reservedCreditCount: creditReservations.reservedCreditCount,
+      status: creditReservations.status,
+      transportState: creditReservations.transportState,
+      providerRejectedStatus: creditReservations.providerRejectedStatus,
+      terminalLedgerEntryId: creditReservations.terminalLedgerEntryId,
+      terminalEvidenceHash: creditReservations.terminalEvidenceHash,
+    })
+    .from(creditReservations)
+    .where(
+      and(
+        eq(creditReservations.workspaceId, input.workspaceId),
+        eq(creditReservations.mode, mode),
+        eq(creditReservations.reservationId, input.reservationId),
+        eq(creditReservations.walletId, input.walletId)
+      )
+    )
+    .limit(2)
+    .for("update");
+  if (reservations.length !== 1) {
+    throw new CreditReservationOperatorResolutionError(
+      "credit_reservation_operator_request_conflict"
+    );
+  }
+  const reservation = reservations[0];
+  if (
+    reservation.status === "initializing" ||
+    reservation.status === "reserved"
+  ) {
+    return false;
+  }
+  if (!matchesTerminalDecisionState(reservation, input)) {
+    throw new CreditReservationOperatorResolutionError(
+      "credit_reservation_operator_request_conflict"
+    );
+  }
+
+  const terminalEntries = await tx
+    .select({
+      entryId: creditLedger.entryId,
+      entryKind: creditLedger.entryKind,
+      terminalStatus: creditLedger.reservationTerminalStatus,
+      evidenceHash: creditLedger.evidenceHash,
+    })
+    .from(creditLedger)
+    .where(
+      and(
+        eq(creditLedger.workspaceId, input.workspaceId),
+        eq(creditLedger.mode, mode),
+        eq(creditLedger.walletId, input.walletId),
+        eq(creditLedger.reservationId, input.reservationId),
+        eq(creditLedger.channelConnectionId, reservation.channelConnectionId),
+        eq(creditLedger.bindingEpoch, reservation.bindingEpoch),
+        eq(creditLedger.privacyEpoch, reservation.privacyEpoch),
+        eq(creditLedger.financialSubjectRef, reservation.financialSubjectRef),
+        eq(
+          creditLedger.reservationCreditCount,
+          reservation.reservedCreditCount
+        ),
+        eq(creditLedger.reservationTerminalSlot, 1)
+      )
+    )
+    .limit(2)
+    .for("update");
+  const terminalEntry = terminalEntries[0];
+  if (
+    terminalEntries.length !== 1 ||
+    !terminalEntry ||
+    !UUID_PATTERN.test(terminalEntry.entryId) ||
+    terminalEntry.entryId !== reservation.terminalLedgerEntryId ||
+    terminalEntry.evidenceHash !== reservation.terminalEvidenceHash ||
+    !matchesTerminalLedgerEntry(terminalEntry, input.decision)
+  ) {
+    throw new CreditReservationOperatorResolutionError(
+      "credit_reservation_operator_request_conflict"
+    );
+  }
+
+  await insertCompletedResolutionAudit(tx, input, mode, auditMaterial, {
+    result: "already_applied",
+    scopeFingerprint,
+    terminalEntryId: terminalEntry.entryId,
+  });
+  return true;
+}
+
 async function completeResolutionAudit(
   tx: ImageGenTransaction,
   input: CreditReservationOperatorResolutionInput,
@@ -512,6 +775,26 @@ async function completeResolutionAudit(
     );
   }
   if (audits.some(row => row.event === COMPLETED_EVENT)) return;
+  await insertCompletedResolutionAudit(
+    tx,
+    input,
+    mode,
+    auditMaterial,
+    terminal
+  );
+}
+
+async function insertCompletedResolutionAudit(
+  tx: ImageGenTransaction,
+  input: CreditReservationOperatorResolutionInput,
+  mode: MollieMode,
+  auditMaterial: AuditMaterial,
+  terminal: Readonly<{
+    result: "applied" | "already_applied";
+    scopeFingerprint: string;
+    terminalEntryId: string;
+  }>
+): Promise<void> {
   await tx.insert(auditLog).values({
     workspaceId: input.workspaceId,
     userId: input.actorUserId,
@@ -575,15 +858,32 @@ function assertMatchingAudits(
   }
   for (const audit of audits) {
     const metadata = readMetadata(audit.metadata);
-    if (
-      audit.userId !== input.actorUserId ||
-      metadata.requestFingerprint !== auditMaterial.requestFingerprint ||
-      metadata.evidenceReferenceHash !== auditMaterial.evidenceReferenceHash ||
-      metadata.decision !== input.decision ||
-      metadata.providerStatus !== input.providerStatus ||
-      metadata.reservationId !== input.reservationId ||
-      metadata.walletId !== input.walletId
-    ) {
+    const currentAuditMatches =
+      audit.userId === input.actorUserId &&
+      metadata.requestFingerprint === auditMaterial.requestFingerprint &&
+      metadata.evidenceReferenceHash === auditMaterial.evidenceReferenceHash &&
+      metadata.decision === input.decision &&
+      metadata.providerStatus === (input.providerStatus ?? null) &&
+      metadata.mode === input.mode &&
+      metadata.reservationId === input.reservationId &&
+      metadata.walletId === input.walletId;
+    const legacy = auditMaterial.legacyV1;
+    // V1 did not authenticate a mode and named a delivered output
+    // `provider_accepted`. Accept that shape only for the pre-effect request:
+    // terminal recovery below re-locks the exact mode/reservation/ledger case,
+    // while a legacy completed row cannot be replayed without mode evidence.
+    const legacyRequestedAuditMatches =
+      audit.event === REQUESTED_EVENT &&
+      legacy !== undefined &&
+      audit.userId === input.actorUserId &&
+      metadata.requestFingerprint === legacy.requestFingerprint &&
+      metadata.evidenceReferenceHash === auditMaterial.evidenceReferenceHash &&
+      metadata.decision === legacy.decision &&
+      metadata.providerStatus === input.providerStatus &&
+      metadata.mode === undefined &&
+      metadata.reservationId === input.reservationId &&
+      metadata.walletId === input.walletId;
+    if (!currentAuditMatches && !legacyRequestedAuditMatches) {
       throw new CreditReservationOperatorResolutionError(
         "credit_reservation_operator_request_conflict"
       );
@@ -599,13 +899,22 @@ function matchesDecisionState(
   }>,
   input: CreditReservationOperatorResolutionInput
 ): boolean {
-  if (input.decision === "provider_accepted") {
+  if (input.decision === "delivered_output") {
     return (
       (reservation.status === "reserved" &&
         (reservation.transportState === "transport_started" ||
           reservation.transportState === "known_accepted")) ||
       (reservation.status === "committed" &&
         reservation.transportState === "known_accepted")
+    );
+  }
+  if (input.decision === "output_not_delivered") {
+    return (
+      (reservation.status === "reserved" &&
+        (reservation.transportState === "transport_started" ||
+          reservation.transportState === "known_accepted")) ||
+      (reservation.status === "released" &&
+        reservation.transportState === "output_not_delivered")
     );
   }
   return (
@@ -616,6 +925,49 @@ function matchesDecisionState(
       reservation.transportState === "known_rejected" &&
       reservation.providerRejectedStatus === input.providerStatus)
   );
+}
+
+function matchesTerminalDecisionState(
+  reservation: Readonly<{
+    status: string;
+    transportState: string;
+    providerRejectedStatus: number | null;
+  }>,
+  input: CreditReservationOperatorResolutionInput
+): boolean {
+  if (input.decision === "delivered_output") {
+    return (
+      reservation.status === "committed" &&
+      reservation.transportState === "known_accepted" &&
+      reservation.providerRejectedStatus === null
+    );
+  }
+  if (input.decision === "output_not_delivered") {
+    return (
+      reservation.status === "released" &&
+      reservation.transportState === "output_not_delivered" &&
+      reservation.providerRejectedStatus === null
+    );
+  }
+  return (
+    reservation.status === "released" &&
+    reservation.transportState === "known_rejected" &&
+    reservation.providerRejectedStatus === input.providerStatus
+  );
+}
+
+function matchesTerminalLedgerEntry(
+  entry: Readonly<{
+    entryKind: string;
+    terminalStatus: string | null;
+  }>,
+  decision: CreditReservationOperatorDecision
+): boolean {
+  return decision === "delivered_output"
+    ? entry.entryKind === "generation_spend" &&
+        entry.terminalStatus === "committed"
+    : entry.entryKind === "reservation_release" &&
+        entry.terminalStatus === "released";
 }
 
 function matchesManualReview(
@@ -629,6 +981,45 @@ function matchesManualReview(
     value.walletId === input.walletId &&
     value.creditPurpose === "premium_image_credits"
   );
+}
+
+function parseOpenTransportReview(row: {
+  caseRef: string;
+  mode: MollieMode;
+  deduplicationKey: string;
+  payload: unknown;
+}): OpenCreditReservationTransportReview {
+  if (!isPlainRecord(row.payload)) {
+    throw new CreditReservationOperatorResolutionError(
+      "credit_reservation_operator_review_malformed"
+    );
+  }
+  const reason = row.payload.reason;
+  const reservationId = row.payload.reservationId;
+  const walletId = row.payload.walletId;
+  if (
+    !UUID_PATTERN.test(row.caseRef) ||
+    (row.mode !== "test" && row.mode !== "live") ||
+    reason !== TRANSPORT_REVIEW_REASON ||
+    typeof reservationId !== "string" ||
+    !UUID_PATTERN.test(reservationId) ||
+    typeof walletId !== "string" ||
+    !UUID_PATTERN.test(walletId) ||
+    row.payload.creditPurpose !== "premium_image_credits" ||
+    row.deduplicationKey !==
+      `credit_reservation_transport_review:${reservationId}`
+  ) {
+    throw new CreditReservationOperatorResolutionError(
+      "credit_reservation_operator_review_malformed"
+    );
+  }
+  return Object.freeze({
+    caseRef: row.caseRef,
+    mode: row.mode,
+    reservationId,
+    walletId,
+    reason,
+  });
 }
 
 function deriveScopeFingerprint(scope: LockedResolutionScope): string {
@@ -673,7 +1064,8 @@ function auditMetadata(
     evidenceReferenceHash: auditMaterial.evidenceReferenceHash,
     evidenceStoredAsHash: true,
     decision: input.decision,
-    providerStatus: input.providerStatus,
+    providerStatus: input.providerStatus ?? null,
+    mode: input.mode,
     reservationId: input.reservationId,
     walletId: input.walletId,
     scopeFingerprint,

@@ -1,46 +1,49 @@
 import { createHash } from "node:crypto";
 
 import { safeLog } from "../logger";
-import { getConfiguredBillingMode } from "./config";
+import type { MollieMode } from "./config";
 import {
   enqueueCreditReservationTransportReview,
   listDueCreditReservationResolutions,
   listExpiredPristineCreditCheckouts,
   listExpiredCreditReservations,
+  listTerminalCreditReservationsForScrub,
   type ExpiredCreditReservation,
 } from "./creditReservationExpiryStore";
 import {
-  commitCreditReservation,
   expirePristineCreditCheckout,
   expireCreditReservation,
+  scrubTerminalCreditReservation,
 } from "./creditWalletStore";
-import { deriveCreditReservationCommitRecovery } from "./creditGenerationAdmission";
 
 const POLL_INTERVAL_MS = 60_000;
 let timer: NodeJS.Timeout | null = null;
 let running = false;
 
 export type CreditReservationExpiryDependencies = Readonly<{
-  mode: typeof getConfiguredBillingMode;
+  modes: () => readonly MollieMode[];
   list: typeof listExpiredCreditReservations;
   listDue: typeof listDueCreditReservationResolutions;
   listPristineCheckouts: typeof listExpiredPristineCreditCheckouts;
+  listTerminalForScrub: typeof listTerminalCreditReservationsForScrub;
   expire: typeof expireCreditReservation;
   expirePristineCheckout: typeof expirePristineCreditCheckout;
-  commit: typeof commitCreditReservation;
-  deriveCommit: typeof deriveCreditReservationCommitRecovery;
+  scrubTerminal: typeof scrubTerminalCreditReservation;
   review: typeof enqueueCreditReservationTransportReview;
 }>;
 
 const defaultDependencies: CreditReservationExpiryDependencies = Object.freeze({
-  mode: getConfiguredBillingMode,
+  // Historical holds retain their immutable payment mode. Scanning only the
+  // currently configured provider mode would strand Test Mode holds after a
+  // later live cutover and could block privacy erasure indefinitely.
+  modes: () => ["test", "live"] as const,
   list: listExpiredCreditReservations,
   listDue: listDueCreditReservationResolutions,
   listPristineCheckouts: listExpiredPristineCreditCheckouts,
+  listTerminalForScrub: listTerminalCreditReservationsForScrub,
   expire: expireCreditReservation,
   expirePristineCheckout: expirePristineCreditCheckout,
-  commit: commitCreditReservation,
-  deriveCommit: deriveCreditReservationCommitRecovery,
+  scrubTerminal: scrubTerminalCreditReservation,
   review: enqueueCreditReservationTransportReview,
 });
 
@@ -49,69 +52,64 @@ export async function runCreditReservationExpiryOnce(
   now = new Date(),
   dependencies: CreditReservationExpiryDependencies = defaultDependencies
 ): Promise<number> {
-  const mode = dependencies.mode();
-  const rows = await dependencies.list(mode, now, limit);
   let resolved = 0;
-  for (const row of rows) {
-    const terminal = deriveExpiryEvidence(row);
-    await dependencies.expire({
-      workspaceId: row.workspaceId,
-      mode: row.mode,
-      channelConnectionId: row.channelConnectionId,
-      bindingEpoch: row.bindingEpoch,
-      privacyEpoch: row.privacyEpoch,
-      userKey: row.userKey,
-      walletId: row.walletId,
-      financialSubjectRef: row.financialSubjectRef,
-      reservationId: row.reservationId,
-      ownerTokenHash: row.ownerTokenHash,
-      entryId: terminal.entryId,
-      evidenceHash: terminal.evidenceHash,
-    });
-    resolved += 1;
+  const modes = [...new Set(dependencies.modes())];
+  if (
+    modes.length !== 2 ||
+    !modes.includes("test") ||
+    !modes.includes("live")
+  ) {
+    throw new Error("credit reservation expiry modes are incomplete");
   }
-
-  const dueRows = await dependencies.listDue(mode, now, limit);
-  for (const row of dueRows) {
-    if (row.transportState === "known_accepted") {
-      try {
-        const terminal = dependencies.deriveCommit(row);
-        if (terminal) {
-          await dependencies.commit({
-            workspaceId: row.workspaceId,
-            mode: row.mode,
-            channelConnectionId: row.channelConnectionId,
-            bindingEpoch: row.bindingEpoch,
-            privacyEpoch: row.privacyEpoch,
-            userKey: row.userKey,
-            walletId: row.walletId,
-            financialSubjectRef: row.financialSubjectRef,
-            reservationId: row.reservationId,
-            ownerTokenHash: row.ownerTokenHash,
-            entryId: terminal.entryId,
-            evidenceHash: terminal.evidenceHash,
-          });
-          resolved += 1;
-          continue;
-        }
-      } catch {
-        // A missing/rotated proof is indistinguishable from an ambiguous
-        // provider outcome. Keep the credit held and use the durable review
-        // plane rather than releasing or consuming it speculatively.
-      }
+  for (const mode of modes) {
+    const rows = await dependencies.list(mode, now, limit);
+    for (const row of rows) {
+      const terminal = deriveExpiryEvidence(row);
+      await dependencies.expire({
+        workspaceId: row.workspaceId,
+        mode: row.mode,
+        channelConnectionId: row.channelConnectionId,
+        bindingEpoch: row.bindingEpoch,
+        privacyEpoch: row.privacyEpoch,
+        userKey: row.userKey,
+        walletId: row.walletId,
+        financialSubjectRef: row.financialSubjectRef,
+        reservationId: row.reservationId,
+        ownerTokenHash: row.ownerTokenHash,
+        entryId: terminal.entryId,
+        evidenceHash: terminal.evidenceHash,
+      });
+      resolved += 1;
     }
-    await dependencies.review(row);
-    resolved += 1;
-  }
 
-  const pristineCheckouts = await dependencies.listPristineCheckouts(
-    mode,
-    now,
-    limit
-  );
-  for (const checkout of pristineCheckouts) {
-    const outcome = await dependencies.expirePristineCheckout(checkout);
-    if (outcome.result === "applied") resolved += 1;
+    const dueRows = await dependencies.listDue(mode, now, limit);
+    for (const row of dueRows) {
+      // Provider acceptance prevents an unsafe transport retry, but does not
+      // prove that a usable image was parsed, published, and delivered. Keep
+      // every unresolved transport held for the durable manual-review plane.
+      await dependencies.review(row);
+      resolved += 1;
+    }
+
+    const pristineCheckouts = await dependencies.listPristineCheckouts(
+      mode,
+      now,
+      limit
+    );
+    for (const checkout of pristineCheckouts) {
+      const outcome = await dependencies.expirePristineCheckout(checkout);
+      if (outcome.result === "applied") resolved += 1;
+    }
+
+    const terminalRows = await dependencies.listTerminalForScrub(
+      mode,
+      now,
+      limit
+    );
+    for (const row of terminalRows) {
+      const outcome = await dependencies.scrubTerminal(row);
+      if (outcome.result === "applied") resolved += 1;
+    }
   }
   return resolved;
 }

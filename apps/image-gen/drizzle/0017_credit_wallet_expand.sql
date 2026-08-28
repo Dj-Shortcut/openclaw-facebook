@@ -153,7 +153,7 @@ CREATE TABLE `credit_reservations` (
 	`generation_request_key_hash` varchar(64),
 	`owner_token_hash` varchar(64),
 	`status` enum('initializing','reserved','committed','released','expired') NOT NULL DEFAULT 'initializing',
-	`transport_state` enum('pretransport','transport_started','known_accepted','known_rejected') NOT NULL DEFAULT 'pretransport',
+	`transport_state` enum('pretransport','transport_started','known_accepted','known_rejected','output_not_delivered') NOT NULL DEFAULT 'pretransport',
 	`transport_started_at` timestamp,
 	`provider_accepted_at` timestamp,
 	`provider_rejected_at` timestamp,
@@ -177,9 +177,9 @@ CREATE TABLE `credit_reservations` (
 	CONSTRAINT `credit_reservations_values_valid` CHECK(`credit_reservations`.`reserved_credit_count` > 0 AND `credit_reservations`.`state_version` > 0),
 	CONSTRAINT `credit_reservations_ids_valid` CHECK(REGEXP_LIKE(`credit_reservations`.`reservation_id`, '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', 'c') AND REGEXP_LIKE(`credit_reservations`.`wallet_id`, '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', 'c') AND (`credit_reservations`.`hold_ledger_entry_id` IS NULL OR REGEXP_LIKE(`credit_reservations`.`hold_ledger_entry_id`, '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', 'c')) AND (`credit_reservations`.`terminal_ledger_entry_id` IS NULL OR REGEXP_LIKE(`credit_reservations`.`terminal_ledger_entry_id`, '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', 'c'))),
 	CONSTRAINT `credit_reservations_hashes_valid` CHECK(((`credit_reservations`.`operational_scrubbed_at` IS NULL AND `credit_reservations`.`generation_request_key_hash` IS NOT NULL AND `credit_reservations`.`owner_token_hash` IS NOT NULL AND REGEXP_LIKE(`credit_reservations`.`generation_request_key_hash`, '^[0-9a-f]{64}$', 'c') AND REGEXP_LIKE(`credit_reservations`.`owner_token_hash`, '^[0-9a-f]{64}$', 'c')) OR (`credit_reservations`.`operational_scrubbed_at` IS NOT NULL AND `credit_reservations`.`status` IN ('committed','released','expired') AND `credit_reservations`.`generation_request_key_hash` IS NULL AND `credit_reservations`.`owner_token_hash` IS NULL AND `credit_reservations`.`operational_scrubbed_at` >= `credit_reservations`.`resolution_due_at`)) IS TRUE),
-	CONSTRAINT `credit_reservations_terminal_state` CHECK(((`credit_reservations`.`status` = 'initializing' AND `credit_reservations`.`transport_state` = 'pretransport' AND `credit_reservations`.`state_version` = 1 AND `credit_reservations`.`hold_ledger_entry_id` IS NULL AND `credit_reservations`.`committed_at` IS NULL AND `credit_reservations`.`released_at` IS NULL AND `credit_reservations`.`terminal_ledger_entry_id` IS NULL AND `credit_reservations`.`terminal_evidence_hash` IS NULL) OR (`credit_reservations`.`status` = 'reserved' AND `credit_reservations`.`state_version` = 2 AND `credit_reservations`.`hold_ledger_entry_id` IS NOT NULL AND `credit_reservations`.`committed_at` IS NULL AND `credit_reservations`.`released_at` IS NULL AND `credit_reservations`.`terminal_ledger_entry_id` IS NULL AND `credit_reservations`.`terminal_evidence_hash` IS NULL) OR (`credit_reservations`.`status` = 'committed' AND `credit_reservations`.`transport_state` = 'known_accepted' AND `credit_reservations`.`state_version` = 3 AND `credit_reservations`.`hold_ledger_entry_id` IS NOT NULL AND `credit_reservations`.`committed_at` IS NOT NULL AND `credit_reservations`.`released_at` IS NULL AND `credit_reservations`.`terminal_ledger_entry_id` IS NOT NULL AND `credit_reservations`.`terminal_evidence_hash` IS NOT NULL AND REGEXP_LIKE(`credit_reservations`.`terminal_evidence_hash`, '^[0-9a-f]{64}$', 'c')) OR (`credit_reservations`.`status` IN ('released','expired') AND `credit_reservations`.`transport_state` IN ('pretransport','known_rejected') AND `credit_reservations`.`state_version` = 3 AND `credit_reservations`.`hold_ledger_entry_id` IS NOT NULL AND `credit_reservations`.`released_at` IS NOT NULL AND `credit_reservations`.`committed_at` IS NULL AND `credit_reservations`.`terminal_ledger_entry_id` IS NOT NULL AND `credit_reservations`.`terminal_evidence_hash` IS NOT NULL AND REGEXP_LIKE(`credit_reservations`.`terminal_evidence_hash`, '^[0-9a-f]{64}$', 'c'))) IS TRUE),
-	CONSTRAINT `credit_reservations_transport_evidence` CHECK(((`credit_reservations`.`transport_state`='pretransport' AND `credit_reservations`.`transport_started_at` IS NULL AND `credit_reservations`.`provider_accepted_at` IS NULL AND `credit_reservations`.`provider_rejected_at` IS NULL AND `credit_reservations`.`provider_rejected_status` IS NULL) OR (`credit_reservations`.`transport_state`='transport_started' AND `credit_reservations`.`transport_started_at` IS NOT NULL AND `credit_reservations`.`provider_accepted_at` IS NULL AND `credit_reservations`.`provider_rejected_at` IS NULL AND `credit_reservations`.`provider_rejected_status` IS NULL) OR (`credit_reservations`.`transport_state`='known_accepted' AND `credit_reservations`.`transport_started_at` IS NOT NULL AND `credit_reservations`.`provider_accepted_at` IS NOT NULL AND `credit_reservations`.`provider_accepted_at`>=`credit_reservations`.`transport_started_at` AND `credit_reservations`.`provider_rejected_at` IS NULL AND `credit_reservations`.`provider_rejected_status` IS NULL) OR (`credit_reservations`.`transport_state`='known_rejected' AND `credit_reservations`.`transport_started_at` IS NOT NULL AND `credit_reservations`.`provider_accepted_at` IS NULL AND `credit_reservations`.`provider_rejected_at` IS NOT NULL AND `credit_reservations`.`provider_rejected_at`>=`credit_reservations`.`transport_started_at` AND `credit_reservations`.`provider_rejected_status` BETWEEN 400 AND 499 AND `credit_reservations`.`provider_rejected_status` NOT IN (408,429))) IS TRUE),
-	CONSTRAINT `credit_reservations_timestamp_order` CHECK(`credit_reservations`.`created_at` <= `credit_reservations`.`owner_lease_until` AND `credit_reservations`.`owner_lease_until` <= `credit_reservations`.`expires_at` AND `credit_reservations`.`expires_at` <= `credit_reservations`.`resolution_due_at` AND (`credit_reservations`.`transport_started_at` IS NULL OR (`credit_reservations`.`transport_started_at`>=`credit_reservations`.`created_at` AND `credit_reservations`.`transport_started_at`<=`credit_reservations`.`resolution_due_at`)) AND (`credit_reservations`.`provider_accepted_at` IS NULL OR (`credit_reservations`.`provider_accepted_at`>=`credit_reservations`.`created_at` AND `credit_reservations`.`provider_accepted_at`<=`credit_reservations`.`resolution_due_at`)) AND (`credit_reservations`.`provider_rejected_at` IS NULL OR (`credit_reservations`.`provider_rejected_at`>=`credit_reservations`.`created_at` AND `credit_reservations`.`provider_rejected_at`<=`credit_reservations`.`resolution_due_at`)) AND (`credit_reservations`.`committed_at` IS NULL OR (`credit_reservations`.`committed_at` >= `credit_reservations`.`created_at` AND `credit_reservations`.`committed_at` <= `credit_reservations`.`resolution_due_at`)) AND (`credit_reservations`.`released_at` IS NULL OR `credit_reservations`.`released_at` >= `credit_reservations`.`created_at`))
+	CONSTRAINT `credit_reservations_terminal_state` CHECK(((`credit_reservations`.`status` = 'initializing' AND `credit_reservations`.`transport_state` = 'pretransport' AND `credit_reservations`.`state_version` = 1 AND `credit_reservations`.`hold_ledger_entry_id` IS NULL AND `credit_reservations`.`committed_at` IS NULL AND `credit_reservations`.`released_at` IS NULL AND `credit_reservations`.`terminal_ledger_entry_id` IS NULL AND `credit_reservations`.`terminal_evidence_hash` IS NULL) OR (`credit_reservations`.`status` = 'reserved' AND `credit_reservations`.`state_version` = 2 AND `credit_reservations`.`hold_ledger_entry_id` IS NOT NULL AND `credit_reservations`.`committed_at` IS NULL AND `credit_reservations`.`released_at` IS NULL AND `credit_reservations`.`terminal_ledger_entry_id` IS NULL AND `credit_reservations`.`terminal_evidence_hash` IS NULL) OR (`credit_reservations`.`status` = 'committed' AND `credit_reservations`.`transport_state` = 'known_accepted' AND `credit_reservations`.`state_version` = 3 AND `credit_reservations`.`hold_ledger_entry_id` IS NOT NULL AND `credit_reservations`.`committed_at` IS NOT NULL AND `credit_reservations`.`released_at` IS NULL AND `credit_reservations`.`terminal_ledger_entry_id` IS NOT NULL AND `credit_reservations`.`terminal_evidence_hash` IS NOT NULL AND REGEXP_LIKE(`credit_reservations`.`terminal_evidence_hash`, '^[0-9a-f]{64}$', 'c')) OR (`credit_reservations`.`status` IN ('released','expired') AND `credit_reservations`.`transport_state` IN ('pretransport','known_rejected','output_not_delivered') AND `credit_reservations`.`state_version` = 3 AND `credit_reservations`.`hold_ledger_entry_id` IS NOT NULL AND `credit_reservations`.`released_at` IS NOT NULL AND `credit_reservations`.`committed_at` IS NULL AND `credit_reservations`.`terminal_ledger_entry_id` IS NOT NULL AND `credit_reservations`.`terminal_evidence_hash` IS NOT NULL AND REGEXP_LIKE(`credit_reservations`.`terminal_evidence_hash`, '^[0-9a-f]{64}$', 'c'))) IS TRUE),
+	CONSTRAINT `credit_reservations_transport_evidence` CHECK(((`credit_reservations`.`transport_state`='pretransport' AND `credit_reservations`.`transport_started_at` IS NULL AND `credit_reservations`.`provider_accepted_at` IS NULL AND `credit_reservations`.`provider_rejected_at` IS NULL AND `credit_reservations`.`provider_rejected_status` IS NULL) OR (`credit_reservations`.`transport_state`='transport_started' AND `credit_reservations`.`transport_started_at` IS NOT NULL AND `credit_reservations`.`provider_accepted_at` IS NULL AND `credit_reservations`.`provider_rejected_at` IS NULL AND `credit_reservations`.`provider_rejected_status` IS NULL) OR (`credit_reservations`.`transport_state`='known_accepted' AND `credit_reservations`.`transport_started_at` IS NOT NULL AND `credit_reservations`.`provider_accepted_at` IS NOT NULL AND `credit_reservations`.`provider_accepted_at`>=`credit_reservations`.`transport_started_at` AND `credit_reservations`.`provider_rejected_at` IS NULL AND `credit_reservations`.`provider_rejected_status` IS NULL) OR (`credit_reservations`.`transport_state`='known_rejected' AND `credit_reservations`.`transport_started_at` IS NOT NULL AND `credit_reservations`.`provider_accepted_at` IS NULL AND `credit_reservations`.`provider_rejected_at` IS NOT NULL AND `credit_reservations`.`provider_rejected_at`>=`credit_reservations`.`transport_started_at` AND `credit_reservations`.`provider_rejected_status` BETWEEN 400 AND 499 AND `credit_reservations`.`provider_rejected_status` NOT IN (408,429)) OR (`credit_reservations`.`transport_state`='output_not_delivered' AND `credit_reservations`.`transport_started_at` IS NOT NULL AND (`credit_reservations`.`provider_accepted_at` IS NULL OR `credit_reservations`.`provider_accepted_at`>=`credit_reservations`.`transport_started_at`) AND `credit_reservations`.`provider_rejected_at` IS NULL AND `credit_reservations`.`provider_rejected_status` IS NULL)) IS TRUE),
+	CONSTRAINT `credit_reservations_timestamp_order` CHECK(`credit_reservations`.`created_at` <= `credit_reservations`.`owner_lease_until` AND `credit_reservations`.`owner_lease_until` <= `credit_reservations`.`expires_at` AND `credit_reservations`.`expires_at` <= `credit_reservations`.`resolution_due_at` AND (`credit_reservations`.`transport_started_at` IS NULL OR (`credit_reservations`.`transport_started_at`>=`credit_reservations`.`created_at` AND `credit_reservations`.`transport_started_at`<=`credit_reservations`.`resolution_due_at`)) AND (`credit_reservations`.`provider_accepted_at` IS NULL OR `credit_reservations`.`provider_accepted_at`>=`credit_reservations`.`created_at`) AND (`credit_reservations`.`provider_rejected_at` IS NULL OR `credit_reservations`.`provider_rejected_at`>=`credit_reservations`.`created_at`) AND (`credit_reservations`.`committed_at` IS NULL OR `credit_reservations`.`committed_at` >= `credit_reservations`.`created_at`) AND (`credit_reservations`.`released_at` IS NULL OR `credit_reservations`.`released_at` >= `credit_reservations`.`created_at`))
 );
 --> statement-breakpoint
 CREATE TABLE `credit_wallets` (
@@ -196,6 +196,7 @@ CREATE TABLE `credit_wallets` (
 	`reserved_credits` int NOT NULL DEFAULT 0,
 	`balance_version` int NOT NULL DEFAULT 1,
 	`last_ledger_entry_id` varchar(36),
+	`refund_adjustment_entry_id` varchar(36),
 	`privacy_erased_at` timestamp,
 	`created_at` timestamp NOT NULL DEFAULT (now()),
 	`updated_at` timestamp NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP,
@@ -205,9 +206,10 @@ CREATE TABLE `credit_wallets` (
 	CONSTRAINT `credit_wallets_exact_scope_unique` UNIQUE(`wallet_id`,`workspace_id`,`mode`,`channel_connection_id`,`binding_epoch`,`privacy_epoch`,`financial_subject_ref`),
 	CONSTRAINT `credit_wallets_epochs_positive` CHECK(`credit_wallets`.`binding_epoch` > 0 AND `credit_wallets`.`privacy_epoch` > 0),
 	CONSTRAINT `credit_wallets_identity_hashes_valid` CHECK(REGEXP_LIKE(`credit_wallets`.`financial_subject_ref`, '^[0-9a-f]{64}$', 'c') AND (`credit_wallets`.`current_user_key_hash` IS NULL OR REGEXP_LIKE(`credit_wallets`.`current_user_key_hash`, '^([0-9a-f]{64}|u2[.]k[1-9][0-9]{0,5}[.][0-9a-f]{64})$', 'c'))),
-	CONSTRAINT `credit_wallets_id_valid` CHECK(REGEXP_LIKE(`credit_wallets`.`wallet_id`, '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', 'c') AND (`credit_wallets`.`last_ledger_entry_id` IS NULL OR REGEXP_LIKE(`credit_wallets`.`last_ledger_entry_id`, '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', 'c'))),
+	CONSTRAINT `credit_wallets_id_valid` CHECK(REGEXP_LIKE(`credit_wallets`.`wallet_id`, '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', 'c') AND (`credit_wallets`.`last_ledger_entry_id` IS NULL OR REGEXP_LIKE(`credit_wallets`.`last_ledger_entry_id`, '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', 'c')) AND (`credit_wallets`.`refund_adjustment_entry_id` IS NULL OR REGEXP_LIKE(`credit_wallets`.`refund_adjustment_entry_id`, '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', 'c'))),
+	CONSTRAINT `credit_wallets_refund_adjustment_shape` CHECK(`credit_wallets`.`refund_adjustment_entry_id` IS NULL OR `credit_wallets`.`status` IN ('active','frozen')),
 	CONSTRAINT `credit_wallets_counters_valid` CHECK(`credit_wallets`.`reserved_credits` >= 0 AND `credit_wallets`.`reserved_credits` <= GREATEST(`credit_wallets`.`credit_balance`, 0) AND (`credit_wallets`.`status` <> 'active' OR `credit_wallets`.`credit_balance` >= 0) AND `credit_wallets`.`balance_version` > 0 AND ((`credit_wallets`.`balance_version` = 1 AND `credit_wallets`.`last_ledger_entry_id` IS NULL AND `credit_wallets`.`credit_balance` = 0 AND `credit_wallets`.`reserved_credits` = 0) OR (`credit_wallets`.`balance_version` > 1 AND `credit_wallets`.`last_ledger_entry_id` IS NOT NULL))),
-	CONSTRAINT `credit_wallets_erasure_shape` CHECK((`credit_wallets`.`status` = 'erased' AND `credit_wallets`.`current_user_key_hash` IS NULL AND `credit_wallets`.`privacy_erased_at` IS NOT NULL AND `credit_wallets`.`privacy_erased_at` >= `credit_wallets`.`created_at` AND `credit_wallets`.`reserved_credits` = 0) OR (`credit_wallets`.`status` <> 'erased' AND `credit_wallets`.`current_user_key_hash` IS NOT NULL AND `credit_wallets`.`privacy_erased_at` IS NULL))
+	CONSTRAINT `credit_wallets_erasure_shape` CHECK((`credit_wallets`.`status` = 'erased' AND `credit_wallets`.`current_user_key_hash` IS NULL AND `credit_wallets`.`privacy_erased_at` IS NOT NULL AND `credit_wallets`.`privacy_erased_at` >= `credit_wallets`.`created_at` AND `credit_wallets`.`reserved_credits` = 0 AND `credit_wallets`.`refund_adjustment_entry_id` IS NULL) OR (`credit_wallets`.`status` <> 'erased' AND `credit_wallets`.`current_user_key_hash` IS NOT NULL AND `credit_wallets`.`privacy_erased_at` IS NULL))
 );
 --> statement-breakpoint
 ALTER TABLE `credit_ledger` ADD CONSTRAINT `credit_ledger_wallet_scope_fk` FOREIGN KEY (`wallet_id`,`workspace_id`,`mode`,`channel_connection_id`,`binding_epoch`,`privacy_epoch`,`financial_subject_ref`) REFERENCES `credit_wallets`(`wallet_id`,`workspace_id`,`mode`,`channel_connection_id`,`binding_epoch`,`privacy_epoch`,`financial_subject_ref`) ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
@@ -401,6 +403,7 @@ BEGIN
 	DECLARE v_current_count int DEFAULT 0;
 	IF NEW.`status`<>'active' OR NEW.`credit_balance`<>0 OR NEW.`reserved_credits`<>0
 		OR NEW.`balance_version`<>1 OR NEW.`last_ledger_entry_id` IS NOT NULL
+		OR NEW.`refund_adjustment_entry_id` IS NOT NULL
 		OR NEW.`current_user_key_hash` IS NULL OR NEW.`privacy_erased_at` IS NOT NULL THEN
 		SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='new credit wallet must start active and empty';
 	END IF;
@@ -425,7 +428,8 @@ CREATE TRIGGER `credit_wallets_before_update`
 BEFORE UPDATE ON `credit_wallets`
 FOR EACH ROW
 BEGIN
-	DECLARE v_projection_count int DEFAULT 0; DECLARE v_clean_refund_reactivation int DEFAULT 0;
+	DECLARE v_projection_count int DEFAULT 0;
+	DECLARE v_refund_reactivation_count int DEFAULT 0;
 	IF BINARY OLD.`wallet_id`<>BINARY NEW.`wallet_id`
 		OR OLD.`workspace_id`<>NEW.`workspace_id` OR OLD.`mode`<>NEW.`mode`
 		OR OLD.`channel_connection_id`<>NEW.`channel_connection_id`
@@ -435,16 +439,37 @@ BEGIN
 		OR OLD.`created_at`<>NEW.`created_at` THEN
 		SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='credit wallet retained scope is immutable';
 	END IF;
-	IF OLD.`status`='frozen' AND NEW.`status`='active' THEN
-		SELECT COUNT(*) INTO v_clean_refund_reactivation FROM `credit_ledger` entry
-		WHERE BINARY entry.`entry_id`=BINARY NEW.`last_ledger_entry_id`
-			AND BINARY entry.`wallet_id`=BINARY NEW.`wallet_id`
-			AND entry.`entry_kind`='refund_debit' AND entry.`balance_after`>=0
-			AND entry.`reserved_after`=0;
-	END IF;
 	IF OLD.`status`='erased' AND NEW.`status`<>'erased'
-		OR OLD.`status`='frozen' AND NEW.`status`='active' AND v_clean_refund_reactivation<>1 THEN
+		OR (OLD.`status`='frozen' AND NEW.`status`='active' AND NOT (
+			OLD.`refund_adjustment_entry_id` IS NOT NULL
+			AND NEW.`refund_adjustment_entry_id` IS NULL
+			AND BINARY NEW.`last_ledger_entry_id`=BINARY OLD.`refund_adjustment_entry_id`
+		)) THEN
 		SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='credit wallet cannot reactivate automatically';
+	END IF;
+	IF OLD.`refund_adjustment_entry_id` IS NOT NULL
+		AND NEW.`refund_adjustment_entry_id` IS NOT NULL
+		AND NOT (BINARY OLD.`refund_adjustment_entry_id`=BINARY NEW.`refund_adjustment_entry_id`) THEN
+		SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='credit refund adjustment fence is immutable';
+	END IF;
+	IF OLD.`refund_adjustment_entry_id` IS NOT NULL
+		AND NEW.`refund_adjustment_entry_id` IS NULL AND NEW.`status`='active' THEN
+		SELECT COUNT(*) INTO v_refund_reactivation_count
+		FROM `credit_ledger` entry
+		WHERE BINARY entry.`entry_id`=BINARY OLD.`refund_adjustment_entry_id`
+			AND entry.`entry_kind`='refund_debit' AND entry.`root_adjustment_slot`=1
+			AND BINARY entry.`wallet_id`=BINARY NEW.`wallet_id`
+			AND entry.`workspace_id`=NEW.`workspace_id` AND entry.`mode`=NEW.`mode`
+			AND entry.`channel_connection_id`=NEW.`channel_connection_id`
+			AND entry.`binding_epoch`=NEW.`binding_epoch` AND entry.`privacy_epoch`=NEW.`privacy_epoch`
+			AND BINARY entry.`financial_subject_ref`=BINARY NEW.`financial_subject_ref`
+			AND BINARY NEW.`last_ledger_entry_id`=BINARY entry.`entry_id`
+			AND entry.`wallet_version_after`=NEW.`balance_version`
+			AND entry.`balance_after`=NEW.`credit_balance`
+			AND entry.`reserved_after`=NEW.`reserved_credits`;
+		IF v_refund_reactivation_count<>1 THEN
+			SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='credit refund adjustment fence requires exact debit evidence';
+		END IF;
 	END IF;
 	IF NOT (BINARY OLD.`current_user_key_hash`<=>BINARY NEW.`current_user_key_hash`)
 		AND NOT (OLD.`current_user_key_hash` IS NOT NULL AND NEW.`current_user_key_hash` IS NULL
@@ -573,9 +598,10 @@ BEGIN
 		SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='credit reservation scope is immutable';
 	END IF;
 	IF OLD.`transport_state`='pretransport' AND NEW.`transport_state` NOT IN ('pretransport','transport_started')
-		OR OLD.`transport_state`='transport_started' AND NEW.`transport_state` NOT IN ('transport_started','known_accepted','known_rejected')
-		OR OLD.`transport_state`='known_accepted' AND NEW.`transport_state`<>'known_accepted'
-		OR OLD.`transport_state`='known_rejected' AND NEW.`transport_state`<>'known_rejected' THEN
+		OR OLD.`transport_state`='transport_started' AND NEW.`transport_state` NOT IN ('transport_started','known_accepted','known_rejected','output_not_delivered')
+		OR OLD.`transport_state`='known_accepted' AND NEW.`transport_state` NOT IN ('known_accepted','output_not_delivered')
+		OR OLD.`transport_state`='known_rejected' AND NEW.`transport_state`<>'known_rejected'
+		OR OLD.`transport_state`='output_not_delivered' AND NEW.`transport_state`<>'output_not_delivered' THEN
 		SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='credit reservation transport transition is invalid';
 	END IF;
 	IF OLD.`transport_started_at` IS NOT NULL AND NOT (OLD.`transport_started_at`<=>NEW.`transport_started_at`)
@@ -731,7 +757,19 @@ BEGIN
 				AND BINARY subject.`user_key`=BINARY wallet.`current_user_key_hash`
 			WHERE BINARY wallet.`wallet_id`=BINARY NEW.`wallet_id`
 				AND wallet.`workspace_id`=NEW.`workspace_id` AND wallet.`mode`=NEW.`mode`
-				AND wallet.`status`='active'
+				AND (
+					(wallet.`status`='active' AND wallet.`refund_adjustment_entry_id` IS NULL)
+					OR (
+						wallet.`status`='frozen'
+						AND wallet.`refund_adjustment_entry_id` IS NOT NULL
+						AND EXISTS (
+							SELECT 1 FROM `credit_reservations` accepted
+							WHERE BINARY accepted.`reservation_id`=BINARY NEW.`reservation_id`
+								AND BINARY accepted.`wallet_id`=BINARY NEW.`wallet_id`
+								AND accepted.`transport_state`='known_accepted'
+						)
+					)
+				)
 				AND connection.`channel`='facebook_messenger' AND connection.`status`='connected'
 				AND connection.`bindingEpoch`=NEW.`binding_epoch`
 				AND subject.`status`='active' AND subject.`privacy_epoch`=NEW.`privacy_epoch`;
@@ -847,6 +885,32 @@ CREATE TRIGGER `credit_ledger_after_insert`
 AFTER INSERT ON `credit_ledger`
 FOR EACH ROW
 BEGIN
+	DECLARE v_exact_refund_projection int DEFAULT 0;
+	IF NEW.`entry_kind`='refund_debit'
+		AND NEW.`root_adjustment_slot`=1
+		AND NEW.`root_grant_entry_id` IS NOT NULL
+		AND NEW.`provider_effect_type`='refund'
+		AND NEW.`provider_effect_status`='refunded'
+		AND NEW.`provider_effect_id` IS NOT NULL
+		AND NEW.`provider_event_hash` IS NOT NULL
+		AND NEW.`provider_effect_evidence` IS NOT NULL
+		AND NEW.`balance_after`>=0
+		AND NEW.`reserved_before`=0 AND NEW.`reserved_after`=0 THEN
+		SELECT COUNT(*) INTO v_exact_refund_projection
+		FROM `credit_wallets` wallet
+		WHERE BINARY wallet.`wallet_id`=BINARY NEW.`wallet_id`
+			AND wallet.`workspace_id`=NEW.`workspace_id` AND wallet.`mode`=NEW.`mode`
+			AND wallet.`channel_connection_id`=NEW.`channel_connection_id`
+			AND wallet.`binding_epoch`=NEW.`binding_epoch`
+			AND wallet.`privacy_epoch`=NEW.`privacy_epoch`
+			AND BINARY wallet.`financial_subject_ref`=BINARY NEW.`financial_subject_ref`
+			AND wallet.`status` IN ('active','frozen')
+			AND BINARY wallet.`refund_adjustment_entry_id`=BINARY NEW.`entry_id`
+			AND wallet.`balance_version`=NEW.`wallet_version_before`
+			AND (wallet.`last_ledger_entry_id`<=>NEW.`previous_entry_id`)
+			AND wallet.`credit_balance`=NEW.`balance_before`
+			AND wallet.`reserved_credits`=NEW.`reserved_before`;
+	END IF;
 	UPDATE `credit_wallets`
 	SET `credit_balance`=NEW.`balance_after`,
 		`reserved_credits`=NEW.`reserved_after`,
@@ -855,8 +919,12 @@ BEGIN
 		`status`=CASE
 			WHEN `status`='active' AND NEW.`entry_kind`='chargeback_debit' THEN 'frozen'
 			WHEN `status`='active' AND NEW.`entry_kind`='refund_debit' AND NEW.`balance_after`<0 THEN 'frozen'
-			WHEN `status`='frozen' AND NEW.`entry_kind`='refund_debit' AND NEW.`balance_after`>=0 AND NEW.`reserved_after`=0 THEN 'active'
+			WHEN `status`='frozen' AND v_exact_refund_projection=1 THEN 'active'
 			ELSE `status`
+		END,
+		`refund_adjustment_entry_id`=CASE
+			WHEN v_exact_refund_projection=1 THEN NULL
+			ELSE `refund_adjustment_entry_id`
 		END
 	WHERE BINARY `wallet_id`=BINARY NEW.`wallet_id`
 		AND `workspace_id`=NEW.`workspace_id` AND `mode`=NEW.`mode`
@@ -998,7 +1066,8 @@ credit_consume_capability_body: BEGIN
 	WHERE BINARY `wallet_id`=BINARY p_wallet_id AND `workspace_id`=p_workspace_id AND `mode`=p_mode
 		AND `channel_connection_id`=p_channel_connection_id AND `binding_epoch`=p_binding_epoch
 		AND `privacy_epoch`=p_privacy_epoch AND BINARY `current_user_key_hash`=BINARY p_user_key
-		AND BINARY `financial_subject_ref`=BINARY p_financial_subject_ref AND `status`='active' FOR UPDATE;
+		AND BINARY `financial_subject_ref`=BINARY p_financial_subject_ref AND `status`='active'
+		AND `refund_adjustment_entry_id` IS NULL FOR UPDATE;
 	IF v_count<>1 THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='credit checkout wallet scope is stale'; END IF;
 	SET v_consumed_at=NULL; SET v_stored_nonce=NULL; SET v_expires_at=NULL; SET v_intent_epoch=NULL;
 	SELECT `authorization_epoch`,`checkout_capability_consumed_at`,`checkout_capability_session_nonce_hash`,
@@ -1116,7 +1185,8 @@ credit_grant_purchase_body: BEGIN
 	WHERE BINARY `wallet_id`=BINARY p_wallet_id AND `workspace_id`=p_workspace_id AND `mode`=p_mode
 		AND `channel_connection_id`=p_channel_connection_id AND `binding_epoch`=p_binding_epoch
 		AND `privacy_epoch`=p_privacy_epoch AND BINARY `current_user_key_hash`=BINARY p_user_key
-		AND BINARY `financial_subject_ref`=BINARY p_financial_subject_ref AND `status`='active' FOR UPDATE;
+		AND BINARY `financial_subject_ref`=BINARY p_financial_subject_ref AND `status`='active'
+		AND `refund_adjustment_entry_id` IS NULL FOR UPDATE;
 	SELECT `plan_code`,`expected_amount`,`currency`,`credit_count`,`mollie_description`,
 		`authorization_epoch`,`credit_metadata_hash`
 	INTO v_offer,v_amount,v_currency,v_credits,v_description,v_authorization_epoch,v_metadata_hash
@@ -1229,7 +1299,8 @@ credit_hold_body: BEGIN
 	WHERE BINARY `wallet_id`=BINARY p_wallet_id AND `workspace_id`=p_workspace_id AND `mode`=p_mode
 		AND `channel_connection_id`=p_channel_connection_id AND `binding_epoch`=p_binding_epoch
 		AND `privacy_epoch`=p_privacy_epoch AND BINARY `current_user_key_hash`=BINARY p_user_key
-		AND BINARY `financial_subject_ref`=BINARY p_financial_subject_ref AND `status`='active' FOR UPDATE;
+		AND BINARY `financial_subject_ref`=BINARY p_financial_subject_ref AND `status`='active'
+		AND `refund_adjustment_entry_id` IS NULL FOR UPDATE;
 	SET v_existing=NULL;
 	SELECT MAX(`reservation_id`) INTO v_existing FROM `credit_reservations`
 	WHERE (`reservation_id`=p_reservation_id OR (`workspace_id`=p_workspace_id AND `mode`=p_mode
@@ -1305,7 +1376,8 @@ credit_transport_started_body: BEGIN
 	WHERE BINARY `wallet_id`=BINARY p_wallet_id AND `workspace_id`=p_workspace_id AND `mode`=p_mode
 		AND `channel_connection_id`=p_channel_connection_id AND `binding_epoch`=p_binding_epoch
 		AND `privacy_epoch`=p_privacy_epoch AND BINARY `current_user_key_hash`=BINARY p_user_key
-		AND BINARY `financial_subject_ref`=BINARY p_financial_subject_ref AND `status`='active' FOR UPDATE;
+		AND BINARY `financial_subject_ref`=BINARY p_financial_subject_ref AND `status`='active'
+		AND `refund_adjustment_entry_id` IS NULL FOR UPDATE;
 	IF v_count<>1 THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='credit transport wallet scope is stale'; END IF;
 	SET v_status=NULL; SET v_transport=NULL;
 	SELECT `status`,`transport_state` INTO v_status,v_transport FROM `credit_reservations`
@@ -1475,7 +1547,7 @@ CREATE PROCEDURE `credit_release_reservation`(
 	IN p_binding_epoch int, IN p_privacy_epoch int, IN p_user_key varchar(96),
 	IN p_wallet_id varchar(36), IN p_financial_subject_ref varchar(64),
 	IN p_reservation_id varchar(36), IN p_owner_token_hash varchar(64),
-	IN p_entry_id varchar(36), IN p_evidence_hash varchar(64)
+	IN p_release_kind varchar(32), IN p_entry_id varchar(36), IN p_evidence_hash varchar(64)
 )
 SQL SECURITY DEFINER
 credit_release_body: BEGIN
@@ -1488,10 +1560,11 @@ credit_release_body: BEGIN
 	IF p_owner_token_hash IS NULL OR p_evidence_hash IS NULL OR p_entry_id IS NULL
 		OR NOT REGEXP_LIKE(p_owner_token_hash,'^[0-9a-f]{64}$','c')
 		OR NOT REGEXP_LIKE(p_evidence_hash,'^[0-9a-f]{64}$','c')
-		OR NOT REGEXP_LIKE(p_entry_id,'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$','c') THEN
+		OR NOT REGEXP_LIKE(p_entry_id,'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$','c')
+		OR p_release_kind NOT IN ('pretransport','output_not_delivered') THEN
 		SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='credit release proof is malformed';
 	END IF;
-	SET v_event_hash=SHA2(CONCAT('credit-reservation-v1',CHAR(10),p_mode,CHAR(10),p_reservation_id,CHAR(10),'release'),256);
+	SET v_event_hash=SHA2(CONCAT('credit-reservation-v1',CHAR(10),p_mode,CHAR(10),p_reservation_id,CHAR(10),'release:',p_release_kind),256);
 	START TRANSACTION;
 	SELECT COUNT(*) INTO v_count FROM `billing_execution_controls`
 	WHERE `workspace_id`=p_workspace_id AND `mode`=p_mode FOR UPDATE;
@@ -1546,9 +1619,21 @@ credit_release_body: BEGIN
 		AND `privacy_epoch`=p_privacy_epoch AND BINARY `current_user_key_hash`=BINARY p_user_key
 		AND BINARY `financial_subject_ref`=BINARY p_financial_subject_ref
 		AND `status` IN ('active','frozen') FOR UPDATE;
-	IF v_count<>1 OR v_status<>'reserved' OR v_transport<>'pretransport'
+	IF v_count<>1 OR v_status<>'reserved'
+		OR NOT ((p_release_kind='pretransport' AND v_transport='pretransport')
+			OR (p_release_kind='output_not_delivered' AND v_transport IN ('transport_started','known_accepted')))
 		OR NOT (BINARY v_owner<=>BINARY p_owner_token_hash) OR v_reserved<v_units THEN
 		SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='credit release requires one owned held reservation';
+	END IF;
+	IF p_release_kind='output_not_delivered' THEN
+		UPDATE `credit_reservations`
+		SET `transport_state`='output_not_delivered'
+		WHERE BINARY `reservation_id`=BINARY p_reservation_id AND `status`='reserved' AND `state_version`=2
+			AND `transport_state` IN ('transport_started','known_accepted')
+			AND `provider_rejected_at` IS NULL AND `provider_rejected_status` IS NULL;
+		IF ROW_COUNT()<>1 THEN
+			SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='credit non-delivery release transport projector failed';
+		END IF;
 	END IF;
 	INSERT INTO `credit_ledger` (`entry_id`,`wallet_id`,`workspace_id`,`mode`,`channel_connection_id`,
 		`binding_epoch`,`privacy_epoch`,`financial_subject_ref`,`entry_kind`,`balance_delta`,`reserved_delta`,
@@ -1850,7 +1935,7 @@ credit_freeze_body: BEGIN
 		SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='credit review lacks exact adjusted payment evidence';
 	END IF;
 	IF v_status='active' THEN
-		UPDATE `credit_wallets` SET `status`='frozen'
+		UPDATE `credit_wallets` SET `status`='frozen',`refund_adjustment_entry_id`=NULL
 		WHERE BINARY `wallet_id`=BINARY p_wallet_id AND `workspace_id`=p_workspace_id AND `mode`=p_mode
 			AND `channel_connection_id`=p_channel_connection_id AND `binding_epoch`=p_binding_epoch
 			AND `privacy_epoch`=p_privacy_epoch
@@ -1859,7 +1944,14 @@ credit_freeze_body: BEGIN
 			SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='credit review wallet freeze lost its fence';
 		END IF;
 		SELECT 'applied' AS `result`,p_wallet_id AS `wallet_id`;
-	ELSEIF v_status IN ('frozen','erased') THEN
+	ELSEIF v_status='frozen' THEN
+		UPDATE `credit_wallets` SET `refund_adjustment_entry_id`=NULL
+		WHERE BINARY `wallet_id`=BINARY p_wallet_id AND `workspace_id`=p_workspace_id AND `mode`=p_mode
+			AND `channel_connection_id`=p_channel_connection_id AND `binding_epoch`=p_binding_epoch
+			AND `privacy_epoch`=p_privacy_epoch
+			AND BINARY `financial_subject_ref`=BINARY p_financial_subject_ref AND `status`='frozen';
+		SELECT 'already_applied' AS `result`,p_wallet_id AS `wallet_id`;
+	ELSEIF v_status='erased' THEN
 		SELECT 'already_applied' AS `result`,p_wallet_id AS `wallet_id`;
 	ELSE
 		SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='credit review wallet status is invalid';
@@ -1875,6 +1967,7 @@ SQL SECURITY DEFINER
 credit_erase_body: BEGIN
 	DECLARE v_count int DEFAULT 0; DECLARE v_holds int DEFAULT 0; DECLARE v_provider_pending int DEFAULT 0;
 	DECLARE v_wallet_status varchar(16); DECLARE v_wallet_user varchar(96);
+	DECLARE v_adjustment_entry_id varchar(36);
 	DECLARE EXIT HANDLER FOR SQLEXCEPTION BEGIN ROLLBACK; RESIGNAL; END;
 	START TRANSACTION;
 	IF p_erasure_privacy_epoch<>p_privacy_epoch+1 THEN
@@ -1890,8 +1983,9 @@ credit_erase_body: BEGIN
 	WHERE `workspace_id`=p_workspace_id AND `channel_connection_id`=p_channel_connection_id
 		AND BINARY `user_key`=BINARY p_user_key AND `privacy_epoch`=p_erasure_privacy_epoch
 		AND `status` IN ('erasing','erased') FOR UPDATE;
-	SET v_wallet_status=NULL; SET v_wallet_user=NULL;
-	SELECT `status`,`current_user_key_hash` INTO v_wallet_status,v_wallet_user FROM `credit_wallets`
+	SET v_wallet_status=NULL; SET v_wallet_user=NULL; SET v_adjustment_entry_id=NULL;
+	SELECT `status`,`current_user_key_hash`,`refund_adjustment_entry_id`
+	INTO v_wallet_status,v_wallet_user,v_adjustment_entry_id FROM `credit_wallets`
 	WHERE BINARY `wallet_id`=BINARY p_wallet_id AND `workspace_id`=p_workspace_id AND `mode`=p_mode
 		AND `channel_connection_id`=p_channel_connection_id AND `binding_epoch`=p_binding_epoch
 		AND `privacy_epoch`=p_privacy_epoch AND BINARY `financial_subject_ref`=BINARY p_financial_subject_ref FOR UPDATE;
@@ -1948,10 +2042,21 @@ credit_erase_body: BEGIN
 		WHERE BINARY `wallet_id`=BINARY p_wallet_id AND `status` IN ('active','frozen');
 		COMMIT; SELECT 'pending_holds' AS `result`,p_wallet_id AS `wallet_id`; LEAVE credit_erase_body;
 	END IF;
+	IF v_adjustment_entry_id IS NOT NULL THEN
+		UPDATE `credit_wallets` SET `status`='frozen'
+		WHERE BINARY `wallet_id`=BINARY p_wallet_id AND `workspace_id`=p_workspace_id AND `mode`=p_mode
+			AND `channel_connection_id`=p_channel_connection_id AND `binding_epoch`=p_binding_epoch
+			AND `privacy_epoch`=p_privacy_epoch AND BINARY `financial_subject_ref`=BINARY p_financial_subject_ref
+			AND `status` IN ('active','frozen')
+			AND BINARY `refund_adjustment_entry_id`=BINARY v_adjustment_entry_id;
+		COMMIT; SELECT 'pending_adjustment' AS `result`,p_wallet_id AS `wallet_id`; LEAVE credit_erase_body;
+	END IF;
 	UPDATE `credit_wallets` SET `status`='erased',`current_user_key_hash`=NULL,
+		`refund_adjustment_entry_id`=NULL,
 		`privacy_erased_at`=CURRENT_TIMESTAMP
 	WHERE BINARY `wallet_id`=BINARY p_wallet_id AND `status` IN ('active','frozen')
-		AND BINARY `current_user_key_hash`=BINARY p_user_key AND `reserved_credits`=0;
+		AND BINARY `current_user_key_hash`=BINARY p_user_key AND `reserved_credits`=0
+		AND `refund_adjustment_entry_id` IS NULL;
 	IF ROW_COUNT()<>1 THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='credit wallet erasure lost its fence'; END IF;
 	COMMIT;
 	SELECT 'erased' AS `result`,p_wallet_id AS `wallet_id`;
@@ -1966,6 +2071,8 @@ SQL SECURITY DEFINER
 credit_refund_body: BEGIN
 	DECLARE v_count int DEFAULT 0; DECLARE v_balance int; DECLARE v_reserved int;
 	DECLARE v_version int; DECLARE v_previous varchar(36); DECLARE v_status varchar(16);
+	DECLARE v_refund_adjustment_entry_id varchar(36); DECLARE v_root_wallet_version int;
+	DECLARE v_generation_spends int DEFAULT 0;
 	DECLARE v_intent_id varchar(36); DECLARE v_payment_ledger_id int; DECLARE v_payment_id varchar(64);
 	DECLARE v_offer varchar(80); DECLARE v_amount decimal(10,2); DECLARE v_currency varchar(3);
 	DECLARE v_payment_amount decimal(10,2); DECLARE v_payment_currency varchar(3);
@@ -1985,8 +2092,9 @@ credit_refund_body: BEGIN
 	WHERE `workspace_id`=p_workspace_id AND `mode`=p_mode FOR UPDATE;
 	SELECT COUNT(*) INTO v_count FROM `channelConnections`
 	WHERE `workspaceId`=p_workspace_id AND `id`=p_channel_connection_id FOR UPDATE;
-	SELECT `credit_balance`,`reserved_credits`,`balance_version`,`last_ledger_entry_id`,`status`
-	INTO v_balance,v_reserved,v_version,v_previous,v_status FROM `credit_wallets`
+	SELECT `credit_balance`,`reserved_credits`,`balance_version`,`last_ledger_entry_id`,`status`,
+		`refund_adjustment_entry_id`
+	INTO v_balance,v_reserved,v_version,v_previous,v_status,v_refund_adjustment_entry_id FROM `credit_wallets`
 	WHERE BINARY `wallet_id`=BINARY p_wallet_id AND `workspace_id`=p_workspace_id AND `mode`=p_mode
 		AND `channel_connection_id`=p_channel_connection_id AND `binding_epoch`=p_binding_epoch
 		AND `privacy_epoch`=p_privacy_epoch AND BINARY `financial_subject_ref`=BINARY p_financial_subject_ref FOR UPDATE;
@@ -1995,8 +2103,9 @@ credit_refund_body: BEGIN
 		AND `kind`='credit_purchase' AND BINARY `credit_wallet_id`=BINARY p_wallet_id FOR UPDATE;
 	IF v_count<>1 THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='refund intent scope is invalid'; END IF;
 	SELECT `provider_payment_id`,`offer_id`,`payment_amount`,`currency`,`purchased_credit_count`,
-		`provider_description`,`authorization_epoch`
-	INTO v_payment_id,v_offer,v_amount,v_currency,v_credits,v_description,v_authorization_epoch FROM `credit_ledger`
+		`provider_description`,`authorization_epoch`,`wallet_version_after`
+	INTO v_payment_id,v_offer,v_amount,v_currency,v_credits,v_description,v_authorization_epoch,
+		v_root_wallet_version FROM `credit_ledger`
 	WHERE BINARY `entry_id`=BINARY p_root_grant_entry_id AND `entry_kind`='purchase_grant'
 		AND BINARY `wallet_id`=BINARY p_wallet_id AND `workspace_id`=p_workspace_id AND `mode`=p_mode
 		AND `channel_connection_id`=p_channel_connection_id AND `binding_epoch`=p_binding_epoch
@@ -2008,7 +2117,8 @@ credit_refund_body: BEGIN
 		AND `root_adjustment_slot`=1 FOR UPDATE;
 	IF v_existing IS NOT NULL THEN
 		IF v_existing_kind<>'refund_debit' THEN
-			UPDATE `credit_wallets` SET `status`=CASE WHEN `status`='active' THEN 'frozen' ELSE `status` END
+			UPDATE `credit_wallets` SET `status`=CASE WHEN `status`='active' THEN 'frozen' ELSE `status` END,
+				`refund_adjustment_entry_id`=NULL
 			WHERE BINARY `wallet_id`=BINARY p_wallet_id;
 			COMMIT; SELECT 'manual_review' AS `result`,p_root_grant_entry_id AS `root_grant_entry_id`;
 			LEAVE credit_refund_body;
@@ -2069,8 +2179,30 @@ credit_refund_body: BEGIN
 	SELECT COUNT(*) INTO v_count FROM `credit_ledger`
 	WHERE `mode`=p_mode AND BINARY `provider_event_hash`=BINARY v_provider_event_hash FOR UPDATE;
 	IF v_count<>0 THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='refund provider evidence collides with another adjustment'; END IF;
+	IF (v_status='frozen' AND v_refund_adjustment_entry_id IS NULL)
+		OR (v_refund_adjustment_entry_id IS NOT NULL
+			AND NOT (BINARY v_refund_adjustment_entry_id<=>BINARY p_entry_id)) THEN
+		UPDATE `credit_wallets` SET `refund_adjustment_entry_id`=NULL
+		WHERE BINARY `wallet_id`=BINARY p_wallet_id AND `status`='frozen';
+		COMMIT; SELECT 'manual_review' AS `result`,p_root_grant_entry_id AS `root_grant_entry_id`; LEAVE credit_refund_body;
+	END IF;
+	IF v_status NOT IN ('active','frozen','erased') THEN
+		SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='refund wallet status is invalid';
+	END IF;
+	SELECT COUNT(*) INTO v_generation_spends FROM `credit_ledger`
+	WHERE BINARY `wallet_id`=BINARY p_wallet_id AND `workspace_id`=p_workspace_id AND `mode`=p_mode
+		AND `channel_connection_id`=p_channel_connection_id AND `binding_epoch`=p_binding_epoch
+		AND `privacy_epoch`=p_privacy_epoch
+		AND BINARY `financial_subject_ref`=BINARY p_financial_subject_ref
+		AND `entry_kind`='generation_spend' AND `wallet_version_before`>=v_root_wallet_version FOR UPDATE;
+	IF v_generation_spends>0 THEN
+		UPDATE `credit_wallets` SET `status`=CASE WHEN `status`='active' THEN 'frozen' ELSE `status` END,
+			`refund_adjustment_entry_id`=NULL
+		WHERE BINARY `wallet_id`=BINARY p_wallet_id;
+		COMMIT; SELECT 'manual_review' AS `result`,p_root_grant_entry_id AS `root_grant_entry_id`; LEAVE credit_refund_body;
+	END IF;
 	IF v_reserved>0 THEN
-		UPDATE `credit_wallets` SET `status`=CASE WHEN `status`='active' THEN 'frozen' ELSE `status` END
+		UPDATE `credit_wallets` SET `status`='frozen',`refund_adjustment_entry_id`=p_entry_id
 		WHERE BINARY `wallet_id`=BINARY p_wallet_id;
 		COMMIT; SELECT 'pending_holds' AS `result`,p_root_grant_entry_id AS `root_grant_entry_id`; LEAVE credit_refund_body;
 	END IF;
@@ -2085,7 +2217,8 @@ credit_refund_body: BEGIN
 		COMMIT; SELECT 'manual_review' AS `result`,p_root_grant_entry_id AS `root_grant_entry_id`; LEAVE credit_refund_body;
 	END IF;
 	IF v_balance<v_credits THEN
-		UPDATE `credit_wallets` SET `status`=CASE WHEN `status`='active' THEN 'frozen' ELSE `status` END
+		UPDATE `credit_wallets` SET `status`=CASE WHEN `status`='active' THEN 'frozen' ELSE `status` END,
+			`refund_adjustment_entry_id`=NULL
 		WHERE BINARY `wallet_id`=BINARY p_wallet_id;
 		COMMIT; SELECT 'manual_review' AS `result`,p_root_grant_entry_id AS `root_grant_entry_id`; LEAVE credit_refund_body;
 	END IF;
@@ -2102,6 +2235,16 @@ credit_refund_body: BEGIN
 		v_currency,v_credits,v_description,'refund_debit',-v_credits,0,v_event_hash,v_provider_event_hash,
 		v_provider_effect_id,'refund','refunded',v_amount,v_currency,v_refunds,p_root_grant_entry_id,1,p_evidence_hash,
 		v_previous,v_version,v_version+1,v_balance,v_reserved,v_balance-v_credits,v_reserved,CURRENT_TIMESTAMP);
+	SELECT COUNT(*) INTO v_count FROM `credit_wallets`
+	WHERE BINARY `wallet_id`=BINARY p_wallet_id AND `workspace_id`=p_workspace_id AND `mode`=p_mode
+		AND `channel_connection_id`=p_channel_connection_id AND `binding_epoch`=p_binding_epoch
+		AND `privacy_epoch`=p_privacy_epoch AND BINARY `financial_subject_ref`=BINARY p_financial_subject_ref
+		AND BINARY `last_ledger_entry_id`=BINARY p_entry_id
+		AND `balance_version`=v_version+1 AND `credit_balance`=v_balance-v_credits
+		AND `reserved_credits`=v_reserved AND `refund_adjustment_entry_id` IS NULL
+		AND ((v_status IN ('active','frozen') AND `status`='active')
+			OR (v_status='erased' AND `status`='erased' AND `current_user_key_hash` IS NULL)) FOR UPDATE;
+	IF v_count<>1 THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='refund wallet projection lost its exact fence'; END IF;
 	COMMIT; SELECT 'applied' AS `result`,p_entry_id AS `entry_id`;
 END;--> statement-breakpoint
 CREATE PROCEDURE `credit_apply_chargeback_debit`(
@@ -2118,7 +2261,7 @@ credit_chargeback_body: BEGIN
 	DECLARE v_offer varchar(80); DECLARE v_amount decimal(10,2); DECLARE v_currency varchar(3);
 	DECLARE v_credits int; DECLARE v_description varchar(255); DECLARE v_authorization_epoch int;
 	DECLARE v_event_hash varchar(64); DECLARE v_provider_event_hash varchar(64); DECLARE v_existing varchar(36);
-	DECLARE v_existing_kind varchar(32);
+	DECLARE v_existing_kind varchar(32); DECLARE v_adjustment_entry_id varchar(36);
 	DECLARE EXIT HANDLER FOR SQLEXCEPTION BEGIN ROLLBACK; RESIGNAL; END;
 	SELECT `source_intent_id`,`payment_ledger_id` INTO v_intent_id,v_payment_ledger_id
 	FROM `credit_ledger` WHERE BINARY `entry_id`=BINARY p_root_grant_entry_id AND `entry_kind`='purchase_grant';
@@ -2128,8 +2271,8 @@ credit_chargeback_body: BEGIN
 	WHERE `workspace_id`=p_workspace_id AND `mode`=p_mode FOR UPDATE;
 	SELECT COUNT(*) INTO v_count FROM `channelConnections`
 	WHERE `workspaceId`=p_workspace_id AND `id`=p_channel_connection_id FOR UPDATE;
-	SELECT `credit_balance`,`reserved_credits`,`balance_version`,`last_ledger_entry_id`,`status`
-	INTO v_balance,v_reserved,v_version,v_previous,v_wallet_status FROM `credit_wallets`
+	SELECT `credit_balance`,`reserved_credits`,`balance_version`,`last_ledger_entry_id`,`status`,`refund_adjustment_entry_id`
+	INTO v_balance,v_reserved,v_version,v_previous,v_wallet_status,v_adjustment_entry_id FROM `credit_wallets`
 	WHERE BINARY `wallet_id`=BINARY p_wallet_id AND `workspace_id`=p_workspace_id AND `mode`=p_mode
 		AND `channel_connection_id`=p_channel_connection_id AND `binding_epoch`=p_binding_epoch
 		AND `privacy_epoch`=p_privacy_epoch AND BINARY `financial_subject_ref`=BINARY p_financial_subject_ref FOR UPDATE;
@@ -2150,7 +2293,8 @@ credit_chargeback_body: BEGIN
 	WHERE `mode`=p_mode AND BINARY `root_grant_entry_id`=BINARY p_root_grant_entry_id
 		AND `root_adjustment_slot`=1 FOR UPDATE;
 	IF v_existing_kind='refund_debit' THEN
-		UPDATE `credit_wallets` SET `status`=CASE WHEN `status`='active' THEN 'frozen' ELSE `status` END
+		UPDATE `credit_wallets` SET `status`=CASE WHEN `status`='active' THEN 'frozen' ELSE `status` END,
+			`refund_adjustment_entry_id`=NULL
 		WHERE BINARY `wallet_id`=BINARY p_wallet_id;
 		COMMIT; SELECT 'manual_review' AS `result`,p_root_grant_entry_id AS `root_grant_entry_id`;
 		LEAVE credit_chargeback_body;
@@ -2168,6 +2312,12 @@ credit_chargeback_body: BEGIN
 			AND BINARY `evidence_hash`=BINARY p_evidence_hash FOR UPDATE;
 		IF v_count<>1 THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='chargeback replay conflicts with existing adjustment'; END IF;
 		COMMIT; SELECT 'already_applied' AS `result`,p_entry_id AS `entry_id`; LEAVE credit_chargeback_body;
+	END IF;
+	IF v_adjustment_entry_id IS NOT NULL AND BINARY v_adjustment_entry_id<>BINARY p_entry_id THEN
+		UPDATE `credit_wallets` SET `status`='frozen',`refund_adjustment_entry_id`=NULL
+		WHERE BINARY `wallet_id`=BINARY p_wallet_id;
+		COMMIT; SELECT 'manual_review' AS `result`,p_root_grant_entry_id AS `root_grant_entry_id`;
+		LEAVE credit_chargeback_body;
 	END IF;
 	SELECT COUNT(*) INTO v_count FROM `payment_ledger`
 	WHERE `id`=v_payment_ledger_id AND `workspace_id`=p_workspace_id AND `mode`=p_mode AND `status`='paid'
@@ -2198,10 +2348,10 @@ credit_chargeback_body: BEGIN
 	SELECT COUNT(*) INTO v_count FROM `credit_ledger`
 	WHERE `mode`=p_mode AND BINARY `provider_event_hash`=BINARY v_provider_event_hash FOR UPDATE;
 	IF v_count<>0 THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='chargeback provider evidence collides with another adjustment'; END IF;
-	IF v_wallet_status='active' THEN
-		UPDATE `credit_wallets` SET `status`='frozen' WHERE BINARY `wallet_id`=BINARY p_wallet_id AND `status`='active';
-	END IF;
 	IF v_reserved>0 THEN
+		UPDATE `credit_wallets` SET `status`='frozen',`refund_adjustment_entry_id`=p_entry_id
+		WHERE BINARY `wallet_id`=BINARY p_wallet_id
+			AND (`status`='active' OR (`status`='frozen' AND BINARY `refund_adjustment_entry_id`=BINARY p_entry_id));
 		COMMIT; SELECT 'pending_holds' AS `result`,p_root_grant_entry_id AS `root_grant_entry_id`; LEAVE credit_chargeback_body;
 	END IF;
 	INSERT INTO `credit_ledger` (`entry_id`,`wallet_id`,`workspace_id`,`mode`,`channel_connection_id`,`binding_epoch`,
@@ -2216,6 +2366,13 @@ credit_chargeback_body: BEGIN
 		v_currency,v_credits,v_description,'chargeback_debit',-v_credits,0,v_event_hash,v_provider_event_hash,
 		p_provider_effect_id,'chargeback','active',v_amount,v_currency,p_root_grant_entry_id,1,p_evidence_hash,
 		v_previous,v_version,v_version+1,v_balance,v_reserved,v_balance-v_credits,v_reserved,CURRENT_TIMESTAMP);
+	UPDATE `credit_wallets` SET `status`='frozen',`refund_adjustment_entry_id`=NULL
+	WHERE BINARY `wallet_id`=BINARY p_wallet_id AND BINARY `last_ledger_entry_id`=BINARY p_entry_id
+		AND `workspace_id`=p_workspace_id AND `mode`=p_mode
+		AND `channel_connection_id`=p_channel_connection_id AND `binding_epoch`=p_binding_epoch
+		AND `privacy_epoch`=p_privacy_epoch AND BINARY `financial_subject_ref`=BINARY p_financial_subject_ref
+		AND `status` IN ('active','frozen')
+		AND (`refund_adjustment_entry_id` IS NULL OR BINARY `refund_adjustment_entry_id`=BINARY p_entry_id);
 	COMMIT; SELECT 'applied' AS `result`,p_entry_id AS `entry_id`;
 END;--> statement-breakpoint
 CREATE PROCEDURE `credit_apply_chargeback_restore`(

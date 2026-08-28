@@ -11,7 +11,11 @@ import {
 
 type CheckoutState =
   | Readonly<{ kind: "loading" }>
-  | Readonly<{ kind: "ready"; intentId: string; offer: CreditCheckoutOffer }>
+  | Readonly<{
+      kind: "ready";
+      intentId: string;
+      offer: CreditCheckoutOffer;
+    }>
   | Readonly<{
       kind: "redirecting";
       intentId: string;

@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { and, asc, eq, gt, inArray, isNull, lte, sql } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import {
   billingOutbox,
   billingCustomers,
@@ -70,6 +70,10 @@ const SAFETY_EVENT_TYPES = [
   "credit_adjustment_retry",
   "payment_warning",
   "manual_review",
+] as const;
+const HISTORICAL_KEY_FREE_EVENT_TYPES = [
+  "manual_review",
+  "credit_adjustment_retry",
 ] as const;
 
 class RetryableOutboxError extends Error {
@@ -284,9 +288,33 @@ export async function runBillingOutboxOnce(
     throw new Error("invalid billing outbox workspace");
   }
   const mode = getConfiguredBillingMode();
-  await releaseStaleBillingLeases(mode, workspaceId);
-  const job = await claimBillingOutboxItem(mode, workspaceId);
+  return runBillingOutboxForModeOnce(
+    mode,
+    workspaceId,
+    clientOverride,
+    tenantLease
+  );
+}
+
+async function runBillingOutboxForModeOnce(
+  mode: MollieMode,
+  workspaceId: number,
+  clientOverride?: MollieClient,
+  tenantLease?: BillingTenantLease,
+  allowedEventTypes?: readonly BillingOutboxItem["eventType"][],
+  now = new Date()
+): Promise<boolean> {
+  await releaseStaleBillingLeases(mode, workspaceId, allowedEventTypes, now);
+  const job = await claimBillingOutboxItem(
+    mode,
+    workspaceId,
+    allowedEventTypes,
+    now
+  );
   if (!job) return false;
+  if (allowedEventTypes && !allowedEventTypes.includes(job.eventType)) {
+    throw new Error("billing outbox claim escaped its allowed event types");
+  }
   try {
     if (tenantLease) await assertBillingTenantLeaseOwned(tenantLease);
     await processBillingOutboxItem(job, clientOverride, tenantLease);
@@ -319,6 +347,67 @@ export async function runBillingOutboxOnce(
     }
   }
   return true;
+}
+
+/**
+ * Drains only provider-key-free safety work from the non-current payment mode.
+ * It never receives a Mollie client and its claim is fenced to metadata-only
+ * operator review and already-persisted refund/chargeback adjustment replays,
+ * so a Test Mode hold remains operable after a later live cutover without
+ * reopening historical provider work.
+ */
+export async function runHistoricalBillingSafetyOutboxOnce(
+  now = new Date()
+): Promise<boolean> {
+  const currentMode = getConfiguredBillingMode();
+  const historicalMode: MollieMode = currentMode === "test" ? "live" : "test";
+  const workspaceId = await findHistoricalKeyFreeWorkspace(historicalMode, now);
+  if (!workspaceId) return false;
+  return runBillingOutboxForModeOnce(
+    historicalMode,
+    workspaceId,
+    undefined,
+    undefined,
+    HISTORICAL_KEY_FREE_EVENT_TYPES,
+    now
+  );
+}
+
+async function findHistoricalKeyFreeWorkspace(
+  mode: MollieMode,
+  now: Date
+): Promise<number | null> {
+  const database = await getDatabaseOrThrow();
+  const staleBefore = new Date(now.getTime() - OUTBOX_LEASE_TIMEOUT_MS);
+  const rows = await database
+    .select({ workspaceId: billingOutbox.workspaceId })
+    .from(billingOutbox)
+    .innerJoin(
+      billingExecutionControls,
+      and(
+        eq(billingExecutionControls.workspaceId, billingOutbox.workspaceId),
+        eq(billingExecutionControls.mode, billingOutbox.mode)
+      )
+    )
+    .where(
+      and(
+        eq(billingOutbox.mode, mode),
+        inArray(billingOutbox.eventType, HISTORICAL_KEY_FREE_EVENT_TYPES),
+        or(
+          and(
+            eq(billingOutbox.status, "pending"),
+            lte(billingOutbox.availableAt, now)
+          ),
+          and(
+            eq(billingOutbox.status, "processing"),
+            lte(billingOutbox.lockedAt, staleBefore)
+          )
+        )
+      )
+    )
+    .orderBy(asc(billingOutbox.availableAt), asc(billingOutbox.id))
+    .limit(1);
+  return rows[0]?.workspaceId ?? null;
 }
 
 export function isCriticalContainmentJob(job: BillingOutboxItem): boolean {
@@ -448,6 +537,14 @@ export async function runBillingOutboxSchedulerSafely(): Promise<void> {
           : error instanceof Error
             ? error.name
             : "UnknownError",
+    });
+  }
+  try {
+    await runHistoricalBillingSafetyOutboxOnce();
+  } catch (error) {
+    safeLog("billing_outbox_historical_notification_failed", {
+      level: "error",
+      errorCode: error instanceof Error ? error.name : "UnknownError",
     });
   }
 }
@@ -2880,7 +2977,9 @@ function isValidMollieId(
 
 export async function claimBillingOutboxItem(
   mode: MollieMode,
-  workspaceId: number
+  workspaceId: number,
+  allowedEventTypesOverride?: readonly BillingOutboxItem["eventType"][],
+  now = new Date()
 ): Promise<ClaimedBillingOutboxItem | null> {
   const database = await getDatabaseOrThrow();
   return database.transaction(async tx => {
@@ -2896,9 +2995,11 @@ export async function claimBillingOutboxItem(
       .limit(1)
       .for("update");
     if (!controls[0]) return null;
-    const allowedEventTypes = controls[0].commercialEnabled
-      ? undefined
-      : SAFETY_EVENT_TYPES;
+    const allowedEventTypes = allowedEventTypesOverride
+      ? [...allowedEventTypesOverride]
+      : controls[0].commercialEnabled
+        ? undefined
+        : SAFETY_EVENT_TYPES;
     const activeJobs = await tx
       .select({ id: billingOutbox.id })
       .from(billingOutbox)
@@ -2922,7 +3023,7 @@ export async function claimBillingOutboxItem(
           eq(billingOutbox.workspaceId, workspaceId),
           eq(billingOutbox.mode, mode),
           eq(billingOutbox.status, "pending"),
-          lte(billingOutbox.availableAt, new Date()),
+          lte(billingOutbox.availableAt, now),
           ...(allowedEventTypes
             ? [inArray(billingOutbox.eventType, allowedEventTypes)]
             : [])
@@ -2939,7 +3040,7 @@ export async function claimBillingOutboxItem(
       .update(billingOutbox)
       .set({
         status: "processing",
-        lockedAt: new Date(),
+        lockedAt: now,
         leaseToken,
         attemptCount,
       })
@@ -2962,10 +3063,12 @@ export async function claimBillingOutboxItem(
 
 async function releaseStaleBillingLeases(
   mode: MollieMode,
-  workspaceId: number
+  workspaceId: number,
+  allowedEventTypes?: readonly BillingOutboxItem["eventType"][],
+  now = new Date()
 ) {
   const database = await getDatabaseOrThrow();
-  const staleBefore = new Date(Date.now() - OUTBOX_LEASE_TIMEOUT_MS);
+  const staleBefore = new Date(now.getTime() - OUTBOX_LEASE_TIMEOUT_MS);
   await database
     .update(billingOutbox)
     .set({
@@ -2979,6 +3082,9 @@ async function releaseStaleBillingLeases(
         eq(billingOutbox.workspaceId, workspaceId),
         eq(billingOutbox.mode, mode),
         eq(billingOutbox.status, "processing"),
+        ...(allowedEventTypes
+          ? [inArray(billingOutbox.eventType, [...allowedEventTypes])]
+          : []),
         lte(billingOutbox.lockedAt, staleBefore)
       )
     );

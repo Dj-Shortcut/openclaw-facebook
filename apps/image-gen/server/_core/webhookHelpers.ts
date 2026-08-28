@@ -19,6 +19,11 @@ export type FacebookWebhookEvent = {
     payload?: string;
     referral?: { ref?: string };
   };
+  delivery?: {
+    mids?: unknown;
+    watermark?: unknown;
+    seq?: unknown;
+  };
   timestamp?: number;
 };
 

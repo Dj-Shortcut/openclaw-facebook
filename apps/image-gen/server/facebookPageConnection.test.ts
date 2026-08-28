@@ -47,7 +47,7 @@ describe("Facebook Page connection", () => {
         externalId: "page-42",
         encryptedAccessToken: expect.stringMatching(/^v1:/),
       }),
-      { updatePolicy: "preserve_exact_facebook_page_binding" }
+      { updatePolicy: "preserve_exact_facebook_binding" }
     );
     expect(
       mocks.upsertChannelConnection.mock.calls[0]?.[0]?.encryptedAccessToken
@@ -82,7 +82,7 @@ describe("Facebook Page connection", () => {
 
     expect(mocks.upsertChannelConnection).toHaveBeenCalledWith(
       expect.objectContaining({ status: "missing_permissions" }),
-      { updatePolicy: "preserve_exact_facebook_page_binding" }
+      { updatePolicy: "preserve_exact_facebook_binding" }
     );
   });
 });

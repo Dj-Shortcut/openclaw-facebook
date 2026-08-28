@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type {
   ExpiredCreditReservation,
   ExpiredPristineCreditCheckout,
+  TerminalCreditReservationForScrub,
 } from "./creditReservationExpiryStore";
 import type { DueCreditReservationResolution } from "./creditReservationExpiryStore";
 import {
@@ -41,14 +42,26 @@ const PRISTINE_CHECKOUT: ExpiredPristineCreditCheckout = Object.freeze({
   financialSubjectRef: ROW.financialSubjectRef,
 });
 
+const TERMINAL_FOR_SCRUB: TerminalCreditReservationForScrub = Object.freeze({
+  reservationId: ROW.reservationId,
+  walletId: ROW.walletId,
+  workspaceId: ROW.workspaceId,
+  mode: ROW.mode,
+  channelConnectionId: ROW.channelConnectionId,
+  bindingEpoch: ROW.bindingEpoch,
+  privacyEpoch: ROW.privacyEpoch,
+  financialSubjectRef: ROW.financialSubjectRef,
+});
+
 function dependencies(
   overrides: Partial<CreditReservationExpiryDependencies> = {}
 ): CreditReservationExpiryDependencies {
   return {
-    mode: () => "test" as const,
+    modes: () => ["test", "live"] as const,
     list: vi.fn(async () => []),
     listDue: vi.fn(async () => []),
     listPristineCheckouts: vi.fn(async () => []),
+    listTerminalForScrub: vi.fn(async () => []),
     expire: vi.fn(async () => ({
       result: "applied" as const,
       reservationId: ROW.reservationId,
@@ -57,13 +70,9 @@ function dependencies(
       result: "applied" as const,
       intentId: PRISTINE_CHECKOUT.intentId,
     })),
-    commit: vi.fn(async () => ({
+    scrubTerminal: vi.fn(async () => ({
       result: "applied" as const,
       reservationId: ROW.reservationId,
-    })),
-    deriveCommit: vi.fn(() => ({
-      entryId: "33333333-3333-8333-8333-333333333333",
-      evidenceHash: "e".repeat(64),
     })),
     review: vi.fn(async () => undefined),
     ...overrides,
@@ -77,7 +86,7 @@ describe("credit reservation expiry worker", () => {
       reservationId: ROW.reservationId,
     }));
     const workerDependencies = dependencies({
-      list: vi.fn(async () => [ROW]),
+      list: vi.fn(async mode => (mode === ROW.mode ? [ROW] : [])),
       expire,
     });
     const now = new Date("2026-08-28T12:00:00.000Z");
@@ -123,7 +132,7 @@ describe("credit reservation expiry worker", () => {
         25,
         new Date(),
         dependencies({
-          list: vi.fn(async () => [ROW]),
+          list: vi.fn(async mode => (mode === ROW.mode ? [ROW] : [])),
           expire,
         })
       )
@@ -135,7 +144,9 @@ describe("credit reservation expiry worker", () => {
       result: "applied" as const,
       intentId: PRISTINE_CHECKOUT.intentId,
     }));
-    const listPristineCheckouts = vi.fn(async () => [PRISTINE_CHECKOUT]);
+    const listPristineCheckouts = vi.fn(async mode =>
+      mode === PRISTINE_CHECKOUT.mode ? [PRISTINE_CHECKOUT] : []
+    );
     const now = new Date("2026-08-28T12:00:00.000Z");
 
     await expect(
@@ -150,19 +161,16 @@ describe("credit reservation expiry worker", () => {
     expect(expirePristineCheckout).toHaveBeenCalledWith(PRISTINE_CHECKOUT);
   });
 
-  it("commits a known accepted provider result with reconstructed exact evidence", async () => {
-    const commit = vi.fn(async () => ({
-      result: "applied" as const,
-      reservationId: ROW.reservationId,
-    }));
+  it("queues a known accepted provider result for review without auto-debit", async () => {
     const review = vi.fn(async () => undefined);
     const knownAccepted: DueCreditReservationResolution = {
       ...DUE_TRANSPORT,
       transportState: "known_accepted",
     };
     const workerDependencies = dependencies({
-      listDue: vi.fn(async () => [knownAccepted]),
-      commit,
+      listDue: vi.fn(async mode =>
+        mode === knownAccepted.mode ? [knownAccepted] : []
+      ),
       review,
     });
 
@@ -170,30 +178,16 @@ describe("credit reservation expiry worker", () => {
       runCreditReservationExpiryOnce(25, new Date(), workerDependencies)
     ).resolves.toBe(1);
 
-    expect(commit).toHaveBeenCalledWith({
-      workspaceId: ROW.workspaceId,
-      mode: ROW.mode,
-      channelConnectionId: ROW.channelConnectionId,
-      bindingEpoch: ROW.bindingEpoch,
-      privacyEpoch: ROW.privacyEpoch,
-      userKey: ROW.userKey,
-      walletId: ROW.walletId,
-      financialSubjectRef: ROW.financialSubjectRef,
-      reservationId: ROW.reservationId,
-      ownerTokenHash: ROW.ownerTokenHash,
-      entryId: "33333333-3333-8333-8333-333333333333",
-      evidenceHash: "e".repeat(64),
-    });
-    expect(review).not.toHaveBeenCalled();
+    expect(review).toHaveBeenCalledWith(knownAccepted);
   });
 
   it("queues one durable review and keeps an ambiguous transport held", async () => {
-    const commit = vi.fn();
     const expire = vi.fn();
     const review = vi.fn(async () => undefined);
     const workerDependencies = dependencies({
-      listDue: vi.fn(async () => [DUE_TRANSPORT]),
-      commit,
+      listDue: vi.fn(async mode =>
+        mode === DUE_TRANSPORT.mode ? [DUE_TRANSPORT] : []
+      ),
       expire,
       review,
     });
@@ -203,27 +197,47 @@ describe("credit reservation expiry worker", () => {
     ).resolves.toBe(1);
 
     expect(review).toHaveBeenCalledWith(DUE_TRANSPORT);
-    expect(commit).not.toHaveBeenCalled();
     expect(expire).not.toHaveBeenCalled();
   });
 
-  it("contains an unprovable known response for review instead of guessing a debit", async () => {
-    const commit = vi.fn();
+  it("scrubs terminal request hashes in both historical modes after the retention boundary", async () => {
+    const scrubTerminal = vi.fn(async () => ({
+      result: "applied" as const,
+      reservationId: TERMINAL_FOR_SCRUB.reservationId,
+    }));
+    const listTerminalForScrub = vi.fn(async mode =>
+      mode === TERMINAL_FOR_SCRUB.mode ? [TERMINAL_FOR_SCRUB] : []
+    );
+    const now = new Date("2026-08-30T12:00:00.000Z");
+
+    await expect(
+      runCreditReservationExpiryOnce(
+        25,
+        now,
+        dependencies({ listTerminalForScrub, scrubTerminal })
+      )
+    ).resolves.toBe(1);
+
+    expect(listTerminalForScrub).toHaveBeenNthCalledWith(1, "test", now, 25);
+    expect(listTerminalForScrub).toHaveBeenNthCalledWith(2, "live", now, 25);
+    expect(scrubTerminal).toHaveBeenCalledExactlyOnceWith(TERMINAL_FOR_SCRUB);
+  });
+
+  it("deduplicates known-response review without guessing a debit", async () => {
     const review = vi.fn(async () => undefined);
     const knownAccepted: DueCreditReservationResolution = {
       ...DUE_TRANSPORT,
       transportState: "known_accepted",
     };
     const workerDependencies = dependencies({
-      listDue: vi.fn(async () => [knownAccepted]),
-      deriveCommit: vi.fn(() => null),
-      commit,
+      listDue: vi.fn(async mode =>
+        mode === knownAccepted.mode ? [knownAccepted] : []
+      ),
       review,
     });
 
     await runCreditReservationExpiryOnce(25, new Date(), workerDependencies);
 
-    expect(commit).not.toHaveBeenCalled();
     expect(review).toHaveBeenCalledWith(knownAccepted);
   });
 });

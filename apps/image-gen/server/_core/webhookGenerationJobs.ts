@@ -66,6 +66,7 @@ import {
 import {
   getMessengerGenerationCompletion,
   markMessengerGenerationCompleted,
+  markMessengerGenerationDeliveryAccepted,
   markMessengerGenerationDeliveryRetryable,
   markMessengerGenerationDeliveryStarted,
   markMessengerGenerationDelivered,
@@ -98,6 +99,7 @@ import {
   MessengerPrivacyFenceError,
 } from "./messengerPrivacySubject";
 import {
+  commitDeliveredPaidCreditGeneration,
   reservePaidCreditGeneration,
   type PaidCreditGenerationInput,
   type PaidCreditGenerationReservation,
@@ -441,6 +443,7 @@ export function createMessengerGenerationJobRunner(
             : null;
         let paidCreditTransportStarted = false;
         let paidCreditReleasePromise: Promise<void> | null = null;
+        let paidCreditProviderAcceptedPromise: Promise<void> | null = null;
         let paidCreditCommitPromise: Promise<void> | null = null;
         let paidCreditRejectedReleasePromise: Promise<void> | null = null;
         let paidCreditProviderRejected = false;
@@ -456,10 +459,16 @@ export function createMessengerGenerationJobRunner(
             paidCreditReservation.releaseBeforeTransport();
           await paidCreditReleasePromise;
         };
-        const commitPaidCreditProviderSuccess = async (): Promise<void> => {
+        const markPaidCreditProviderAccepted = async (): Promise<void> => {
+          if (!paidCreditReservation) return;
+          paidCreditProviderAcceptedPromise ??=
+            paidCreditReservation.markProviderAccepted();
+          await paidCreditProviderAcceptedPromise;
+        };
+        const commitPaidCreditDeliveredOutput = async (): Promise<void> => {
           if (!paidCreditReservation) return;
           paidCreditCommitPromise ??=
-            paidCreditReservation.commitProviderSuccess();
+            paidCreditReservation.commitDeliveredOutput();
           await paidCreditCommitPromise;
         };
         const releasePaidCreditProviderRejected = async (
@@ -700,7 +709,7 @@ export function createMessengerGenerationJobRunner(
               : undefined,
             onProviderAttempt: beginProviderAttempt,
             onProviderSuccess: paidCreditReservation
-              ? commitPaidCreditProviderSuccess
+              ? markPaidCreditProviderAccepted
               : undefined,
             onProviderRejected: paidCreditReservation
               ? releasePaidCreditProviderRejected
@@ -737,7 +746,6 @@ export function createMessengerGenerationJobRunner(
                 const admission = await beginProviderAttempt();
                 await admission.markTransportStarted();
               }
-              await commitPaidCreditProviderSuccess();
               await assertMessengerGenerationOwnership(job);
               await assertGenerationJobPrivacy(job);
               await handleGenerationSuccess({
@@ -754,16 +762,21 @@ export function createMessengerGenerationJobRunner(
                 successQuotaIdentity: paidCreditReservation
                   ? undefined
                   : successQuotaIdentity,
-                quotaAccountingMode:
-                  workspacePolicy.kind === "startpilot"
+                quotaAccountingMode: paidCreditReservation
+                  ? "paid_credit_delivery_v1"
+                  : workspacePolicy.kind === "startpilot"
                     ? "startpilot_attempt_committed_v1"
                     : "success_only_v1",
+                paidCreditMode: paidCreditReservation?.mode,
                 quotaReservation: pendingQuotaReservation,
                 quotaLeaseHeartbeat: paidCreditReservation
                   ? null
                   : quotaLeaseHeartbeat,
                 assertCurrentBinding: () =>
                   assertMessengerGenerationOwnership(job),
+                commitDeliveredOutput: paidCreditReservation
+                  ? commitPaidCreditDeliveredOutput
+                  : undefined,
                 onDurableRecoveryRequired: () => {
                   durableGenerationRecoveryRequired = true;
                 },
@@ -1305,7 +1318,7 @@ async function finishDuplicateGenerationIfCompleted(input: {
   recordMessengerDuplicateSkip();
   let quotaStatus = completedGeneration.quotaStatus;
   let successNoticeStatus = completedGeneration.successNoticeStatus;
-  const deliveryStatus = completedGeneration.deliveryStatus ?? "delivered";
+  let deliveryStatus = completedGeneration.deliveryStatus ?? "delivered";
   const recoveryQuotaIdentity = quotaIdentityForCompletionRecovery(
     completedGeneration,
     input.successQuotaIdentity
@@ -1393,7 +1406,7 @@ async function finishDuplicateGenerationIfCompleted(input: {
       priorDeliveryStatus: completedGeneration.deliveryStatus,
     });
     try {
-      await deliverGenerationImage({
+      const recoveredDelivery = await deliverGenerationImage({
         deps: input.deps,
         psid: input.psid,
         imageUrl: completedGeneration.imageUrl,
@@ -1401,7 +1414,10 @@ async function finishDuplicateGenerationIfCompleted(input: {
         userId: input.userId,
         rememberSendOutcome: input.rememberSendOutcome,
         completionFence: input.completionFence,
+        requireDeliveryReceipt:
+          completedGeneration.quotaAccountingMode === "paid_credit_delivery_v1",
       });
+      deliveryStatus = recoveredDelivery.deliveryStatus;
     } catch (error) {
       if (!isAmbiguousGenerationDeliveryFailure(error)) throw error;
       imageDeliveryAmbiguous = true;
@@ -1430,9 +1446,19 @@ async function finishDuplicateGenerationIfCompleted(input: {
     await setFlowState(input.psid, "IDLE");
     return true;
   }
-  const shouldSendSuccessNotice =
-    successNoticeStatus === "pending" ||
-    (deliveryStatus === "pending" && successNoticeStatus !== "sent");
+  if (
+    completedGeneration.quotaAccountingMode === "paid_credit_delivery_v1" &&
+    deliveryStatus === "delivered"
+  ) {
+    await commitPaidCreditFromDeliveredCompletion({
+      reqId: input.reqId,
+      userId: input.userId,
+      imageUrl: completedGeneration.imageUrl,
+      completionFence: input.completionFence,
+      paidCreditMode: completedGeneration.paidCreditMode,
+    });
+  }
+  const shouldSendSuccessNotice = successNoticeStatus !== "sent";
   if (shouldSendSuccessNotice) {
     if (recoveryQuotaIdentity) {
       // A retry can happen after another successful photo or after the local
@@ -1463,6 +1489,52 @@ async function finishDuplicateGenerationIfCompleted(input: {
   }
   await setFlowState(input.psid, "IDLE");
   return true;
+}
+
+export async function commitPaidCreditFromDeliveredCompletion(input: {
+  reqId: string;
+  userId: string;
+  imageUrl: string;
+  completionFence?: MessengerGenerationCompletionFence;
+  paidCreditMode?: "test" | "live";
+}): Promise<void> {
+  if (!input.completionFence || !input.paidCreditMode) {
+    throw new MessengerImageQuotaRecoveryError();
+  }
+  const durable = await getMessengerGenerationCompletion(
+    input.reqId,
+    input.completionFence
+  );
+  if (
+    !durable ||
+    durable.reqId !== input.reqId ||
+    durable.imageUrl !== input.imageUrl ||
+    durable.userKey !== input.userId ||
+    durable.deliveryStatus !== "delivered" ||
+    durable.deliveryProof !== "meta_delivery_receipt_v1" ||
+    !Number.isFinite(durable.receiptConfirmedAt) ||
+    !/^[a-f0-9]{64}$/.test(durable.messengerMessageIdHash ?? "") ||
+    durable.quotaAccountingMode !== "paid_credit_delivery_v1" ||
+    durable.paidCreditMode !== input.paidCreditMode ||
+    durable.workspaceId !== input.completionFence.workspaceId ||
+    durable.channelConnectionId !== input.completionFence.channelConnectionId ||
+    durable.bindingEpoch !== input.completionFence.bindingEpoch ||
+    durable.privacyEpoch !== input.completionFence.privacyEpoch ||
+    durable.pageId !== input.completionFence.pageId ||
+    input.completionFence.channel !== "facebook_messenger" ||
+    durable.channel !== "facebook_messenger"
+  ) {
+    throw new MessengerImageQuotaRecoveryError();
+  }
+  await commitDeliveredPaidCreditGeneration({
+    workspaceId: input.completionFence.workspaceId,
+    channelConnectionId: input.completionFence.channelConnectionId,
+    bindingEpoch: input.completionFence.bindingEpoch,
+    privacyEpoch: input.completionFence.privacyEpoch,
+    userKey: input.userId,
+    requestId: input.reqId,
+    mode: input.paidCreditMode,
+  });
 }
 
 function isLegacyQuotaGrandfatherAllowed(
@@ -1651,9 +1723,11 @@ async function handleGenerationSuccess(input: {
   completionFence?: MessengerGenerationCompletionFence;
   successQuotaIdentity?: MessengerImageQuotaIdentity;
   quotaAccountingMode: MessengerGenerationQuotaAccountingMode;
+  paidCreditMode?: "test" | "live";
   quotaReservation: MessengerImageQuotaReservation | null;
   quotaLeaseHeartbeat: MessengerGenerationQuotaLeaseHeartbeat | null;
   assertCurrentBinding: () => Promise<void>;
+  commitDeliveredOutput?: () => Promise<void>;
   onDurableRecoveryRequired: () => void;
 }): Promise<void> {
   const { imageUrl, metrics, mode, proof } = input.generationResult;
@@ -1706,7 +1780,8 @@ async function handleGenerationSuccess(input: {
       Date.now(),
       input.completionFence,
       input.quotaAccountingMode,
-      input.successQuotaIdentity ?? null
+      input.successQuotaIdentity ?? null,
+      input.paidCreditMode
     )
   );
   let quotaStatus: MessengerImageQuotaStatus | undefined;
@@ -1731,9 +1806,9 @@ async function handleGenerationSuccess(input: {
   await setLastGenerated(input.psid, imageUrl);
   await setLastGenerationContext(input.psid, { prompt: input.promptHint });
 
-  let messengerSendMs: number;
+  let delivery: Awaited<ReturnType<typeof deliverGenerationImage>>;
   try {
-    messengerSendMs = await deliverGenerationImage({
+    delivery = await deliverGenerationImage({
       deps: input.deps,
       psid: input.psid,
       imageUrl,
@@ -1741,6 +1816,7 @@ async function handleGenerationSuccess(input: {
       userId: input.userId,
       rememberSendOutcome: input.rememberSendOutcome,
       completionFence: input.completionFence,
+      requireDeliveryReceipt: Boolean(input.commitDeliveredOutput),
     });
   } catch (error) {
     if (!isAmbiguousGenerationDeliveryFailure(error)) throw error;
@@ -1768,6 +1844,15 @@ async function handleGenerationSuccess(input: {
     await setFlowState(input.psid, "IDLE");
     return;
   }
+  if (delivery.deliveryStatus === "delivered" && input.commitDeliveredOutput) {
+    await commitPaidCreditFromDeliveredCompletion({
+      reqId: input.reqId,
+      userId: input.userId,
+      imageUrl,
+      completionFence: input.completionFence,
+      paidCreditMode: input.paidCreditMode,
+    });
+  }
   recordGenerationSuccess(input.resolvedGenerationKind, metrics.totalMs);
   await sendGenerationSuccessActions({
     deps: input.deps,
@@ -1790,7 +1875,7 @@ async function handleGenerationSuccess(input: {
       psid: input.psid,
       generationKind: input.resolvedGenerationKind,
       metrics,
-      messengerSendMs,
+      messengerSendMs: delivery.messengerSendMs,
     })
   );
   await setFlowState(input.psid, "IDLE");
@@ -1804,7 +1889,11 @@ async function deliverGenerationImage(input: {
   userId: string;
   rememberSendOutcome: (outcome: MessengerSendOutcome) => MessengerSendOutcome;
   completionFence?: MessengerGenerationCompletionFence;
-}): Promise<number> {
+  requireDeliveryReceipt: boolean;
+}): Promise<{
+  messengerSendMs: number;
+  deliveryStatus: "receipt_pending" | "delivered";
+}> {
   const messengerSendStartedAt = Date.now();
   const deliveryStart = await markMessengerGenerationDeliveryStarted(
     input.reqId,
@@ -1813,7 +1902,12 @@ async function deliverGenerationImage(input: {
     Date.now(),
     input.completionFence
   );
-  if (deliveryStart === "already_delivered") return 0;
+  if (deliveryStart === "already_delivered") {
+    return { messengerSendMs: 0, deliveryStatus: "delivered" };
+  }
+  if (deliveryStart === "receipt_pending") {
+    return { messengerSendMs: 0, deliveryStatus: "receipt_pending" };
+  }
 
   let outcome: MessengerSendOutcome;
   try {
@@ -1871,6 +1965,25 @@ async function deliverGenerationImage(input: {
   }
 
   try {
+    if (input.requireDeliveryReceipt) {
+      if (!outcome.messageId || !input.completionFence) {
+        throw markGenerationDeliveryAmbiguous(
+          new Error("Messenger accepted image without a delivery message ID")
+        );
+      }
+      const acceptance = await markMessengerGenerationDeliveryAccepted(
+        input.reqId,
+        input.imageUrl,
+        outcome.messageId,
+        input.userId,
+        Date.now(),
+        input.completionFence
+      );
+      return {
+        messengerSendMs: Date.now() - messengerSendStartedAt,
+        deliveryStatus: acceptance,
+      };
+    }
     await markMessengerGenerationDelivered(
       input.reqId,
       input.imageUrl,
@@ -1885,9 +1998,24 @@ async function deliverGenerationImage(input: {
       user: toLogUser(input.userId),
       error,
     });
-    throw new MessengerGenerationDeliveryError(error);
+    throw new MessengerGenerationDeliveryError(
+      input.requireDeliveryReceipt
+        ? markGenerationDeliveryAmbiguous(error)
+        : error
+    );
   }
-  return Date.now() - messengerSendStartedAt;
+  return {
+    messengerSendMs: Date.now() - messengerSendStartedAt,
+    deliveryStatus: "delivered",
+  };
+}
+
+function markGenerationDeliveryAmbiguous(error: unknown): Error {
+  const ambiguous = error instanceof Error ? error : new Error(String(error));
+  Object.defineProperty(ambiguous, "messengerDeliveryAmbiguous", {
+    value: true,
+  });
+  return ambiguous;
 }
 
 function isMessengerDeliveryAmbiguous(error: unknown): boolean {
@@ -2013,6 +2141,7 @@ function completionFenceForJob(
     privacyEpoch: job.privacyEpoch,
     userKey: job.userId,
     pageId: job.pageId ?? "",
+    channel: "facebook_messenger",
   };
 }
 

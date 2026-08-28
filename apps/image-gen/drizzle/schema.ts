@@ -2081,6 +2081,9 @@ export const creditWallets = mysqlTable(
     reservedCredits: int("reserved_credits").default(0).notNull(),
     balanceVersion: int("balance_version").default(1).notNull(),
     lastLedgerEntryId: varchar("last_ledger_entry_id", { length: 36 }),
+    refundAdjustmentEntryId: varchar("refund_adjustment_entry_id", {
+      length: 36,
+    }),
     privacyErasedAt: timestamp("privacy_erased_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
@@ -2142,7 +2145,11 @@ export const creditWallets = mysqlTable(
     ),
     check(
       "credit_wallets_id_valid",
-      sql`REGEXP_LIKE(${table.walletId}, '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', 'c') AND (${table.lastLedgerEntryId} IS NULL OR REGEXP_LIKE(${table.lastLedgerEntryId}, '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', 'c'))`
+      sql`REGEXP_LIKE(${table.walletId}, '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', 'c') AND (${table.lastLedgerEntryId} IS NULL OR REGEXP_LIKE(${table.lastLedgerEntryId}, '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', 'c')) AND (${table.refundAdjustmentEntryId} IS NULL OR REGEXP_LIKE(${table.refundAdjustmentEntryId}, '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', 'c'))`
+    ),
+    check(
+      "credit_wallets_refund_adjustment_shape",
+      sql`${table.refundAdjustmentEntryId} IS NULL OR ${table.status} IN ('active','frozen')`
     ),
     check(
       "credit_wallets_counters_valid",
@@ -2150,7 +2157,7 @@ export const creditWallets = mysqlTable(
     ),
     check(
       "credit_wallets_erasure_shape",
-      sql`(${table.status} = 'erased' AND ${table.currentUserKeyHash} IS NULL AND ${table.privacyErasedAt} IS NOT NULL AND ${table.privacyErasedAt} >= ${table.createdAt} AND ${table.reservedCredits} = 0) OR (${table.status} <> 'erased' AND ${table.currentUserKeyHash} IS NOT NULL AND ${table.privacyErasedAt} IS NULL)`
+      sql`(${table.status} = 'erased' AND ${table.currentUserKeyHash} IS NULL AND ${table.privacyErasedAt} IS NOT NULL AND ${table.privacyErasedAt} >= ${table.createdAt} AND ${table.reservedCredits} = 0 AND ${table.refundAdjustmentEntryId} IS NULL) OR (${table.status} <> 'erased' AND ${table.currentUserKeyHash} IS NOT NULL AND ${table.privacyErasedAt} IS NULL)`
     ),
   ]
 );
@@ -2191,6 +2198,7 @@ export const creditReservations = mysqlTable(
       "transport_started",
       "known_accepted",
       "known_rejected",
+      "output_not_delivered",
     ])
       .default("pretransport")
       .notNull(),
@@ -2281,15 +2289,15 @@ export const creditReservations = mysqlTable(
     ),
     check(
       "credit_reservations_terminal_state",
-      sql`((${table.status} = 'initializing' AND ${table.transportState} = 'pretransport' AND ${table.stateVersion} = 1 AND ${table.holdLedgerEntryId} IS NULL AND ${table.committedAt} IS NULL AND ${table.releasedAt} IS NULL AND ${table.terminalLedgerEntryId} IS NULL AND ${table.terminalEvidenceHash} IS NULL) OR (${table.status} = 'reserved' AND ${table.stateVersion} = 2 AND ${table.holdLedgerEntryId} IS NOT NULL AND ${table.committedAt} IS NULL AND ${table.releasedAt} IS NULL AND ${table.terminalLedgerEntryId} IS NULL AND ${table.terminalEvidenceHash} IS NULL) OR (${table.status} = 'committed' AND ${table.transportState} = 'known_accepted' AND ${table.stateVersion} = 3 AND ${table.holdLedgerEntryId} IS NOT NULL AND ${table.committedAt} IS NOT NULL AND ${table.releasedAt} IS NULL AND ${table.terminalLedgerEntryId} IS NOT NULL AND ${table.terminalEvidenceHash} IS NOT NULL AND REGEXP_LIKE(${table.terminalEvidenceHash}, '^[0-9a-f]{64}$', 'c')) OR (${table.status} IN ('released','expired') AND ${table.transportState} IN ('pretransport','known_rejected') AND ${table.stateVersion} = 3 AND ${table.holdLedgerEntryId} IS NOT NULL AND ${table.releasedAt} IS NOT NULL AND ${table.committedAt} IS NULL AND ${table.terminalLedgerEntryId} IS NOT NULL AND ${table.terminalEvidenceHash} IS NOT NULL AND REGEXP_LIKE(${table.terminalEvidenceHash}, '^[0-9a-f]{64}$', 'c'))) IS TRUE`
+      sql`((${table.status} = 'initializing' AND ${table.transportState} = 'pretransport' AND ${table.stateVersion} = 1 AND ${table.holdLedgerEntryId} IS NULL AND ${table.committedAt} IS NULL AND ${table.releasedAt} IS NULL AND ${table.terminalLedgerEntryId} IS NULL AND ${table.terminalEvidenceHash} IS NULL) OR (${table.status} = 'reserved' AND ${table.stateVersion} = 2 AND ${table.holdLedgerEntryId} IS NOT NULL AND ${table.committedAt} IS NULL AND ${table.releasedAt} IS NULL AND ${table.terminalLedgerEntryId} IS NULL AND ${table.terminalEvidenceHash} IS NULL) OR (${table.status} = 'committed' AND ${table.transportState} = 'known_accepted' AND ${table.stateVersion} = 3 AND ${table.holdLedgerEntryId} IS NOT NULL AND ${table.committedAt} IS NOT NULL AND ${table.releasedAt} IS NULL AND ${table.terminalLedgerEntryId} IS NOT NULL AND ${table.terminalEvidenceHash} IS NOT NULL AND REGEXP_LIKE(${table.terminalEvidenceHash}, '^[0-9a-f]{64}$', 'c')) OR (${table.status} IN ('released','expired') AND ${table.transportState} IN ('pretransport','known_rejected','output_not_delivered') AND ${table.stateVersion} = 3 AND ${table.holdLedgerEntryId} IS NOT NULL AND ${table.releasedAt} IS NOT NULL AND ${table.committedAt} IS NULL AND ${table.terminalLedgerEntryId} IS NOT NULL AND ${table.terminalEvidenceHash} IS NOT NULL AND REGEXP_LIKE(${table.terminalEvidenceHash}, '^[0-9a-f]{64}$', 'c'))) IS TRUE`
     ),
     check(
       "credit_reservations_transport_evidence",
-      sql`((${table.transportState} = 'pretransport' AND ${table.transportStartedAt} IS NULL AND ${table.providerAcceptedAt} IS NULL AND ${table.providerRejectedAt} IS NULL AND ${table.providerRejectedStatus} IS NULL) OR (${table.transportState} = 'transport_started' AND ${table.transportStartedAt} IS NOT NULL AND ${table.providerAcceptedAt} IS NULL AND ${table.providerRejectedAt} IS NULL AND ${table.providerRejectedStatus} IS NULL) OR (${table.transportState} = 'known_accepted' AND ${table.transportStartedAt} IS NOT NULL AND ${table.providerAcceptedAt} IS NOT NULL AND ${table.providerAcceptedAt} >= ${table.transportStartedAt} AND ${table.providerRejectedAt} IS NULL AND ${table.providerRejectedStatus} IS NULL) OR (${table.transportState} = 'known_rejected' AND ${table.transportStartedAt} IS NOT NULL AND ${table.providerAcceptedAt} IS NULL AND ${table.providerRejectedAt} IS NOT NULL AND ${table.providerRejectedAt} >= ${table.transportStartedAt} AND ${table.providerRejectedStatus} BETWEEN 400 AND 499 AND ${table.providerRejectedStatus} NOT IN (408,429))) IS TRUE`
+      sql`((${table.transportState} = 'pretransport' AND ${table.transportStartedAt} IS NULL AND ${table.providerAcceptedAt} IS NULL AND ${table.providerRejectedAt} IS NULL AND ${table.providerRejectedStatus} IS NULL) OR (${table.transportState} = 'transport_started' AND ${table.transportStartedAt} IS NOT NULL AND ${table.providerAcceptedAt} IS NULL AND ${table.providerRejectedAt} IS NULL AND ${table.providerRejectedStatus} IS NULL) OR (${table.transportState} = 'known_accepted' AND ${table.transportStartedAt} IS NOT NULL AND ${table.providerAcceptedAt} IS NOT NULL AND ${table.providerAcceptedAt} >= ${table.transportStartedAt} AND ${table.providerRejectedAt} IS NULL AND ${table.providerRejectedStatus} IS NULL) OR (${table.transportState} = 'known_rejected' AND ${table.transportStartedAt} IS NOT NULL AND ${table.providerAcceptedAt} IS NULL AND ${table.providerRejectedAt} IS NOT NULL AND ${table.providerRejectedAt} >= ${table.transportStartedAt} AND ${table.providerRejectedStatus} BETWEEN 400 AND 499 AND ${table.providerRejectedStatus} NOT IN (408,429)) OR (${table.transportState} = 'output_not_delivered' AND ${table.transportStartedAt} IS NOT NULL AND (${table.providerAcceptedAt} IS NULL OR ${table.providerAcceptedAt} >= ${table.transportStartedAt}) AND ${table.providerRejectedAt} IS NULL AND ${table.providerRejectedStatus} IS NULL)) IS TRUE`
     ),
     check(
       "credit_reservations_timestamp_order",
-      sql`${table.createdAt} <= ${table.ownerLeaseUntil} AND ${table.ownerLeaseUntil} <= ${table.expiresAt} AND ${table.expiresAt} <= ${table.resolutionDueAt} AND (${table.transportStartedAt} IS NULL OR (${table.transportStartedAt} >= ${table.createdAt} AND ${table.transportStartedAt} <= ${table.resolutionDueAt})) AND (${table.providerAcceptedAt} IS NULL OR (${table.providerAcceptedAt} >= ${table.createdAt} AND ${table.providerAcceptedAt} <= ${table.resolutionDueAt})) AND (${table.providerRejectedAt} IS NULL OR (${table.providerRejectedAt} >= ${table.createdAt} AND ${table.providerRejectedAt} <= ${table.resolutionDueAt})) AND (${table.committedAt} IS NULL OR (${table.committedAt} >= ${table.createdAt} AND ${table.committedAt} <= ${table.resolutionDueAt})) AND (${table.releasedAt} IS NULL OR ${table.releasedAt} >= ${table.createdAt})`
+      sql`${table.createdAt} <= ${table.ownerLeaseUntil} AND ${table.ownerLeaseUntil} <= ${table.expiresAt} AND ${table.expiresAt} <= ${table.resolutionDueAt} AND (${table.transportStartedAt} IS NULL OR (${table.transportStartedAt} >= ${table.createdAt} AND ${table.transportStartedAt} <= ${table.resolutionDueAt})) AND (${table.providerAcceptedAt} IS NULL OR ${table.providerAcceptedAt} >= ${table.createdAt}) AND (${table.providerRejectedAt} IS NULL OR ${table.providerRejectedAt} >= ${table.createdAt}) AND (${table.committedAt} IS NULL OR ${table.committedAt} >= ${table.createdAt}) AND (${table.releasedAt} IS NULL OR ${table.releasedAt} >= ${table.createdAt})`
     ),
   ]
 );

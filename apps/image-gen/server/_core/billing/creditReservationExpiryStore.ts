@@ -60,11 +60,24 @@ export type ExpiredPristineCreditCheckout = Readonly<{
   financialSubjectRef: string;
 }>;
 
+export type TerminalCreditReservationForScrub = Readonly<{
+  reservationId: string;
+  walletId: string;
+  workspaceId: number;
+  mode: MollieMode;
+  channelConnectionId: number;
+  bindingEpoch: number;
+  privacyEpoch: number;
+  financialSubjectRef: string;
+}>;
+
 /**
- * Finds a bounded oldest-first set of checkout records that have never crossed
- * a browser, provider, delivery, or financial boundary. The terminal definer
- * routine repeats every predicate under locks, so this read is only candidate
- * discovery and cannot itself authorize deletion.
+ * Finds a bounded oldest-first set of expired checkout records that never
+ * crossed a provider, delivery, or financial boundary. A browser may already
+ * have consumed the short-lived capability; once it expires, an unconfirmed
+ * session can no longer create a payment and must not retain its identity
+ * forever. The terminal definer routine repeats every predicate under locks,
+ * so this read is only candidate discovery and cannot authorize deletion.
  */
 export async function listExpiredPristineCreditCheckouts(
   mode: MollieMode,
@@ -123,25 +136,12 @@ export async function listExpiredPristineCreditCheckouts(
         eq(billingIntents.kind, "credit_purchase"),
         eq(billingIntents.status, "created"),
         sql`UNIX_TIMESTAMP(${billingIntents.checkoutCapabilityExpiresAt}) < ${Math.floor(now.getTime() / 1_000)}`,
-        isNull(billingIntents.checkoutCapabilityConsumedAt),
-        isNull(billingIntents.checkoutCapabilitySessionNonceHash),
         isNull(billingIntents.molliePaymentId),
         isNull(billingIntents.urlExposedAt),
         isNull(billingIntents.paidAt),
         isNull(billingIntents.creditIdentityErasedAt),
-        eq(creditWallets.status, "active"),
-        eq(creditWallets.creditBalance, 0),
-        eq(creditWallets.reservedCredits, 0),
-        eq(creditWallets.balanceVersion, 1),
-        isNull(creditWallets.lastLedgerEntryId),
+        inArray(creditWallets.status, ["active", "frozen"]),
         isNull(creditWallets.privacyErasedAt),
-        sql`NOT EXISTS (
-          SELECT 1 FROM billing_intents AS other_credit_intent
-          WHERE other_credit_intent.workspace_id = ${billingIntents.workspaceId}
-            AND other_credit_intent.mode = ${billingIntents.mode}
-            AND BINARY other_credit_intent.credit_wallet_id = BINARY ${billingIntents.creditWalletId}
-            AND BINARY other_credit_intent.intent_id <> BINARY ${billingIntents.intentId}
-        )`,
         notExists(
           database
             .select({ value: sql`1` })
@@ -194,24 +194,8 @@ export async function listExpiredPristineCreditCheckouts(
                   eq(
                     paymentLedger.paymentEffectOwnerRef,
                     billingIntents.intentId
-                  ),
-                  eq(
-                    paymentLedger.creditWalletId,
-                    billingIntents.creditWalletId
                   )
                 )
-              )
-            )
-        ),
-        notExists(
-          database
-            .select({ value: sql`1` })
-            .from(creditReservations)
-            .where(
-              and(
-                eq(creditReservations.workspaceId, billingIntents.workspaceId),
-                eq(creditReservations.mode, billingIntents.mode),
-                eq(creditReservations.walletId, billingIntents.creditWalletId)
               )
             )
         ),
@@ -223,10 +207,7 @@ export async function listExpiredPristineCreditCheckouts(
               and(
                 eq(creditLedger.workspaceId, billingIntents.workspaceId),
                 eq(creditLedger.mode, billingIntents.mode),
-                or(
-                  eq(creditLedger.walletId, billingIntents.creditWalletId),
-                  eq(creditLedger.sourceIntentId, billingIntents.intentId)
-                )
+                eq(creditLedger.sourceIntentId, billingIntents.intentId)
               )
             )
         ),
@@ -289,7 +270,7 @@ export async function listExpiredPristineCreditCheckouts(
               and(
                 eq(billingOutbox.workspaceId, billingIntents.workspaceId),
                 eq(billingOutbox.mode, billingIntents.mode),
-                sql`(JSON_SEARCH(${billingOutbox.payload}, 'one', ${billingIntents.intentId}) IS NOT NULL OR JSON_SEARCH(${billingOutbox.payload}, 'one', ${billingIntents.creditWalletId}) IS NOT NULL)`
+                sql`JSON_SEARCH(${billingOutbox.payload}, 'one', ${billingIntents.intentId}) IS NOT NULL`
               )
             )
         )
@@ -393,6 +374,61 @@ export async function listExpiredCreditReservations(
         ]
       : []
   );
+}
+
+/**
+ * Discovers terminal reservations whose short-lived request/owner hashes have
+ * reached their retention boundary. The definer routine repeats the exact
+ * financial scope and deadline checks under locks; this query only keeps the
+ * operational scrub worker bounded and oldest-first.
+ */
+export async function listTerminalCreditReservationsForScrub(
+  mode: MollieMode,
+  now: Date,
+  limit = 25
+): Promise<readonly TerminalCreditReservationForScrub[]> {
+  if (
+    (mode !== "test" && mode !== "live") ||
+    !(now instanceof Date) ||
+    !Number.isFinite(now.getTime()) ||
+    !Number.isSafeInteger(limit) ||
+    limit < 1
+  ) {
+    throw new Error("Terminal credit reservation scrub input is invalid");
+  }
+  const boundedLimit = Math.min(MAX_BATCH_SIZE, limit);
+  const database = await getDatabaseOrThrow();
+  return database
+    .select({
+      reservationId: creditReservations.reservationId,
+      walletId: creditReservations.walletId,
+      workspaceId: creditReservations.workspaceId,
+      mode: creditReservations.mode,
+      channelConnectionId: creditReservations.channelConnectionId,
+      bindingEpoch: creditReservations.bindingEpoch,
+      privacyEpoch: creditReservations.privacyEpoch,
+      financialSubjectRef: creditReservations.financialSubjectRef,
+    })
+    .from(creditReservations)
+    .where(
+      and(
+        eq(creditReservations.mode, mode),
+        inArray(creditReservations.status, [
+          "committed",
+          "released",
+          "expired",
+        ]),
+        lte(creditReservations.resolutionDueAt, now),
+        isNull(creditReservations.operationalScrubbedAt),
+        isNotNull(creditReservations.generationRequestKeyHash),
+        isNotNull(creditReservations.ownerTokenHash)
+      )
+    )
+    .orderBy(
+      asc(creditReservations.resolutionDueAt),
+      asc(creditReservations.reservationId)
+    )
+    .limit(boundedLimit);
 }
 
 /**

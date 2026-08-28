@@ -22,6 +22,7 @@ const PRIVACY_USER_KEY_PATTERN =
   /^(?:[0-9a-f]{64}|u2[.]k[1-9][0-9]{0,5}[.][0-9a-f]{64})$/;
 const REQUEST_ID_MAX_LENGTH = 256;
 const CAPABILITY_TTL_MS = 10 * 60_000;
+const WALLET_SCOPE_CONFLICT = "credit checkout wallet scope conflicts";
 
 export type MessengerCreditCheckoutRequest = Readonly<{
   workspaceId: number;
@@ -68,6 +69,24 @@ const defaultDependencies: Dependencies = Object.freeze({
 
 function fail(): never {
   throw new CreditCheckoutReservationError();
+}
+
+function isWalletScopeConflict(error: unknown): boolean {
+  const seen = new Set<object>();
+  let current = error;
+  while (current && typeof current === "object" && !seen.has(current)) {
+    seen.add(current);
+    const candidate = current as Record<string, unknown>;
+    if (
+      candidate.code === "ER_SIGNAL_EXCEPTION" &&
+      candidate.sqlState === "45000" &&
+      candidate.sqlMessage === WALLET_SCOPE_CONFLICT
+    ) {
+      return true;
+    }
+    current = candidate.cause;
+  }
+  return false;
 }
 
 function isDatabaseId(value: unknown): value is number {
@@ -166,6 +185,7 @@ export async function reserveMessengerCreditCheckout(
     userKey: input.userKey,
   });
   const persistedIdentity = await dependencies.readWalletIdentity(scope);
+  if (persistedIdentity && !persistedIdentity.checkoutAvailable) fail();
   const identity = dependencies.withKeyring(keys =>
     withSelectedCreditCheckoutHmacKey({
       keys,
@@ -185,27 +205,35 @@ export async function reserveMessengerCreditCheckout(
   const now = dependencies.now();
   if (!Number.isFinite(now.getTime())) fail();
   const capabilityExpiresAt = new Date(now.getTime() + CAPABILITY_TTL_MS);
-  await dependencies.reserve({
-    intentId: identity.intentId,
-    walletId: identity.walletId,
-    workspaceId: input.workspaceId,
-    mode: config.mode,
-    channelConnectionId: input.channelConnectionId,
-    bindingEpoch: input.bindingEpoch,
-    privacyEpoch: input.privacyEpoch,
-    userKey: input.userKey,
-    financialSubjectRef: identity.financialSubjectRef,
-    authorizationEpoch: boundary.authorizationEpoch,
-    offerSnapshotCode: offer.offerId,
-    expectedAmount: offer.amount.value,
-    creditCount: offer.creditCount,
-    description: "Leaderbot - 8 premium beeldcredits",
-    metadataHash: identity.metadataHash,
-    idempotencyKey: identity.idempotencyKey,
-    checkoutScopeKey: identity.checkoutScopeKey,
-    capabilityHash: identitySnapshot.capabilityHash,
-    capabilityExpiresAt,
-  });
+  try {
+    await dependencies.reserve({
+      intentId: identity.intentId,
+      walletId: identity.walletId,
+      workspaceId: input.workspaceId,
+      mode: config.mode,
+      channelConnectionId: input.channelConnectionId,
+      bindingEpoch: input.bindingEpoch,
+      privacyEpoch: input.privacyEpoch,
+      userKey: input.userKey,
+      financialSubjectRef: identity.financialSubjectRef,
+      authorizationEpoch: boundary.authorizationEpoch,
+      offerSnapshotCode: offer.offerId,
+      expectedAmount: offer.amount.value,
+      creditCount: offer.creditCount,
+      description: "Leaderbot - 8 premium beeldcredits",
+      metadataHash: identity.metadataHash,
+      idempotencyKey: identity.idempotencyKey,
+      checkoutScopeKey: identity.checkoutScopeKey,
+      capabilityHash: identitySnapshot.capabilityHash,
+      capabilityExpiresAt,
+    });
+  } catch (error) {
+    // A refund may win the wallet row lock after the identity read. Translate
+    // only that exact stored-routine policy fence; database outages and all
+    // other failures remain retryable to the durable generation worker.
+    if (isWalletScopeConflict(error)) fail();
+    throw error;
+  }
 
   const checkoutUrl = new URL(
     `/credits/checkout/${encodeURIComponent(identity.intentId)}`,

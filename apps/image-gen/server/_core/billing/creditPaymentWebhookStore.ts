@@ -58,6 +58,7 @@ type LockedCreditBoundary = Readonly<{
         privacyEpoch: number;
         currentUserKeyHash: string | null;
         financialSubjectRef: string;
+        refundAdjustmentEntryId: string | null;
         status: string;
       }>
     | undefined;
@@ -159,6 +160,32 @@ export class CreditPaymentWebhookStoreError extends Error {
     super(message);
     this.name = "CreditPaymentWebhookStoreError";
   }
+}
+
+/** Stable UUID for one exact financial adjustment and provider snapshot. */
+export function createDeterministicCreditAdjustmentEntryId(
+  input: Pick<
+    CreditPaymentAdjustmentEvidence,
+    "kind" | "mode" | "rootGrantEntryId" | "evidenceHash"
+  > & { readonly providerEffectId?: string }
+): string {
+  const digest = createHash("sha256")
+    .update(
+      [
+        "credit-adjustment-entry-v1",
+        input.mode,
+        input.rootGrantEntryId,
+        input.kind,
+        input.providerEffectId ?? "refund-set",
+        input.evidenceHash,
+      ].join("\n")
+    )
+    .digest();
+  const bytes = Buffer.from(digest.subarray(0, 16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x50;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = bytes.toString("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
 export type CreditPaymentGrantCompletionScope = Readonly<{
@@ -499,14 +526,46 @@ export async function persistCreditPaymentWebhookSnapshot(input: {
             financial.rootGrantEntryId,
             decision
           );
-          await freezeExactAdjustedCreditWallet(
-            tx,
-            intent,
-            boundary,
-            ledger,
-            input.webhookPaymentId,
-            observed.snapshotHash
-          );
+          if (
+            adjustment.kind === "refund_debit" ||
+            adjustment.kind === "chargeback_debit"
+          ) {
+            const adjustmentEntryId =
+              adjustment.replayEntryId ??
+              createDeterministicCreditAdjustmentEntryId(adjustment);
+            if (
+              adjustment.replayEntryId === undefined &&
+              !(await fenceExactPendingDebitAdjustment(
+                tx,
+                intent,
+                boundary,
+                adjustmentEntryId,
+                adjustment.kind
+              ))
+            ) {
+              await containCreditPaymentAdjustmentAndReview(
+                tx,
+                candidate.workspaceId,
+                input.expectedMode,
+                intent,
+                boundary,
+                ledger,
+                input.webhookPaymentId,
+                observed.snapshotHash,
+                "credit_refund_adjustment_fence_conflict"
+              );
+              return { result: "mismatch" };
+            }
+          } else {
+            await freezeExactAdjustedCreditWallet(
+              tx,
+              intent,
+              boundary,
+              ledger,
+              input.webhookPaymentId,
+              observed.snapshotHash
+            );
+          }
           await enqueueCreditPaymentAdjustmentRetry(tx, adjustment);
           return {
             result: "adjustment_pending",
@@ -762,9 +821,7 @@ export async function finishCreditPaymentAdjustment(
       ledger.paidEffectApplied !== 1 ||
       ledger.paymentEffectOwnerKind !== "credit_grant" ||
       ledger.paymentEffectOwnerRef !== input.adjustment.intentId ||
-      ledger.observedSnapshotHash !== input.adjustment.deliverySnapshotHash ||
-      (!input.adjustment.replayEntryId &&
-        ledger.observedSnapshotHash !== input.adjustment.evidenceHash)
+      !SHA256_PATTERN.test(ledger.observedSnapshotHash)
     ) {
       throw new CreditPaymentWebhookStoreError();
     }
@@ -783,26 +840,12 @@ export async function finishCreditPaymentAdjustment(
     }
 
     if (input.outcome !== "manual_review") {
-      const replay = classifyCreditPaymentAdjustment({
-        refunds: ledger.refunds,
-        chargebacks: ledger.chargebacks,
-        snapshotHash: ledger.observedSnapshotHash,
-        adjustments: financial.adjustments,
-      });
+      const immutable = financial.adjustments.find(
+        adjustment => adjustment.entryId === input.entryId
+      );
       if (
-        !replay.actionable ||
-        replay.kind !== input.adjustment.kind ||
-        replay.replay?.entryId !== input.entryId ||
-        replay.replay.evidenceHash !== input.adjustment.evidenceHash ||
-        (replay.kind === "refund_debit" &&
-          (input.adjustment.kind !== "refund_debit" ||
-            !sameProviderEffectIds(
-              replay.providerEffectIds,
-              input.adjustment.providerEffectIds
-            ))) ||
-        (replay.kind !== "refund_debit" &&
-          (input.adjustment.kind === "refund_debit" ||
-            replay.providerEffectId !== input.adjustment.providerEffectId))
+        !immutable ||
+        !isExactImmutableAdjustment(immutable, input.adjustment)
       ) {
         throw new CreditPaymentWebhookStoreError();
       }
@@ -1051,6 +1094,7 @@ async function lockCreditPaymentBoundary(
             privacyEpoch: creditWallets.privacyEpoch,
             currentUserKeyHash: creditWallets.currentUserKeyHash,
             financialSubjectRef: creditWallets.financialSubjectRef,
+            refundAdjustmentEntryId: creditWallets.refundAdjustmentEntryId,
             status: creditWallets.status,
           })
           .from(creditWallets)
@@ -1561,6 +1605,44 @@ function isExactChargebackReplay(
   );
 }
 
+function isExactImmutableAdjustment(
+  adjustment: LockedCreditAdjustment,
+  evidence: CreditPaymentAdjustmentEvidence
+): boolean {
+  if (
+    adjustment.entryKind !== evidence.kind ||
+    adjustment.evidenceHash !== evidence.evidenceHash ||
+    adjustment.rootAdjustmentSlot !==
+      (evidence.kind === "chargeback_restore" ? 2 : 1) ||
+    adjustment.providerEffectAmount !== "4.99" ||
+    adjustment.providerEffectCurrency !== "EUR"
+  ) {
+    return false;
+  }
+  if (evidence.kind === "refund_debit") {
+    const recorded = readCompletedRefundSet(adjustment.providerEffectEvidence);
+    return (
+      adjustment.providerEffectType === "refund" &&
+      adjustment.providerEffectStatus === "refunded" &&
+      adjustment.providerEffectId !== null &&
+      SHA256_PATTERN.test(adjustment.providerEffectId) &&
+      recorded.valid &&
+      recorded.totalMinor === 499 &&
+      sameProviderEffectIds(
+        recorded.entries.map(entry => entry.id),
+        evidence.providerEffectIds
+      )
+    );
+  }
+  return (
+    adjustment.providerEffectId === evidence.providerEffectId &&
+    adjustment.providerEffectType === "chargeback" &&
+    adjustment.providerEffectStatus ===
+      (evidence.kind === "chargeback_debit" ? "active" : "reversed") &&
+    adjustment.providerEffectEvidence === null
+  );
+}
+
 function sameProviderEffects(
   left: readonly Readonly<{ id: string; amountMinor: number }>[],
   right: readonly Readonly<{ id: string; amountMinor: number }>[]
@@ -1967,6 +2049,75 @@ async function freezeExactAdjustedCreditWallet(
       snapshotHash,
     });
   }
+}
+
+async function fenceExactPendingDebitAdjustment(
+  tx: ImageGenTransaction,
+  intent: CreditIntent,
+  boundary: LockedCreditBoundary,
+  adjustmentEntryId: string,
+  kind: "refund_debit" | "chargeback_debit"
+): Promise<boolean> {
+  const wallet = boundary.wallet;
+  if (
+    !wallet ||
+    wallet.walletId !== intent.creditWalletId ||
+    wallet.channelConnectionId !== intent.messengerChannelConnectionId ||
+    wallet.bindingEpoch !== intent.messengerBindingEpoch ||
+    wallet.privacyEpoch !== intent.messengerPrivacyEpoch ||
+    wallet.financialSubjectRef !== intent.creditFinancialSubjectRef ||
+    !UUID_PATTERN.test(adjustmentEntryId)
+  ) {
+    throw new CreditPaymentWebhookStoreError();
+  }
+  if (wallet.status === "erased") return true;
+  if (wallet.refundAdjustmentEntryId === adjustmentEntryId) {
+    if (kind === "refund_debit") {
+      return wallet.status === "active" || wallet.status === "frozen";
+    }
+    if (wallet.status === "frozen") return true;
+    if (wallet.status !== "active") return false;
+    const frozen = await tx
+      .update(creditWallets)
+      .set({ status: "frozen" })
+      .where(
+        and(
+          eq(creditWallets.walletId, wallet.walletId),
+          eq(creditWallets.workspaceId, intent.workspaceId),
+          eq(creditWallets.mode, intent.mode),
+          eq(creditWallets.channelConnectionId, wallet.channelConnectionId),
+          eq(creditWallets.bindingEpoch, wallet.bindingEpoch),
+          eq(creditWallets.privacyEpoch, wallet.privacyEpoch),
+          eq(creditWallets.financialSubjectRef, wallet.financialSubjectRef),
+          eq(creditWallets.status, "active"),
+          eq(creditWallets.refundAdjustmentEntryId, adjustmentEntryId)
+        )
+      );
+    return affectedRows(frozen) === 1;
+  }
+  if (wallet.status !== "active" || wallet.refundAdjustmentEntryId !== null) {
+    return false;
+  }
+  const updated = await tx
+    .update(creditWallets)
+    .set({
+      refundAdjustmentEntryId: adjustmentEntryId,
+      ...(kind === "chargeback_debit" ? { status: "frozen" as const } : {}),
+    })
+    .where(
+      and(
+        eq(creditWallets.walletId, wallet.walletId),
+        eq(creditWallets.workspaceId, intent.workspaceId),
+        eq(creditWallets.mode, intent.mode),
+        eq(creditWallets.channelConnectionId, wallet.channelConnectionId),
+        eq(creditWallets.bindingEpoch, wallet.bindingEpoch),
+        eq(creditWallets.privacyEpoch, wallet.privacyEpoch),
+        eq(creditWallets.financialSubjectRef, wallet.financialSubjectRef),
+        eq(creditWallets.status, "active"),
+        isNull(creditWallets.refundAdjustmentEntryId)
+      )
+    );
+  return affectedRows(updated) === 1;
 }
 
 async function enqueueManualReview(
