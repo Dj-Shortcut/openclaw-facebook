@@ -4,9 +4,9 @@
   "baseSchemaSnapshot": "meta/0014_snapshot.json",
   "baseSchemaSnapshotSha256": "e0102aad23d607b4b359d1a11458d56c63533d73f056f332076ba952b7468b35",
   "schemaSnapshot": "meta/0018_snapshot.json",
-  "schemaSnapshotSha256": "875ea5affa3bf0d355bf6b73fc35c41ebfe7da0153f2e6060c28a60e46410e47",
+  "schemaSnapshotSha256": "9fb254700f37c33b87dffbe3d5b7c2fe7e6616156c1e8e3b540a39b95f617127",
   "productionSchemaContract": "production-schema-contract.json",
-  "productionSchemaContractSha256": "a125178a23a3064adb93d90a083ee6f932e92ba147333e785368a14860640240",
+  "productionSchemaContractSha256": "636dd5d6d1af49316a04fc6aedf908a97abf01337841d6aef7e9f09a1aafc475",
   "migrations": [
     {
       "idx": 0,
@@ -114,7 +114,7 @@
       "idx": 17,
       "when": 1787881948952,
       "tag": "0017_credit_wallet_expand",
-      "sha256": "f34b5b588bf97f0e9dbff4f3f656dc44f75916b16ac8d76d218c03d44888a2d7"
+      "sha256": "6bf02b11e9ffcbdde2336ca241c464baea784d7d9e53fd84e891c05ef604bb36"
     },
     {
       "idx": 18,

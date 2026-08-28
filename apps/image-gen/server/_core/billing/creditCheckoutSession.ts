@@ -7,6 +7,7 @@ import {
 } from "./creditCheckoutCapability";
 import {
   getCreditCheckoutPilotConfig,
+  isCreditCheckoutMessengerScopeAllowed,
   type CreditCheckoutPilotConfig,
 } from "./creditCheckoutConfig";
 import {
@@ -147,6 +148,17 @@ function readExactScope(
     !SHA256_PATTERN.test(capabilityHash) ||
     !isValidDate(capabilityExpiresAt) ||
     record.creditIdentityErasedAt !== null
+  ) {
+    fail();
+  }
+  if (
+    !isCreditCheckoutMessengerScopeAllowed(config, {
+      workspaceId: record.workspaceId,
+      channelConnectionId,
+      bindingEpoch,
+      privacyEpoch,
+      userKey,
+    })
   ) {
     fail();
   }

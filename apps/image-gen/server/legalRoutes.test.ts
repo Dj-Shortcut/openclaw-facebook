@@ -105,7 +105,6 @@ describe("legal routes", () => {
     expect(terms).toContain("signed checkout link opened from Messenger");
     expect(terms).toContain("Credits do not expire");
     expect(terms).toContain("does not consume a credit");
-    expect(terms).not.toContain("Startpilot");
     expect(billingPolicy).toContain(
       `${displayedPrice} once in ${offer.amount.currency}`
     );
@@ -121,6 +120,22 @@ describe("legal routes", () => {
     expect(billingPolicy).not.toContain("one workspace");
     expect(billingPolicy).not.toContain("billing@leaderbot.live");
     expect(billingPolicy).not.toContain("Bijzondere vrijstellingsregeling");
+  });
+
+  it("retains the exact legacy Startpilot terms while that separate offer still exists", () => {
+    const terms = renderLegalRoute("/terms").body;
+
+    expect(terms).toContain("Separate legacy Startpilot offer");
+    expect(terms).toContain("eligible Belgian consumers");
+    expect(terms).toContain("costs €19 once");
+    expect(terms).toContain("30 days of access");
+    expect(terms).toContain("one workspace and one connected Facebook Page");
+    expect(terms).toContain("up to 300 AI answers and 20 image generations");
+    expect(terms).toContain("limited to 5 images per day");
+    expect(terms).toContain(
+      "no subscription, direct-debit mandate, automatic top-up or overage charge"
+    );
+    expect(terms).toContain("separate from the Messenger premium-credit pack");
   });
 
   it("uses the shared HTML escaper for text inserted into legal pages and receipts", () => {

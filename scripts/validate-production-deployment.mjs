@@ -6787,6 +6787,50 @@ export function validateProductionRepository(rootDir = process.cwd()) {
           `${app.config} must give image workers a 300s graceful SIGTERM drain`,
         );
       }
+      const paidCreditsEnabled = String(
+        envAssignments.MESSENGER_PAID_CREDITS_ENABLED ?? "",
+      );
+      const creditCheckoutEnabled = String(
+        envAssignments.MOLLIE_CREDIT_CHECKOUT_ENABLED ?? "",
+      );
+      const creditExposureEnabled =
+        paidCreditsEnabled === "true" || creditCheckoutEnabled === "true";
+      const testPilotValues = {
+        channelConnectionId: String(
+          envAssignments.MOLLIE_CREDIT_TEST_CHANNEL_CONNECTION_ID ?? "",
+        ),
+        bindingEpoch: String(
+          envAssignments.MOLLIE_CREDIT_TEST_BINDING_EPOCH ?? "",
+        ),
+        privacyEpoch: String(
+          envAssignments.MOLLIE_CREDIT_TEST_PRIVACY_EPOCH ?? "",
+        ),
+        userKeyHash: String(
+          envAssignments.MOLLIE_CREDIT_TEST_USER_KEY_HASH ?? "",
+        ),
+      };
+      const canonicalDatabaseId = (value) =>
+        /^[1-9][0-9]*$/.test(value) &&
+        Number.isSafeInteger(Number(value)) &&
+        Number(value) <= 2_147_483_647;
+      if (
+        creditExposureEnabled &&
+        String(envAssignments.MOLLIE_MODE ?? "") === "test" &&
+        (!canonicalDatabaseId(testPilotValues.channelConnectionId) ||
+          !canonicalDatabaseId(testPilotValues.bindingEpoch) ||
+          !canonicalDatabaseId(testPilotValues.privacyEpoch) ||
+          !/^[a-f0-9]{64}$/.test(testPilotValues.userKeyHash))
+      ) {
+        fail(
+          `${app.config} must pin Test Mode paid credits to one hashed Messenger user and exact Page binding`,
+        );
+      }
+      if (
+        String(envAssignments.MOLLIE_MODE ?? "") === "live" &&
+        Object.values(testPilotValues).some((value) => value !== "")
+      ) {
+        fail(`${app.config} must remove the Test Mode tester pin in live mode`);
+      }
       for (const [name, expected] of [
         [
           "PUBLIC_BASE_URL",
@@ -6810,6 +6854,15 @@ export function validateProductionRepository(rootDir = process.cwd()) {
         if (String(envAssignments[name] ?? "") !== expected) {
           fail(`${app.config} must set ${name}=${expected}`);
         }
+      }
+      if (
+        !/^k[1-9][0-9]{0,5}$/.test(
+          String(envAssignments.CREDIT_CHECKOUT_HMAC_ACTIVE_KEY_ID ?? ""),
+        )
+      ) {
+        fail(
+          `${app.config} must set a canonical CREDIT_CHECKOUT_HMAC_ACTIVE_KEY_ID`,
+        );
       }
       if (!["v1", "v2"].includes(app.generationQueueWriteVersion)) {
         fail(`${target} generationQueueWriteVersion must be v1 or v2`);

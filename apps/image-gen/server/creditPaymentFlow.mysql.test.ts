@@ -15,13 +15,18 @@ import {
   markCreditPaymentTransportStarted,
   type CreditCheckoutProviderScope,
 } from "./_core/billing/creditCheckoutProviderStore";
-import { reserveMessengerCreditCheckout } from "./_core/billing/creditCheckoutReservationService";
+import {
+  CreditCheckoutReservationError,
+  reserveMessengerCreditCheckout,
+} from "./_core/billing/creditCheckoutReservationService";
+import { deriveCreditCheckoutTestUserKeyHash } from "./_core/billing/creditCheckoutConfig";
 import {
   claimCreditCheckoutBrowserSession,
   readCreditCheckoutBrowserSession,
 } from "./_core/billing/creditCheckoutSession";
 import { readCreditCheckoutSessionRecord } from "./_core/billing/creditCheckoutSessionStore";
 import {
+  CreditPaymentAdjustmentPendingError,
   applyCreditPaymentWebhookSnapshot,
   createDeterministicCreditGrantEntryId,
 } from "./_core/billing/creditPaymentWebhook";
@@ -39,7 +44,9 @@ import {
   createCreditReservationHold,
   eraseCreditWalletsForPrivacySubject,
   grantCreditPurchase,
+  releaseCreditReservation,
 } from "./_core/billing/creditWalletStore";
+import { runBillingOutboxOnce } from "./_core/billing/outboxWorker";
 import type { MollieConfig } from "./_core/billing/config";
 import { confirmCreditCheckoutPayment } from "./_core/billing/creditCheckoutPaymentService";
 import type { MollieClient, MolliePayment } from "./_core/billing/mollieClient";
@@ -106,11 +113,17 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
       "APP_BASE_URL",
       "BILLING_SUPPORT_EMAIL",
       "BILLING_NOTIFICATION_PLANE_ENABLED",
+      "CREDIT_CHECKOUT_HMAC_ACTIVE_KEY_ID",
+      "CREDIT_CHECKOUT_HMAC_PREVIOUS_KEYS",
       "CREDIT_CHECKOUT_HMAC_SECRET",
       "MESSENGER_PAID_CREDITS_ENABLED",
       "MOLLIE_BILLING_DRAIN_ENABLED",
       "MOLLIE_BILLING_ENABLED",
       "MOLLIE_CREDIT_CHECKOUT_ENABLED",
+      "MOLLIE_CREDIT_TEST_BINDING_EPOCH",
+      "MOLLIE_CREDIT_TEST_CHANNEL_CONNECTION_ID",
+      "MOLLIE_CREDIT_TEST_PRIVACY_EPOCH",
+      "MOLLIE_CREDIT_TEST_USER_KEY_HASH",
       "MOLLIE_CREDIT_WORKSPACE_ID",
       "MOLLIE_CREDENTIAL_GENERATION_ID",
       "MOLLIE_API_KEY",
@@ -123,6 +136,8 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
     process.env.APP_BASE_URL = "https://app.leaderbot.live";
     process.env.BILLING_SUPPORT_EMAIL = "support@example.invalid";
     process.env.BILLING_NOTIFICATION_PLANE_ENABLED = "true";
+    process.env.CREDIT_CHECKOUT_HMAC_ACTIVE_KEY_ID = "k1";
+    delete process.env.CREDIT_CHECKOUT_HMAC_PREVIOUS_KEYS;
     process.env.CREDIT_CHECKOUT_HMAC_SECRET = TEST_CHECKOUT_SECRET;
     process.env.MESSENGER_PAID_CREDITS_ENABLED = "true";
     process.env.MOLLIE_BILLING_DRAIN_ENABLED = "true";
@@ -227,6 +242,13 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
     label: string
   ): Promise<CheckoutFixture> {
     process.env.MOLLIE_CREDIT_WORKSPACE_ID = String(owner.workspaceId);
+    process.env.MOLLIE_CREDIT_TEST_CHANNEL_CONNECTION_ID = String(
+      owner.channelConnectionId
+    );
+    process.env.MOLLIE_CREDIT_TEST_BINDING_EPOCH = String(owner.bindingEpoch);
+    process.env.MOLLIE_CREDIT_TEST_PRIVACY_EPOCH = String(owner.privacyEpoch);
+    process.env.MOLLIE_CREDIT_TEST_USER_KEY_HASH =
+      deriveCreditCheckoutTestUserKeyHash(owner.userKey);
     const reserved = await reserveMessengerCreditCheckout({
       workspaceId: owner.workspaceId,
       channelConnectionId: owner.channelConnectionId,
@@ -420,12 +442,203 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
     }
   }
 
+  async function waitForLockWait(
+    observer: Connection,
+    blockingProcessId: number,
+    requestingProcessId?: number
+  ): Promise<number> {
+    const deadline = Date.now() + 3_000;
+    while (Date.now() < deadline) {
+      const [rows] = await observer.query<RowDataPacket[]>(
+        `SELECT requester_thread.PROCESSLIST_ID AS requestingProcessId
+         FROM performance_schema.data_lock_waits AS waits
+         JOIN performance_schema.threads AS blocker_thread
+           ON blocker_thread.THREAD_ID=waits.BLOCKING_THREAD_ID
+         JOIN performance_schema.threads AS requester_thread
+           ON requester_thread.THREAD_ID=waits.REQUESTING_THREAD_ID
+         WHERE blocker_thread.PROCESSLIST_ID=?
+           AND (? IS NULL OR requester_thread.PROCESSLIST_ID=?)
+         LIMIT 1`,
+        [
+          blockingProcessId,
+          requestingProcessId ?? null,
+          requestingProcessId ?? null,
+        ]
+      );
+      const observed = Number(rows[0]?.requestingProcessId);
+      if (Number.isSafeInteger(observed) && observed > 0) return observed;
+    }
+    throw new Error("expected MySQL row-lock wait was not observed");
+  }
+
   async function walletState(walletId: string) {
     const [[wallet]] = await connection.query<RowDataPacket[]>(
       "SELECT `status`,`credit_balance` AS balance,`reserved_credits` AS reserved FROM `credit_wallets` WHERE `wallet_id`=?",
       [walletId]
     );
     return wallet;
+  }
+
+  async function proveAdjustmentFreezeWinsBeforeConcurrentHold(
+    kind: "refund" | "chargeback"
+  ): Promise<void> {
+    const owner = await createOwnerScope();
+    const fixture = await reserveAndConsumeCheckout(
+      owner,
+      `atomic-${kind}-freeze`
+    );
+    await openCheckout(fixture);
+    const paid = molliePayment(fixture, "paid");
+    await expect(
+      applyCreditPaymentWebhookSnapshot({
+        webhookPaymentId: fixture.paymentId,
+        expectedMode: "test",
+        payment: paid,
+      })
+    ).resolves.toBe("processed");
+
+    const providerEffectId = `${kind === "refund" ? "re" : "chb"}_${randomUUID().replaceAll("-", "")}`;
+    const adjusted: MolliePayment =
+      kind === "refund"
+        ? {
+            ...paid,
+            amountRefunded: { currency: "EUR", value: "4.99" },
+            _embedded: {
+              refunds: [
+                {
+                  id: providerEffectId,
+                  status: "refunded",
+                  amount: { currency: "EUR", value: "4.99" },
+                  createdAt: "2026-08-28T13:00:00.000Z",
+                },
+              ],
+              chargebacks: [],
+            },
+          }
+        : {
+            ...paid,
+            _embedded: {
+              refunds: [],
+              chargebacks: [
+                {
+                  id: providerEffectId,
+                  amount: { currency: "EUR", value: "4.99" },
+                  createdAt: "2026-08-28T13:00:00.000Z",
+                },
+              ],
+            },
+          };
+
+    const blocker = await openPeer();
+    const observer = await openPeer();
+    const holdPeer = await openPeer();
+    let adjustmentPromise:
+      ReturnType<typeof persistCreditPaymentWebhookSnapshot> | undefined;
+    let holdPromise: ReturnType<Connection["query"]> | undefined;
+    try {
+      await blocker.beginTransaction();
+      const [[blockerIdentity]] = await blocker.query<RowDataPacket[]>(
+        "SELECT CONNECTION_ID() AS connectionId"
+      );
+      await blocker.query(
+        "SELECT `status` FROM `credit_wallets` WHERE BINARY `wallet_id`=BINARY ? FOR UPDATE",
+        [fixture.providerScope.walletId]
+      );
+
+      adjustmentPromise = persistCreditPaymentWebhookSnapshot({
+        webhookPaymentId: fixture.paymentId,
+        expectedMode: "test",
+        payment: adjusted,
+      });
+      const adjustmentProcessId = await waitForLockWait(
+        observer,
+        Number(blockerIdentity.connectionId)
+      );
+
+      const [[holdIdentity]] = await holdPeer.query<RowDataPacket[]>(
+        "SELECT CONNECTION_ID() AS connectionId"
+      );
+      const reservationId = randomUUID();
+      holdPromise = holdPeer.query(
+        "CALL `credit_create_reservation_hold`(?,'test',?,1,1,?,?,?,?,?,?,?,?,?)",
+        [
+          owner.workspaceId,
+          owner.channelConnectionId,
+          owner.userKey,
+          fixture.providerScope.walletId,
+          fixture.providerScope.financialSubjectRef,
+          reservationId,
+          sha256(`atomic-${kind}-generation`),
+          sha256(`atomic-${kind}-owner`),
+          1,
+          randomUUID(),
+          sha256(`atomic-${kind}-hold`),
+        ]
+      );
+      await waitForLockWait(
+        observer,
+        adjustmentProcessId,
+        Number(holdIdentity.connectionId)
+      );
+
+      await blocker.commit();
+      const [adjustmentOutcome, holdOutcome] = await Promise.allSettled([
+        adjustmentPromise,
+        holdPromise,
+      ]);
+      expect(adjustmentOutcome.status).toBe("fulfilled");
+      if (adjustmentOutcome.status !== "fulfilled") {
+        throw adjustmentOutcome.reason;
+      }
+      expect(adjustmentOutcome.value).toMatchObject({
+        result: "adjustment_pending",
+      });
+      expect(holdOutcome.status).toBe("rejected");
+
+      const [[state]] = await connection.query<RowDataPacket[]>(
+        `SELECT
+          (SELECT \`status\` FROM \`credit_wallets\`
+            WHERE BINARY \`wallet_id\`=BINARY ?) AS walletStatus,
+          (SELECT \`credit_balance\` FROM \`credit_wallets\`
+            WHERE BINARY \`wallet_id\`=BINARY ?) AS balance,
+          (SELECT \`reserved_credits\` FROM \`credit_wallets\`
+            WHERE BINARY \`wallet_id\`=BINARY ?) AS reserved,
+          (SELECT COUNT(*) FROM \`credit_reservations\`
+            WHERE BINARY \`reservation_id\`=BINARY ?) AS reservations,
+          (SELECT COUNT(*) FROM \`billing_outbox\`
+            WHERE \`workspace_id\`=? AND \`mode\`='test'
+              AND \`event_type\`='credit_adjustment_retry'
+              AND \`status\`='pending') AS retries`,
+        [
+          fixture.providerScope.walletId,
+          fixture.providerScope.walletId,
+          fixture.providerScope.walletId,
+          reservationId,
+          owner.workspaceId,
+        ]
+      );
+      expect({
+        walletStatus: state.walletStatus,
+        balance: Number(state.balance),
+        reserved: Number(state.reserved),
+        reservations: Number(state.reservations),
+        retries: Number(state.retries),
+      }).toEqual({
+        walletStatus: "frozen",
+        balance: 8,
+        reserved: 0,
+        reservations: 0,
+        retries: 1,
+      });
+    } finally {
+      await blocker.rollback().catch(() => undefined);
+      await Promise.allSettled(
+        [adjustmentPromise, holdPromise].filter(
+          (value): value is Promise<unknown> => value !== undefined
+        )
+      );
+      await Promise.all([blocker.end(), observer.end(), holdPeer.end()]);
+    }
   }
 
   it("runs on an exact fresh 0000-to-0018 MySQL 8.4.11 bootstrap", async () => {
@@ -473,6 +686,12 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
         paidCreditsEnabled: true,
         workspaceId: owner.workspaceId,
         mode: "test",
+        testPilotScope: {
+          channelConnectionId: owner.channelConnectionId,
+          bindingEpoch: owner.bindingEpoch,
+          privacyEpoch: owner.privacyEpoch,
+          userKeyHash: deriveCreditCheckoutTestUserKeyHash(owner.userKey),
+        },
       }),
       createClient: () => ({
         createCreditPayment: async input => {
@@ -593,15 +812,16 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
     );
     expect(provider.customerId).toBeNull();
 
-    process.env.MOLLIE_CREDIT_WORKSPACE_ID = String(owner.workspaceId);
-    await reserveMessengerCreditCheckout({
-      workspaceId: owner.workspaceId,
-      channelConnectionId: owner.channelConnectionId,
-      bindingEpoch: owner.bindingEpoch,
-      privacyEpoch: owner.privacyEpoch,
-      userKey: USER_B,
-      requestId: `mysql-cross-scope-${randomUUID()}`,
-    });
+    await expect(
+      reserveMessengerCreditCheckout({
+        workspaceId: owner.workspaceId,
+        channelConnectionId: owner.channelConnectionId,
+        bindingEpoch: owner.bindingEpoch,
+        privacyEpoch: owner.privacyEpoch,
+        userKey: USER_B,
+        requestId: `mysql-cross-scope-${randomUUID()}`,
+      })
+    ).rejects.toBeInstanceOf(CreditCheckoutReservationError);
     const [[otherUser]] = await connection.query<RowDataPacket[]>(
       "SELECT COUNT(*) AS wallets,COALESCE(SUM(`credit_balance`),0) AS balance FROM `credit_wallets` WHERE `workspace_id`=? AND BINARY `current_user_key_hash`=BINARY ?",
       [owner.workspaceId, USER_B]
@@ -609,7 +829,7 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
     expect({
       wallets: Number(otherUser.wallets),
       balance: Number(otherUser.balance),
-    }).toEqual({ wallets: 1, balance: 0 });
+    }).toEqual({ wallets: 0, balance: 0 });
   });
 
   it("keeps an early webhook customerless after finalize and recovers exposure without another POST", async () => {
@@ -692,6 +912,12 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
           paidCreditsEnabled: true,
           workspaceId: owner.workspaceId,
           mode: "test",
+          testPilotScope: {
+            channelConnectionId: owner.channelConnectionId,
+            bindingEpoch: owner.bindingEpoch,
+            privacyEpoch: owner.privacyEpoch,
+            userKeyHash: deriveCreditCheckoutTestUserKeyHash(owner.userKey),
+          },
         }),
         createClient: () => ({
           createCreditPayment: async input => {
@@ -746,6 +972,160 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
       exposed: 1,
       operationState: "succeeded",
       routeCount: 1,
+    });
+  });
+
+  it("does not regress a terminal intent when an older open snapshot arrives later", async () => {
+    const owner = await createOwnerScope();
+    const fixture = await reserveAndConsumeCheckout(owner, "stale-open");
+    await openCheckout(fixture);
+
+    const canceled: MolliePayment = {
+      ...molliePayment(fixture, "open"),
+      status: "canceled",
+      method: "bancontact",
+      canceledAt: "2026-08-28T09:02:00.000Z",
+    };
+    await expect(
+      applyCreditPaymentWebhookSnapshot({
+        webhookPaymentId: fixture.paymentId,
+        expectedMode: "test",
+        payment: canceled,
+      })
+    ).resolves.toBe("processed");
+
+    const staleOpen: MolliePayment = {
+      ...molliePayment(fixture, "open"),
+      method: "bancontact",
+    };
+    await expect(
+      applyCreditPaymentWebhookSnapshot({
+        webhookPaymentId: fixture.paymentId,
+        expectedMode: "test",
+        payment: staleOpen,
+      })
+    ).resolves.toBe("processed");
+
+    const [[state]] = await connection.query<RowDataPacket[]>(
+      `SELECT intent.\`status\` AS intentStatus,ledger.\`status\` AS ledgerStatus,
+        (SELECT COUNT(*) FROM \`webhook_deliveries\`
+          WHERE \`workspace_id\`=? AND \`mode\`='test'
+            AND BINARY \`mollie_resource_id\`=BINARY ?
+            AND \`processing_result\`='credit_snapshot_preserved'
+            AND \`processed_at\` IS NOT NULL) AS preservedDeliveries
+       FROM \`billing_intents\` intent
+       JOIN \`payment_ledger\` ledger
+         ON ledger.\`workspace_id\`=intent.\`workspace_id\`
+        AND ledger.\`mode\`=intent.\`mode\`
+        AND BINARY ledger.\`mollie_payment_id\`=BINARY intent.\`mollie_payment_id\`
+       WHERE intent.\`workspace_id\`=? AND BINARY intent.\`intent_id\`=BINARY ?`,
+      [
+        owner.workspaceId,
+        fixture.paymentId,
+        owner.workspaceId,
+        fixture.providerScope.intentId,
+      ]
+    );
+    expect({
+      intentStatus: state.intentStatus,
+      ledgerStatus: state.ledgerStatus,
+      preservedDeliveries: Number(state.preservedDeliveries),
+    }).toEqual({
+      intentStatus: "canceled",
+      ledgerStatus: "canceled",
+      preservedDeliveries: 1,
+    });
+  });
+
+  it("recovers a durable pending grant from a later distinct paid snapshot", async () => {
+    const owner = await createOwnerScope();
+    const fixture = await reserveAndConsumeCheckout(owner, "grant-recovery");
+    await openCheckout(fixture);
+
+    const firstPaid = molliePayment(fixture, "paid");
+    const interrupted = await persistCreditPaymentWebhookSnapshot({
+      webhookPaymentId: fixture.paymentId,
+      expectedMode: "test",
+      payment: firstPaid,
+    });
+    expect(interrupted.result).toBe("grant_pending");
+    if (interrupted.result !== "grant_pending") {
+      throw new Error("first paid snapshot did not reach pending grant state");
+    }
+
+    const laterPaid: MolliePayment = {
+      ...firstPaid,
+      amountRefunded: { currency: "EUR", value: "0.00" },
+    };
+    await expect(
+      applyCreditPaymentWebhookSnapshot({
+        webhookPaymentId: fixture.paymentId,
+        expectedMode: "test",
+        payment: laterPaid,
+      })
+    ).resolves.toBe("processed");
+
+    const [[state]] = await connection.query<RowDataPacket[]>(
+      `SELECT intent.\`status\` AS intentStatus,ledger.\`status\` AS ledgerStatus,
+        ledger.\`paid_effect_applied\` AS paidEffectApplied,
+        wallet.\`credit_balance\` AS balance,
+        (SELECT COUNT(*) FROM \`credit_ledger\`
+          WHERE BINARY \`wallet_id\`=BINARY wallet.\`wallet_id\`
+            AND \`entry_kind\`='purchase_grant') AS grants,
+        (SELECT COUNT(*) FROM \`webhook_deliveries\`
+          WHERE \`workspace_id\`=? AND \`mode\`='test'
+            AND BINARY \`mollie_resource_id\`=BINARY ?
+            AND \`processing_result\`='credit_granted'
+            AND \`processed_at\` IS NOT NULL) AS grantedDeliveries,
+        (SELECT COUNT(*) FROM \`webhook_deliveries\`
+          WHERE \`workspace_id\`=? AND \`mode\`='test'
+            AND BINARY \`mollie_resource_id\`=BINARY ?
+            AND \`processing_result\`='credit_snapshot_preserved'
+            AND \`processed_at\` IS NOT NULL) AS preservedDeliveries,
+        (SELECT COUNT(*) FROM \`webhook_deliveries\`
+          WHERE \`workspace_id\`=? AND \`mode\`='test'
+            AND BINARY \`mollie_resource_id\`=BINARY ?
+            AND \`processing_result\`='credit_grant_pending'
+            AND \`processed_at\` IS NULL) AS pendingDeliveries
+       FROM \`billing_intents\` intent
+       JOIN \`payment_ledger\` ledger
+         ON ledger.\`workspace_id\`=intent.\`workspace_id\`
+        AND ledger.\`mode\`=intent.\`mode\`
+        AND BINARY ledger.\`mollie_payment_id\`=BINARY intent.\`mollie_payment_id\`
+       JOIN \`credit_wallets\` wallet
+         ON BINARY wallet.\`wallet_id\`=BINARY intent.\`credit_wallet_id\`
+        AND wallet.\`workspace_id\`=intent.\`workspace_id\`
+        AND wallet.\`mode\`=intent.\`mode\`
+       WHERE intent.\`workspace_id\`=? AND BINARY intent.\`intent_id\`=BINARY ?`,
+      [
+        owner.workspaceId,
+        fixture.paymentId,
+        owner.workspaceId,
+        fixture.paymentId,
+        owner.workspaceId,
+        fixture.paymentId,
+        owner.workspaceId,
+        fixture.providerScope.intentId,
+      ]
+    );
+    expect({
+      intentStatus: state.intentStatus,
+      ledgerStatus: state.ledgerStatus,
+      paidEffectApplied: Number(state.paidEffectApplied),
+      balance: Number(state.balance),
+      grants: Number(state.grants),
+      grantedDeliveries: Number(state.grantedDeliveries),
+      preservedDeliveries: Number(state.preservedDeliveries),
+      pendingDeliveries: Number(state.pendingDeliveries),
+    }).toEqual({
+      intentStatus: "paid",
+      ledgerStatus: "paid",
+      paidEffectApplied: 1,
+      balance: 8,
+      grants: 1,
+      grantedDeliveries: 1,
+      preservedDeliveries: 1,
+      pendingDeliveries: 0,
     });
   });
 
@@ -853,6 +1233,7 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
     });
 
     const refundId = `re_${randomUUID().replaceAll("-", "")}`;
+    const secondRefundId = `re_${randomUUID().replaceAll("-", "")}`;
     const refundedPayment: MolliePayment = {
       ...paid,
       amountRefunded: { currency: "EUR", value: "4.99" },
@@ -861,8 +1242,14 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
           {
             id: refundId,
             status: "refunded",
-            amount: { currency: "EUR", value: "4.99" },
+            amount: { currency: "EUR", value: "2.00" },
             createdAt: "2026-08-28T10:00:00.000Z",
+          },
+          {
+            id: secondRefundId,
+            status: "refunded",
+            amount: { currency: "EUR", value: "2.99" },
+            createdAt: "2026-08-28T10:00:01.000Z",
           },
         ],
         chargebacks: [],
@@ -890,6 +1277,8 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
                     AND \`processing_result\`='credit_adjustment_pending' AND \`processed_at\` IS NULL) AS pendingDeliveries,
                 (SELECT COUNT(*) FROM \`credit_ledger\`
                   WHERE BINARY \`wallet_id\`=BINARY ? AND \`entry_kind\`='refund_debit') AS refundDebits,
+                (SELECT \`status\` FROM \`credit_wallets\`
+                  WHERE BINARY \`wallet_id\`=BINARY ?) AS walletStatus,
                 (SELECT \`credit_balance\` FROM \`credit_wallets\`
                   WHERE BINARY \`wallet_id\`=BINARY ?) AS balance`,
               [
@@ -897,13 +1286,20 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
                 fixture.paymentId,
                 fixture.providerScope.walletId,
                 fixture.providerScope.walletId,
+                fixture.providerScope.walletId,
               ]
             );
             expect({
               pendingDeliveries: Number(before.pendingDeliveries),
               refundDebits: Number(before.refundDebits),
+              walletStatus: before.walletStatus,
               balance: Number(before.balance),
-            }).toEqual({ pendingDeliveries: 1, refundDebits: 0, balance: 8 });
+            }).toEqual({
+              pendingDeliveries: 1,
+              refundDebits: 0,
+              walletStatus: "frozen",
+              balance: 8,
+            });
             observedPendingBeforeDebit = true;
 
             const outcome = await applyCreditRefundDebit(input);
@@ -950,8 +1346,9 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
           WHERE BINARY \`wallet_id\`=BINARY ? AND \`entry_kind\`='refund_debit') AS refundDelta,
         (SELECT COUNT(*) FROM \`credit_ledger\`
           WHERE BINARY \`wallet_id\`=BINARY ? AND \`entry_kind\`='refund_debit'
-            AND JSON_LENGTH(\`provider_effect_evidence\`)=1
-            AND JSON_UNQUOTE(JSON_EXTRACT(\`provider_effect_evidence\`,'$[0].id'))=?) AS exactEvidence,
+            AND JSON_LENGTH(\`provider_effect_evidence\`)=2
+            AND JSON_SEARCH(\`provider_effect_evidence\`,'one',?) IS NOT NULL
+            AND JSON_SEARCH(\`provider_effect_evidence\`,'one',?) IS NOT NULL) AS exactEvidence,
         (SELECT COUNT(*) FROM \`webhook_deliveries\`
           WHERE \`workspace_id\`=? AND \`mode\`='test' AND BINARY \`mollie_resource_id\`=BINARY ?
             AND \`processing_result\`='credit_refund_debited' AND \`processed_at\` IS NOT NULL) AS completedDeliveries,
@@ -965,6 +1362,7 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
         fixture.providerScope.walletId,
         fixture.providerScope.walletId,
         refundId,
+        secondRefundId,
         owner.workspaceId,
         fixture.paymentId,
         owner.workspaceId,
@@ -980,7 +1378,7 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
       completedDeliveries: Number(completed.completedDeliveries),
       pendingDeliveries: Number(completed.pendingDeliveries),
     }).toEqual({
-      walletStatus: "active",
+      walletStatus: "frozen",
       balance: 0,
       refundDebits: 1,
       refundDelta: -8,
@@ -1243,6 +1641,183 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
     });
   });
 
+  it.each(["refund", "chargeback"] as const)(
+    "atomically freezes a %s adjustment before a concurrent generation hold can commit",
+    async kind => {
+      await proveAdjustmentFreezeWinsBeforeConcurrentHold(kind);
+    }
+  );
+
+  it("durably retries a full refund after its active hold terminates", async () => {
+    const owner = await createOwnerScope();
+    const fixture = await reserveAndConsumeCheckout(owner, "refund-retry");
+    await openCheckout(fixture);
+    const paid = molliePayment(fixture, "paid");
+    await expect(
+      applyCreditPaymentWebhookSnapshot({
+        webhookPaymentId: fixture.paymentId,
+        expectedMode: "test",
+        payment: paid,
+      })
+    ).resolves.toBe("processed");
+
+    const reservationId = randomUUID();
+    const ownerTokenHash = sha256(`refund-retry-owner:${reservationId}`);
+    await expect(
+      createCreditReservationHold({
+        workspaceId: owner.workspaceId,
+        mode: "test",
+        channelConnectionId: owner.channelConnectionId,
+        bindingEpoch: owner.bindingEpoch,
+        privacyEpoch: owner.privacyEpoch,
+        userKey: owner.userKey,
+        walletId: fixture.providerScope.walletId,
+        financialSubjectRef: fixture.providerScope.financialSubjectRef,
+        reservationId,
+        generationRequestKeyHash: sha256(
+          `refund-retry-generation:${reservationId}`
+        ),
+        ownerTokenHash,
+        reservedCreditCount: 1,
+        entryId: randomUUID(),
+        evidenceHash: sha256(`refund-retry-hold:${reservationId}`),
+      })
+    ).resolves.toMatchObject({ result: "applied", reservationId });
+
+    const refunded: MolliePayment = {
+      ...paid,
+      amountRefunded: { currency: "EUR", value: "4.99" },
+      _embedded: {
+        refunds: [
+          {
+            id: `re_${randomUUID().replaceAll("-", "")}`,
+            status: "refunded",
+            amount: { currency: "EUR", value: "4.99" },
+          },
+        ],
+        chargebacks: [],
+      },
+    };
+    await expect(
+      applyCreditPaymentWebhookSnapshot({
+        webhookPaymentId: fixture.paymentId,
+        expectedMode: "test",
+        payment: refunded,
+      })
+    ).rejects.toBeInstanceOf(CreditPaymentAdjustmentPendingError);
+
+    await connection.query(
+      "UPDATE `billing_execution_controls` SET `commercial_enabled`=false WHERE `workspace_id`=? AND `mode`='test'",
+      [owner.workspaceId]
+    );
+    await connection.query(
+      "UPDATE `billing_outbox` SET `max_attempts`=1,`available_at`='2000-01-01 00:00:00' WHERE `workspace_id`=? AND `mode`='test' AND `event_type`='credit_adjustment_retry'",
+      [owner.workspaceId]
+    );
+    const configuredKey = process.env.MOLLIE_API_KEY;
+    delete process.env.MOLLIE_API_KEY;
+    try {
+      await expect(runBillingOutboxOnce(owner.workspaceId)).resolves.toBe(true);
+    } finally {
+      if (configuredKey === undefined) delete process.env.MOLLIE_API_KEY;
+      else process.env.MOLLIE_API_KEY = configuredKey;
+    }
+
+    const [[rearmed]] = await connection.query<RowDataPacket[]>(
+      `SELECT
+        (SELECT COUNT(*) FROM \`billing_outbox\`
+          WHERE \`workspace_id\`=? AND \`mode\`='test' AND \`event_type\`='credit_adjustment_retry'
+            AND \`status\`='pending' AND \`attempt_count\`=0
+            AND \`last_error_code\`='credit_adjustment_pending_holds_exhausted') AS retries,
+        (SELECT COUNT(*) FROM \`billing_outbox\`
+          WHERE \`workspace_id\`=? AND \`mode\`='test' AND \`event_type\`='manual_review'
+            AND JSON_UNQUOTE(JSON_EXTRACT(\`payload\`,'$.reason'))='credit_adjustment_retry_exhausted') AS reviews,
+        (SELECT COUNT(*) FROM \`credit_ledger\`
+          WHERE BINARY \`wallet_id\`=BINARY ? AND \`entry_kind\`='refund_debit') AS debits`,
+      [owner.workspaceId, owner.workspaceId, fixture.providerScope.walletId]
+    );
+    expect({
+      retries: Number(rearmed.retries),
+      reviews: Number(rearmed.reviews),
+      debits: Number(rearmed.debits),
+    }).toEqual({ retries: 1, reviews: 1, debits: 0 });
+
+    await expect(
+      releaseCreditReservation({
+        workspaceId: owner.workspaceId,
+        mode: "test",
+        channelConnectionId: owner.channelConnectionId,
+        bindingEpoch: owner.bindingEpoch,
+        privacyEpoch: owner.privacyEpoch,
+        userKey: owner.userKey,
+        walletId: fixture.providerScope.walletId,
+        financialSubjectRef: fixture.providerScope.financialSubjectRef,
+        reservationId,
+        ownerTokenHash,
+        entryId: randomUUID(),
+        evidenceHash: sha256(`refund-retry-release:${reservationId}`),
+      })
+    ).resolves.toMatchObject({ result: "applied", reservationId });
+    await connection.query(
+      "UPDATE `billing_outbox` SET `available_at`='2000-01-01 00:00:00' WHERE `workspace_id`=? AND `mode`='test' AND `event_type`='credit_adjustment_retry'",
+      [owner.workspaceId]
+    );
+
+    delete process.env.MOLLIE_API_KEY;
+    try {
+      await expect(runBillingOutboxOnce(owner.workspaceId)).resolves.toBe(true);
+    } finally {
+      if (configuredKey === undefined) delete process.env.MOLLIE_API_KEY;
+      else process.env.MOLLIE_API_KEY = configuredKey;
+    }
+    await expect(
+      applyCreditPaymentWebhookSnapshot({
+        webhookPaymentId: fixture.paymentId,
+        expectedMode: "test",
+        payment: refunded,
+      })
+    ).resolves.toBe("duplicate");
+
+    const [[completed]] = await connection.query<RowDataPacket[]>(
+      `SELECT
+        (SELECT \`status\` FROM \`credit_wallets\` WHERE BINARY \`wallet_id\`=BINARY ?) AS walletStatus,
+        (SELECT \`credit_balance\` FROM \`credit_wallets\` WHERE BINARY \`wallet_id\`=BINARY ?) AS balance,
+        (SELECT \`reserved_credits\` FROM \`credit_wallets\` WHERE BINARY \`wallet_id\`=BINARY ?) AS reserved,
+        (SELECT COUNT(*) FROM \`credit_ledger\`
+          WHERE BINARY \`wallet_id\`=BINARY ? AND \`entry_kind\`='refund_debit') AS debits,
+        (SELECT COUNT(*) FROM \`billing_outbox\`
+          WHERE \`workspace_id\`=? AND \`mode\`='test' AND \`event_type\`='credit_adjustment_retry'
+            AND \`status\`='completed') AS completedRetries,
+        (SELECT COUNT(*) FROM \`webhook_deliveries\`
+          WHERE \`workspace_id\`=? AND \`mode\`='test' AND BINARY \`mollie_resource_id\`=BINARY ?
+            AND \`processing_result\`='credit_refund_debited' AND \`processed_at\` IS NOT NULL) AS completedDeliveries`,
+      [
+        fixture.providerScope.walletId,
+        fixture.providerScope.walletId,
+        fixture.providerScope.walletId,
+        fixture.providerScope.walletId,
+        owner.workspaceId,
+        owner.workspaceId,
+        fixture.paymentId,
+      ]
+    );
+    expect({
+      walletStatus: completed.walletStatus,
+      balance: Number(completed.balance),
+      reserved: Number(completed.reserved),
+      debits: Number(completed.debits),
+      completedRetries: Number(completed.completedRetries),
+      completedDeliveries: Number(completed.completedDeliveries),
+    }).toEqual({
+      walletStatus: "frozen",
+      balance: 0,
+      reserved: 0,
+      debits: 1,
+      completedRetries: 1,
+      completedDeliveries: 1,
+    });
+  });
+
   it("serializes duplicate paid webhooks into one grant without a deadlock", async () => {
     const owner = await createOwnerScope();
     const fixture = await reserveAndConsumeCheckout(owner, "duplicate-race");
@@ -1287,6 +1862,57 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
       grants: Number(counts.grants),
       payments: Number(counts.payments),
     }).toEqual({ grants: 1, payments: 1 });
+  });
+
+  it("accepts an exact grant completion already finalized by a duplicate", async () => {
+    const owner = await createOwnerScope();
+    const fixture = await reserveAndConsumeCheckout(
+      owner,
+      "duplicate-finalization"
+    );
+    await openCheckout(fixture);
+    const paid = molliePayment(fixture, "paid");
+    const pending = await persistCreditPaymentWebhookSnapshot({
+      webhookPaymentId: fixture.paymentId,
+      expectedMode: "test",
+      payment: paid,
+    });
+    expect(pending.result).toBe("grant_pending");
+    if (pending.result !== "grant_pending") {
+      throw new Error("paid snapshot did not reach pending grant state");
+    }
+
+    const entryId = createDeterministicCreditGrantEntryId(pending.grant);
+    await expect(
+      grantCreditPurchase({
+        workspaceId: pending.grant.workspaceId,
+        mode: pending.grant.mode,
+        channelConnectionId: pending.grant.channelConnectionId,
+        bindingEpoch: pending.grant.bindingEpoch,
+        privacyEpoch: pending.grant.privacyEpoch,
+        userKey: pending.grant.userKey,
+        walletId: pending.grant.walletId,
+        financialSubjectRef: pending.grant.financialSubjectRef,
+        intentId: pending.grant.intentId,
+        providerPaymentId: pending.grant.providerPaymentId,
+        entryId,
+        evidenceHash: pending.grant.evidenceHash,
+      })
+    ).resolves.toMatchObject({ result: "applied" });
+    await expect(
+      persistCreditPaymentWebhookSnapshot({
+        webhookPaymentId: fixture.paymentId,
+        expectedMode: "test",
+        payment: paid,
+      })
+    ).resolves.toEqual({ result: "duplicate" });
+    await expect(finishCreditPaymentGrant(pending.grant)).resolves.toBe(
+      undefined
+    );
+    expect(await walletState(fixture.providerScope.walletId)).toMatchObject({
+      balance: 8,
+      reserved: 0,
+    });
   });
 
   it("serializes disable against a known response and never leaves an exposed uncanceled payment", async () => {

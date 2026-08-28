@@ -5,6 +5,8 @@ import {
   readCreditCheckoutAppBaseUrl,
   reserveMessengerCreditCheckout,
 } from "./creditCheckoutReservationService";
+import { deriveCreditWalletIdentity } from "./creditCheckoutIdentity";
+import { deriveCreditCheckoutTestUserKeyHash } from "./creditCheckoutConfig";
 
 const NOW = new Date("2026-08-28T12:00:00.000Z");
 const INPUT = Object.freeze({
@@ -25,15 +27,25 @@ function dependencies(
       paidCreditsEnabled: true,
       workspaceId: 42,
       mode: "test" as const,
+      testPilotScope: {
+        channelConnectionId: INPUT.channelConnectionId,
+        bindingEpoch: INPUT.bindingEpoch,
+        privacyEpoch: INPUT.privacyEpoch,
+        userKeyHash: deriveCreditCheckoutTestUserKeyHash(INPUT.userKey),
+      },
     }),
     readAuthorization: vi.fn(async () => ({ authorizationEpoch: 7 })),
+    readWalletIdentity: vi.fn(async () => null),
     reserve: vi.fn(async input => ({
       result: "applied" as const,
       intentId: input.intentId,
       walletId: input.walletId,
     })),
-    withSecret: <T>(callback: (secret: Uint8Array) => T) =>
-      callback(Buffer.alloc(32, 9)),
+    withKeyring: <T>(
+      callback: (
+        keys: readonly Readonly<{ keyId: string; secret: Uint8Array }>[]
+      ) => T
+    ) => callback([{ keyId: "k1", secret: Buffer.alloc(32, 9) }]),
     now: () => NOW,
     appBaseUrl: () => new URL("https://app.leaderbot.live"),
     ...override,
@@ -87,6 +99,88 @@ describe("Messenger credit checkout reservation", () => {
     expect(second.actionUrl).toBe(first.actionUrl);
   });
 
+  it("keeps an existing wallet on its retained key after rotation", async () => {
+    const oldSecret = Buffer.alloc(32, 1);
+    const newSecret = Buffer.alloc(32, 2);
+    const scope = {
+      workspaceId: INPUT.workspaceId,
+      mode: "test" as const,
+      channel: "facebook_messenger" as const,
+      channelConnectionId: INPUT.channelConnectionId,
+      bindingEpoch: INPUT.bindingEpoch,
+      privacyEpoch: INPUT.privacyEpoch,
+      userKey: INPUT.userKey,
+    };
+    const oldIdentity = deriveCreditWalletIdentity({
+      dedicatedSecret: oldSecret,
+      scope,
+    });
+    const newIdentity = deriveCreditWalletIdentity({
+      dedicatedSecret: newSecret,
+      scope,
+    });
+    const deps = dependencies({
+      readWalletIdentity: vi.fn(async () => oldIdentity),
+      withKeyring: callback =>
+        callback([
+          { keyId: "k2", secret: newSecret },
+          { keyId: "k1", secret: oldSecret },
+        ]),
+    });
+
+    await reserveMessengerCreditCheckout(INPUT, deps);
+
+    expect(deps.reserve).toHaveBeenCalledWith(
+      expect.objectContaining({
+        walletId: oldIdentity.walletId,
+        financialSubjectRef: oldIdentity.financialSubjectRef,
+      })
+    );
+    expect(deps.reserve).not.toHaveBeenCalledWith(
+      expect.objectContaining({ walletId: newIdentity.walletId })
+    );
+  });
+
+  it("fails closed when an existing wallet key is no longer retained", async () => {
+    const oldIdentity = deriveCreditWalletIdentity({
+      dedicatedSecret: Buffer.alloc(32, 1),
+      scope: {
+        workspaceId: INPUT.workspaceId,
+        mode: "test",
+        channel: "facebook_messenger",
+        channelConnectionId: INPUT.channelConnectionId,
+        bindingEpoch: INPUT.bindingEpoch,
+        privacyEpoch: INPUT.privacyEpoch,
+        userKey: INPUT.userKey,
+      },
+    });
+    const deps = dependencies({
+      readWalletIdentity: vi.fn(async () => oldIdentity),
+      withKeyring: callback =>
+        callback([{ keyId: "k2", secret: Buffer.alloc(32, 2) }]),
+    });
+
+    await expect(reserveMessengerCreditCheckout(INPUT, deps)).rejects.toThrow(
+      "Credit checkout keyring cannot resolve"
+    );
+    expect(deps.reserve).not.toHaveBeenCalled();
+  });
+
+  it("rejects another Messenger user in the same workspace before any database write", async () => {
+    const deps = dependencies();
+
+    await expect(
+      reserveMessengerCreditCheckout(
+        { ...INPUT, userKey: "b".repeat(64) },
+        deps
+      )
+    ).rejects.toBeInstanceOf(CreditCheckoutReservationError);
+
+    expect(deps.readAuthorization).not.toHaveBeenCalled();
+    expect(deps.readWalletIdentity).not.toHaveBeenCalled();
+    expect(deps.reserve).not.toHaveBeenCalled();
+  });
+
   it.each([
     [
       "checkout disabled",
@@ -102,7 +196,16 @@ describe("Messenger credit checkout reservation", () => {
     ],
   ])("fails closed when %s", async (_label, partial) => {
     const deps = dependencies({
-      config: () => ({ ...partial, mode: "test" as const }),
+      config: () => ({
+        ...partial,
+        mode: "test" as const,
+        testPilotScope: {
+          channelConnectionId: INPUT.channelConnectionId,
+          bindingEpoch: INPUT.bindingEpoch,
+          privacyEpoch: INPUT.privacyEpoch,
+          userKeyHash: deriveCreditCheckoutTestUserKeyHash(INPUT.userKey),
+        },
+      }),
     });
     await expect(
       reserveMessengerCreditCheckout(INPUT, deps)

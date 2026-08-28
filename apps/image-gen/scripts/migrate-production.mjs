@@ -253,7 +253,7 @@ export function assertProductionSchemaContractManifest(contract, migrations) {
 
 export function assertPartial0017Contract(partial) {
   if (
-    partial?.statementCount !== 53 ||
+    partial?.statementCount !== 54 ||
     !Array.isArray(partial.statementSha256) ||
     partial.statementSha256.length !== partial.statementCount ||
     partial.statementSha256.some(hash => !/^[a-f0-9]{64}$/.test(hash)) ||

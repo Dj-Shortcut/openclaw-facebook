@@ -49,6 +49,11 @@ import {
   reconcileCustomerlessCreditPayment,
 } from "./creditPaymentRecovery";
 import {
+  CreditPaymentAdjustmentPendingError,
+  retryPersistedCreditPaymentAdjustment,
+} from "./creditPaymentWebhook";
+import type { CreditPaymentAdjustmentEvidence } from "./creditPaymentWebhookStore";
+import {
   claimNextBillingTenant,
   assertBillingTenantLeaseOwned,
   releaseBillingTenantLease,
@@ -59,6 +64,13 @@ import {
 
 const OUTBOX_POLL_INTERVAL_MS = 5_000;
 const OUTBOX_LEASE_TIMEOUT_MS = 15 * 60 * 1_000;
+const SAFETY_EVENT_TYPES = [
+  "cancel_subscription",
+  "cancel_payment",
+  "credit_adjustment_retry",
+  "payment_warning",
+  "manual_review",
+] as const;
 
 class RetryableOutboxError extends Error {
   constructor(readonly retryCode: string) {
@@ -227,12 +239,6 @@ export async function getNextBillingOutboxDue(
   if (!controls[0]) {
     throw new Error("billing execution control is not provisioned");
   }
-  const safetyEventTypes = [
-    "cancel_subscription",
-    "cancel_payment",
-    "payment_warning",
-    "manual_review",
-  ] as const;
   const rows = await database
     .select({ nextAt: sql<Date | null>`MIN(${billingOutbox.availableAt})` })
     .from(billingOutbox)
@@ -243,7 +249,7 @@ export async function getNextBillingOutboxDue(
         inArray(billingOutbox.status, ["pending", "processing"]),
         ...(controls[0].commercialEnabled
           ? []
-          : [inArray(billingOutbox.eventType, safetyEventTypes)])
+          : [inArray(billingOutbox.eventType, SAFETY_EVENT_TYPES)])
       )
     );
   const rawNextAt: unknown = rows[0]?.nextAt;
@@ -316,6 +322,12 @@ export async function runBillingOutboxOnce(
 }
 
 export function isCriticalContainmentJob(job: BillingOutboxItem): boolean {
+  if (job.eventType === "credit_adjustment_retry") {
+    return (
+      isRecord(job.payload) &&
+      job.payload.reason === "credit_adjustment_pending"
+    );
+  }
   if (
     job.eventType !== "cancel_subscription" &&
     job.eventType !== "cancel_payment"
@@ -343,6 +355,7 @@ async function rearmCriticalContainmentAfterExhaustion(
   job: ClaimedBillingOutboxItem,
   errorCode: string
 ): Promise<void> {
+  const creditAdjustment = job.eventType === "credit_adjustment_retry";
   const database = await getDatabaseOrThrow();
   await database.transaction(async tx => {
     const rows = await tx
@@ -385,9 +398,13 @@ async function rearmCriticalContainmentAfterExhaustion(
         workspaceId: job.workspaceId,
         mode: job.mode,
         eventType: "manual_review",
-        deduplicationKey: `containment_retry_exhausted:${job.deliveryId}`,
+        deduplicationKey: creditAdjustment
+          ? `credit_adjustment_retry_exhausted:${job.deliveryId}`
+          : `containment_retry_exhausted:${job.deliveryId}`,
         payload: {
-          reason: "billing_profile_containment_retry_exhausted",
+          reason: creditAdjustment
+            ? "credit_adjustment_retry_exhausted"
+            : "billing_profile_containment_retry_exhausted",
           sourceDeliveryId: job.deliveryId,
         },
         status: "pending",
@@ -457,6 +474,25 @@ export async function processBillingOutboxItem(
   }
   if (job.eventType === "send_portal_handoff") {
     await sendPaymentHandoff(job);
+    return;
+  }
+  if (job.eventType === "credit_adjustment_retry") {
+    const adjustment = readCreditAdjustmentRetryPayload(
+      job.payload,
+      job.workspaceId,
+      job.mode
+    );
+    if (!adjustment) {
+      throw new PermanentOutboxError("credit_adjustment_payload_invalid");
+    }
+    try {
+      await retryPersistedCreditPaymentAdjustment(adjustment);
+    } catch (error) {
+      if (error instanceof CreditPaymentAdjustmentPendingError) {
+        throw new RetryableOutboxError("credit_adjustment_pending_holds");
+      }
+      throw error;
+    }
     return;
   }
 
@@ -2862,12 +2898,7 @@ export async function claimBillingOutboxItem(
     if (!controls[0]) return null;
     const allowedEventTypes = controls[0].commercialEnabled
       ? undefined
-      : ([
-          "cancel_subscription",
-          "cancel_payment",
-          "payment_warning",
-          "manual_review",
-        ] as const);
+      : SAFETY_EVENT_TYPES;
     const activeJobs = await tx
       .select({ id: billingOutbox.id })
       .from(billingOutbox)
@@ -3204,6 +3235,164 @@ export async function failBillingOutboxItem(
     errorCode,
     attempt: job.attemptCount,
   });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(
+    value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.getPrototypeOf(value) === Object.prototype
+  );
+}
+
+function hasExactKeys(
+  value: Record<string, unknown>,
+  expected: readonly string[]
+): boolean {
+  const actual = Object.keys(value).sort();
+  const sortedExpected = [...expected].sort();
+  return (
+    actual.length === sortedExpected.length &&
+    actual.every((key, index) => key === sortedExpected[index])
+  );
+}
+
+export function readCreditAdjustmentRetryPayload(
+  payload: unknown,
+  workspaceId: number,
+  mode: MollieMode
+): CreditPaymentAdjustmentEvidence | null {
+  if (
+    !isRecord(payload) ||
+    !hasExactKeys(payload, ["adjustment", "reason"]) ||
+    payload.reason !== "credit_adjustment_pending" ||
+    !isRecord(payload.adjustment)
+  ) {
+    return null;
+  }
+  const adjustment = payload.adjustment;
+  const commonKeys = [
+    "workspaceId",
+    "mode",
+    "channelConnectionId",
+    "bindingEpoch",
+    "privacyEpoch",
+    "walletId",
+    "financialSubjectRef",
+    "intentId",
+    "authorizationEpoch",
+    "paymentLedgerId",
+    "providerPaymentId",
+    "rootGrantEntryId",
+    "evidenceHash",
+    "webhookPaymentId",
+    "deliverySnapshotHash",
+    "kind",
+  ];
+  const replayEntryId = adjustment.replayEntryId;
+  const providerKeys =
+    adjustment.kind === "refund_debit"
+      ? ["providerEffectIds"]
+      : adjustment.kind === "chargeback_debit" ||
+          adjustment.kind === "chargeback_restore"
+        ? ["providerEffectId"]
+        : null;
+  if (
+    !providerKeys ||
+    !hasExactKeys(adjustment, [
+      ...commonKeys,
+      ...providerKeys,
+      ...(replayEntryId === undefined ? [] : ["replayEntryId"]),
+    ])
+  ) {
+    return null;
+  }
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+  const sha256 = /^[0-9a-f]{64}$/;
+  const paymentId = /^tr_[A-Za-z0-9]{1,60}$/;
+  const positiveInteger = (value: unknown) =>
+    Number.isSafeInteger(value) && Number(value) > 0;
+  if (
+    adjustment.workspaceId !== workspaceId ||
+    adjustment.mode !== mode ||
+    !positiveInteger(adjustment.channelConnectionId) ||
+    !positiveInteger(adjustment.bindingEpoch) ||
+    !positiveInteger(adjustment.privacyEpoch) ||
+    !positiveInteger(adjustment.authorizationEpoch) ||
+    !positiveInteger(adjustment.paymentLedgerId) ||
+    typeof adjustment.walletId !== "string" ||
+    !uuid.test(adjustment.walletId) ||
+    typeof adjustment.intentId !== "string" ||
+    !uuid.test(adjustment.intentId) ||
+    typeof adjustment.rootGrantEntryId !== "string" ||
+    !uuid.test(adjustment.rootGrantEntryId) ||
+    (replayEntryId !== undefined &&
+      (typeof replayEntryId !== "string" || !uuid.test(replayEntryId))) ||
+    typeof adjustment.financialSubjectRef !== "string" ||
+    !sha256.test(adjustment.financialSubjectRef) ||
+    typeof adjustment.evidenceHash !== "string" ||
+    !sha256.test(adjustment.evidenceHash) ||
+    typeof adjustment.deliverySnapshotHash !== "string" ||
+    !sha256.test(adjustment.deliverySnapshotHash) ||
+    typeof adjustment.providerPaymentId !== "string" ||
+    !paymentId.test(adjustment.providerPaymentId) ||
+    adjustment.webhookPaymentId !== adjustment.providerPaymentId
+  ) {
+    return null;
+  }
+  const common = {
+    workspaceId,
+    mode,
+    channelConnectionId: Number(adjustment.channelConnectionId),
+    bindingEpoch: Number(adjustment.bindingEpoch),
+    privacyEpoch: Number(adjustment.privacyEpoch),
+    walletId: adjustment.walletId,
+    financialSubjectRef: adjustment.financialSubjectRef,
+    intentId: adjustment.intentId,
+    authorizationEpoch: Number(adjustment.authorizationEpoch),
+    paymentLedgerId: Number(adjustment.paymentLedgerId),
+    providerPaymentId: adjustment.providerPaymentId,
+    rootGrantEntryId: adjustment.rootGrantEntryId,
+    evidenceHash: adjustment.evidenceHash,
+    ...(typeof replayEntryId === "string" ? { replayEntryId } : {}),
+    webhookPaymentId: adjustment.providerPaymentId,
+    deliverySnapshotHash: adjustment.deliverySnapshotHash,
+  };
+  if (adjustment.kind === "refund_debit") {
+    if (!Array.isArray(adjustment.providerEffectIds)) {
+      return null;
+    }
+    const providerEffectIds: string[] = [];
+    for (const value of adjustment.providerEffectIds as unknown[]) {
+      if (typeof value !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(value)) {
+        return null;
+      }
+      providerEffectIds.push(value);
+    }
+    if (
+      providerEffectIds.length < 1 ||
+      new Set(providerEffectIds).size !== providerEffectIds.length
+    ) {
+      return null;
+    }
+    return {
+      ...common,
+      kind: "refund_debit",
+      providerEffectIds,
+    };
+  }
+  if (
+    typeof adjustment.providerEffectId !== "string" ||
+    !/^[A-Za-z0-9_-]{1,64}$/.test(adjustment.providerEffectId)
+  ) {
+    return null;
+  }
+  return {
+    ...common,
+    kind: adjustment.kind as "chargeback_debit" | "chargeback_restore",
+    providerEffectId: adjustment.providerEffectId,
+  };
 }
 
 function readSourceIntentId(payload: unknown): string | null {

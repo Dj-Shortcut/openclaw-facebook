@@ -1792,7 +1792,7 @@
         },
         "event_type": {
           "name": "event_type",
-          "type": "enum('ensure_subscription','cancel_subscription','cancel_payment','payment_warning','manual_review','send_portal_handoff')",
+          "type": "enum('ensure_subscription','cancel_subscription','cancel_payment','credit_adjustment_retry','payment_warning','manual_review','send_portal_handoff')",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false

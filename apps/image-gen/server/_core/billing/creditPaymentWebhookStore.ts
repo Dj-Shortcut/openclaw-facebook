@@ -378,15 +378,56 @@ export async function persistCreditPaymentWebhookSnapshot(input: {
       return { result: "mismatch" };
     }
 
-    if (input.payment.status !== "paid") {
-      await applyNonPaidIntentStatus(tx, intent, input.payment.status);
+    // `persistPaymentLedger` keeps the newer or financially stronger snapshot
+    // when an older provider observation arrives later. In that case this
+    // delivery is durable evidence, but it must not drive the intent from the
+    // preserved terminal state back to `open` or replace the durable grant
+    // evidence with stale input. The recovery case below resumes only the
+    // already-persisted pending grant.
+    const acceptedSnapshot = shouldApplyPersistedCreditPaymentSnapshot(
+      ledger.observedSnapshotHash,
+      observed.snapshotHash
+    );
+    const recoveringPendingGrant =
+      !acceptedSnapshot &&
+      shouldRecoverPersistedCreditPaymentGrant(ledger, input.payment);
+    if (!acceptedSnapshot && !recoveringPendingGrant) {
       await finishDelivery(
         tx,
         candidate.workspaceId,
         input.expectedMode,
         input.webhookPaymentId,
         observed.snapshotHash,
-        `credit_${input.payment.status}`
+        "credit_snapshot_preserved"
+      );
+      return {
+        result: existingDelivery?.processedAt ? "duplicate" : "processed",
+      };
+    }
+    if (recoveringPendingGrant) {
+      // The first paid delivery may have committed its durable ledger and
+      // pending-grant row immediately before the process crashed. A later
+      // non-adjustment snapshot must resume that original durable grant,
+      // while its own delivery remains an acknowledged preserved observation.
+      await finishDelivery(
+        tx,
+        candidate.workspaceId,
+        input.expectedMode,
+        input.webhookPaymentId,
+        observed.snapshotHash,
+        "credit_snapshot_preserved"
+      );
+    }
+
+    if (ledger.status !== "paid") {
+      await applyNonPaidIntentStatus(tx, intent, ledger.status);
+      await finishDelivery(
+        tx,
+        candidate.workspaceId,
+        input.expectedMode,
+        input.webhookPaymentId,
+        observed.snapshotHash,
+        `credit_${ledger.status}`
       );
       return {
         result: existingDelivery?.processedAt ? "duplicate" : "processed",
@@ -450,17 +491,27 @@ export async function persistCreditPaymentWebhookSnapshot(input: {
             input.webhookPaymentId,
             observed.snapshotHash
           );
+          const adjustment = buildAdjustmentEvidence(
+            intent,
+            ledger,
+            input.webhookPaymentId,
+            observed.snapshotHash,
+            financial.rootGrantEntryId,
+            decision
+          );
+          await freezeExactAdjustedCreditWallet(
+            tx,
+            intent,
+            boundary,
+            ledger,
+            input.webhookPaymentId,
+            observed.snapshotHash
+          );
+          await enqueueCreditPaymentAdjustmentRetry(tx, adjustment);
           return {
             result: "adjustment_pending",
             duplicateSnapshot: Boolean(existingDelivery),
-            adjustment: buildAdjustmentEvidence(
-              intent,
-              ledger,
-              input.webhookPaymentId,
-              observed.snapshotHash,
-              financial.rootGrantEntryId,
-              decision
-            ),
+            adjustment,
           };
         }
       }
@@ -518,7 +569,9 @@ export async function persistCreditPaymentWebhookSnapshot(input: {
       return { result: "mismatch" };
     }
 
-    const paidAt = resolveRequiredPaidAt(input.payment);
+    const paidAt = recoveringPendingGrant
+      ? ledger.occurredAt
+      : resolveRequiredPaidAt(input.payment);
     if (!paidAt) {
       await recordMismatch(
         tx,
@@ -535,21 +588,26 @@ export async function persistCreditPaymentWebhookSnapshot(input: {
       .update(billingIntents)
       .set({ status: "paid", paidAt })
       .where(exactIntentPredicate(intent));
-    await setDeliveryPendingGrant(
-      tx,
-      candidate.workspaceId,
-      input.expectedMode,
-      input.webhookPaymentId,
-      observed.snapshotHash
-    );
+    const grantDeliverySnapshotHash = recoveringPendingGrant
+      ? ledger.observedSnapshotHash
+      : observed.snapshotHash;
+    if (!recoveringPendingGrant) {
+      await setDeliveryPendingGrant(
+        tx,
+        candidate.workspaceId,
+        input.expectedMode,
+        input.webhookPaymentId,
+        grantDeliverySnapshotHash
+      );
+    }
     return {
       result: "grant_pending",
-      duplicateSnapshot: Boolean(existingDelivery),
+      duplicateSnapshot: Boolean(existingDelivery) || recoveringPendingGrant,
       grant: buildGrantEvidence(
         intent,
         input.webhookPaymentId,
         ledger.observedSnapshotHash,
-        observed.snapshotHash
+        grantDeliverySnapshotHash
       ),
     };
   });
@@ -605,6 +663,17 @@ export async function finishCreditPaymentGrant(
       ledger.paymentEffectOwnerRef !== input.intentId
     ) {
       throw new CreditPaymentWebhookStoreError();
+    }
+    // A concurrent duplicate may observe the already-applied payment effect
+    // and complete this exact delivery before the caller that applied the
+    // grant reaches its completion transaction. Treat that exact terminal
+    // state as an idempotent success so the effect-owning caller can still
+    // report the grant it actually applied.
+    if (delivery.processedAt !== null) {
+      if (delivery.processingResult !== "credit_granted") {
+        throw new CreditPaymentWebhookStoreError();
+      }
+      return;
     }
     const updated = await tx
       .update(webhookDeliveries)
@@ -1718,6 +1787,20 @@ export function shouldPreservePendingCreditGrantSnapshot(
   );
 }
 
+export function shouldApplyPersistedCreditPaymentSnapshot(
+  persistedSnapshotHash: string,
+  incomingSnapshotHash: string
+): boolean {
+  return persistedSnapshotHash === incomingSnapshotHash;
+}
+
+export function shouldRecoverPersistedCreditPaymentGrant(
+  existing: Readonly<{ status: string; paidEffectApplied: number }>,
+  payment: MolliePayment
+): boolean {
+  return shouldPreservePendingCreditGrantSnapshot(existing, payment);
+}
+
 function hasPersistedCreditPaymentAdjustment(
   existing: Pick<LockedPaymentLedger, "refunds" | "chargebacks">
 ): boolean {
@@ -1830,6 +1913,33 @@ async function containCreditPaymentAdjustmentAndReview(
   snapshotHash: string,
   detailCode: string
 ): Promise<void> {
+  await freezeExactAdjustedCreditWallet(
+    tx,
+    intent,
+    boundary,
+    ledger,
+    paymentId,
+    snapshotHash
+  );
+  await containPaidIntentAndReview(
+    tx,
+    workspaceId,
+    mode,
+    intent,
+    paymentId,
+    snapshotHash,
+    detailCode
+  );
+}
+
+async function freezeExactAdjustedCreditWallet(
+  tx: ImageGenTransaction,
+  intent: CreditIntent,
+  boundary: LockedCreditBoundary,
+  ledger: LockedPaymentLedger,
+  paymentId: string,
+  snapshotHash: string
+): Promise<void> {
   const wallet = boundary.wallet;
   if (
     !wallet ||
@@ -1844,8 +1954,8 @@ async function containCreditPaymentAdjustmentAndReview(
   }
   if (wallet.status === "active" && ledger.paidEffectApplied === 1) {
     await freezeCreditWalletForReview(tx, {
-      workspaceId,
-      mode,
+      workspaceId: intent.workspaceId,
+      mode: intent.mode,
       walletId: wallet.walletId,
       channelConnectionId: wallet.channelConnectionId,
       bindingEpoch: wallet.bindingEpoch,
@@ -1857,15 +1967,6 @@ async function containCreditPaymentAdjustmentAndReview(
       snapshotHash,
     });
   }
-  await containPaidIntentAndReview(
-    tx,
-    workspaceId,
-    mode,
-    intent,
-    paymentId,
-    snapshotHash,
-    detailCode
-  );
 }
 
 async function enqueueManualReview(
@@ -1961,6 +2062,36 @@ async function setDeliveryPendingAdjustment(
         eq(webhookDeliveries.snapshotHash, snapshotHash)
       )
     );
+}
+
+async function enqueueCreditPaymentAdjustmentRetry(
+  tx: ImageGenTransaction,
+  adjustment: CreditPaymentAdjustmentEvidence
+): Promise<void> {
+  const retryKey = sha256Hex(
+    [
+      "credit-adjustment-retry-v1",
+      adjustment.mode,
+      adjustment.webhookPaymentId,
+      adjustment.deliverySnapshotHash,
+    ].join("\n")
+  );
+  await tx
+    .insert(billingOutbox)
+    .values({
+      workspaceId: adjustment.workspaceId,
+      mode: adjustment.mode,
+      eventType: "credit_adjustment_retry",
+      deduplicationKey: `credit_adjustment_retry:${retryKey}`,
+      payload: {
+        reason: "credit_adjustment_pending",
+        adjustment,
+      },
+      status: "pending",
+    })
+    .onDuplicateKeyUpdate({
+      set: { deduplicationKey: sql`deduplication_key` },
+    });
 }
 
 function completedAdjustmentResult(

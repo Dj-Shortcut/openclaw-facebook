@@ -27,6 +27,7 @@ WHERE payment.`paid_effect_applied` NOT IN (0,1)
 			AND NOT REGEXP_LIKE(intent.`intent_id`,'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$','c')
 	);--> statement-breakpoint
 DROP TEMPORARY TABLE `credit_0017_legacy_effect_preflight`;--> statement-breakpoint
+ALTER TABLE `billing_outbox` MODIFY COLUMN `event_type` enum('ensure_subscription','cancel_subscription','cancel_payment','credit_adjustment_retry','payment_warning','manual_review','send_portal_handoff') NOT NULL;--> statement-breakpoint
 ALTER TABLE `payment_ledger`
 	ADD CONSTRAINT `payment_ledger_exact_payment_scope_unique` UNIQUE(`id`,`workspace_id`,`mode`,`mollie_payment_id`);--> statement-breakpoint
 ALTER TABLE `payment_ledger`

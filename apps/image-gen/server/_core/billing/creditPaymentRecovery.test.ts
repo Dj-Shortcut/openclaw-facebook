@@ -1,3 +1,4 @@
+import { MySqlDialect } from "drizzle-orm/mysql-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -17,12 +18,18 @@ import {
 } from "./creditPaymentRecovery";
 import { MollieApiError, type MollieClient } from "./mollieClient";
 
-const { getDatabaseOrThrowMock } = vi.hoisted(() => ({
+const { getDatabaseOrThrowMock, schedulerFenceMock } = vi.hoisted(() => ({
   getDatabaseOrThrowMock: vi.fn(),
+  schedulerFenceMock: vi.fn(),
 }));
 
 vi.mock("../../db", () => ({
   getDatabaseOrThrow: getDatabaseOrThrowMock,
+}));
+
+vi.mock("./billingSchedulerStore", async importOriginal => ({
+  ...(await importOriginal<typeof import("./billingSchedulerStore")>()),
+  assertBillingTenantLeaseOwnedInTransaction: schedulerFenceMock,
 }));
 
 const WORKSPACE_ID = 42;
@@ -455,71 +462,143 @@ describe("customerless credit Payment replay safety", () => {
 });
 
 describe("customerless credit Payment due recovery", () => {
-  it("enqueues exact authorized reconciliation after the generic due resolver", async () => {
+  it("discovers an exact joined pair before limiting and then locks canonically", async () => {
     const intent = exactIntent({
       status: "api_unknown",
       molliePaymentId: null,
     });
-    const rows = [
+    const operation = {
+      operationId: OPERATION_ID,
+      intentId: INTENT_ID,
+      authorizationEpoch: 2,
+      requestFingerprint: METADATA_HASH,
+      providerCustomerId: null,
+    };
+    const rows: readonly unknown[][] = [
       [{ commercialEnabled: true, authorizationEpoch: 2 }],
+      [{ operationId: OPERATION_ID, intentId: INTENT_ID }],
       [intent],
-      [
-        {
-          operationId: OPERATION_ID,
-          intentId: INTENT_ID,
-          authorizationEpoch: 2,
-          requestFingerprint: METADATA_HASH,
-          providerCustomerId: null,
-        },
-      ],
+      [operation],
     ];
-    let selected = 0;
     const inserts: Record<string, unknown>[] = [];
+    const joins: unknown[] = [];
+    const predicates: unknown[] = [];
+    const limits: number[] = [];
+    const lockOrder: string[] = [];
+    let selected = 0;
     const tx = {
-      select: vi.fn(() => ({
-        from: vi.fn(() => ({
-          where: vi.fn(() => {
-            const result = rows[selected++] ?? [];
-            const locked = vi.fn(async () => result);
+      select: vi.fn(() => {
+        const queryIndex = selected++;
+        const result = rows[queryIndex] ?? [];
+        return {
+          from: vi.fn(() => {
+            if (queryIndex === 0) {
+              return {
+                where: vi.fn((predicate: unknown) => {
+                  predicates.push(predicate);
+                  return {
+                    limit: vi.fn((limit: number) => {
+                      limits.push(limit);
+                      return {
+                        for: vi.fn(async () => {
+                          lockOrder.push("control");
+                          return result;
+                        }),
+                      };
+                    }),
+                  };
+                }),
+              };
+            }
+            if (queryIndex === 1) {
+              return {
+                innerJoin: vi.fn((_table: unknown, join: unknown) => {
+                  joins.push(join);
+                  return {
+                    where: vi.fn((predicate: unknown) => {
+                      predicates.push(predicate);
+                      return {
+                        orderBy: vi.fn(() => ({
+                          limit: vi.fn(async (limit: number) => {
+                            limits.push(limit);
+                            return result.slice(0, limit);
+                          }),
+                        })),
+                      };
+                    }),
+                  };
+                }),
+              };
+            }
             return {
-              limit: vi.fn(() => ({
-                for: locked,
-              })),
-              orderBy: vi.fn(() => ({
-                limit: vi.fn(() => ({ for: locked })),
-              })),
+              where: vi.fn((predicate: unknown) => {
+                predicates.push(predicate);
+                return {
+                  orderBy: vi.fn(() => ({
+                    for: vi.fn(async () => {
+                      lockOrder.push(queryIndex === 2 ? "intent" : "operation");
+                      return result;
+                    }),
+                  })),
+                };
+              }),
             };
           }),
-        })),
-      })),
+        };
+      }),
       insert: vi.fn(() => ({
         values: vi.fn((value: Record<string, unknown>) => {
           inserts.push(value);
-          return {
-            onDuplicateKeyUpdate: vi.fn(async () => undefined),
-          };
+          return { onDuplicateKeyUpdate: vi.fn(async () => undefined) };
         }),
       })),
     };
     getDatabaseOrThrowMock.mockResolvedValue({
       transaction: vi.fn(async callback => callback(tx)),
     });
+    schedulerFenceMock.mockImplementation(async () => {
+      lockOrder.push("scheduler");
+    });
 
     await expect(
       enqueueDueCustomerlessCreditPaymentRecoveries(
         WORKSPACE_ID,
         "test",
-        STARTED_AT
+        STARTED_AT,
+        {
+          workspaceId: WORKSPACE_ID,
+          mode: "test",
+          kind: "reconciliation",
+          leaseToken: "scheduler-lease",
+          executionEpoch: 2,
+        }
       )
     ).resolves.toBe(1);
+
+    expect(tx.select).toHaveBeenCalledTimes(4);
+    expect(joins).toHaveLength(1);
+    expect(limits).toEqual([1, 50]);
+    expect(lockOrder).toEqual(["control", "intent", "scheduler", "operation"]);
+    const dialect = new MySqlDialect();
+    const join = dialect.sqlToQuery(joins[0] as never);
+    expect(join.sql).toContain("`billing_provider_operations`.`intent_id`");
+    expect(join.sql).toContain("`billing_intents`.`intent_id`");
+    expect(join.sql).toContain(
+      "`billing_provider_operations`.`request_fingerprint`"
+    );
+    expect(join.sql).toContain("`billing_intents`.`credit_metadata_hash`");
+    const due = dialect.sqlToQuery(predicates[1] as never);
+    expect(due.sql).toContain("`billing_intents`.`status`");
+    expect(due.sql).toContain("`billing_provider_operations`.`state`");
+    expect(due.sql).toContain(
+      "`billing_provider_operations`.`resolution_due_at`"
+    );
     expect(inserts).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           eventType: "cancel_payment",
           payload: expect.objectContaining({
             reason: "credit_payment_provider_ambiguous",
-            targetCustomerId: null,
-            targetPaymentId: null,
             providerOperationId: OPERATION_ID,
             authorizationEpoch: 2,
             creditPurpose: "premium_image_credits",
@@ -533,5 +612,202 @@ describe("customerless credit Payment due recovery", () => {
         }),
       ])
     );
+  });
+
+  it("does not let 51 lower-sorting unmatched intents starve the joined recovery batch", async () => {
+    const unmatchedIntents = Array.from({ length: 51 }, (_, index) =>
+      exactIntent({
+        intentId: `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
+        status: "api_unknown",
+        molliePaymentId: null,
+      })
+    );
+    const candidates = Array.from({ length: 50 }, (_, index) => {
+      const suffix = String(index).padStart(12, "0");
+      const intentId = `f0000000-0000-4000-8000-${suffix}`;
+      const operationId = `10000000-0000-4000-8000-${suffix}`;
+      const metadataHash = index.toString(16).padStart(64, "d");
+      return {
+        key: { operationId, intentId },
+        intent: exactIntent({
+          intentId,
+          status: "api_unknown",
+          molliePaymentId: null,
+          creditMetadataHash: metadataHash,
+        }),
+        operation: {
+          operationId,
+          intentId,
+          authorizationEpoch: 2,
+          requestFingerprint: metadataHash,
+          providerCustomerId: null,
+        },
+      };
+    });
+    const allIntents = [
+      ...unmatchedIntents,
+      ...candidates.map(candidate => candidate.intent),
+    ];
+    const inserts: Record<string, unknown>[] = [];
+    const lockOrder: string[] = [];
+    let selected = 0;
+    const lockedRows = (rows: readonly unknown[], stage: string) => ({
+      orderBy: vi.fn(() => ({
+        for: vi.fn(async () => {
+          lockOrder.push(stage);
+          return rows;
+        }),
+      })),
+    });
+    const tx = {
+      select: vi.fn(() => {
+        const queryIndex = selected++;
+        return {
+          from: vi.fn(() => {
+            if (queryIndex === 0) {
+              return {
+                where: vi.fn(() => ({
+                  limit: vi.fn(() => ({
+                    for: vi.fn(async () => {
+                      lockOrder.push("control");
+                      return [
+                        { commercialEnabled: true, authorizationEpoch: 2 },
+                      ];
+                    }),
+                  })),
+                })),
+              };
+            }
+            if (queryIndex === 1) {
+              return {
+                // The former direct-where path would have selected 50 of the
+                // 51 lower IDs and missed every operation-backed intent.
+                where: vi.fn(() => ({
+                  orderBy: vi.fn(() => ({
+                    limit: vi.fn((limit: number) => ({
+                      for: vi.fn(async () => allIntents.slice(0, limit)),
+                    })),
+                  })),
+                })),
+                innerJoin: vi.fn(() => ({
+                  where: vi.fn(() => ({
+                    orderBy: vi.fn(() => ({
+                      limit: vi.fn(async (limit: number) =>
+                        candidates
+                          .map(candidate => candidate.key)
+                          .slice(0, limit)
+                      ),
+                    })),
+                  })),
+                })),
+              };
+            }
+            return {
+              where: vi.fn(() =>
+                lockedRows(
+                  queryIndex === 2
+                    ? candidates.map(candidate => candidate.intent)
+                    : candidates.map(candidate => candidate.operation),
+                  queryIndex === 2 ? "intent" : "operation"
+                )
+              ),
+            };
+          }),
+        };
+      }),
+      insert: vi.fn(() => ({
+        values: vi.fn((value: Record<string, unknown>) => {
+          inserts.push(value);
+          return { onDuplicateKeyUpdate: vi.fn(async () => undefined) };
+        }),
+      })),
+    };
+    getDatabaseOrThrowMock.mockResolvedValue({
+      transaction: vi.fn(async callback => callback(tx)),
+    });
+
+    await expect(
+      enqueueDueCustomerlessCreditPaymentRecoveries(
+        WORKSPACE_ID,
+        "test",
+        STARTED_AT
+      )
+    ).resolves.toBe(50);
+
+    expect(tx.select).toHaveBeenCalledTimes(4);
+    expect(lockOrder).toEqual(["control", "intent", "operation"]);
+    expect(
+      inserts.filter(row => row.eventType === "cancel_payment")
+    ).toHaveLength(50);
+    expect(
+      inserts.filter(row => row.eventType === "manual_review")
+    ).toHaveLength(50);
+  });
+
+  it("does not enqueue when a discovered operation stops being due before its lock", async () => {
+    const rows: readonly unknown[][] = [
+      [{ commercialEnabled: true, authorizationEpoch: 2 }],
+      [{ operationId: OPERATION_ID, intentId: INTENT_ID }],
+      [exactIntent({ status: "api_unknown", molliePaymentId: null })],
+      [],
+    ];
+    const inserts: Record<string, unknown>[] = [];
+    let selected = 0;
+    const tx = {
+      select: vi.fn(() => {
+        const queryIndex = selected++;
+        const result = rows[queryIndex] ?? [];
+        return {
+          from: vi.fn(() => {
+            if (queryIndex === 0) {
+              return {
+                where: vi.fn(() => ({
+                  limit: vi.fn(() => ({
+                    for: vi.fn(async () => result),
+                  })),
+                })),
+              };
+            }
+            if (queryIndex === 1) {
+              return {
+                innerJoin: vi.fn(() => ({
+                  where: vi.fn(() => ({
+                    orderBy: vi.fn(() => ({
+                      limit: vi.fn(async () => result),
+                    })),
+                  })),
+                })),
+              };
+            }
+            return {
+              where: vi.fn(() => ({
+                orderBy: vi.fn(() => ({
+                  for: vi.fn(async () => result),
+                })),
+              })),
+            };
+          }),
+        };
+      }),
+      insert: vi.fn(() => ({
+        values: vi.fn((value: Record<string, unknown>) => {
+          inserts.push(value);
+          return { onDuplicateKeyUpdate: vi.fn(async () => undefined) };
+        }),
+      })),
+    };
+    getDatabaseOrThrowMock.mockResolvedValue({
+      transaction: vi.fn(async callback => callback(tx)),
+    });
+
+    await expect(
+      enqueueDueCustomerlessCreditPaymentRecoveries(
+        WORKSPACE_ID,
+        "test",
+        STARTED_AT
+      )
+    ).resolves.toBe(0);
+    expect(tx.select).toHaveBeenCalledTimes(4);
+    expect(inserts).toEqual([]);
   });
 });

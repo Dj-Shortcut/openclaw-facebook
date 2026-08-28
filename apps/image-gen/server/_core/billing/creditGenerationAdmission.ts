@@ -2,15 +2,18 @@ import { createHash, createHmac } from "node:crypto";
 
 import {
   getCreditCheckoutPilotConfig,
+  isCreditCheckoutMessengerScopeAllowed,
   isPaidMessengerCreditsEnabled,
-  withCreditCheckoutHmacSecret,
+  withCreditCheckoutHmacKeyring,
   type CreditCheckoutPilotConfig,
 } from "./creditCheckoutConfig";
+import { type CreditCheckoutMessengerScope } from "./creditCheckoutIdentity";
 import {
-  deriveCreditWalletIdentity,
-  type CreditCheckoutMessengerScope,
-} from "./creditCheckoutIdentity";
+  CreditCheckoutKeyringError,
+  withSelectedCreditCheckoutHmacKey,
+} from "./creditCheckoutKeyring";
 import {
+  readCurrentCreditWalletIdentity,
   readCreditGenerationReservation,
   readSpendableCreditWallet,
   type CreditGenerationReservationState,
@@ -101,7 +104,8 @@ export type CreditReservationProviderRejectedRecoveryInput =
 export type CreditGenerationAdmissionDependencies = Readonly<{
   enabled: () => boolean;
   config: () => CreditCheckoutPilotConfig;
-  withSecret: typeof withCreditCheckoutHmacSecret;
+  withKeyring: typeof withCreditCheckoutHmacKeyring;
+  readWalletIdentity: typeof readCurrentCreditWalletIdentity;
   readWallet: (
     scope: CreditWalletScope
   ) => Promise<SpendableCreditWallet | null>;
@@ -124,7 +128,8 @@ const defaultDependencies: CreditGenerationAdmissionDependencies =
   Object.freeze({
     enabled: isPaidMessengerCreditsEnabled,
     config: getCreditCheckoutPilotConfig,
-    withSecret: withCreditCheckoutHmacSecret,
+    withKeyring: withCreditCheckoutHmacKeyring,
+    readWalletIdentity: readCurrentCreditWalletIdentity,
     readWallet: readSpendableCreditWallet,
     readReservation: readCreditGenerationReservation,
     reserve: createCreditReservationHold,
@@ -302,6 +307,69 @@ function deriveReservationMaterial(
   return deriveReservationMaterialFromRequestHash(secret, scope, requestHash);
 }
 
+function messengerScope(input: {
+  workspaceId: number;
+  mode: CreditWalletScope["mode"];
+  channelConnectionId: number;
+  bindingEpoch: number;
+  privacyEpoch: number;
+  userKey: string;
+}): CreditCheckoutMessengerScope {
+  return Object.freeze({
+    workspaceId: input.workspaceId,
+    mode: input.mode,
+    channel: "facebook_messenger" as const,
+    channelConnectionId: input.channelConnectionId,
+    bindingEpoch: input.bindingEpoch,
+    privacyEpoch: input.privacyEpoch,
+    userKey: input.userKey,
+  });
+}
+
+function walletScope(
+  input: CreditCheckoutMessengerScope,
+  identity: Readonly<{ walletId: string; financialSubjectRef: string }>
+): CreditWalletScope {
+  return Object.freeze({
+    workspaceId: input.workspaceId,
+    mode: input.mode,
+    channelConnectionId: input.channelConnectionId,
+    bindingEpoch: input.bindingEpoch,
+    privacyEpoch: input.privacyEpoch,
+    userKey: input.userKey,
+    walletId: identity.walletId,
+    financialSubjectRef: identity.financialSubjectRef,
+  });
+}
+
+function deriveMatchingRecoveryMaterial(
+  input: CreditReservationCommitRecoveryInput,
+  dependencies: Pick<CreditGenerationAdmissionDependencies, "withKeyring">
+): ReservationMaterial | null {
+  const scope = messengerScope(input);
+  try {
+    return dependencies.withKeyring(keys =>
+      withSelectedCreditCheckoutHmacKey({
+        keys,
+        scope,
+        persistedIdentity: {
+          walletId: input.walletId,
+          financialSubjectRef: input.financialSubjectRef,
+        },
+        callback: ({ key, identity }) =>
+          deriveReservationMaterialFromRequestHash(
+            key.secret,
+            walletScope(scope, identity),
+            input.generationRequestKeyHash
+          ),
+      })
+    );
+  } catch (error) {
+    if (error instanceof CreditCheckoutKeyringError) return null;
+    throw error;
+  }
+}
+
 /**
  * Rebuilds only the deterministic commit proof for a persisted, known-2xx
  * reservation. It returns null when the current secret no longer proves the
@@ -312,7 +380,7 @@ export function deriveCreditReservationCommitRecovery(
   input: CreditReservationCommitRecoveryInput,
   dependencies: Pick<
     CreditGenerationAdmissionDependencies,
-    "withSecret"
+    "withKeyring"
   > = defaultDependencies
 ): Readonly<{ entryId: string; evidenceHash: string }> | null {
   if (
@@ -342,31 +410,17 @@ export function deriveCreditReservationCommitRecovery(
   ) {
     fail();
   }
-  return dependencies.withSecret(secret => {
-    const material = deriveReservationMaterialFromRequestHash(
-      secret,
-      {
-        workspaceId: input.workspaceId,
-        mode: input.mode,
-        channelConnectionId: input.channelConnectionId,
-        bindingEpoch: input.bindingEpoch,
-        privacyEpoch: input.privacyEpoch,
-        userKey: input.userKey,
-        walletId: input.walletId,
-        financialSubjectRef: input.financialSubjectRef,
-      },
-      input.generationRequestKeyHash
-    );
-    if (
-      material.reservationId !== input.reservationId ||
-      material.ownerTokenHash !== input.ownerTokenHash
-    ) {
-      return null;
-    }
-    return Object.freeze({
-      entryId: material.commitEntryId,
-      evidenceHash: material.commitEvidenceHash,
-    });
+  const material = deriveMatchingRecoveryMaterial(input, dependencies);
+  if (
+    !material ||
+    material.reservationId !== input.reservationId ||
+    material.ownerTokenHash !== input.ownerTokenHash
+  ) {
+    return null;
+  }
+  return Object.freeze({
+    entryId: material.commitEntryId,
+    evidenceHash: material.commitEvidenceHash,
   });
 }
 
@@ -380,7 +434,7 @@ export function deriveCreditReservationProviderRejectedRecovery(
   input: CreditReservationProviderRejectedRecoveryInput,
   dependencies: Pick<
     CreditGenerationAdmissionDependencies,
-    "withSecret"
+    "withKeyring"
   > = defaultDependencies
 ): Readonly<{ entryId: string; evidenceHash: string }> | null {
   if (
@@ -397,51 +451,16 @@ export function deriveCreditReservationProviderRejectedRecovery(
     dependencies
   );
   if (!commitProof) return null;
-  return dependencies.withSecret(secret => {
-    const material = deriveReservationMaterialFromRequestHash(
-      secret,
-      input,
-      input.generationRequestKeyHash
-    );
-    return Object.freeze({
-      entryId: material.providerRejectedEntryId,
-      evidenceHash: evidenceHash(
-        "provider_rejected",
-        input.reservationId,
-        input.generationRequestKeyHash,
-        input.rejectionStatus
-      ),
-    });
-  });
-}
-
-function exactScope(
-  input: PaidCreditGenerationInput,
-  config: CreditCheckoutPilotConfig,
-  dedicatedSecret: Uint8Array
-): CreditWalletScope {
-  const messengerScope: CreditCheckoutMessengerScope = {
-    workspaceId: input.workspaceId,
-    mode: config.mode,
-    channel: "facebook_messenger",
-    channelConnectionId: input.channelConnectionId,
-    bindingEpoch: input.bindingEpoch,
-    privacyEpoch: input.privacyEpoch,
-    userKey: input.userKey,
-  };
-  const identity = deriveCreditWalletIdentity({
-    dedicatedSecret,
-    scope: messengerScope,
-  });
+  const material = deriveMatchingRecoveryMaterial(input, dependencies);
+  if (!material) return null;
   return Object.freeze({
-    workspaceId: input.workspaceId,
-    mode: config.mode,
-    channelConnectionId: input.channelConnectionId,
-    bindingEpoch: input.bindingEpoch,
-    privacyEpoch: input.privacyEpoch,
-    userKey: input.userKey,
-    walletId: identity.walletId,
-    financialSubjectRef: identity.financialSubjectRef,
+    entryId: material.providerRejectedEntryId,
+    evidenceHash: evidenceHash(
+      "provider_rejected",
+      input.reservationId,
+      input.generationRequestKeyHash,
+      input.rejectionStatus
+    ),
   });
 }
 
@@ -454,17 +473,33 @@ export async function reservePaidCreditGeneration(
     return { available: false, reason: "disabled" };
   }
   const config = dependencies.config();
-  if (config.workspaceId === null || config.workspaceId !== input.workspaceId) {
+  if (!isCreditCheckoutMessengerScopeAllowed(config, input)) {
     return { available: false, reason: "outside_pilot" };
   }
 
-  const derived = dependencies.withSecret(secret => {
-    const scope = exactScope(input, config, secret);
-    return Object.freeze({
-      scope,
-      material: deriveReservationMaterial(secret, scope, input.requestId),
-    });
-  });
+  const subjectScope = messengerScope({ ...input, mode: config.mode });
+  const persistedIdentity = await dependencies.readWalletIdentity(subjectScope);
+  if (!persistedIdentity) {
+    return { available: false, reason: "empty" };
+  }
+  const derived = dependencies.withKeyring(keys =>
+    withSelectedCreditCheckoutHmacKey({
+      keys,
+      scope: subjectScope,
+      persistedIdentity,
+      callback: ({ key, identity }) => {
+        const scope = walletScope(subjectScope, identity);
+        return Object.freeze({
+          scope,
+          material: deriveReservationMaterial(
+            key.secret,
+            scope,
+            input.requestId
+          ),
+        });
+      },
+    })
+  );
   const wallet = await dependencies.readWallet(derived.scope);
   if (!wallet) {
     return { available: false, reason: "empty" };

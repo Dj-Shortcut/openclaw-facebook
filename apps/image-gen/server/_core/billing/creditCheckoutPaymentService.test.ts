@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { MollieConfig } from "./config";
-import type { CreditCheckoutPilotConfig } from "./creditCheckoutConfig";
+import {
+  deriveCreditCheckoutTestUserKeyHash,
+  type CreditCheckoutPilotConfig,
+} from "./creditCheckoutConfig";
 import type { CreditCheckoutProviderScope } from "./creditCheckoutProviderStore";
 import {
   confirmCreditCheckoutPayment,
@@ -14,12 +17,19 @@ const INTENT_ID = "11111111-1111-8111-8111-111111111111";
 const OPERATION_ID = "22222222-2222-4222-8222-222222222222";
 const LEASE_TOKEN = "33333333-3333-4333-8333-333333333333";
 const PAYMENT_ID = "tr_credit1";
+const TEST_USER_KEY = `u2.k1.${"a".repeat(64)}`;
 
 const pilot: CreditCheckoutPilotConfig = Object.freeze({
   checkoutEnabled: true,
   paidCreditsEnabled: true,
   workspaceId: 42,
   mode: "test",
+  testPilotScope: {
+    channelConnectionId: 7,
+    bindingEpoch: 3,
+    privacyEpoch: 4,
+    userKeyHash: deriveCreditCheckoutTestUserKeyHash(TEST_USER_KEY),
+  },
 });
 
 const config: MollieConfig = Object.freeze({
@@ -60,7 +70,7 @@ function session(
       mollieDescription: "Leaderbot - 8 premium beeldcredits",
       status: "created",
       molliePaymentId: null,
-      messengerSenderUserKey: `u2.k1.${"a".repeat(64)}`,
+      messengerSenderUserKey: TEST_USER_KEY,
       messengerChannelConnectionId: 7,
       messengerBindingEpoch: 3,
       messengerPrivacyEpoch: 4,
@@ -365,6 +375,23 @@ describe("confirmCreditCheckoutPayment", () => {
     ).rejects.toBeInstanceOf(CreditCheckoutPaymentError);
     expect(test.claim).not.toHaveBeenCalled();
     expect(test.createCreditPayment).not.toHaveBeenCalled();
+  });
+
+  it("makes no provider or intent-state call for another Test Mode Messenger user", async () => {
+    const test = harness();
+
+    await expect(
+      confirmCreditCheckoutPayment(
+        session({ messengerSenderUserKey: `u2.k1.${"b".repeat(64)}` }),
+        test.dependencies
+      )
+    ).rejects.toBeInstanceOf(CreditCheckoutPaymentError);
+
+    expect(test.claim).not.toHaveBeenCalled();
+    expect(test.createCreditPayment).not.toHaveBeenCalled();
+    expect(test.getPayment).not.toHaveBeenCalled();
+    expect(test.finalize).not.toHaveBeenCalled();
+    expect(test.expose).not.toHaveBeenCalled();
   });
 
   it("fails before claiming when the immutable refund policy changes", async () => {

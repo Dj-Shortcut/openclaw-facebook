@@ -9,7 +9,10 @@ vi.mock("../../db", () => ({
   getDatabaseOrThrow: getDatabaseOrThrowMock,
 }));
 
-import { readCreditGenerationReservation } from "./creditGenerationAdmissionStore";
+import {
+  readCreditGenerationReservation,
+  readCurrentCreditWalletIdentity,
+} from "./creditGenerationAdmissionStore";
 
 const scope = Object.freeze({
   workspaceId: 42,
@@ -104,5 +107,76 @@ describe("credit generation reservation lookup", () => {
     getDatabaseOrThrowMock.mockResolvedValue(harness.database);
 
     await expect(readCreditGenerationReservation(input)).resolves.toBeNull();
+  });
+});
+
+describe("current credit wallet identity lookup", () => {
+  const subject = Object.freeze({
+    workspaceId: scope.workspaceId,
+    mode: scope.mode,
+    channelConnectionId: scope.channelConnectionId,
+    bindingEpoch: scope.bindingEpoch,
+    privacyEpoch: scope.privacyEpoch,
+    userKey: scope.userKey,
+  });
+
+  it("resolves one exact non-erased Messenger subject", async () => {
+    const identity = {
+      walletId: scope.walletId,
+      financialSubjectRef: scope.financialSubjectRef,
+    };
+    const harness = databaseReturning([identity]);
+    getDatabaseOrThrowMock.mockResolvedValue(harness.database);
+
+    await expect(readCurrentCreditWalletIdentity(subject)).resolves.toEqual(
+      identity
+    );
+    expect(harness.limit).toHaveBeenCalledWith(2);
+    const predicate = harness.where.mock.calls[0]?.[0];
+    const compiled = new MySqlDialect().sqlToQuery(predicate);
+    expect(compiled.sql).toContain("`credit_wallets`.`workspace_id` = ?");
+    expect(compiled.sql).toContain("`credit_wallets`.`mode` = ?");
+    expect(compiled.sql).toContain(
+      "`credit_wallets`.`channel_connection_id` = ?"
+    );
+    expect(compiled.sql).toContain("`credit_wallets`.`binding_epoch` = ?");
+    expect(compiled.sql).toContain("`credit_wallets`.`privacy_epoch` = ?");
+    expect(compiled.sql).toContain(
+      "`credit_wallets`.`current_user_key_hash` = ?"
+    );
+    expect(compiled.sql).toContain("`credit_wallets`.`status` in (?, ?)");
+    expect(compiled.params).toEqual(
+      expect.arrayContaining([
+        subject.workspaceId,
+        subject.mode,
+        subject.channelConnectionId,
+        subject.bindingEpoch,
+        subject.privacyEpoch,
+        subject.userKey,
+        "active",
+        "frozen",
+      ])
+    );
+  });
+
+  it("returns no identity for a new subject and rejects ambiguity", async () => {
+    const empty = databaseReturning([]);
+    getDatabaseOrThrowMock.mockResolvedValueOnce(empty.database);
+    await expect(readCurrentCreditWalletIdentity(subject)).resolves.toBeNull();
+
+    const duplicate = databaseReturning([
+      {
+        walletId: scope.walletId,
+        financialSubjectRef: scope.financialSubjectRef,
+      },
+      {
+        walletId: "33333333-3333-3333-3333-333333333333",
+        financialSubjectRef: "e".repeat(64),
+      },
+    ]);
+    getDatabaseOrThrowMock.mockResolvedValueOnce(duplicate.database);
+    await expect(readCurrentCreditWalletIdentity(subject)).rejects.toThrow(
+      "Credit wallet identity is ambiguous"
+    );
   });
 });

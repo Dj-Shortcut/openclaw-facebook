@@ -56,6 +56,15 @@ kill_timeout = 300
   MESSENGER_PAID_CREDITS_ENABLED = "false"
   MOLLIE_CREDIT_CHECKOUT_ENABLED = "false"
   MOLLIE_CREDIT_WORKSPACE_ID = "1"
+  # A reviewed Test Mode activation must fill all four values. The hash is
+  # domain-separated from the pseudonymous Messenger user key; never configure
+  # or expose the underlying key or PSID.
+  MOLLIE_CREDIT_TEST_CHANNEL_CONNECTION_ID = ""
+  MOLLIE_CREDIT_TEST_BINDING_EPOCH = ""
+  MOLLIE_CREDIT_TEST_PRIVACY_EPOCH = ""
+  MOLLIE_CREDIT_TEST_USER_KEY_HASH = ""
+  # Non-secret version label for the active credit-checkout HMAC key.
+  CREDIT_CHECKOUT_HMAC_ACTIVE_KEY_ID = "k1"
   MOLLIE_ACCOUNTING_IMPORT_ENABLED = "false"
   MOLLIE_BILLING_ENABLED = "false"
   # The first rollout of the reviewed runtime is provider-silent. The safety

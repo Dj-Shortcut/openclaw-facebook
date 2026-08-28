@@ -75,6 +75,16 @@ These variables control whether the OpenAI-backed parts of the bot actually run.
 | `MESSENGER_VIDEO_FLOW_TIMEOUT_MS`                     | Complete video-flow deadline                                                       | Must be a positive integer greater than the provider deadline; initial value is `300000`.                                                                                                                  |
 | `MESSENGER_OWNER_COST_ALERTS`                         | Optional owner notification for spend-cap blocks                                   | Set to `1` only when `BUILT_IN_FORGE_API_URL` and `BUILT_IN_FORGE_API_KEY` are configured; alerts include metadata-only budget details.                                                                    |
 
+Purchased-credit identity uses a bounded versioned keyring. Set the non-secret
+`CREDIT_CHECKOUT_HMAC_ACTIVE_KEY_ID` to `k1` initially and place the matching
+64-character lowercase hexadecimal secret only in
+`CREDIT_CHECKOUT_HMAC_SECRET`. On rotation, increment the active ID and move
+each predecessor into the secret `CREDIT_CHECKOUT_HMAC_PREVIOUS_KEYS` value as
+`k1=<64 hex>,k2=<64 hex>` (maximum three predecessors). Retain every predecessor
+while a non-erased wallet or pending provider-resolution proof depends on it.
+Removing a required predecessor makes checkout, paid spend, and recovery fail
+closed; it must never create a replacement wallet.
+
 ## 4. Optional but easy to confuse
 
 These show up in the repo and can be mistaken for the main OpenAI path.
@@ -138,6 +148,19 @@ Fly.
 | `MOLLIE_BILLING_SCHEDULER_MODE`          | Tenant scheduler rollout              | Must be explicit: `pilot_pin` for one approved workspace or `multi_tenant` for the reviewed broader rollout. Readiness verifies control/lane epochs, heartbeats and dead letters.                                                                                                        |
 | `MOLLIE_BILLING_WORKER_WORKSPACE_ID`     | Isolated pilot workspace              | Required and positive only with `pilot_pin`; must be unset with `multi_tenant`.                                                                                                                                                                                                          |
 | `MOLLIE_WEBHOOK_RATE_LIMIT_PER_MINUTE`   | Dedicated classic-webhook protection  | Defaults to 6000 per source IP/minute so the shared app limiter cannot suppress Mollie delivery.                                                                                                                                                                                         |
+
+The direct premium-credit Test Mode flags have an additional single-tester
+barrier. Before either `MESSENGER_PAID_CREDITS_ENABLED` or
+`MOLLIE_CREDIT_CHECKOUT_ENABLED` can be enabled, configure the exact non-secret
+`MOLLIE_CREDIT_WORKSPACE_ID`, `MOLLIE_CREDIT_TEST_CHANNEL_CONNECTION_ID`,
+`MOLLIE_CREDIT_TEST_BINDING_EPOCH` and `MOLLIE_CREDIT_TEST_PRIVACY_EPOCH`.
+Configure `MOLLIE_CREDIT_TEST_USER_KEY_HASH` as the lowercase SHA-256 of the
+UTF-8 domain `leaderbot.credit-checkout-test-user.v1\0` followed by the
+canonical pseudonymous Messenger user key. Compute it only in the protected
+operator environment. Never copy the underlying user key or raw PSID into
+Fly config, docs, chat, logs or evidence. Startup and readiness reject missing,
+partial or stale pins; a Page reconnect, privacy-epoch change, or other user is
+therefore outside the pilot before any wallet, intent or provider work.
 
 ## 7. Fast triage
 

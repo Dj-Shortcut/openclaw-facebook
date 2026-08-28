@@ -41,7 +41,7 @@ import {
 import { assertWhatsAppTenantBindingReadiness } from "./whatsappBindingReadiness";
 import {
   getCreditCheckoutPilotConfig,
-  withCreditCheckoutHmacSecret,
+  withCreditCheckoutHmacKeyring,
 } from "./billing/creditCheckoutConfig";
 import { assertCreditCheckoutDatabaseReadiness } from "./billing/creditCheckoutReadiness";
 
@@ -158,7 +158,7 @@ export function buildRuntimeReadinessChecks(): ReadinessCheck[] {
       check: async () => {
         const config = getCreditCheckoutPilotConfig();
         if (!config.paidCreditsEnabled && !config.checkoutEnabled) return;
-        withCreditCheckoutHmacSecret(() => undefined);
+        withCreditCheckoutHmacKeyring(() => undefined);
         await assertCreditCheckoutDatabaseReadiness({
           mode: config.mode,
           workspaceId: config.workspaceId!,

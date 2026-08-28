@@ -2815,6 +2815,36 @@ describe("messenger generation job safety", () => {
     ).resolves.toBe("AWAITING_EDIT_PROMPT");
   });
 
+  it("shows only the free-quota notice to another user in the same Test Mode workspace", async () => {
+    process.env.MESSENGER_FREE_DAILY_LIMIT = "0";
+    reservePaidCreditGenerationMock.mockResolvedValueOnce({
+      available: false,
+      reason: "outside_pilot",
+    });
+    const runner = createTestRunner();
+    const job = {
+      ...paidCreditGenerationJob("different-test-user"),
+      userId: "b".repeat(64),
+    };
+
+    await runner.processMessengerGenerationJob(job);
+
+    expect(reservePaidCreditGenerationMock).toHaveBeenCalledWith({
+      workspaceId: 42,
+      channelConnectionId: 8,
+      bindingEpoch: 3,
+      privacyEpoch: 5,
+      userKey: job.userId,
+      requestId: job.reqId,
+    });
+    expect(reserveMessengerCreditCheckoutMock).not.toHaveBeenCalled();
+    expect(sendButtonTemplateMock).not.toHaveBeenCalled();
+    expect(executeGenerationFlowMock).not.toHaveBeenCalled();
+    expect(reserveMessengerProviderAttemptFenceMock).not.toHaveBeenCalled();
+    expect(sendQuickRepliesMock).toHaveBeenCalledOnce();
+    expect(sendQuickRepliesMock.mock.calls[0]?.[1]).not.toContain("€ 4,99");
+  });
+
   it.each([
     ["a raw Messenger id", { userId: "1234567890123456" }],
     ["a missing privacy epoch", { privacyEpoch: undefined }],

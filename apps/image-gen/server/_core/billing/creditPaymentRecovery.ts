@@ -1,6 +1,16 @@
 import { createHash } from "node:crypto";
 
-import { and, asc, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  eq,
+  inArray,
+  isNotNull,
+  isNull,
+  lte,
+  or,
+  sql,
+} from "drizzle-orm";
 
 import {
   billingExecutionControls,
@@ -14,7 +24,12 @@ import {
 import { getDatabaseOrThrow, type ImageGenTransaction } from "../../db";
 import type { MollieMode } from "./config";
 import { getMollieConfig } from "./config";
-import { getCreditOffer, type CreditOffer } from "./creditCatalog";
+import {
+  getCreditOffer,
+  PREMIUM_IMAGE_CREDIT_OFFER_ID,
+  PREMIUM_IMAGE_CREDIT_OFFER_VERSION,
+  type CreditOffer,
+} from "./creditCatalog";
 import { validateCreditPaymentContract } from "./creditPaymentContract";
 import { hashCanonicalSnapshot } from "./ids";
 import {
@@ -597,55 +612,101 @@ export async function enqueueDueCustomerlessCreditPaymentRecoveries(
       .for("update");
     const control = controls[0];
     if (!control?.commercialEnabled) return 0;
-
-    const intents = await tx
-      .select()
-      .from(billingIntents)
-      .where(
-        and(
-          eq(billingIntents.workspaceId, workspaceId),
-          eq(billingIntents.mode, mode),
-          eq(billingIntents.kind, "credit_purchase"),
-          eq(billingIntents.authorizationEpoch, control.authorizationEpoch),
-          eq(billingIntents.status, "api_unknown")
-        )
-      )
-      .orderBy(asc(billingIntents.intentId))
-      .limit(RECOVERY_BATCH_LIMIT)
-      .for("update");
-    if (tenantLease) {
-      await assertBillingTenantLeaseOwnedInTransaction(tx, tenantLease);
+    const offer = getCreditOffer(
+      PREMIUM_IMAGE_CREDIT_OFFER_ID,
+      PREMIUM_IMAGE_CREDIT_OFFER_VERSION
+    );
+    if (!offer) {
+      throw new Error("premium credit recovery offer is unavailable");
     }
-    const operations = await tx
+
+    // Discover only exact joined pairs before applying the batch limit. This
+    // read intentionally takes no row lock: locking the join would let the
+    // MySQL optimizer acquire provider-operation locks before intent locks and
+    // invert the billing-wide canonical order.
+    const candidateKeys = await tx
       .select({
         operationId: billingProviderOperations.operationId,
         intentId: billingProviderOperations.intentId,
-        authorizationEpoch: billingProviderOperations.authorizationEpoch,
-        requestFingerprint: billingProviderOperations.requestFingerprint,
-        providerCustomerId: billingProviderOperations.providerCustomerId,
       })
-      .from(billingProviderOperations)
+      .from(billingIntents)
+      .innerJoin(billingProviderOperations, dueCreditRecoveryJoinPredicate())
       .where(
         and(
-          eq(billingProviderOperations.workspaceId, workspaceId),
-          eq(billingProviderOperations.mode, mode),
-          eq(billingProviderOperations.operationType, "create_payment"),
-          eq(
-            billingProviderOperations.authorizationEpoch,
-            control.authorizationEpoch
+          dueCreditRecoveryIntentPredicate(
+            workspaceId,
+            mode,
+            control.authorizationEpoch,
+            offer
           ),
-          eq(billingProviderOperations.state, "reconciliation_only"),
-          isNull(billingProviderOperations.providerCustomerId),
-          lte(billingProviderOperations.resolutionDueAt, now)
+          dueCreditRecoveryOperationPredicate(
+            workspaceId,
+            mode,
+            control.authorizationEpoch,
+            now
+          )
         )
       )
       .orderBy(asc(billingProviderOperations.operationId))
-      .limit(RECOVERY_BATCH_LIMIT)
-      .for("update");
+      .limit(RECOVERY_BATCH_LIMIT);
+
+    // Re-read and lock the discovered rows in canonical order, repeating all
+    // authorization and due predicates. A concurrent transition can only
+    // remove a candidate; it cannot turn stale discovery into an enqueue.
+    const intentIds = [...new Set(candidateKeys.map(row => row.intentId))];
+    const intents =
+      intentIds.length === 0
+        ? []
+        : await tx
+            .select()
+            .from(billingIntents)
+            .where(
+              and(
+                dueCreditRecoveryIntentPredicate(
+                  workspaceId,
+                  mode,
+                  control.authorizationEpoch,
+                  offer
+                ),
+                inArray(billingIntents.intentId, intentIds)
+              )
+            )
+            .orderBy(asc(billingIntents.intentId))
+            .for("update");
+    if (tenantLease) {
+      await assertBillingTenantLeaseOwnedInTransaction(tx, tenantLease);
+    }
+    const operationIds = candidateKeys.map(row => row.operationId);
+    const operations =
+      operationIds.length === 0
+        ? []
+        : await tx
+            .select({
+              operationId: billingProviderOperations.operationId,
+              intentId: billingProviderOperations.intentId,
+              authorizationEpoch: billingProviderOperations.authorizationEpoch,
+              requestFingerprint: billingProviderOperations.requestFingerprint,
+              providerCustomerId: billingProviderOperations.providerCustomerId,
+            })
+            .from(billingProviderOperations)
+            .where(
+              and(
+                dueCreditRecoveryOperationPredicate(
+                  workspaceId,
+                  mode,
+                  control.authorizationEpoch,
+                  now
+                ),
+                inArray(billingProviderOperations.operationId, operationIds)
+              )
+            )
+            .orderBy(asc(billingProviderOperations.operationId))
+            .for("update");
     return enqueueDueCreditRecoveryJobs(
       tx,
       workspaceId,
       mode,
+      candidateKeys,
       intents,
       operations
     );
@@ -660,18 +721,104 @@ type DueCreditRecoveryOperation = Readonly<{
   providerCustomerId: string | null;
 }>;
 
+type DueCreditRecoveryCandidateKey = Readonly<{
+  operationId: string;
+  intentId: string;
+}>;
+
+function dueCreditRecoveryJoinPredicate() {
+  return and(
+    eq(billingProviderOperations.intentId, billingIntents.intentId),
+    eq(billingProviderOperations.workspaceId, billingIntents.workspaceId),
+    eq(billingProviderOperations.mode, billingIntents.mode),
+    eq(
+      billingProviderOperations.billingProfileVersion,
+      billingIntents.billingProfileVersion
+    ),
+    eq(
+      billingProviderOperations.authorizationEpoch,
+      billingIntents.authorizationEpoch
+    ),
+    eq(
+      billingProviderOperations.requestFingerprint,
+      billingIntents.creditMetadataHash
+    )
+  );
+}
+
+function dueCreditRecoveryIntentPredicate(
+  workspaceId: number,
+  mode: MollieMode,
+  authorizationEpoch: number,
+  offer: CreditOffer
+) {
+  return and(
+    eq(billingIntents.workspaceId, workspaceId),
+    eq(billingIntents.mode, mode),
+    eq(billingIntents.kind, "credit_purchase"),
+    eq(billingIntents.authorizationEpoch, authorizationEpoch),
+    eq(billingIntents.status, "api_unknown"),
+    eq(billingIntents.planCode, offer.offerId),
+    eq(billingIntents.billingProfileVersion, 0),
+    eq(billingIntents.interval, "oneoff"),
+    eq(billingIntents.expectedAmount, offer.amount.value),
+    eq(billingIntents.currency, offer.amount.currency),
+    eq(billingIntents.mollieDescription, offer.mollieDescription),
+    eq(billingIntents.creditCount, offer.creditCount),
+    isNotNull(billingIntents.creditWalletId),
+    isNotNull(billingIntents.creditFinancialSubjectRef),
+    isNotNull(billingIntents.creditMetadataHash),
+    isNotNull(billingIntents.messengerChannelConnectionId),
+    isNotNull(billingIntents.messengerBindingEpoch),
+    isNotNull(billingIntents.messengerPrivacyEpoch)
+  );
+}
+
+function dueCreditRecoveryOperationPredicate(
+  workspaceId: number,
+  mode: MollieMode,
+  authorizationEpoch: number,
+  now: Date
+) {
+  return and(
+    eq(billingProviderOperations.workspaceId, workspaceId),
+    eq(billingProviderOperations.mode, mode),
+    eq(billingProviderOperations.operationType, "create_payment"),
+    eq(billingProviderOperations.billingProfileVersion, 0),
+    eq(billingProviderOperations.authorizationEpoch, authorizationEpoch),
+    eq(billingProviderOperations.state, "reconciliation_only"),
+    isNull(billingProviderOperations.providerCustomerId),
+    lte(billingProviderOperations.resolutionDueAt, now)
+  );
+}
+
 async function enqueueDueCreditRecoveryJobs(
   tx: ImageGenTransaction,
   workspaceId: number,
   mode: MollieMode,
+  candidateKeys: readonly DueCreditRecoveryCandidateKey[],
   intents: readonly (typeof billingIntents.$inferSelect)[],
   operations: readonly DueCreditRecoveryOperation[]
 ): Promise<number> {
+  const discoveredIntentByOperationId = new Map(
+    candidateKeys.map(candidate => [candidate.operationId, candidate.intentId])
+  );
   const intentsById = new Map(intents.map(intent => [intent.intentId, intent]));
   let enqueued = 0;
   for (const operation of operations) {
-    const intent = intentsById.get(operation.intentId);
-    if (!intent || !isExactDueCreditRecovery(intent, operation)) continue;
+    const discoveredIntentId = discoveredIntentByOperationId.get(
+      operation.operationId
+    );
+    const intent = discoveredIntentId
+      ? intentsById.get(discoveredIntentId)
+      : undefined;
+    if (
+      !intent ||
+      operation.intentId !== discoveredIntentId ||
+      !isExactDueCreditRecovery(intent, operation)
+    ) {
+      continue;
+    }
     await insertOutbox(tx, {
       workspaceId,
       mode,

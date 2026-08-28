@@ -97,6 +97,10 @@ export function registerLegalRoutes(app: express.Express) {
             html: "<p>A credit pack does not renew automatically and does not create a subscription or direct-debit mandate. Usage stops when no free or paid credits remain. There are no automatic top-ups or additional usage charges. Every later purchase requires a separate, explicit choice.</p>",
           },
           {
+            heading: "Separate legacy Startpilot offer",
+            html: "<p>Leaderbot Startpilot is a separate legacy one-time offer for eligible Belgian consumers. It costs €19 once and provides 30 days of access for one workspace and one connected Facebook Page, with up to 300 AI answers and 20 image generations, limited to 5 images per day. It does not renew automatically and creates no subscription, direct-debit mandate, automatic top-up or overage charge. Startpilot access and quotas are separate from the Messenger premium-credit pack.</p>",
+          },
+          {
             heading: "AI-generated content",
             html: "<p>AI-generated images can be inaccurate, incomplete or unexpected. Review images before relying on, publishing or sharing them. Do not use Leaderbot for unlawful, harmful, deceptive or infringing content.</p>",
           },

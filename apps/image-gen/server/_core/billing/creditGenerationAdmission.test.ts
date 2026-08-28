@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { CreditCheckoutPilotConfig } from "./creditCheckoutConfig";
+import {
+  deriveCreditCheckoutTestUserKeyHash,
+  type CreditCheckoutPilotConfig,
+} from "./creditCheckoutConfig";
+import { deriveCreditWalletIdentity } from "./creditCheckoutIdentity";
 import {
   deriveCreditReservationCommitRecovery,
   deriveCreditReservationProviderRejectedRecovery,
@@ -16,6 +20,12 @@ const CONFIG: CreditCheckoutPilotConfig = Object.freeze({
   paidCreditsEnabled: true,
   workspaceId: 42,
   mode: "test",
+  testPilotScope: {
+    channelConnectionId: 12,
+    bindingEpoch: 3,
+    privacyEpoch: 5,
+    userKeyHash: deriveCreditCheckoutTestUserKeyHash(USER_KEY),
+  },
 });
 const INPUT: PaidCreditGenerationInput = Object.freeze({
   workspaceId: 42,
@@ -25,6 +35,25 @@ const INPUT: PaidCreditGenerationInput = Object.freeze({
   userKey: USER_KEY,
   requestId: "generation-request-1",
 });
+const ACTIVE_SECRET = Buffer.from("s".repeat(32), "ascii");
+
+function walletIdentity(
+  secret: Uint8Array = ACTIVE_SECRET,
+  input: PaidCreditGenerationInput = INPUT
+) {
+  return deriveCreditWalletIdentity({
+    dedicatedSecret: secret,
+    scope: {
+      workspaceId: input.workspaceId,
+      mode: CONFIG.mode,
+      channel: "facebook_messenger",
+      channelConnectionId: input.channelConnectionId,
+      bindingEpoch: input.bindingEpoch,
+      privacyEpoch: input.privacyEpoch,
+      userKey: input.userKey,
+    },
+  });
+}
 
 function dependencies(
   overrides: Partial<CreditGenerationAdmissionDependencies> = {}
@@ -32,7 +61,8 @@ function dependencies(
   return {
     enabled: () => true,
     config: () => CONFIG,
-    withSecret: callback => callback(Buffer.from("s".repeat(32), "ascii")),
+    withKeyring: callback => callback([{ keyId: "k1", secret: ACTIVE_SECRET }]),
+    readWalletIdentity: vi.fn(async () => walletIdentity()),
     readWallet: vi.fn(async () => ({ creditBalance: 8, reservedCredits: 0 })),
     readReservation: vi.fn(async () => null),
     reserve: vi.fn(async input => ({
@@ -87,6 +117,21 @@ describe("paid credit generation admission", () => {
       reason: "outside_pilot",
     });
     expect(readWallet).not.toHaveBeenCalled();
+  });
+
+  it("rejects another Messenger user in the same workspace before reading or reserving a wallet", async () => {
+    const readWalletIdentity = vi.fn();
+    const readWallet = vi.fn();
+    const reserve = vi.fn();
+    const deps = dependencies({ readWalletIdentity, readWallet, reserve });
+
+    await expect(
+      reservePaidCreditGeneration({ ...INPUT, userKey: "b".repeat(64) }, deps)
+    ).resolves.toEqual({ available: false, reason: "outside_pilot" });
+
+    expect(readWalletIdentity).not.toHaveBeenCalled();
+    expect(readWallet).not.toHaveBeenCalled();
+    expect(reserve).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -156,6 +201,77 @@ describe("paid credit generation admission", () => {
       imageQuality: "medium",
     });
     expect(JSON.stringify(first.reservation)).not.toContain(USER_KEY);
+  });
+
+  it("spends and recovers an existing wallet through a retained key after rotation", async () => {
+    const oldSecret = Buffer.alloc(32, 1);
+    const newSecret = Buffer.alloc(32, 2);
+    const oldIdentity = walletIdentity(oldSecret);
+    const readWallet = vi.fn(async () => ({
+      creditBalance: 8,
+      reservedCredits: 0,
+    }));
+    const reserve = vi.fn(async input => ({
+      result: "applied" as const,
+      reservationId: input.reservationId,
+    }));
+    const deps = dependencies({
+      withKeyring: callback =>
+        callback([
+          { keyId: "k2", secret: newSecret },
+          { keyId: "k1", secret: oldSecret },
+        ]),
+      readWalletIdentity: vi.fn(async () => oldIdentity),
+      readWallet,
+      reserve,
+    });
+
+    const decision = await reservePaidCreditGeneration(INPUT, deps);
+    if (!decision.available) throw new Error("unreachable");
+    const hold = reserve.mock.calls[0]?.[0];
+    if (!hold) throw new Error("hold was not recorded");
+
+    expect(readWallet).toHaveBeenCalledWith(
+      expect.objectContaining({
+        walletId: oldIdentity.walletId,
+        financialSubjectRef: oldIdentity.financialSubjectRef,
+      })
+    );
+    expect(deriveCreditReservationCommitRecovery(hold, deps)).toMatchObject({
+      entryId: expect.stringMatching(/^[0-9a-f-]{36}$/),
+      evidenceHash: expect.stringMatching(/^[0-9a-f]{64}$/),
+    });
+    expect(
+      deriveCreditReservationProviderRejectedRecovery(
+        { ...hold, rejectionStatus: 400 },
+        deps
+      )
+    ).toMatchObject({
+      entryId: expect.stringMatching(/^[0-9a-f-]{36}$/),
+      evidenceHash: expect.stringMatching(/^[0-9a-f]{64}$/),
+    });
+    expect(
+      deriveCreditReservationCommitRecovery(hold, {
+        withKeyring: callback => callback([{ keyId: "k2", secret: newSecret }]),
+      })
+    ).toBeNull();
+  });
+
+  it("fails closed before wallet spend when its derivation key was removed", async () => {
+    const reserve = vi.fn();
+    const deps = dependencies({
+      withKeyring: callback =>
+        callback([{ keyId: "k2", secret: Buffer.alloc(32, 2) }]),
+      readWalletIdentity: vi.fn(async () =>
+        walletIdentity(Buffer.alloc(32, 1))
+      ),
+      reserve,
+    });
+
+    await expect(reservePaidCreditGeneration(INPUT, deps)).rejects.toThrow(
+      "Credit checkout keyring cannot resolve"
+    );
+    expect(reserve).not.toHaveBeenCalled();
   });
 
   it("commits a known provider success exactly once and never releases it", async () => {

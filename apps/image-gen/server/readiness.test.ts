@@ -9,6 +9,7 @@ import {
 } from "./_core/readiness";
 import * as billingReadiness from "./_core/billing/billingReadiness";
 import * as creditCheckoutReadiness from "./_core/billing/creditCheckoutReadiness";
+import { deriveCreditCheckoutTestUserKeyHash } from "./_core/billing/creditCheckoutConfig";
 import { resetConversationIdentityConfigForTests } from "./_core/conversationIdentityConfig";
 import { registerHealthRoutes } from "./_core/runtime/healthRoutes";
 import { bindTestHttpServer } from "./testHttpServer";
@@ -37,6 +38,12 @@ const READINESS_ENV_KEYS = [
   "MOLLIE_CREDIT_CHECKOUT_ENABLED",
   "MESSENGER_PAID_CREDITS_ENABLED",
   "MOLLIE_CREDIT_WORKSPACE_ID",
+  "MOLLIE_CREDIT_TEST_CHANNEL_CONNECTION_ID",
+  "MOLLIE_CREDIT_TEST_BINDING_EPOCH",
+  "MOLLIE_CREDIT_TEST_PRIVACY_EPOCH",
+  "MOLLIE_CREDIT_TEST_USER_KEY_HASH",
+  "CREDIT_CHECKOUT_HMAC_ACTIVE_KEY_ID",
+  "CREDIT_CHECKOUT_HMAC_PREVIOUS_KEYS",
   "CREDIT_CHECKOUT_HMAC_SECRET",
   "PORTAL_HANDOFF_TOKEN_SECRET",
   "REDIS_URL",
@@ -268,10 +275,17 @@ describe("readiness", () => {
       MOLLIE_CREDIT_CHECKOUT_ENABLED: "true",
       MESSENGER_PAID_CREDITS_ENABLED: "true",
       MOLLIE_CREDIT_WORKSPACE_ID: "42",
+      MOLLIE_CREDIT_TEST_CHANNEL_CONNECTION_ID: "8",
+      MOLLIE_CREDIT_TEST_BINDING_EPOCH: "3",
+      MOLLIE_CREDIT_TEST_PRIVACY_EPOCH: "5",
+      MOLLIE_CREDIT_TEST_USER_KEY_HASH: deriveCreditCheckoutTestUserKeyHash(
+        "a".repeat(64)
+      ),
       MOLLIE_BILLING_DRAIN_ENABLED: "true",
       BILLING_NOTIFICATION_PLANE_ENABLED: "true",
       MOLLIE_BILLING_ENABLED: "false",
       MOLLIE_LIVE_BILLING_ENABLED: "false",
+      CREDIT_CHECKOUT_HMAC_ACTIVE_KEY_ID: "k1",
       CREDIT_CHECKOUT_HMAC_SECRET: "ab".repeat(32),
     })) {
       vi.stubEnv(name, value);
@@ -289,6 +303,73 @@ describe("readiness", () => {
       workspaceId: 42,
       commercialExposureEnabled: true,
     });
+  });
+
+  it("fails Test Mode readiness before database access without the exact tester pin", async () => {
+    for (const [name, value] of Object.entries({
+      MOLLIE_MODE: "test",
+      MOLLIE_CREDIT_CHECKOUT_ENABLED: "true",
+      MESSENGER_PAID_CREDITS_ENABLED: "true",
+      MOLLIE_CREDIT_WORKSPACE_ID: "42",
+      MOLLIE_CREDIT_TEST_CHANNEL_CONNECTION_ID: "8",
+      MOLLIE_CREDIT_TEST_BINDING_EPOCH: "3",
+      MOLLIE_CREDIT_TEST_PRIVACY_EPOCH: "5",
+      MOLLIE_BILLING_DRAIN_ENABLED: "true",
+      BILLING_NOTIFICATION_PLANE_ENABLED: "true",
+      MOLLIE_BILLING_ENABLED: "false",
+      MOLLIE_LIVE_BILLING_ENABLED: "false",
+      CREDIT_CHECKOUT_HMAC_ACTIVE_KEY_ID: "k1",
+      CREDIT_CHECKOUT_HMAC_SECRET: "ab".repeat(32),
+    })) {
+      vi.stubEnv(name, value);
+    }
+    delete process.env.MOLLIE_CREDIT_TEST_USER_KEY_HASH;
+    const databaseCheck = vi
+      .spyOn(creditCheckoutReadiness, "assertCreditCheckoutDatabaseReadiness")
+      .mockResolvedValue();
+    const check = buildRuntimeReadinessChecks().find(
+      item => item.name === "credit_checkout"
+    );
+
+    await expect(check?.check()).rejects.toThrow(
+      "Test Mode credit pilot scope must be complete"
+    );
+    expect(databaseCheck).not.toHaveBeenCalled();
+  });
+
+  it("fails readiness before database access for a malformed credit keyring", async () => {
+    for (const [name, value] of Object.entries({
+      MOLLIE_MODE: "test",
+      MOLLIE_CREDIT_CHECKOUT_ENABLED: "true",
+      MESSENGER_PAID_CREDITS_ENABLED: "true",
+      MOLLIE_CREDIT_WORKSPACE_ID: "42",
+      MOLLIE_CREDIT_TEST_CHANNEL_CONNECTION_ID: "8",
+      MOLLIE_CREDIT_TEST_BINDING_EPOCH: "3",
+      MOLLIE_CREDIT_TEST_PRIVACY_EPOCH: "5",
+      MOLLIE_CREDIT_TEST_USER_KEY_HASH: deriveCreditCheckoutTestUserKeyHash(
+        "a".repeat(64)
+      ),
+      MOLLIE_BILLING_DRAIN_ENABLED: "true",
+      BILLING_NOTIFICATION_PLANE_ENABLED: "true",
+      MOLLIE_BILLING_ENABLED: "false",
+      MOLLIE_LIVE_BILLING_ENABLED: "false",
+      CREDIT_CHECKOUT_HMAC_ACTIVE_KEY_ID: "k2",
+      CREDIT_CHECKOUT_HMAC_SECRET: "ab".repeat(32),
+      CREDIT_CHECKOUT_HMAC_PREVIOUS_KEYS: "k1=invalid",
+    })) {
+      vi.stubEnv(name, value);
+    }
+    const databaseCheck = vi
+      .spyOn(creditCheckoutReadiness, "assertCreditCheckoutDatabaseReadiness")
+      .mockResolvedValue();
+    const check = buildRuntimeReadinessChecks().find(
+      item => item.name === "credit_checkout"
+    );
+
+    await expect(check?.check()).rejects.toThrow(
+      "CREDIT_CHECKOUT_HMAC_PREVIOUS_KEYS is malformed"
+    );
+    expect(databaseCheck).not.toHaveBeenCalled();
   });
 
   it("returns ok when all dependency checks pass", async () => {

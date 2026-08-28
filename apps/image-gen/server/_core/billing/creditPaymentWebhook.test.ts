@@ -6,6 +6,7 @@ import {
   CreditPaymentAdjustmentPendingError,
   createDeterministicCreditAdjustmentEntryId,
   createDeterministicCreditGrantEntryId,
+  retryPersistedCreditPaymentAdjustment,
 } from "./creditPaymentWebhook";
 import type {
   CreditPaymentAdjustmentEvidence,
@@ -293,6 +294,18 @@ describe("credit payment webhook grant orchestration", () => {
       )
     ).rejects.toBeInstanceOf(CreditPaymentAdjustmentPendingError);
     expect(deps.finishAdjustment).not.toHaveBeenCalled();
+  });
+
+  it("replays persisted adjustment evidence without another provider snapshot", async () => {
+    const deps = dependencies({ result: "unknown" });
+
+    await expect(
+      retryPersistedCreditPaymentAdjustment(refundAdjustment, deps)
+    ).resolves.toBe("duplicate");
+
+    expect(deps.persist).not.toHaveBeenCalled();
+    expect(deps.refundDebit).toHaveBeenCalledOnce();
+    expect(deps.finishAdjustment).toHaveBeenCalledOnce();
   });
 
   it.each([

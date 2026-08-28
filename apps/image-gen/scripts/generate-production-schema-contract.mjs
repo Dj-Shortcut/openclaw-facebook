@@ -116,7 +116,7 @@ try {
     history0016 = await captureMigrationHistory(connection);
 
     const statements0017 = await readFileStatements(migration0017);
-    if (statements0017.length !== 53) {
+    if (statements0017.length !== 54) {
       throw new Error("0017 statement contract is unsupported");
     }
     if (

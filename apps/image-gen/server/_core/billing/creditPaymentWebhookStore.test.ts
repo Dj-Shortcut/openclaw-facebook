@@ -18,7 +18,9 @@ import {
   isCreditPaymentGrantComplete,
   persistCreditPaymentWebhookSnapshot,
   resolveCreditPaymentOccurredAt,
+  shouldApplyPersistedCreditPaymentSnapshot,
   shouldPreservePendingCreditGrantSnapshot,
+  shouldRecoverPersistedCreditPaymentGrant,
 } from "./creditPaymentWebhookStore";
 
 const ADJUSTMENT_HASH = "e".repeat(64);
@@ -233,6 +235,51 @@ describe("credit payment pre-grant financial adjustment fence", () => {
       ).toBe(false);
     }
   );
+});
+
+describe("credit payment snapshot monotonicity", () => {
+  it("does not apply an older delivery after persistence keeps terminal evidence", () => {
+    expect(
+      shouldApplyPersistedCreditPaymentSnapshot("a".repeat(64), "b".repeat(64))
+    ).toBe(false);
+  });
+
+  it("continues processing the exact snapshot accepted by the ledger", () => {
+    const snapshotHash = "a".repeat(64);
+    expect(
+      shouldApplyPersistedCreditPaymentSnapshot(snapshotHash, snapshotHash)
+    ).toBe(true);
+  });
+
+  it("recovers an unfinished grant from a later non-adjustment observation", () => {
+    expect(
+      shouldRecoverPersistedCreditPaymentGrant(
+        { status: "paid", paidEffectApplied: 0 },
+        {
+          ...basePayment,
+          amountRefunded: { currency: "EUR", value: "0.00" },
+        }
+      )
+    ).toBe(true);
+  });
+
+  it("can recover from stale open but never from adjusted payment input", () => {
+    expect(
+      shouldRecoverPersistedCreditPaymentGrant(
+        { status: "paid", paidEffectApplied: 0 },
+        { ...basePayment, status: "open", paidAt: undefined }
+      )
+    ).toBe(true);
+    expect(
+      shouldRecoverPersistedCreditPaymentGrant(
+        { status: "paid", paidEffectApplied: 0 },
+        {
+          ...basePayment,
+          amountRefunded: { currency: "EUR", value: "4.99" },
+        }
+      )
+    ).toBe(false);
+  });
 });
 
 describe("credit payment adjustment classification", () => {

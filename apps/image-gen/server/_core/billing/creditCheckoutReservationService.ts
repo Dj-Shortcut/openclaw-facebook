@@ -7,10 +7,13 @@ import {
 } from "./creditCatalog";
 import {
   getCreditCheckoutPilotConfig,
-  withCreditCheckoutHmacSecret,
+  isCreditCheckoutMessengerScopeAllowed,
+  withCreditCheckoutHmacKeyring,
   type CreditCheckoutPilotConfig,
 } from "./creditCheckoutConfig";
 import { deriveCreditCheckoutIdentity } from "./creditCheckoutIdentity";
+import { withSelectedCreditCheckoutHmacKey } from "./creditCheckoutKeyring";
+import { readCurrentCreditWalletIdentity } from "./creditGenerationAdmissionStore";
 import { readCreditCheckoutAuthorization } from "./creditCheckoutReservationStore";
 import { reserveCreditCheckoutIntent } from "./creditWalletStore";
 
@@ -46,8 +49,9 @@ export class CreditCheckoutReservationError extends Error {
 type Dependencies = Readonly<{
   config: () => CreditCheckoutPilotConfig;
   readAuthorization: typeof readCreditCheckoutAuthorization;
+  readWalletIdentity: typeof readCurrentCreditWalletIdentity;
   reserve: typeof reserveCreditCheckoutIntent;
-  withSecret: typeof withCreditCheckoutHmacSecret;
+  withKeyring: typeof withCreditCheckoutHmacKeyring;
   now: () => Date;
   appBaseUrl: () => URL;
 }>;
@@ -55,8 +59,9 @@ type Dependencies = Readonly<{
 const defaultDependencies: Dependencies = Object.freeze({
   config: getCreditCheckoutPilotConfig,
   readAuthorization: readCreditCheckoutAuthorization,
+  readWalletIdentity: readCurrentCreditWalletIdentity,
   reserve: reserveCreditCheckoutIntent,
-  withSecret: withCreditCheckoutHmacSecret,
+  withKeyring: withCreditCheckoutHmacKeyring,
   now: () => new Date(),
   appBaseUrl: readCreditCheckoutAppBaseUrl,
 });
@@ -137,7 +142,7 @@ export async function reserveMessengerCreditCheckout(
   if (
     !config.checkoutEnabled ||
     !config.paidCreditsEnabled ||
-    config.workspaceId !== input.workspaceId
+    !isCreditCheckoutMessengerScopeAllowed(config, input)
   ) {
     fail();
   }
@@ -151,21 +156,29 @@ export async function reserveMessengerCreditCheckout(
     PREMIUM_IMAGE_CREDIT_OFFER_VERSION
   );
   if (!offer) fail();
-  const identity = dependencies.withSecret(secret =>
-    deriveCreditCheckoutIdentity({
-      dedicatedSecret: secret,
-      scope: {
-        workspaceId: input.workspaceId,
-        mode: config.mode,
-        channel: "facebook_messenger",
-        channelConnectionId: input.channelConnectionId,
-        bindingEpoch: input.bindingEpoch,
-        privacyEpoch: input.privacyEpoch,
-        userKey: input.userKey,
-      },
-      expectedAuthorizationEpoch: boundary.authorizationEpoch,
-      requestKeyHash: requestKeyHash(input.requestId),
-      offer,
+  const scope = Object.freeze({
+    workspaceId: input.workspaceId,
+    mode: config.mode,
+    channel: "facebook_messenger" as const,
+    channelConnectionId: input.channelConnectionId,
+    bindingEpoch: input.bindingEpoch,
+    privacyEpoch: input.privacyEpoch,
+    userKey: input.userKey,
+  });
+  const persistedIdentity = await dependencies.readWalletIdentity(scope);
+  const identity = dependencies.withKeyring(keys =>
+    withSelectedCreditCheckoutHmacKey({
+      keys,
+      scope,
+      persistedIdentity,
+      callback: ({ key }) =>
+        deriveCreditCheckoutIdentity({
+          dedicatedSecret: key.secret,
+          scope,
+          expectedAuthorizationEpoch: boundary.authorizationEpoch,
+          requestKeyHash: requestKeyHash(input.requestId),
+          offer,
+        }),
     })
   );
   const identitySnapshot = identity.toJSON();

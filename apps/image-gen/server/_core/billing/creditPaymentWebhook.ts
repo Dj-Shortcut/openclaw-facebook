@@ -102,6 +102,25 @@ export async function applyCreditPaymentWebhookSnapshot(
   }
 }
 
+/**
+ * Replays only already-persisted, metadata-only adjustment evidence. This path
+ * is intentionally provider-key-free: the stored routines and completion
+ * transaction revalidate the exact payment, wallet, and provider-effect rows.
+ */
+export function retryPersistedCreditPaymentAdjustment(
+  adjustment: CreditPaymentAdjustmentEvidence,
+  dependencies: Dependencies = defaultDependencies
+): Promise<CreditPaymentWebhookResult> {
+  return applyCreditPaymentAdjustment(
+    {
+      result: "adjustment_pending",
+      duplicateSnapshot: true,
+      adjustment,
+    },
+    dependencies
+  );
+}
+
 async function applyCreditPaymentAdjustment(
   persisted: Extract<
     CreditPaymentPersistenceResult,

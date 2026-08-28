@@ -8,6 +8,7 @@ import {
 } from "./creditCatalog";
 import {
   getCreditCheckoutPilotConfig,
+  isCreditCheckoutMessengerScopeAllowed,
   type CreditCheckoutPilotConfig,
 } from "./creditCheckoutConfig";
 import {
@@ -261,6 +262,17 @@ function requireProviderScope(
     session.offer.refundPolicyId !== PREMIUM_IMAGE_CREDIT_REFUND_POLICY_ID ||
     session.offer.refundPolicyVersion !==
       PREMIUM_IMAGE_CREDIT_REFUND_POLICY_VERSION
+  ) {
+    return fail();
+  }
+  if (
+    !isCreditCheckoutMessengerScopeAllowed(pilot, {
+      workspaceId: record.workspaceId,
+      channelConnectionId,
+      bindingEpoch,
+      privacyEpoch,
+      userKey,
+    })
   ) {
     return fail();
   }

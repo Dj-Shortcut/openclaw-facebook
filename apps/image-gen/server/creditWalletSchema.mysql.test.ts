@@ -8,12 +8,14 @@ import mysql, {
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { deriveCreditWalletIdentity } from "./_core/billing/creditCheckoutIdentity";
+import { deriveCreditCheckoutTestUserKeyHash } from "./_core/billing/creditCheckoutConfig";
 import {
   deriveCreditReservationCommitRecovery,
   reservePaidCreditGeneration,
   type CreditGenerationAdmissionDependencies,
 } from "./_core/billing/creditGenerationAdmission";
 import {
+  readCurrentCreditWalletIdentity,
   readCreditGenerationReservation,
   readSpendableCreditWallet,
 } from "./_core/billing/creditGenerationAdmissionStore";
@@ -309,7 +311,7 @@ suite("0018 credit wallet MySQL 8.4 procedure boundary", () => {
   }
 
   function paidGenerationDependencies(
-    workspaceId: number,
+    scope: Scope,
     dedicatedSecret: Uint8Array
   ): CreditGenerationAdmissionDependencies {
     return {
@@ -317,10 +319,18 @@ suite("0018 credit wallet MySQL 8.4 procedure boundary", () => {
       config: () => ({
         checkoutEnabled: true,
         paidCreditsEnabled: true,
-        workspaceId,
+        workspaceId: scope.workspaceId,
         mode: "test",
+        testPilotScope: {
+          channelConnectionId: scope.channelConnectionId,
+          bindingEpoch: 1,
+          privacyEpoch: 1,
+          userKeyHash: deriveCreditCheckoutTestUserKeyHash(scope.userKey),
+        },
       }),
-      withSecret: callback => callback(dedicatedSecret),
+      withKeyring: callback =>
+        callback([{ keyId: "k1", secret: dedicatedSecret }]),
+      readWalletIdentity: readCurrentCreditWalletIdentity,
       readWallet: readSpendableCreditWallet,
       readReservation: readCreditGenerationReservation,
       reserve: createCreditReservationHold,
@@ -1079,7 +1089,7 @@ suite("0018 credit wallet MySQL 8.4 procedure boundary", () => {
           userKey: scope.userKey,
           requestId: `mysql-started-${randomUUID()}`,
         },
-        paidGenerationDependencies(scope.workspaceId, dedicatedSecret)
+        paidGenerationDependencies(scope, dedicatedSecret)
       );
       if (!decision.available) {
         throw new Error(`paid generation was unavailable: ${decision.reason}`);
@@ -1283,6 +1293,68 @@ suite("0018 credit wallet MySQL 8.4 procedure boundary", () => {
     expect(scrubbedReplay[0]?.[0]?.result).toBe("already_applied");
   });
 
+  it("preserves one spendable wallet across checkout HMAC rotation", async () => {
+    const oldSecret = Buffer.from(
+      hash(`wallet-rotation-old:${randomUUID()}`),
+      "hex"
+    );
+    const newSecret = Buffer.from(
+      hash(`wallet-rotation-new:${randomUUID()}`),
+      "hex"
+    );
+    try {
+      const scope = await createScope({ dedicatedSecret: oldSecret });
+      const payment = await makeIntentPaid(
+        scope,
+        scope.checkoutReservation,
+        randomUUID(),
+        { grossAmount: "4.99" }
+      );
+      expect(
+        (
+          await grant(
+            scope,
+            scope.checkoutReservation.intentId,
+            payment.paymentId,
+            payment.evidenceHash
+          )
+        ).result
+      ).toBe("applied");
+
+      const decision = await reservePaidCreditGeneration(
+        {
+          workspaceId: scope.workspaceId,
+          channelConnectionId: scope.channelConnectionId,
+          bindingEpoch: 1,
+          privacyEpoch: 1,
+          userKey: scope.userKey,
+          requestId: `mysql-rotated-${randomUUID()}`,
+        },
+        {
+          ...paidGenerationDependencies(scope, oldSecret),
+          withKeyring: callback =>
+            callback([
+              { keyId: "k2", secret: newSecret },
+              { keyId: "k1", secret: oldSecret },
+            ]),
+        }
+      );
+      if (!decision.available) {
+        throw new Error(`paid generation was unavailable: ${decision.reason}`);
+      }
+
+      const [wallets] = await connection.query<RowDataPacket[]>(
+        "SELECT `wallet_id` AS walletId FROM `credit_wallets` WHERE `workspace_id`=? AND `mode`='test' AND `channel_connection_id`=? AND `binding_epoch`=1 AND `privacy_epoch`=1 AND BINARY `current_user_key_hash`=BINARY ?",
+        [scope.workspaceId, scope.channelConnectionId, scope.userKey]
+      );
+      expect(wallets).toEqual([{ walletId: scope.walletId }]);
+      await decision.reservation.releaseBeforeTransport();
+    } finally {
+      oldSecret.fill(0);
+      newSecret.fill(0);
+    }
+  });
+
   it("commits one due known provider acceptance and replays idempotently", async () => {
     const dedicatedSecret = Buffer.from(
       hash(`accepted-transport-secret:${randomUUID()}`),
@@ -1316,7 +1388,7 @@ suite("0018 credit wallet MySQL 8.4 procedure boundary", () => {
           userKey: scope.userKey,
           requestId: `mysql-accepted-${randomUUID()}`,
         },
-        paidGenerationDependencies(scope.workspaceId, dedicatedSecret)
+        paidGenerationDependencies(scope, dedicatedSecret)
       );
       if (!decision.available) {
         throw new Error(`paid generation was unavailable: ${decision.reason}`);
@@ -1360,7 +1432,8 @@ suite("0018 credit wallet MySQL 8.4 procedure boundary", () => {
         commit: commitCreditReservation,
         deriveCommit: row =>
           deriveCreditReservationCommitRecovery(row, {
-            withSecret: callback => callback(dedicatedSecret),
+            withKeyring: callback =>
+              callback([{ keyId: "k1", secret: dedicatedSecret }]),
           }),
         review: enqueueCreditReservationTransportReview,
       } satisfies Parameters<typeof runCreditReservationExpiryOnce>[2];

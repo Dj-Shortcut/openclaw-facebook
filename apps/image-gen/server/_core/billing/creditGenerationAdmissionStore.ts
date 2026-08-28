@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 
 import { creditReservations, creditWallets } from "../../../drizzle/schema";
 import { getDatabaseOrThrow } from "../../db";
@@ -12,6 +12,49 @@ export type SpendableCreditWallet = Readonly<{
 export type CreditGenerationReservationState = Readonly<{
   status: "initializing" | "reserved" | "committed" | "released" | "expired";
 }>;
+
+export type CurrentCreditWalletIdentity = Readonly<{
+  walletId: string;
+  financialSubjectRef: string;
+}>;
+
+/**
+ * Resolves the one non-erased wallet for the exact current Messenger privacy
+ * subject without deriving a secret-bound identifier first. The database's
+ * active-subject unique key makes this lookup an unambiguous rotation bridge.
+ */
+export async function readCurrentCreditWalletIdentity(input: {
+  workspaceId: number;
+  mode: CreditWalletScope["mode"];
+  channelConnectionId: number;
+  bindingEpoch: number;
+  privacyEpoch: number;
+  userKey: string;
+}): Promise<CurrentCreditWalletIdentity | null> {
+  const database = await getDatabaseOrThrow();
+  const rows = await database
+    .select({
+      walletId: creditWallets.walletId,
+      financialSubjectRef: creditWallets.financialSubjectRef,
+    })
+    .from(creditWallets)
+    .where(
+      and(
+        eq(creditWallets.workspaceId, input.workspaceId),
+        eq(creditWallets.mode, input.mode),
+        eq(creditWallets.channelConnectionId, input.channelConnectionId),
+        eq(creditWallets.bindingEpoch, input.bindingEpoch),
+        eq(creditWallets.privacyEpoch, input.privacyEpoch),
+        eq(creditWallets.currentUserKeyHash, input.userKey),
+        inArray(creditWallets.status, ["active", "frozen"])
+      )
+    )
+    .limit(2);
+  if (rows.length > 1) {
+    throw new Error("Credit wallet identity is ambiguous");
+  }
+  return rows[0] ?? null;
+}
 
 /**
  * Reads only one exact current wallet. The stored reservation procedure repeats

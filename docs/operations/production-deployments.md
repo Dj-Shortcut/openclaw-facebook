@@ -470,6 +470,28 @@ schema`. The protected workflow first proves every Machine is the attested
     protected unlock path for at least 24 hours before a separately approved
     drop.
 
+Before paid-credit exposure, set the non-secret
+`CREDIT_CHECKOUT_HMAC_ACTIVE_KEY_ID=k1` beside the dedicated Fly secret. A later
+rotation must deploy the new active ID/key together with every still-required
+predecessor in `CREDIT_CHECKOUT_HMAC_PREVIOUS_KEYS`. Readiness rejects a
+malformed or unbounded keyring, and the runtime resolves an existing wallet by
+its exact persisted Messenger subject before selecting the retained key. Never
+remove a predecessor until no non-erased wallet or provider-resolution proof
+uses it; removal is a fail-closed incident, not a wallet migration.
+
+Test Mode exposure is additionally limited to one approved pseudonymous
+Messenger subject on one exact Page binding. In the reviewed activation change,
+set `MOLLIE_CREDIT_TEST_CHANNEL_CONNECTION_ID`,
+`MOLLIE_CREDIT_TEST_BINDING_EPOCH` and `MOLLIE_CREDIT_TEST_PRIVACY_EPOCH` to the
+current non-secret database boundary. Compute
+`MOLLIE_CREDIT_TEST_USER_KEY_HASH` only in the protected operator environment as
+SHA-256 over the UTF-8 domain `leaderbot.credit-checkout-test-user.v1\0`
+followed by the canonical pseudonymous user key. Retain only the hash; never
+place the source user key or PSID in config, documentation, evidence, chat or
+logs. `/readyz` must fail before database access when any part is absent or
+stale. A different user in the same owner workspace remains on the ordinary
+free-quota response and cannot create a wallet, intent or provider operation.
+
 Do not type migration commands into a production shell and do not start an
 ad-hoc migration Machine. Normal releases use the image's compatibility check;
 the protected schema workflow is the only production path that changes this

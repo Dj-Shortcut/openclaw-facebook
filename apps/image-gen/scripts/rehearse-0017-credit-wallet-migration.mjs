@@ -25,7 +25,7 @@ if (
 }
 const migration0017 = await readStatements(migration0017Files[0]);
 const through0017 = [...through0016, migration0017Files[0]];
-assert(migration0017.length === 53, "0017 must contain 53 reviewed statements");
+assert(migration0017.length === 54, "0017 must contain 54 reviewed statements");
 assert(
   migration0017[0].startsWith(
     "CREATE TEMPORARY TABLE `credit_0017_legacy_effect_preflight`"
@@ -33,6 +33,8 @@ assert(
     migration0017[1] ===
       "DROP TEMPORARY TABLE `credit_0017_legacy_effect_preflight`;" &&
     migration0017[2] ===
+      "ALTER TABLE `billing_outbox` MODIFY COLUMN `event_type` enum('ensure_subscription','cancel_subscription','cancel_payment','credit_adjustment_retry','payment_warning','manual_review','send_portal_handoff') NOT NULL;" &&
+    migration0017[3] ===
       "ALTER TABLE `payment_ledger`\n\tADD CONSTRAINT `payment_ledger_exact_payment_scope_unique` UNIQUE(`id`,`workspace_id`,`mode`,`mollie_payment_id`);",
   "0017 must prove legacy ownership before the first permanent DDL"
 );

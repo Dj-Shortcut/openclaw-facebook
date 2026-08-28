@@ -850,8 +850,8 @@ async function testEvery0017StatementBoundary({
   migration0017Statements,
 }) {
   assert(
-    migration0017Statements.length === 53,
-    "0017 exposes the exact 53-statement migration contract"
+    migration0017Statements.length === 54,
+    "0017 exposes the exact 54-statement migration contract"
   );
   for (
     let boundary = 0;

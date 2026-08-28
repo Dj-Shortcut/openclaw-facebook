@@ -37,7 +37,7 @@ const triggerNames = Array.from(
 
 describe("0017 direct Messenger purchased-credit schema", () => {
   it("locks the compact payment prerequisite before any credit DDL", () => {
-    expect(statements).toHaveLength(53);
+    expect(statements).toHaveLength(54);
     expect(statements[0]).toMatch(
       /^CREATE TEMPORARY TABLE `credit_0017_legacy_effect_preflight`/
     );
@@ -45,6 +45,9 @@ describe("0017 direct Messenger purchased-credit schema", () => {
       "DROP TEMPORARY TABLE `credit_0017_legacy_effect_preflight`;"
     );
     expect(statements[2]).toBe(
+      "ALTER TABLE `billing_outbox` MODIFY COLUMN `event_type` enum('ensure_subscription','cancel_subscription','cancel_payment','credit_adjustment_retry','payment_warning','manual_review','send_portal_handoff') NOT NULL;"
+    );
+    expect(statements[3]).toBe(
       "ALTER TABLE `payment_ledger`\n\tADD CONSTRAINT `payment_ledger_exact_payment_scope_unique` UNIQUE(`id`,`workspace_id`,`mode`,`mollie_payment_id`);"
     );
     expect(

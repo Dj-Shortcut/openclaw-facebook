@@ -4521,6 +4521,34 @@ describe("production deployment contract", () => {
     );
   });
 
+  it("requires a versioned paid-credit HMAC key label", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      "apps/image-gen/fly.toml",
+      '  CREDIT_CHECKOUT_HMAC_ACTIVE_KEY_ID = "k1"\n',
+      "",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "apps/image-gen/fly.toml must set a canonical CREDIT_CHECKOUT_HMAC_ACTIVE_KEY_ID",
+    );
+  });
+
+  it("rejects Test Mode paid-credit exposure without one exact hashed Messenger tester pin", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      "apps/image-gen/fly.toml",
+      '  MESSENGER_PAID_CREDITS_ENABLED = "false"\n  MOLLIE_CREDIT_CHECKOUT_ENABLED = "false"\n',
+      '  MESSENGER_PAID_CREDITS_ENABLED = "true"\n  MOLLIE_CREDIT_CHECKOUT_ENABLED = "true"\n',
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must pin Test Mode paid credits to one hashed Messenger user and exact Page binding",
+    );
+  });
+
   it("requires a bounded graceful image-worker shutdown window", () => {
     const root = createRepositoryFixture();
     const configPath = path.join(root, "apps/image-gen/fly.toml");

@@ -100,7 +100,7 @@ import { registerCreditCheckoutRoutes } from "./billing/creditCheckoutRoutes";
 import { confirmCreditCheckoutPayment } from "./billing/creditCheckoutPaymentService";
 import {
   getCreditCheckoutPilotConfig,
-  withCreditCheckoutHmacSecret,
+  withCreditCheckoutHmacKeyring,
 } from "./billing/creditCheckoutConfig";
 import { startCreditReservationExpiryWorker } from "./billing/creditReservationExpiryWorker";
 import { assertCreditCheckoutDatabaseReadiness } from "./billing/creditCheckoutReadiness";
@@ -240,7 +240,7 @@ async function startServer() {
     creditCheckoutConfig.paidCreditsEnabled ||
     creditCheckoutConfig.checkoutEnabled
   ) {
-    withCreditCheckoutHmacSecret(() => undefined);
+    withCreditCheckoutHmacKeyring(() => undefined);
     await assertCreditCheckoutDatabaseReadiness({
       mode: creditCheckoutConfig.mode,
       workspaceId: creditCheckoutConfig.workspaceId!,

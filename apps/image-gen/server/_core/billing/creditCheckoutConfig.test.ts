@@ -2,9 +2,15 @@ import { describe, expect, it } from "vitest";
 
 import {
   CreditCheckoutConfigError,
+  deriveCreditCheckoutTestUserKeyHash,
   getCreditCheckoutPilotConfig,
+  isCreditCheckoutMessengerScopeAllowed,
+  withCreditCheckoutHmacKeyring,
   withCreditCheckoutHmacSecret,
 } from "./creditCheckoutConfig";
+
+const TEST_USER_KEY = `u2.k1.${"7".repeat(64)}`;
+const TEST_USER_KEY_HASH = deriveCreditCheckoutTestUserKeyHash(TEST_USER_KEY);
 
 function enabledEnv(override: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return {
@@ -12,10 +18,15 @@ function enabledEnv(override: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
     MOLLIE_CREDIT_CHECKOUT_ENABLED: "true",
     MESSENGER_PAID_CREDITS_ENABLED: "true",
     MOLLIE_CREDIT_WORKSPACE_ID: "42",
+    MOLLIE_CREDIT_TEST_CHANNEL_CONNECTION_ID: "8",
+    MOLLIE_CREDIT_TEST_BINDING_EPOCH: "3",
+    MOLLIE_CREDIT_TEST_PRIVACY_EPOCH: "5",
+    MOLLIE_CREDIT_TEST_USER_KEY_HASH: TEST_USER_KEY_HASH,
     MOLLIE_BILLING_DRAIN_ENABLED: "true",
     BILLING_NOTIFICATION_PLANE_ENABLED: "true",
     MOLLIE_BILLING_ENABLED: "false",
     MOLLIE_LIVE_BILLING_ENABLED: "false",
+    CREDIT_CHECKOUT_HMAC_ACTIVE_KEY_ID: "k1",
     CREDIT_CHECKOUT_HMAC_SECRET: "ab".repeat(32),
     ...override,
   };
@@ -28,6 +39,12 @@ describe("credit checkout rollout configuration", () => {
       paidCreditsEnabled: true,
       workspaceId: 42,
       mode: "test",
+      testPilotScope: {
+        channelConnectionId: 8,
+        bindingEpoch: 3,
+        privacyEpoch: 5,
+        userKeyHash: TEST_USER_KEY_HASH,
+      },
     });
   });
 
@@ -56,7 +73,56 @@ describe("credit checkout rollout configuration", () => {
       paidCreditsEnabled: false,
       workspaceId: null,
       mode: "test",
+      testPilotScope: null,
     });
+  });
+
+  it("allows only the exact pseudonymous tester on the pinned Page binding", () => {
+    const config = getCreditCheckoutPilotConfig(enabledEnv());
+    const exactScope = {
+      workspaceId: 42,
+      channelConnectionId: 8,
+      bindingEpoch: 3,
+      privacyEpoch: 5,
+      userKey: TEST_USER_KEY,
+    };
+
+    expect(isCreditCheckoutMessengerScopeAllowed(config, exactScope)).toBe(
+      true
+    );
+    expect(
+      isCreditCheckoutMessengerScopeAllowed(config, {
+        ...exactScope,
+        userKey: `u2.k1.${"8".repeat(64)}`,
+      })
+    ).toBe(false);
+    expect(
+      isCreditCheckoutMessengerScopeAllowed(config, {
+        ...exactScope,
+        bindingEpoch: 4,
+      })
+    ).toBe(false);
+  });
+
+  it.each([
+    ["missing tester hash", { MOLLIE_CREDIT_TEST_USER_KEY_HASH: "" }],
+    ["partial tester scope", { MOLLIE_CREDIT_TEST_CHANNEL_CONNECTION_ID: "" }],
+    ["malformed tester hash", { MOLLIE_CREDIT_TEST_USER_KEY_HASH: "a" }],
+  ])("fails closed for a %s", (_label, override) => {
+    expect(() => getCreditCheckoutPilotConfig(enabledEnv(override))).toThrow(
+      CreditCheckoutConfigError
+    );
+  });
+
+  it("rejects a Test Mode tester pin in live mode", () => {
+    expect(() =>
+      getCreditCheckoutPilotConfig(
+        enabledEnv({
+          MOLLIE_MODE: "live",
+          MOLLIE_LIVE_BILLING_ENABLED: "true",
+        })
+      )
+    ).toThrow("Test Mode tester scope must be unset in live mode");
   });
 
   it.each([
@@ -91,9 +157,64 @@ describe("credit checkout rollout configuration", () => {
     value => {
       expect(() =>
         withCreditCheckoutHmacSecret(() => undefined, {
+          CREDIT_CHECKOUT_HMAC_ACTIVE_KEY_ID: "k1",
           CREDIT_CHECKOUT_HMAC_SECRET: value,
         })
       ).toThrow(CreditCheckoutConfigError);
     }
   );
+
+  it("orders the active key before retained predecessors and wipes all bytes", () => {
+    let observed:
+      readonly Readonly<{ keyId: string; secret: Uint8Array }>[] | undefined;
+    const ids = withCreditCheckoutHmacKeyring(
+      keys => {
+        observed = keys;
+        return keys.map(key => key.keyId);
+      },
+      enabledEnv({
+        CREDIT_CHECKOUT_HMAC_ACTIVE_KEY_ID: "k3",
+        CREDIT_CHECKOUT_HMAC_SECRET: "cd".repeat(32),
+        CREDIT_CHECKOUT_HMAC_PREVIOUS_KEYS: `k2=${"bc".repeat(32)},k1=${"ab".repeat(32)}`,
+      })
+    );
+
+    expect(ids).toEqual(["k3", "k2", "k1"]);
+    expect(observed).toHaveLength(3);
+    expect(
+      observed?.every(key => Buffer.from(key.secret).equals(Buffer.alloc(32)))
+    ).toBe(true);
+  });
+
+  it.each([
+    ["missing active ID", { CREDIT_CHECKOUT_HMAC_ACTIVE_KEY_ID: "" }],
+    ["malformed active ID", { CREDIT_CHECKOUT_HMAC_ACTIVE_KEY_ID: "current" }],
+    [
+      "duplicate key ID",
+      {
+        CREDIT_CHECKOUT_HMAC_PREVIOUS_KEYS: `k1=${"bc".repeat(32)}`,
+      },
+    ],
+    [
+      "duplicate secret",
+      {
+        CREDIT_CHECKOUT_HMAC_PREVIOUS_KEYS: `k2=${"ab".repeat(32)}`,
+      },
+    ],
+    [
+      "unbounded predecessor list",
+      {
+        CREDIT_CHECKOUT_HMAC_PREVIOUS_KEYS: [2, 3, 4, 5]
+          .map(
+            index =>
+              `k${index}=${index.toString(16).padStart(2, "0").repeat(32)}`
+          )
+          .join(","),
+      },
+    ],
+  ])("rejects a %s", (_label, override) => {
+    expect(() =>
+      withCreditCheckoutHmacKeyring(() => undefined, enabledEnv(override))
+    ).toThrow(CreditCheckoutConfigError);
+  });
 });

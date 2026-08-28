@@ -8,6 +8,7 @@ import {
   readCreditCheckoutBrowserSession,
 } from "./creditCheckoutSession";
 import { deriveCreditCheckoutCapability } from "./creditCheckoutCapability";
+import { deriveCreditCheckoutTestUserKeyHash } from "./creditCheckoutConfig";
 import type { CreditCheckoutSessionRecord } from "./creditCheckoutSessionStore";
 
 const INTENT_ID = "11111111-1111-8111-8111-111111111111";
@@ -18,6 +19,7 @@ const CAPABILITY = deriveCreditCheckoutCapability({
   intentId: INTENT_ID,
   metadataHash: "a".repeat(64),
 });
+const TEST_USER_KEY = "b".repeat(64);
 
 function record(
   override: Partial<CreditCheckoutSessionRecord> = {}
@@ -35,7 +37,7 @@ function record(
     mollieDescription: "Leaderbot - 8 premium beeldcredits",
     status: "created",
     molliePaymentId: null,
-    messengerSenderUserKey: "b".repeat(64),
+    messengerSenderUserKey: TEST_USER_KEY,
     messengerChannelConnectionId: 8,
     messengerBindingEpoch: 3,
     messengerPrivacyEpoch: 5,
@@ -63,6 +65,12 @@ function dependencies(row: CreditCheckoutSessionRecord | null) {
       paidCreditsEnabled: true,
       workspaceId: 42,
       mode: "test" as const,
+      testPilotScope: {
+        channelConnectionId: 8,
+        bindingEpoch: 3,
+        privacyEpoch: 5,
+        userKeyHash: deriveCreditCheckoutTestUserKeyHash(TEST_USER_KEY),
+      },
     }),
     readRecord: vi.fn(async () => row),
     consume: vi.fn(async () => ({
@@ -122,6 +130,7 @@ describe("credit checkout browser sessions", () => {
     ["erased identity", { creditIdentityErasedAt: NOW }],
     ["already started", { status: "creating_payment" }],
     ["already claimed", { checkoutCapabilityConsumedAt: NOW }],
+    ["different Test Mode user", { messengerSenderUserKey: "c".repeat(64) }],
     [
       "expired capability",
       { checkoutCapabilityExpiresAt: new Date("2026-08-28T11:59:59.000Z") },

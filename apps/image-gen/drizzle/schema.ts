@@ -1573,6 +1573,7 @@ export const billingOutbox = mysqlTable(
       "ensure_subscription",
       "cancel_subscription",
       "cancel_payment",
+      "credit_adjustment_retry",
       "payment_warning",
       "manual_review",
       "send_portal_handoff",
