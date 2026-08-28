@@ -956,3 +956,28 @@ export function canonicalJson(value) {
   }
   return JSON.stringify(value);
 }
+
+export function canonicalPrettyJson(value) {
+  const serialized = JSON.stringify(
+    value,
+    (_key, nestedValue) => {
+      if (
+        !nestedValue ||
+        typeof nestedValue !== "object" ||
+        Array.isArray(nestedValue)
+      ) {
+        return nestedValue;
+      }
+      return Object.fromEntries(
+        Object.keys(nestedValue)
+          .sort()
+          .map(key => [key, nestedValue[key]])
+      );
+    },
+    2
+  );
+  if (serialized === undefined) {
+    throw new Error("production schema contract must be JSON-serializable");
+  }
+  return serialized;
+}

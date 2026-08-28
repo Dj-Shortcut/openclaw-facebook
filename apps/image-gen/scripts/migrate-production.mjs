@@ -178,23 +178,21 @@ export function assertProductionSchemaContractManifest(contract, migrations) {
   const expected0018Rows = expectedRows.slice(0, plan.through0018.length);
   if (
     contract.legacyHistory.nextId !== 9 ||
-    JSON.stringify(contract.legacyHistory.rows) !==
-      JSON.stringify(legacyRows) ||
+    canonicalJson(contract.legacyHistory.rows) !== canonicalJson(legacyRows) ||
     contract.baseHistory.nextId !== plan.through0014.length + 1 ||
     contract.history0015.nextId !== plan.through0015.length + 1 ||
     contract.history0016.nextId !== plan.through0016.length + 1 ||
     contract.history0017.nextId !== plan.through0017.length + 1 ||
     contract.history0018.nextId !== plan.through0018.length + 1 ||
-    JSON.stringify(contract.baseHistory.rows) !==
-      JSON.stringify(expected0014Rows) ||
-    JSON.stringify(contract.history0015.rows) !==
-      JSON.stringify(expected0015Rows) ||
-    JSON.stringify(contract.history0016.rows) !==
-      JSON.stringify(expected0016Rows) ||
-    JSON.stringify(contract.history0017.rows) !==
-      JSON.stringify(expected0017Rows) ||
-    JSON.stringify(contract.history0018.rows) !==
-      JSON.stringify(expected0018Rows)
+    canonicalJson(contract.baseHistory.rows) !==
+      canonicalJson(expected0014Rows) ||
+    canonicalJson(contract.history0015.rows) !==
+      canonicalJson(expected0015Rows) ||
+    canonicalJson(contract.history0016.rows) !==
+      canonicalJson(expected0016Rows) ||
+    canonicalJson(contract.history0017.rows) !==
+      canonicalJson(expected0017Rows) ||
+    canonicalJson(contract.history0018.rows) !== canonicalJson(expected0018Rows)
   ) {
     throw new Error(
       "production schema contract history does not match manifest"
@@ -481,7 +479,7 @@ function assertExactHistory(actual, expected, label) {
   ) {
     throw new Error(`${label} migration history table contract mismatch`);
   }
-  if (JSON.stringify(actual.rows) !== JSON.stringify(expected.rows)) {
+  if (canonicalJson(actual.rows) !== canonicalJson(expected.rows)) {
     throw new Error(`${label} migration history rows mismatch`);
   }
 }

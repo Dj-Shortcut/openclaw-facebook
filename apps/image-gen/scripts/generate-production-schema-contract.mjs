@@ -8,6 +8,7 @@ import {
   captureProductionSchemaState,
   assertProductionMigrationRuntime,
   canonicalJson,
+  canonicalPrettyJson,
   productionMigrationSetSha256,
   productionSchemaContractVersion,
   sha256,
@@ -282,11 +283,7 @@ try {
     final0018,
     history0018,
   };
-  await fs.writeFile(
-    outputPath,
-    `${JSON.stringify(contract, null, 2)}\n`,
-    "utf8"
-  );
+  await fs.writeFile(outputPath, `${canonicalPrettyJson(contract)}\n`, "utf8");
   process.stdout.write(
     `Generated ${path.relative(appDirectory, outputPath)} with MySQL ${mysqlVersion}.\n`
   );
