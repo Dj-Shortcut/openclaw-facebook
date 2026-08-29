@@ -570,7 +570,7 @@ const frBeCopy: PortalCopy = {
     cancel: "Annuler",
     edit: "Modifier",
     rename: "Renommer",
-    signOut: "Se deconnecter",
+    signOut: "Se déconnecter",
     customer: "utilisateur",
     loadingWorkspace: "Chargement...",
     none: "Aucune",
