@@ -6,6 +6,16 @@ import {
   buildPortalEnrollmentResponse,
   buildQuickStartResponse,
 } from "../../conversationActions";
+import {
+  getMessengerRequestOwnership,
+  getMessengerRequestPageId,
+} from "../../messengerRequestContext";
+import { setPendingVideoGeneration } from "../../messengerState";
+import {
+  isMessengerVideoGenerationEnabled,
+  isMessengerVideoPageBindingAllowed,
+  isMessengerVideoUserAllowed,
+} from "../../video-generation/videoConfig";
 
 const HELP_COMMANDS = new Set([
   "help",
@@ -82,6 +92,8 @@ const PRIVACY_COMMANDS = new Set([
   "privacy policy",
 ]);
 
+const VIDEO_COMMANDS = new Set(["video", "maak video", "make video"]);
+
 const PORTAL_COMMANDS = new Set([
   "portal",
   "/portal",
@@ -100,7 +112,16 @@ export function isAssistantCommandText(normalizedText: string): boolean {
     CHANGE_BACKGROUND_COMMANDS.has(normalizedText) ||
     COMBINE_PHOTOS_COMMANDS.has(normalizedText) ||
     PRIVACY_COMMANDS.has(normalizedText) ||
+    VIDEO_COMMANDS.has(normalizedText) ||
     PORTAL_COMMANDS.has(normalizedText)
+  );
+}
+
+function isCurrentVideoPageBindingAllowed(): boolean {
+  const ownership = getMessengerRequestOwnership();
+  const pageId = getMessengerRequestPageId();
+  return isMessengerVideoPageBindingAllowed(
+    ownership && pageId ? { ...ownership, pageId } : null
   );
 }
 
@@ -211,6 +232,35 @@ export const assistantCommandsFeature: BotFeature = {
 
       await ctx.setFlowState("AWAITING_EDIT_PROMPT");
       await ctx.sendText(t(ctx.lang, "editImagePrompt"));
+      return { handled: true };
+    }
+
+    if (VIDEO_COMMANDS.has(ctx.normalizedText)) {
+      const sourceImageUrl = getEditableImageUrl(ctx);
+      if (!sourceImageUrl) {
+        await ctx.sendText(t(ctx.lang, "videoGenerationRequiresPhoto"));
+        return { handled: true };
+      }
+
+      if (
+        !ctx.runVideoGeneration ||
+        !isMessengerVideoGenerationEnabled() ||
+        !isMessengerVideoUserAllowed(ctx.userId) ||
+        !isCurrentVideoPageBindingAllowed()
+      ) {
+        await ctx.sendText(t(ctx.lang, "videoGenerationUnavailable"));
+        return { handled: true };
+      }
+
+      await ctx.sendText(t(ctx.lang, "videoGenerationQueued"));
+      await Promise.resolve(
+        setPendingVideoGeneration(ctx.senderId, {
+          sourceImageUrl,
+          promptHint: ctx.messageText,
+          requestedAt: Date.now(),
+        })
+      );
+      await ctx.runVideoGeneration(sourceImageUrl, ctx.messageText);
       return { handled: true };
     }
 
