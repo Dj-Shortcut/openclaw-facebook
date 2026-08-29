@@ -10,6 +10,7 @@ export const PUBLIC_BUSINESS_DETAILS = Object.freeze({
   phoneDisplay: "+32 469 79 26 56",
   phoneHref: "+32469792656",
   email: "privacy@leaderbot.live",
+  messengerUrl: "https://m.me/61587343141159",
 });
 
 export function formatPublicBusinessAddress(): string {

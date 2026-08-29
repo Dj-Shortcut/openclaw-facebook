@@ -12,14 +12,14 @@ const enCopy = {
     en: "EN",
   },
   common: {
-    workspace: "Workspace",
+    workspace: "Bot",
     save: "Save",
     cancel: "Cancel",
     edit: "Edit",
     rename: "Rename",
     signOut: "Sign out",
-    customer: "customer",
-    loadingWorkspace: "Loading workspace...",
+    customer: "user",
+    loadingWorkspace: "Loading...",
     none: "None",
     noEmail: "No email on file",
     user: "User",
@@ -39,31 +39,30 @@ const enCopy = {
     free: "Free",
   },
   auth: {
-    title: "Leaderbot customer portal",
-    body: "Continue with Facebook to manage your workspace, AI identity, Messenger channel, usage, knowledge, and privacy controls.",
+    title: "Leaderbot admin",
+    body: "Continue with Facebook to manage the bot's identity, Messenger connection, usage, knowledge, and privacy controls.",
     continueWithFacebook: "Continue with Facebook",
   },
   publicPreview: {
     customerDataNotice:
-      "Customer data stays inside the signed-in workspace. This public preview uses example data only.",
+      "This public preview uses example data only; it does not show real Messenger user data.",
     loginNotConfigured:
       "Facebook Login is not configured for this local environment.",
-    workspaceTitle: "Leaderbot workspace",
-    dashboardTitle: "Workspace overview",
+    workspaceTitle: "Leaderbot admin",
+    dashboardTitle: "Overview",
     sourcesDetail: "{count} sources",
-    identityHelp: "Help customers with clear, useful answers.",
-    customerFaq: "Customer FAQ",
+    identityHelp: "Help Messenger users with clear, useful answers.",
+    customerFaq: "FAQ",
     brandVoiceNotes: "Brand voice notes",
     messengerInactive:
-      "Messenger stays inactive until a signed-in customer connects an approved Page.",
+      "Messenger stays inactive until an admin connects an approved Page.",
   },
   header: {
     signedInAs: "Signed in as",
-    updateWorkspaceError:
-      "Unable to update the workspace name. Please try again.",
+    updateWorkspaceError: "Unable to update the name. Please try again.",
   },
   navigation: {
-    ariaLabel: "Workspace dashboard",
+    ariaLabel: "Dashboard navigation",
     dashboard: "Leaderbot dashboard",
     overview: "Overview",
     assistant: "Assistant",
@@ -74,9 +73,9 @@ const enCopy = {
     knowledge: "Knowledge",
   },
   workspaceAccess: {
-    title: "Workspace access",
-    unableToLoad: "Unable to load workspace access.",
-    empty: "No workspace members found.",
+    title: "Admin access",
+    unableToLoad: "Unable to load admin access.",
+    empty: "No admins found.",
   },
   identity: {
     fallbackName: "Leaderbot",
@@ -104,8 +103,8 @@ const enCopy = {
     unablePage: "Unable to connect that Page. Please try again.",
     noManagedPages:
       "No manageable Facebook Page was available for this account.",
-    connected: "Messenger connected for this workspace.",
-    disconnected: "Messenger disconnected for this workspace.",
+    connected: "Messenger connected.",
+    disconnected: "Messenger disconnected.",
     unableDisconnect: "Unable to disconnect Messenger. Please try again.",
     oauthMissing: "Facebook OAuth is not configured for this portal.",
   },
@@ -114,9 +113,9 @@ const enCopy = {
     promptFirstTitle: "Prompt-first images",
     promptFirstBody:
       "Ask naturally in Messenger. Describe the image or edit you want; no style menu is required.",
-    contextTitle: "Workspace context",
+    contextTitle: "Bot context",
     contextBody:
-      "The assistant uses this workspace's identity, instructions, and active knowledge sources.",
+      "The assistant uses this bot's identity, instructions, and active knowledge sources.",
     dataTitle: "Data controls",
     dataBody:
       'Use the portal to request exports or deletion. Messenger users can also send "delete my data".',
@@ -128,54 +127,31 @@ const enCopy = {
     requesting: "Requesting",
     imagesRemaining: "Images remaining",
     imagesUsedDetail: "of {limit} used today",
-    imagesRemainingInPeriod: "Startpilot images remaining",
-    imagesUsedInPeriodDetail: "of {limit} used in this Startpilot period",
+    imagesRemainingInPeriod: "Extra images remaining (paid period)",
+    imagesUsedInPeriodDetail: "of {limit} used in this paid period",
     messagesToday: "Messages today",
     messagesWindowDetail: "per {seconds} seconds",
     blockedToday: "Blocked today",
     actionNeeded: "Action may be needed",
     noBlocks: "No blocks recorded",
-    requestRecorded: "Upgrade request recorded for this workspace.",
+    requestRecorded: "Upgrade request recorded.",
     requestError: "Unable to record the upgrade request. Please try again.",
     loadError: "Unable to load upgrade requests. Please try again.",
     empty: "No upgrade requests yet.",
     upgradeLabel: "upgrade",
-    customerRequested: "Customer requested",
+    customerRequested: "User requested",
     latestRequest: "Latest upgrade request",
   },
   billing: {
     title: "Billing",
     subtitle: "Manage your Leaderbot access and Mollie payments.",
-    availablePlan: "Available offer",
+    availablePlan: "Premium credits",
+    creditsInfoBody:
+      "Premium credits aren't bought here. When a Messenger user reaches their free daily limit, Leaderbot sends them a one-time Mollie purchase link directly in the chat.",
     currentPlan: "Current access",
     noSubscription: "No paid access is active for this workspace.",
-    oneTimePayment: "One-time payment",
-    accessPeriod: "Access period",
     for30Days: "for 30 days",
-    pilotIncludes: "The Startpilot includes",
-    pilotWorkspacePage: "1 workspace and 1 Facebook Page",
-    pilotImageControls: "Guided Messenger image controls and follow-up buttons",
-    pilotImages:
-      "20 Images 2.0 generations, with a maximum of 5 generations per day",
-    noAutomaticRenewal: "No automatic renewal",
-    noAutomaticRenewalBody:
-      "This is a one-time purchase. It does not create a subscription or direct-debit mandate.",
-    noOverages: "No overage charges",
-    noOveragesBody:
-      "Usage stops at the included limits. There are no automatic top-ups or extra usage charges.",
-    firstPayment: "First payment",
-    recurringPayment: "Recurring payment",
     monthly: "per month",
-    automaticRenewal: "Automatic renewal",
-    automaticRenewalBody:
-      "The subscription renews automatically until you cancel before the next billing date.",
-    sepaDebit: "Future payments by SEPA Direct Debit",
-    sepaDebitBody:
-      "After the first Mollie payment, later subscription payments may be collected automatically by SEPA Direct Debit.",
-    cancellationTiming:
-      "Cancel before the next billing date. Access remains available through the already paid period.",
-    startSubscription: "Continue to Mollie",
-    buyStartpilot: "Buy Startpilot with Mollie",
     openingCheckout: "Opening Mollie...",
     planLoadError: "Unable to load the available billing plan.",
     summaryLoadError: "Unable to load billing information. Please try again.",
@@ -202,7 +178,7 @@ const enCopy = {
     changePaymentMethod: "Set a new payment method",
     changePaymentMethodConfirmation:
       "Continue to Mollie for a new full monthly payment? The purchased period is added after your existing paid access. The old subscription is canceled only after this payment succeeds. This is blocked within seven days of the next collection or while an old collection is in progress.",
-    managerOnly: "Only workspace owners and administrators can change billing.",
+    managerOnly: "Only admins can change billing.",
     paymentHistory: "Payment history",
     noPayments: "No payments have been recorded yet.",
     paymentDate: "Date",
@@ -311,14 +287,14 @@ const nlBeCopy: PortalCopy = {
     en: "EN",
   },
   common: {
-    workspace: "Werkruimte",
+    workspace: "Bot",
     save: "Opslaan",
     cancel: "Annuleren",
     edit: "Bewerken",
     rename: "Hernoemen",
     signOut: "Afmelden",
-    customer: "klant",
-    loadingWorkspace: "Werkruimte laden...",
+    customer: "gebruiker",
+    loadingWorkspace: "Laden...",
     none: "Geen",
     noEmail: "Geen e-mail opgeslagen",
     user: "Gebruiker",
@@ -338,31 +314,30 @@ const nlBeCopy: PortalCopy = {
     free: "Gratis",
   },
   auth: {
-    title: "Leaderbot klantenportaal",
-    body: "Ga verder met Facebook om je werkruimte, AI-identiteit, Messenger-kanaal, gebruik, kennis en privacy-instellingen te beheren.",
+    title: "Leaderbot beheer",
+    body: "Ga verder met Facebook om de identiteit, Messenger-koppeling, gebruik, kennis en privacy-instellingen van de bot te beheren.",
     continueWithFacebook: "Verder met Facebook",
   },
   publicPreview: {
     customerDataNotice:
-      "Klantdata blijft binnen de ingelogde werkruimte. Deze publieke preview gebruikt alleen voorbeelddata.",
+      "Deze publieke preview gebruikt alleen voorbeelddata; er staan geen echte Messenger-gegevens in.",
     loginNotConfigured:
       "Facebook Login is niet ingesteld voor deze lokale omgeving.",
-    workspaceTitle: "Leaderbot werkruimte",
-    dashboardTitle: "Werkruimteoverzicht",
+    workspaceTitle: "Leaderbot beheer",
+    dashboardTitle: "Overzicht",
     sourcesDetail: "{count} bronnen",
-    identityHelp: "Help klanten met duidelijke, nuttige antwoorden.",
-    customerFaq: "Klantenvragen",
+    identityHelp: "Help Messenger-gebruikers met duidelijke, nuttige antwoorden.",
+    customerFaq: "Vragen",
     brandVoiceNotes: "Merkstemnotities",
     messengerInactive:
-      "Messenger blijft inactief tot een ingelogde klant een goedgekeurde pagina verbindt.",
+      "Messenger blijft inactief tot een beheerder een goedgekeurde pagina verbindt.",
   },
   header: {
     signedInAs: "Aangemeld als",
-    updateWorkspaceError:
-      "Werkruimtenaam kon niet bijgewerkt worden. Probeer opnieuw.",
+    updateWorkspaceError: "Naam kon niet bijgewerkt worden. Probeer opnieuw.",
   },
   navigation: {
-    ariaLabel: "Werkruimtedashboard",
+    ariaLabel: "Dashboardnavigatie",
     dashboard: "Leaderbot dashboard",
     overview: "Overzicht",
     assistant: "Assistent",
@@ -373,9 +348,9 @@ const nlBeCopy: PortalCopy = {
     knowledge: "Kennis",
   },
   workspaceAccess: {
-    title: "Toegang tot werkruimte",
-    unableToLoad: "Toegang tot werkruimte kon niet geladen worden.",
-    empty: "Geen werkruimteleden gevonden.",
+    title: "Beheerderstoegang",
+    unableToLoad: "Beheerderstoegang kon niet geladen worden.",
+    empty: "Geen beheerders gevonden.",
   },
   identity: {
     fallbackName: "Leaderbot",
@@ -404,8 +379,8 @@ const nlBeCopy: PortalCopy = {
     unablePage: "Die pagina kon niet verbonden worden. Probeer opnieuw.",
     noManagedPages:
       "Voor dit account was geen beheerbare Facebookpagina beschikbaar.",
-    connected: "Messenger is verbonden voor deze werkruimte.",
-    disconnected: "Messenger is losgekoppeld voor deze werkruimte.",
+    connected: "Messenger is verbonden.",
+    disconnected: "Messenger is losgekoppeld.",
     unableDisconnect:
       "Messenger kon niet losgekoppeld worden. Probeer opnieuw.",
     oauthMissing: "Facebook OAuth is niet ingesteld voor dit portaal.",
@@ -415,9 +390,9 @@ const nlBeCopy: PortalCopy = {
     promptFirstTitle: "Afbeeldingen via prompt",
     promptFirstBody:
       "Vraag natuurlijk in Messenger. Beschrijf de afbeelding of bewerking die je wilt; er is geen stijlmenu nodig.",
-    contextTitle: "Werkruimtecontext",
+    contextTitle: "Botcontext",
     contextBody:
-      "De assistent gebruikt de identiteit, instructies en actieve kennisbronnen van deze werkruimte.",
+      "De assistent gebruikt de identiteit, instructies en actieve kennisbronnen van deze bot.",
     dataTitle: "Databeheer",
     dataBody:
       'Gebruik het portaal om export of verwijdering aan te vragen. Messenger-gebruikers kunnen ook "delete my data" sturen.',
@@ -429,55 +404,32 @@ const nlBeCopy: PortalCopy = {
     requesting: "Aanvragen",
     imagesRemaining: "Beelden over",
     imagesUsedDetail: "van {limit} vandaag gebruikt",
-    imagesRemainingInPeriod: "Startpilot-beelden over",
-    imagesUsedInPeriodDetail: "van {limit} gebruikt in deze Startpilot-periode",
+    imagesRemainingInPeriod: "Extra beelden over (betaalde periode)",
+    imagesUsedInPeriodDetail: "van {limit} gebruikt in deze betaalde periode",
     messagesToday: "Berichten vandaag",
     messagesWindowDetail: "per {seconds} seconden",
     blockedToday: "Geblokkeerd vandaag",
     actionNeeded: "Actie kan nodig zijn",
     noBlocks: "Geen blokkades geregistreerd",
-    requestRecorded: "Upgrade-aanvraag opgeslagen voor deze werkruimte.",
+    requestRecorded: "Upgrade-aanvraag opgeslagen.",
     requestError:
       "Upgrade-aanvraag kon niet opgeslagen worden. Probeer opnieuw.",
     loadError: "Upgrade-aanvragen konden niet geladen worden. Probeer opnieuw.",
     empty: "Nog geen upgrade-aanvragen.",
     upgradeLabel: "upgrade",
-    customerRequested: "Aangevraagd door klant",
+    customerRequested: "Aangevraagd door gebruiker",
     latestRequest: "Laatste upgrade-aanvraag",
   },
   billing: {
     title: "Facturatie",
     subtitle: "Beheer je Leaderbot-toegang en Mollie-betalingen.",
-    availablePlan: "Beschikbaar aanbod",
+    availablePlan: "Premium credits",
+    creditsInfoBody:
+      "Premium credits koop je hier niet. Zodra een Messenger-gebruiker zijn gratis daglimiet bereikt, stuurt Leaderbot rechtstreeks in de chat een eenmalige Mollie-aankooplink.",
     currentPlan: "Huidige toegang",
     noSubscription: "Er is geen betaalde toegang actief voor deze werkruimte.",
-    oneTimePayment: "Eenmalige betaling",
-    accessPeriod: "Toegangsperiode",
     for30Days: "voor 30 dagen",
-    pilotIncludes: "De Startpilot bevat",
-    pilotWorkspacePage: "1 werkruimte en 1 Facebookpagina",
-    pilotImageControls:
-      "Begeleide Messenger-beeldfuncties met handige vervolgknoppen",
-    pilotImages: "20 Images 2.0-generaties, met maximaal 5 generaties per dag",
-    noAutomaticRenewal: "Geen automatische verlenging",
-    noAutomaticRenewalBody:
-      "Dit is een eenmalige aankoop. Er wordt geen abonnement of domiciliëringsmandaat aangemaakt.",
-    noOverages: "Geen kosten buiten het pakket",
-    noOveragesBody:
-      "Gebruik stopt aan de inbegrepen limieten. Er zijn geen automatische top-ups of extra gebruikskosten.",
-    firstPayment: "Eerste betaling",
-    recurringPayment: "Terugkerende betaling",
     monthly: "per maand",
-    automaticRenewal: "Automatische verlenging",
-    automaticRenewalBody:
-      "Het abonnement wordt automatisch verlengd tot je vóór de volgende factuurdatum opzegt.",
-    sepaDebit: "Volgende betalingen via SEPA-incasso",
-    sepaDebitBody:
-      "Na de eerste Mollie-betaling kunnen latere abonnementsbetalingen automatisch via SEPA-incasso worden geïnd.",
-    cancellationTiming:
-      "Zeg vóór de volgende factuurdatum op. Je toegang blijft behouden tot het einde van de betaalde periode.",
-    startSubscription: "Verder naar Mollie",
-    buyStartpilot: "Startpilot kopen via Mollie",
     openingCheckout: "Mollie openen...",
     planLoadError: "Het beschikbare aanbod kon niet geladen worden.",
     summaryLoadError:
@@ -505,8 +457,7 @@ const nlBeCopy: PortalCopy = {
     changePaymentMethod: "Nieuwe betaalmethode instellen",
     changePaymentMethodConfirmation:
       "Naar Mollie gaan voor een nieuwe volledige maandbetaling? De gekochte periode wordt na je bestaande betaalde toegang toegevoegd. Het oude abonnement wordt pas na een geslaagde betaling opgezegd. Dit is geblokkeerd binnen zeven dagen van de volgende inning of zolang een oude inning loopt.",
-    managerOnly:
-      "Alleen eigenaars en beheerders van de werkruimte kunnen facturatie wijzigen.",
+    managerOnly: "Alleen beheerders kunnen facturatie wijzigen.",
     paymentHistory: "Betaalhistoriek",
     noPayments: "Er zijn nog geen betalingen geregistreerd.",
     paymentDate: "Datum",
@@ -614,14 +565,14 @@ const frBeCopy: PortalCopy = {
     en: "EN",
   },
   common: {
-    workspace: "Espace de travail",
+    workspace: "Bot",
     save: "Enregistrer",
     cancel: "Annuler",
     edit: "Modifier",
     rename: "Renommer",
-    signOut: "Se deconnecter",
-    customer: "client",
-    loadingWorkspace: "Chargement de l'espace...",
+    signOut: "Se déconnecter",
+    customer: "utilisateur",
+    loadingWorkspace: "Chargement...",
     none: "Aucune",
     noEmail: "Aucun e-mail enregistre",
     user: "Utilisateur",
@@ -641,31 +592,30 @@ const frBeCopy: PortalCopy = {
     free: "Gratuit",
   },
   auth: {
-    title: "Portail client Leaderbot",
-    body: "Continuez avec Facebook pour gerer votre espace de travail, l'identite IA, Messenger, l'utilisation, les connaissances et la confidentialite.",
+    title: "Administration Leaderbot",
+    body: "Continuez avec Facebook pour gérer l'identité, la connexion Messenger, l'utilisation, les connaissances et la confidentialité du bot.",
     continueWithFacebook: "Continuer avec Facebook",
   },
   publicPreview: {
     customerDataNotice:
-      "Les donnees client restent dans l'espace connecte. Cette preview publique utilise uniquement des donnees d'exemple.",
+      "Cette preview publique utilise uniquement des données d'exemple ; aucune vraie donnée Messenger n'y figure.",
     loginNotConfigured:
-      "Facebook Login n'est pas configure pour cet environnement local.",
-    workspaceTitle: "Espace Leaderbot",
-    dashboardTitle: "Vue d'ensemble de l'espace",
+      "Facebook Login n'est pas configuré pour cet environnement local.",
+    workspaceTitle: "Administration Leaderbot",
+    dashboardTitle: "Aperçu",
     sourcesDetail: "{count} sources",
-    identityHelp: "Aidez les clients avec des reponses claires et utiles.",
-    customerFaq: "FAQ client",
+    identityHelp: "Aidez les utilisateurs Messenger avec des réponses claires et utiles.",
+    customerFaq: "Questions fréquentes",
     brandVoiceNotes: "Notes de ton de marque",
     messengerInactive:
-      "Messenger reste inactif jusqu'a ce qu'un client connecte lie une Page approuvee.",
+      "Messenger reste inactif jusqu'à ce qu'un administrateur connecte une Page approuvée.",
   },
   header: {
-    signedInAs: "Connecte en tant que",
-    updateWorkspaceError:
-      "Impossible de mettre a jour le nom de l'espace. Reessayez.",
+    signedInAs: "Connecté en tant que",
+    updateWorkspaceError: "Impossible de mettre à jour le nom. Réessayez.",
   },
   navigation: {
-    ariaLabel: "Tableau de bord de l’espace de travail",
+    ariaLabel: "Navigation du tableau de bord",
     dashboard: "Tableau de bord Leaderbot",
     overview: "Aperçu",
     assistant: "Assistant",
@@ -676,9 +626,9 @@ const frBeCopy: PortalCopy = {
     knowledge: "Connaissances",
   },
   workspaceAccess: {
-    title: "Acces a l'espace",
-    unableToLoad: "Impossible de charger les acces a l'espace.",
-    empty: "Aucun membre trouve.",
+    title: "Accès administrateurs",
+    unableToLoad: "Impossible de charger les accès administrateurs.",
+    empty: "Aucun administrateur trouvé.",
   },
   identity: {
     fallbackName: "Leaderbot",
@@ -708,8 +658,8 @@ const frBeCopy: PortalCopy = {
     unablePage: "Impossible de connecter cette Page. Reessayez.",
     noManagedPages:
       "Aucune Page Facebook administrable n'etait disponible pour ce compte.",
-    connected: "Messenger est connecte pour cet espace de travail.",
-    disconnected: "Messenger est deconnecte pour cet espace de travail.",
+    connected: "Messenger est connecté.",
+    disconnected: "Messenger est déconnecté.",
     unableDisconnect: "Impossible de deconnecter Messenger. Reessayez.",
     oauthMissing: "Facebook OAuth n'est pas configure pour ce portail.",
   },
@@ -718,9 +668,9 @@ const frBeCopy: PortalCopy = {
     promptFirstTitle: "Images par prompt",
     promptFirstBody:
       "Demandez naturellement dans Messenger. Decrivez l'image ou la retouche voulue; aucun menu de style n'est requis.",
-    contextTitle: "Contexte de l'espace",
+    contextTitle: "Contexte du bot",
     contextBody:
-      "L'assistant utilise l'identite, les instructions et les sources de connaissances actives de cet espace.",
+      "L'assistant utilise l'identité, les instructions et les sources de connaissances actives de ce bot.",
     dataTitle: "Controle des donnees",
     dataBody:
       'Utilisez le portail pour demander un export ou une suppression. Les utilisateurs Messenger peuvent aussi envoyer "delete my data".',
@@ -732,56 +682,32 @@ const frBeCopy: PortalCopy = {
     requesting: "Demande",
     imagesRemaining: "Images restantes",
     imagesUsedDetail: "sur {limit} utilisees aujourd'hui",
-    imagesRemainingInPeriod: "Images Startpilot restantes",
-    imagesUsedInPeriodDetail: "sur {limit} utilisees pendant cette periode",
+    imagesRemainingInPeriod: "Images supplémentaires restantes (période payante)",
+    imagesUsedInPeriodDetail: "sur {limit} utilisées dans cette période payante",
     messagesToday: "Messages aujourd'hui",
     messagesWindowDetail: "par {seconds} secondes",
     blockedToday: "Bloques aujourd'hui",
     actionNeeded: "Une action peut etre necessaire",
     noBlocks: "Aucun blocage enregistre",
-    requestRecorded: "Demande d'upgrade enregistree pour cet espace.",
+    requestRecorded: "Demande d'upgrade enregistrée.",
     requestError: "Impossible d'enregistrer la demande d'upgrade. Reessayez.",
     loadError: "Impossible de charger les demandes d'upgrade. Reessayez.",
     empty: "Aucune demande d'upgrade.",
     upgradeLabel: "upgrade",
-    customerRequested: "Demande client",
+    customerRequested: "Demande utilisateur",
     latestRequest: "Derniere demande d'upgrade",
   },
   billing: {
     title: "Facturation",
     subtitle: "Gérez votre accès Leaderbot et vos paiements Mollie.",
-    availablePlan: "Offre disponible",
+    availablePlan: "Crédits premium",
+    creditsInfoBody:
+      "Les crédits premium ne s'achètent pas ici. Quand un utilisateur Messenger atteint sa limite gratuite quotidienne, Leaderbot lui envoie directement dans le chat un lien d'achat Mollie à usage unique.",
     currentPlan: "Accès actuel",
     noSubscription:
       "Aucun accès payant n'est actif pour cet espace de travail.",
-    oneTimePayment: "Paiement unique",
-    accessPeriod: "Période d'accès",
     for30Days: "pour 30 jours",
-    pilotIncludes: "Le pilote comprend",
-    pilotWorkspacePage: "1 espace de travail et 1 Page Facebook",
-    pilotImageControls:
-      "Commandes d'image Messenger guidées et boutons de suivi",
-    pilotImages:
-      "20 générations Images 2.0, avec un maximum de 5 générations par jour",
-    noAutomaticRenewal: "Aucun renouvellement automatique",
-    noAutomaticRenewalBody:
-      "Il s'agit d'un achat unique. Aucun abonnement ni mandat de prélèvement n'est créé.",
-    noOverages: "Aucun dépassement facturé",
-    noOveragesBody:
-      "L'usage s'arrête aux limites incluses. Il n'y a ni recharge automatique ni frais d'usage supplémentaires.",
-    firstPayment: "Premier paiement",
-    recurringPayment: "Paiement récurrent",
     monthly: "par mois",
-    automaticRenewal: "Renouvellement automatique",
-    automaticRenewalBody:
-      "L'abonnement est renouvelé automatiquement jusqu'à sa résiliation avant la prochaine date de facturation.",
-    sepaDebit: "Paiements futurs par prélèvement SEPA",
-    sepaDebitBody:
-      "Après le premier paiement Mollie, les paiements suivants peuvent être prélevés automatiquement par prélèvement SEPA.",
-    cancellationTiming:
-      "Résiliez avant la prochaine date de facturation. L'accès reste disponible jusqu'à la fin de la période déjà payée.",
-    startSubscription: "Continuer vers Mollie",
-    buyStartpilot: "Acheter le pilote via Mollie",
     openingCheckout: "Ouverture de Mollie...",
     planLoadError: "Impossible de charger l'offre disponible.",
     summaryLoadError:
@@ -809,8 +735,7 @@ const frBeCopy: PortalCopy = {
     changePaymentMethod: "Définir un nouveau moyen de paiement",
     changePaymentMethodConfirmation:
       "Continuer vers Mollie pour un nouveau paiement mensuel complet ? La période achetée est ajoutée après votre accès déjà payé. L'ancien abonnement n'est résilié qu'après la réussite du paiement. Cette action est bloquée dans les sept jours précédant le prochain prélèvement ou tant qu'un ancien prélèvement est en cours.",
-    managerOnly:
-      "Seuls les propriétaires et administrateurs de l'espace peuvent modifier la facturation.",
+    managerOnly: "Seuls les administrateurs peuvent modifier la facturation.",
     paymentHistory: "Historique des paiements",
     noPayments: "Aucun paiement n'a encore été enregistré.",
     paymentDate: "Date",
