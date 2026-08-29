@@ -1137,8 +1137,8 @@ describe("production deployment contract", () => {
       to: "0018_credit_checkout_reservation",
       state: "bridge_reviewed",
       bridgeImage:
-        "registry.fly.io/leaderbot-fb-image-gen@sha256:dc40601684b2f9f7b3698914c5acb887ea7103631873a316930414e55ef10a03",
-      bridgeSourceCommit: "ab7a7e97003bd65fb31b8e57c718d6329b163d9f",
+        "registry.fly.io/leaderbot-fb-image-gen@sha256:a37632c86a72a87cd94f5c030c8b88be330420289c553f4570e234c85df233b8",
+      bridgeSourceCommit: "f26d80e1eb47361541b9812a1c0d47477afac535",
     });
     expect(app.deploymentEnabled).toBe(true);
     expect(app.reviewedArtifactKind).toBe("migration-bridge");
