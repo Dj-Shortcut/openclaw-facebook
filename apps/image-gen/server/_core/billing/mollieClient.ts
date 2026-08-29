@@ -436,12 +436,15 @@ const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9:_-]{16,160}$/;
 
+/** Bancontact minimum is EUR 0.02 (two minor units). */
+const BANCONTACT_MIN_MINOR = 2;
+
 function assertCreditPaymentInput(input: {
   amountValue: string;
   creditCheckoutIntentId: string;
   idempotencyKey: string;
 }): void {
-  if (parseEurValueMinor(input.amountValue) <= 0) {
+  if (parseEurValueMinor(input.amountValue) < BANCONTACT_MIN_MINOR) {
     throw new Error("invalid credit payment amount");
   }
   if (!UUID_PATTERN.test(input.creditCheckoutIntentId)) {

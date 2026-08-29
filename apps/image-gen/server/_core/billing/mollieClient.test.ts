@@ -227,6 +227,11 @@ describe("MollieClient", () => {
       input: { amountValue: "0.00" },
       message: "invalid credit payment amount",
     },
+    {
+      name: "below Bancontact minimum amount",
+      input: { amountValue: "0.01" },
+      message: "invalid credit payment amount",
+    },
   ])("rejects $name before transport", async ({ input, message }) => {
     const fetchMock = vi.fn();
     const client = new MollieClient(
