@@ -15,12 +15,12 @@ import { useRoute } from "wouter";
 
 function getClaimErrorMessage(message?: string) {
   if (message?.includes("expired")) {
-    return "This setup link has expired. Ask for a fresh Startpilot setup link in Messenger.";
+    return "This admin link has expired. Ask Leaderbot for a fresh one in Messenger.";
   }
   if (message?.includes("already_used")) {
-    return "This setup link has already been used. Open the portal or ask for a fresh link.";
+    return "This admin link has already been used. Open the dashboard or ask for a fresh link.";
   }
-  return "This setup link is invalid. Ask for a fresh Startpilot setup link in Messenger.";
+  return "This admin link is invalid. Ask Leaderbot for a fresh one in Messenger.";
 }
 
 function isTerminalClaimError(message?: string) {
@@ -95,10 +95,10 @@ function PortalHandoff() {
               <AlertTriangle className="h-6 w-6" />
             </div>
             <h1 className="text-3xl font-semibold text-stone-950">
-              Setup link missing
+              Admin link missing
             </h1>
             <p className="mt-4 text-base leading-7 text-stone-600">
-              Open the Startpilot setup link from Messenger again.
+              Ask Leaderbot for a fresh admin link in Messenger.
             </p>
           </section>
         </div>
@@ -115,11 +115,10 @@ function PortalHandoff() {
               <ShieldCheck className="h-6 w-6" />
             </div>
             <h1 className="text-3xl font-semibold text-stone-950">
-              Startpilot setup ready
+              Admin sign-in ready
             </h1>
             <p className="mt-4 max-w-2xl text-base leading-7 text-stone-600">
-              Continue with Facebook to claim your workspace and finish your
-              Leaderbot setup.
+              Continue with Facebook to open the Leaderbot admin dashboard.
             </p>
             <Button
               className="mt-8 gap-2"
@@ -153,13 +152,13 @@ function PortalHandoff() {
           </div>
           <h1 className="text-3xl font-semibold text-stone-950">
             {claimMutation.isError
-              ? "Setup link could not be claimed"
-              : "Claiming workspace"}
+              ? "Admin link could not be used"
+              : "Signing you in"}
           </h1>
           <p className="mt-4 max-w-2xl text-base leading-7 text-stone-600">
             {claimMutation.isError
               ? getClaimErrorMessage(claimMutation.error.message)
-              : "Securing your Startpilot workspace and opening the portal."}
+              : "Securing your session and opening the dashboard."}
           </p>
           {claimMutation.isError ? (
             <Button
@@ -169,7 +168,7 @@ function PortalHandoff() {
                 window.location.assign("/");
               }}
             >
-              Open portal
+              Open dashboard
             </Button>
           ) : null}
         </section>
