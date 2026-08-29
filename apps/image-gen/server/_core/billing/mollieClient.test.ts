@@ -235,6 +235,11 @@ describe("MollieClient", () => {
       message: "invalid credit payment amount",
     },
     {
+      name: "below Bancontact minimum amount",
+      override: { amount: { currency: "EUR", value: "0.01" } },
+      message: "invalid credit payment amount",
+    },
+    {
       name: "non-canonical amount",
       override: { amount: { currency: "EUR", value: "9" } },
       message: "invalid Mollie amount",
