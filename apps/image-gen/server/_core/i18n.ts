@@ -24,6 +24,7 @@ type TranslationKey =
   | "newImage"
   | "editImage"
   | "editPhoto"
+  | "makeVideo"
   | "assistantQuickActions"
   | "assistantPhotoTip"
   | "assistantPhotoTipExtra"
@@ -118,6 +119,7 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
     newImage: "Nieuwe afbeelding",
     editImage: "Pas aan",
     editPhoto: "Pas foto aan",
+    makeVideo: "Maak video",
     assistantQuickActions: "Je afbeelding staat klaar. Wat wil je doen?",
     assistantPhotoTip:
       "Typ gewoon wat je wilt maken, bijvoorbeeld: maak een futuristische stad bij zonsondergang.",
@@ -259,6 +261,7 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
     newImage: "New image",
     editImage: "Edit image",
     editPhoto: "Edit photo",
+    makeVideo: "Make video",
     assistantQuickActions: "Your image is ready. What would you like to do?",
     assistantPhotoTip:
       "Just type what you want to make, for example: make a futuristic city at sunset.",
