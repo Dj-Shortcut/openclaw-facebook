@@ -90,6 +90,9 @@ these environment secrets:
   `leaderbot-portal-mysql`;
 - `IMAGE_GEN_DATABASE_MIGRATION_URL`: `127.0.0.1:13306` URL for the dedicated
   expand principal;
+- `IMAGE_GEN_DATABASE_PROVISIONER_URL`: `127.0.0.1:13306` URL for the separate
+  protected database provisioner that alone creates, grants, locks, unlocks,
+  and drops reviewed MySQL principals;
 - `META_APP_ID` and `META_APP_SECRET`: used only to read and verify webhook
   subscriptions; values are never printed.
 
@@ -167,22 +170,76 @@ inspection environment contains only its read-only Fly token. Verify that
 timer, no administrator bypass, and only its narrowly scoped database migration
 token. Treat any drift as a release blocker.
 
-Use three exact MySQL principals for the production schema, with no global or
-grant-option privileges:
+During the reviewed `0016_expand -> 0018_credit_checkout_reservation`
+transition, keep four execution roles separate from a fifth protected
+provisioner. Except for the conditional `SUPER` case below, the first four may
+not have a global privilege or `WITH GRANT OPTION`:
 
-- runtime: exactly `SELECT, INSERT, UPDATE, DELETE`;
-- expand migration: exactly `CREATE TEMPORARY TABLES, ALTER, INDEX, REFERENCES,
-SELECT, INSERT, UPDATE`;
-- persistent trigger definer: table-level `SELECT, TRIGGER` on
-  `billing_outbox` and table-level `SELECT, UPDATE, TRIGGER` on
-  `billing_scheduler_tenants`, with no rights on any other table.
+- temporary pre-migration 0016 runtime: schema-level exactly `SELECT, INSERT,
+UPDATE, DELETE`;
+- 0017/0018 credit migration and credit-object definer: schema-level exactly
+  `CREATE, CREATE TEMPORARY TABLES, ALTER, INDEX, REFERENCES, SELECT, INSERT,
+UPDATE, TRIGGER, CREATE ROUTINE, ALTER ROUTINE`, table-level exactly `DELETE`
+  on `billing_intents`, and table-level exactly `CREATE, DELETE` on
+  `credit_wallets`; the table-level `CREATE` permits MySQL to record the exact
+  future-table grant before 0017 creates that table and does not permit schema
+  DELETE;
+- final 0018 credit runtime: schema-level `SELECT`, table-level `INSERT, UPDATE,
+DELETE` only on the 41 entries in `productionRuntimeWritableTableNames`, and
+  `EXECUTE` only on the 17 entries in `creditWalletRoutineNames`; it has no
+  direct DML on `credit_wallets`, `credit_reservations`, or `credit_ledger`;
+- persistent trigger definer: table-level `SELECT, TRIGGER` on `billing_outbox`
+  and table-level `SELECT, UPDATE, TRIGGER` on
+  `billing_scheduler_tenants`, with no rights on any other table; this role
+  remains limited to the legacy billing triggers during the transition.
+- protected provisioner: account-administration and grant authority used only
+  inside reviewer-gated `production` jobs; it is never available to the app,
+  production inspection, automatic recovery, or no-review cleanup. Its exact
+  grants are global `CREATE USER` without grant option, table-level `SELECT` on
+  `mysql.user` without grant option, schema-level `SELECT, EXECUTE WITH GRANT
+OPTION`, table-level `INSERT, UPDATE, DELETE WITH GRANT OPTION` only on the 41
+  entries in `productionRuntimeWritableTableNames`, and table-level `CREATE,
+DELETE WITH GRANT OPTION` only on `credit_wallets`. It has no other grant, is
+  not root, and has no `ALL`, `SUPER`, or schema-wide DML or DDL grant. The
+  schema-wide `EXECUTE` delegation is required because this credential exists
+  before the 17 reviewed credit procedures do; the staging workflow still
+  grants the runtime only their exact names.
 
-After creating or rotating the runtime or expand principal, run its matching
-protected inspection mode; the migrator rejects missing and excessive grants.
-Inspect the trigger-definer grants privately with the database administrator,
-then require the automatic runtime trigger probe below. Bootstrap/contract DDL
-credentials are not application or 0016-expand credentials and stay outside
-these workflows. No MySQL principal is provisioned to automatic no-review
+MySQL may additionally expose creator grants of `ALTER ROUTINE` and `EXECUTE`
+to the credit migration principal only for those 17 procedures and the
+transitional `credit_create_wallet` until 0018 drops it. Global `SUPER` is
+required and accepted only when binary logging is enabled and
+`log_bin_trust_function_creators` is disabled; otherwise it is excessive.
+After creating or rotating a runtime or migration principal, run its exact
+phase-matched protected inspection; missing or excessive grants fail closed.
+The credit migration additionally requires
+`@@GLOBAL.automatic_sp_privileges=1`. Every already-created credit procedure
+must name the authenticated migration account from `CURRENT_USER()` as its
+definer and retain an exact procedure-level creator `EXECUTE` grant before the
+transition may resume. Schema-level `ALTER ROUTINE` remains part of the exact
+migration-principal contract; MySQL need not duplicate it per procedure.
+The protected workflow first performs a non-mutating migration-principal and
+schema-phase inspection, then creates, restores, validates, and durably uploads
+the exact pre-credit recovery evidence. This pregrant inspection accepts an
+absent or incomplete subset of only the two reviewed definer table grants so a
+connection loss between their two statements remains resumable; it rejects any
+revoke or unreviewed privilege. Only after the recovery evidence exists does it
+open the separate provisioner connection, prove every effective provisioner
+grant matches the exact ceiling above, discover the migration account through
+`CURRENT_USER()`, and idempotently complete the two exact definer table grants.
+A second strict migration-principal inspection runs before credit DDL.
+The workflow never passes the provisioner connection to the migrator or
+application and does not log either database account identity. The
+runtime-principal staging and cleanup workflows use this same separately
+protected provisioner secret; they never reuse the migration principal for
+account administration.
+If the credit transition is abandoned or rolled back without retaining the
+credit routines, use a separate reviewed cleanup to revoke `DELETE` on
+`billing_intents` and `CREATE, DELETE` on `credit_wallets` from the migration
+account. Do not widen that cleanup to schema-level DELETE.
+Inspect the separate legacy trigger-definer grants privately and require the
+automatic runtime trigger probe below. Bootstrap/contract DDL credentials stay
+outside these workflows. No MySQL principal is provisioned to automatic no-review
 application recovery.
 
 The trigger definer is a non-runtime executor for the three contract-pinned
@@ -190,9 +247,10 @@ billing triggers. Its complete privilege set is table-level `SELECT, TRIGGER`
 on `billing_outbox` plus table-level `SELECT, UPDATE, TRIGGER` on
 `billing_scheduler_tenants`. It has no rights on any other table and does not
 have `INSERT`, `DELETE`, DDL, a schema/global privilege or grant option. Never
-add `TRIGGER` to the application runtime principal. Keep the expand principal
-separate so its temporary migration rights can be removed without disabling an
-already installed trigger.
+add `TRIGGER` to either application runtime. Keep the separate legacy
+billing-trigger definer and credit migration/credit-object definer on their
+exact contract-pinned grants; change either definer only through a reviewed
+migration and reprobe.
 
 Before an image-gen rollout, the protected deployment extracts the reviewed
 probe from the candidate image, uploads it to one exact started app Machine,
@@ -223,17 +281,19 @@ table-level `SELECT, UPDATE, TRIGGER` on `billing_scheduler_tenants`, without
 rights on any other table, schema/global privileges or grant option. Using a
 separately authenticated administrator with the required definer authority,
 recreate all three exact checked-in triggers with that account as their
-explicit definer in one reviewed maintenance transition. Keep the runtime
-account at exactly `SELECT, INSERT, UPDATE, DELETE`; do not reuse the expand
-principal as the persistent definer. MySQL account locking blocks login but
-does not disable execution of stored objects that name the locked account as
-definer.
+explicit definer in one reviewed maintenance transition. Keep the
+pre-migration runtime at its exact legacy grants only until the final 0018
+runtime principal is staged and proven; do not reuse the credit migration
+principal as an application runtime or as the separate legacy billing-trigger
+definer. MySQL account locking blocks login but does not disable execution of
+stored objects that name the locked account as definer.
 
 After the transition, privately prove that all three triggers name exactly that
 one locked account and that its only effective object grants are the two exact
 table-level sets above. Do not print the account name, grant output or
-connection URL. Run the normal runtime/expand schema inspection and the runtime
-trigger probe before another deploy, and retain the evidence as metadata only.
+connection URL. Run the phase-matched runtime (`runtime` or `credit-runtime`)
+and migration (`credit-expand`) schema inspections plus the runtime trigger
+probe before another deploy, and retain the evidence as metadata only.
 That schema inspection deliberately omits privileged trigger metadata, while
 bootstrap inspection requires each trigger definer to equal the connected
 bootstrap principal. It therefore cannot certify this locked, separate
@@ -398,57 +458,121 @@ Rollback and recovery were correctly skipped. This reviewed follow-up records
 
 ### Image-gen database migration gate
 
-Production moves only from `0015_base` to the backwards-compatible
-`0016_expand` shape. Migration 0017 is blocked. There is no production contract
-command, manifest switch, or operator environment variable that may enable it.
-A later 0017 rollout needs a separate design and review.
+Production currently runs `0016_expand`. The only reviewed successor is the
+ordered credit transition through `0017_credit_wallet_expand` to the exact
+`0018_credit_checkout_reservation` runtime. The protected schema workflow may
+apply those two checked-in migrations only; no application deploy, shell
+command, or ad-hoc Machine may change the production schema.
 
 Use this exact sequence:
 
-1. **Build the bridge.** Dispatch `Build trusted production artifact` with
-   `image-gen-bridge`. The workflow proves that the bridge keeps the exact live
-   application runtime, works with both 0015 and 0016, and attests both its
-   reviewed source and exact legacy base image.
-2. **Review and deploy the bridge.** Record its digest and source commit in the
-   manifest with state `bridge_reviewed`. After green CI, deploy that exact
-   digest through `Deploy production`. Prove every app and worker Machine runs
-   it.
-3. **Freeze deploys.** In a new reviewed PR, set state `expand_pending`, disable
-   application deploys, and keep only the bridge as the recovery image.
-4. **Back up and prove recovery.** Dispatch
-   `Apply reviewed image-gen schema expand`. The protected workflow first checks
-   that every Machine is the attested bridge. It creates a fresh encrypted
-   snapshot, restores it into an isolated encrypted volume, runs MySQL checks,
-   and removes the temporary restore volume. It records metadata only, never
-   customer rows.
-5. **Apply only 0016.** The same workflow runs `apply-expand` and then verifies
-   `0016_expand` from an exact bridge worker. It cannot apply 0017. If the known
-   0016 sequence was interrupted, rerun this same protected workflow with the
-   exact prior run ID and run attempt that uploaded its pre-expand evidence.
-   The workflow accepts that evidence only when its snapshot, database,
-   migration-manifest, schema-contract, and bridge tuple still match. Unknown
-   or partial shapes fail closed.
-6. **Build the runtime.** Record the successful expand phase and state
-   `runtime_build_pending` in a reviewed PR. Then dispatch
-   `Build trusted production artifact` with `image-gen-runtime`. The build must
-   reject 0015, accept 0016, and produce a trusted attestation.
-7. **Review and deploy the runtime.** Record that exact digest and source commit
-   with state `runtime_reviewed`, retain the bridge as the only rollback, and
-   enable deployment in a reviewed PR. After green CI, deploy it through
-   `Deploy production`, prove every Machine switched, and complete both image
-   smoke tests.
+1. **Open the reviewed transition.** In a dedicated manifest PR, set the
+   transition to `0016_expand -> 0018_credit_checkout_reservation`, state
+   `awaiting_attested_bridge`, keep the exact settled 0016 runtime as
+   `legacyBaseImage`, disable deploys, and retain only that image as rollback.
+2. **Build the bridge.** After that PR is green and merged, dispatch `Build
+trusted production artifact` with `image-gen-bridge`. The workflow proves
+   that the bridge keeps the exact settled application runtime, carries only
+   the reviewed 0017/0018 migration material and reversible billing-trigger
+   preflight, supports all three declared phases, and attests its source plus
+   exact base digest.
+3. **Review and deploy the bridge.** In a separate manifest PR, record the
+   bridge digest and its build-source commit with state `bridge_reviewed`.
+   After green CI, deploy that exact digest through `Deploy production` and
+   prove every app and worker Machine runs it. Commercial, paid-credit, and
+   Mollie exposure flags remain off.
+4. **Freeze deploys.** In another reviewed manifest PR, set state
+   `expand_pending`, disable application deploys, and retain only the bridge as
+   recovery image.
+5. **Back up and prove recovery.** Dispatch `Apply reviewed image-gen credit
+schema`. The protected workflow first proves every Machine is the attested
+   bridge and the live database is the exact 0016 base. It creates a fresh
+   encrypted snapshot, restores it into an isolated encrypted volume, runs
+   MySQL integrity checks, uploads metadata-only recovery evidence, and removes
+   the temporary restore Machine and volume.
+6. **Apply only 0017 then 0018.** The same protected workflow applies only the
+   reviewed credit migrations and verifies the exact final 0018 contract from
+   the bridge. A resume must name the exact earlier recovery run and attempt;
+   the snapshot, database, migration manifest, schema contract, bridge digest,
+   and bridge source must all still match. Unknown or partial shapes fail
+   closed.
+7. **Build the final runtime.** In a reviewed manifest PR, record the successful
+   schema phase and state `runtime_build_pending`, leaving deploys frozen on the
+   bridge. Then dispatch `Build trusted production artifact` with
+   `image-gen-runtime`. The image must reject pre-0018 schemas, accept only the
+   exact 0018 contract, and receive trusted provenance for its immutable digest
+   and build-source commit.
+8. **Review the immutable runtime before staging credentials.** In a separate
+   manifest PR, record that digest and its artifact build-source commit, set
+   state `runtime_principal_pending`, keep deployment disabled, and retain the
+   bridge as rollback. This manifest-review commit is expected to be later than
+   the artifact build-source commit; they must not be forced to the same Git
+   SHA. The protected staging workflow requires green CI for both commits,
+   verifies the immutable image label and attestation against the recorded
+   artifact source, runs the exact trigger/runtime privilege probe through the
+   newly created restricted principal, and stages `DATABASE_URL` without
+   restarting a Machine.
+9. **Review and deploy the staged principal.** Record the metadata-only staged
+   principal fingerprint in another reviewed manifest PR, set state
+   `runtime_reviewed`, enable deployment, and keep the bridge as the only
+   application rollback. `Deploy production` must prove the exact candidate
+   image, configuration, and deployment identity, then run the reviewed probe
+   through the staged principal on every desired app and worker Machine before
+   `/healthz` and `/readyz` may complete the rollout. A failed rollout restores
+   the bridge and its captured configuration; the 0018 schema remains in place.
+10. **Settle before commercial exposure.** Record a healthy final-schema
+    runtime predecessor and move to `complete` only in a later reviewed
+    manifest PR that removes the bridge from the rollback allowlist and retains
+    at least one exact 0018 runtime rollback. Do not expose a Mollie checkout
+    while the only rollback is the migration bridge. Obsolete broad database
+    principals may be locked only after every desired Machine reproves the
+    restricted principal under the settled deployment identity. Preserve the
+    protected unlock path for at least 24 hours before a separately approved
+    drop.
+
+Before paid-credit exposure, set the non-secret
+`CREDIT_CHECKOUT_HMAC_ACTIVE_KEY_ID=k1` beside the dedicated Fly secret. A later
+rotation must deploy the new active ID/key together with every still-required
+predecessor in `CREDIT_CHECKOUT_HMAC_PREVIOUS_KEYS`. Readiness rejects a
+malformed or duplicate keyring entry, but does not impose a fixed predecessor
+count because purchased credits do not expire. The runtime resolves an existing
+wallet by its exact persisted Messenger subject before selecting the retained
+key. Never remove a predecessor until no non-erased wallet or
+provider-resolution proof uses it; removal is a fail-closed incident, not a
+wallet migration.
+
+Test Mode exposure is additionally limited to one approved pseudonymous
+Messenger subject on one exact Page binding. In the reviewed activation change,
+set `MOLLIE_CREDIT_TEST_CHANNEL_CONNECTION_ID`,
+`MOLLIE_CREDIT_TEST_BINDING_EPOCH` and `MOLLIE_CREDIT_TEST_PRIVACY_EPOCH` to the
+current non-secret database boundary. Compute
+`MOLLIE_CREDIT_TEST_USER_KEY_HASH` only in the protected operator environment as
+SHA-256 over the UTF-8 domain `leaderbot.credit-checkout-test-user.v1\0`
+followed by the canonical pseudonymous user key. Retain only the hash; never
+place the source user key or PSID in config, documentation, evidence, chat or
+logs. `/readyz` must fail before database access when any part is absent or
+stale. A different user in the same owner workspace remains on the ordinary
+free-quota response and cannot create a wallet, intent or provider operation.
+
+Set the non-secret `MESSENGER_PAID_IMAGE_PROVIDER_MAX_COST_USD=1.00` in the same
+reviewed Test Mode activation. This is a conservative reservation against the
+global, monthly and per-user provider spend caps before a paid image request
+starts, not the provider's final invoice cost. Re-review the value whenever the
+model, quality, size or source-image policy changes; readiness fails closed if
+paid credits are enabled without a positive finite value.
 
 Do not type migration commands into a production shell and do not start an
 ad-hoc migration Machine. Normal releases use the image's compatibility check;
 the protected schema workflow is the only production path that changes this
 database.
 
-Application rollback leaves the successfully applied schema in place and may
-use only an image explicitly reviewed for that phase. Never blindly restore a
-pre-migration snapshot after production writers continued: that would silently
-discard later writes. A production restore requires point-in-time recovery to a
-verified boundary, or a coordinated writer pause with a durable buffer and a
-proven replay plan. Otherwise preserve the database and recover forward.
+Application rollback after step 6 leaves the successfully applied 0018 schema
+in place and may use only the reviewed migration bridge or a runtime explicitly
+reviewed for 0018. Never blindly restore the pre-migration snapshot after
+production writers continued: that would silently discard later writes. A
+production restore requires point-in-time recovery to a verified boundary, or
+a coordinated writer pause with a durable buffer and a proven replay plan.
+Otherwise preserve the database and recover forward.
 
 ### Messenger queue two-phase rollout
 

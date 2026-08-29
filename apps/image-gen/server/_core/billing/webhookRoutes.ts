@@ -8,12 +8,16 @@ import {
   getTenantBillingWorkerWorkspaceId,
 } from "./config";
 import { safeBillingErrorCode } from "./errorCode";
+import { applyCreditPaymentWebhookSnapshot } from "./creditPaymentWebhook";
 import { MollieApiError, MollieClient } from "./mollieClient";
 import { applyMolliePaymentSnapshot } from "./paymentStore";
 import { resolveMollieWebhookWorkspace } from "./checkoutStore";
 
 const WEBHOOK_BODY_LIMIT = "2kb";
 const PAYMENT_ID_PATTERN = /^tr_[A-Za-z0-9]{1,60}$/;
+const CREDIT_INTENT_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 const DEFAULT_WEBHOOK_RATE_LIMIT_PER_MINUTE = 6_000;
 const WEBHOOK_REDIS_OPERATION_TIMEOUT_MS = 2_000;
 
@@ -105,6 +109,21 @@ export async function handleMollieWebhook(
   if (payment.id !== paymentId || payment.mode !== config.mode) {
     return "unknown";
   }
+  // Resolve the durable customerless credit route before considering the
+  // legacy workspace billing path. This remains safe for legacy Payments:
+  // the credit handler returns `unknown` unless an exact local webhook route
+  // and credit intent are bound to the provider resource.
+  const creditResult = await applyCreditPaymentWebhookSnapshot({
+    webhookPaymentId: paymentId,
+    expectedMode: config.mode,
+    payment,
+  });
+  if (creditResult !== "unknown") return creditResult;
+  // A provider Payment can reach this route after its create operation was
+  // durably finalized but before checkout exposure bound the local webhook
+  // route. Its exact credit marker must never fall through to the legacy
+  // tenant/subscription dispatcher; checkout recovery will bind it later.
+  if (hasExactCreditPaymentMetadataMarker(payment.metadata)) return "unknown";
   const intentId = readProviderIntentId(payment.metadata);
   if (!intentId) return "unknown";
   const workspaceId = await resolveMollieWebhookWorkspace(
@@ -121,6 +140,32 @@ export async function handleMollieWebhook(
   }
   const result = await applyMolliePaymentSnapshot(payment, workspaceId);
   return result.result;
+}
+
+function hasExactCreditPaymentMetadataMarker(metadata: unknown): boolean {
+  if (
+    !metadata ||
+    typeof metadata !== "object" ||
+    Array.isArray(metadata) ||
+    Object.getPrototypeOf(metadata) !== Object.prototype
+  ) {
+    return false;
+  }
+  const value = metadata as Record<string, unknown>;
+  const keys = Object.keys(value).sort();
+  return (
+    keys.length === 4 &&
+    keys[0] === "billingIntentId" &&
+    keys[1] === "metadataHash" &&
+    keys[2] === "purpose" &&
+    keys[3] === "version" &&
+    typeof value.billingIntentId === "string" &&
+    CREDIT_INTENT_ID_PATTERN.test(value.billingIntentId) &&
+    value.purpose === "premium_image_credits" &&
+    value.version === 1 &&
+    typeof value.metadataHash === "string" &&
+    SHA256_PATTERN.test(value.metadataHash)
+  );
 }
 
 function readProviderIntentId(metadata: unknown): string | null {

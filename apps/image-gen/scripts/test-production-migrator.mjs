@@ -1,84 +1,93 @@
 /* global process, URL */
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import mysql from "mysql2/promise";
 import { runProductionLegacyBridge } from "./bridge-production-0007-to-0014.mjs";
+import { assertBillingTriggerRuntimePreflight } from "./billing-trigger-runtime-preflight.mjs";
+import { grantCreditMigrationDefinerPrivileges } from "./credit-migration-definer-grants.mjs";
 import {
   cleanupMigrationConnection,
   combineMigrationErrors,
+  assert0017PreDdlStatementOrder,
+  assertVerifiedPhase,
+  bridgeArtifactPrivilegeProfileForState,
   assertProductionSchemaContractManifest,
-  billingHandoffWriterLockName,
   loadAndVerifyMigrationManifest,
   migrationLockName,
+  productionDatabasePrivilegeProfiles,
   productionMigrationOptionsForMode,
   productionSchemaPhases,
   runProductionMigrations as runProductionMigrationStage,
-  assertContractRolloutRevision,
+  schemaCapturePlanForPrivilege,
+  transitionInspectionPhase,
 } from "./migrate-production.mjs";
+import {
+  productionMigrationTags,
+  resolveProductionMigrationPlan,
+} from "./production-migration-plan.mjs";
 import {
   normalizeShowCreate,
   normalizeSqlOutsideQuotedValues,
+  assertCreditProvisionerGrantScope,
+  assertCreditWalletBinlogFormat,
+  assertCreditWalletMigrationGrantScope,
+  assertCreditWalletMigrationRoutineOwnership,
+  assertCreditWalletRuntimeGrantScope,
   assertExpandMigrationGrantScope,
   assertProductionInspectionGrantScope,
   assertProductionMigrationRuntime,
   assertProductionRuntimeGrantScope,
   assertProductionRuntimeValues,
   assertTriggerGrantScope,
+  canonicalRoutineTuple,
   canonicalTriggerTuple,
+  configureProductionSchemaSession,
+  creditWalletRoutineNames,
+  creditWalletTableNames,
+  productionRuntimeWritableTableNames,
   productionSchemaSqlMode,
   sha256,
 } from "./production-schema-contract.mjs";
 
+const execFileAsync = promisify(execFile);
+
 await testCleanupContracts();
-testBillingHandoffWriterLockContract();
 testStagedRolloutContracts();
+testCreditMigrationRoutineOwnershipContracts();
 testSchemaDigestContracts();
 await testContractManifestBinding();
-
-const reviewedWriterRevision = "a".repeat(40);
 
 async function runProductionMigrations(options = {}) {
   if (options.verifyOnly) {
     return runProductionMigrationStage({
       ...options,
-      target: options.target ?? "contract",
+      target: options.target ?? "expand",
     });
   }
   try {
     return await runProductionMigrationStage({
       ...options,
-      target: "contract",
+      target: "expand",
       allowEmptyBootstrap: true,
-      sourceRevision: reviewedWriterRevision,
-      fullyDeployedWriterRevision: reviewedWriterRevision,
     });
   } catch (error) {
     if (
       String(error?.message).includes(
-        "contract migration cannot skip the reviewed 0016 expand rollout"
+        "expand migration requires the completed 0015 base schema"
       )
     ) {
       await apply0015PrerequisiteForTest(options.databaseUrl);
-    } else if (
-      !String(error?.message).includes(
-        "contract migration requires the completed 0016 expand phase"
-      )
-    ) {
+    } else {
       throw error;
     }
   }
-  await runProductionMigrationStage({
+  return runProductionMigrationStage({
     ...options,
     target: "expand",
     verifyOnly: false,
-  });
-  return runProductionMigrationStage({
-    ...options,
-    target: "contract",
-    verifyOnly: false,
-    sourceRevision: reviewedWriterRevision,
-    fullyDeployedWriterRevision: reviewedWriterRevision,
   });
 }
 
@@ -93,13 +102,17 @@ const resume0016Databases = Array.from(
   { length: 10 },
   (_, index) => `leaderbot_production_migrator_resume_0016_${index}`
 );
-const resume0017Databases = Array.from(
-  { length: 18 },
-  (_, index) => `leaderbot_production_migrator_resume_0017_${index}`
-);
-const handoffWriterLockDatabase =
-  "leaderbot_production_migrator_handoff_writer_lock";
 const stagedRolloutDatabase = "leaderbot_production_migrator_staged_rollout";
+const creditBoundaryDatabase = "leaderbot_production_migrator_credit_boundary";
+const creditFreshDatabase = "leaderbot_production_migrator_credit_fresh";
+const creditPrivilegeDatabase =
+  "leaderbot_production_migrator_credit_privilege";
+const bridgeArtifactDatabase = "leaderbot_production_migrator_bridge_artifact";
+const creditMigrationUser = "leaderbot_credit_migration_test";
+const creditProvisionerUser = "lb_credit_provisioner_test";
+const creditRuntimeUser = "leaderbot_credit_runtime_test";
+const bridgeLegacyUser = "lb_bridge_legacy_runtime_test";
+const bridgeCreditUser = "lb_bridge_credit_runtime_test";
 const databases = [
   "leaderbot_production_migrator_concurrency",
   "leaderbot_production_migrator_upgrade",
@@ -124,11 +137,12 @@ const databases = [
   "leaderbot_production_migrator_legacy_drift",
   "leaderbot_production_migrator_legacy_partial",
   "leaderbot_production_migrator_verify_only",
-  "leaderbot_production_migrator_handoff_backfill",
-  handoffWriterLockDatabase,
   ...resume0016Databases,
-  ...resume0017Databases,
   stagedRolloutDatabase,
+  creditBoundaryDatabase,
+  creditFreshDatabase,
+  creditPrivilegeDatabase,
+  bridgeArtifactDatabase,
 ];
 const admin = await mysql.createConnection({
   host: adminUrl.hostname,
@@ -138,6 +152,11 @@ const admin = await mysql.createConnection({
 });
 
 try {
+  await admin.query(`DROP USER IF EXISTS \`${creditMigrationUser}\`@'%'`);
+  await admin.query(`DROP USER IF EXISTS \`${creditProvisionerUser}\`@'%'`);
+  await admin.query(`DROP USER IF EXISTS \`${creditRuntimeUser}\`@'%'`);
+  await admin.query(`DROP USER IF EXISTS \`${bridgeLegacyUser}\`@'%'`);
+  await admin.query(`DROP USER IF EXISTS \`${bridgeCreditUser}\`@'%'`);
   for (const database of databases) {
     await admin.query(`DROP DATABASE IF EXISTS \`${database}\``);
     await admin.query(
@@ -148,6 +167,8 @@ try {
     `ALTER DATABASE \`${databases[10]}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_bin`
   );
 
+  const { migrations: manifest, migrationPlan } =
+    await loadAndVerifyMigrationManifest();
   const concurrentUrl = databaseUrl(databases[0]);
   const [[showCreateDefaults]] = await admin.query(
     "SELECT @@GLOBAL.sql_quote_show_create AS quoteShowCreate,@@GLOBAL.show_create_table_verbosity AS tableVerbosity"
@@ -169,7 +190,9 @@ try {
     );
   }
   assert(
-    results.every(result => result.appliedCount === 18),
+    results.every(
+      result => result.appliedCount === migrationPlan.through0016.length
+    ),
     "concurrent apply"
   );
   const beforeNoop = await withDatabaseResult(databases[0], connection =>
@@ -178,18 +201,20 @@ try {
   const idempotent = await runProductionMigrations({
     databaseUrl: concurrentUrl,
   });
-  assert(idempotent.appliedCount === 18, "already-complete idempotent apply");
+  assert(
+    idempotent.appliedCount === migrationPlan.through0016.length,
+    "already-complete idempotent apply"
+  );
   const afterNoop = await withDatabaseResult(databases[0], connection =>
     captureSchemaFingerprint(connection)
   );
   assert(
     beforeNoop === afterNoop,
-    "complete 0017 no-op leaves schema/history unchanged"
+    "complete 0016 no-op leaves schema/history unchanged"
   );
 
-  const { migrations: manifest } = await loadAndVerifyMigrationManifest();
   await withDatabase(stagedRolloutDatabase, async connection => {
-    await applyMigrationPrefix(connection, manifest.slice(0, -2));
+    await applyMigrationPrefix(connection, migrationPlan.through0015);
     await connection.query(
       "INSERT INTO `workspaces` (`id`,`name`,`slug`) VALUES (7201,'Staged rollout','staged-rollout')"
     );
@@ -223,7 +248,8 @@ try {
     target: "expand",
   });
   assert(
-    expanded.schemaPhase === "0016_expand" && expanded.appliedCount === 17,
+    expanded.schemaPhase === "0016_expand" &&
+      expanded.appliedCount === migrationPlan.through0016.length,
     "expand applies only 0016"
   );
   await withDatabase(stagedRolloutDatabase, connection =>
@@ -231,76 +257,17 @@ try {
       "INSERT INTO `billing_intents` (`intent_id`,`workspace_id`,`mode`,`plan_code`,`kind`,`expected_amount`,`currency`,`interval`,`entitlements`,`mollie_description`,`status`,`idempotency_key`,`checkout_scope_key`,`messenger_sender_user_key`,`messenger_page_id`,`billing_profile_version`,`authorization_epoch`) VALUES ('72000000-0000-4000-8000-000000000001',7201,'test','startpilot','startpilot_purchase','19.00','EUR','one-time',JSON_OBJECT('aiAnswers',300),'Old writer during expand','paid','staged-old-writer-key','staged-old-writer-scope','staged-user','staged-page',0,1)"
     )
   );
-  const beforeContractAttestation = await withDatabaseResult(
-    stagedRolloutDatabase,
-    connection => captureSchemaFingerprint(connection)
-  );
-  await expectFailure(
-    runProductionMigrationStage({
-      databaseUrl: databaseUrl(stagedRolloutDatabase),
-      target: "contract",
-    }),
-    "contract without rollout attestation",
-    "exact fully deployed reviewed writer source revision"
-  );
-  await expectFailure(
-    runProductionMigrationStage({
-      databaseUrl: databaseUrl(stagedRolloutDatabase),
-      target: "contract",
-      sourceRevision: "a".repeat(40),
-      fullyDeployedWriterRevision: "b".repeat(40),
-    }),
-    "contract with a different reviewed writer",
-    "exact fully deployed reviewed writer source revision"
-  );
-  const afterContractAttestation = await withDatabaseResult(
-    stagedRolloutDatabase,
-    connection => captureSchemaFingerprint(connection)
-  );
-  assert(
-    beforeContractAttestation === afterContractAttestation,
-    "contract attestation refusal leaves schema and history unchanged"
-  );
-  const contracted = await runProductionMigrationStage({
-    databaseUrl: databaseUrl(stagedRolloutDatabase),
-    target: "contract",
-    sourceRevision: reviewedWriterRevision,
-    fullyDeployedWriterRevision: reviewedWriterRevision,
-  });
-  assert(
-    contracted.schemaPhase === "0017_contract" &&
-      contracted.appliedCount === 18,
-    "attested contract applies only after expand"
-  );
   await withDatabase(stagedRolloutDatabase, async connection => {
-    const [[repaired]] = await connection.query(
+    const [[terminal]] = await connection.query(
       "SELECT `messenger_channel_connection_id` AS connectionId,`messenger_privacy_epoch` AS privacyEpoch FROM `billing_intents` WHERE `intent_id`='72000000-0000-4000-8000-000000000001'"
     );
     assert(
-      repaired.connectionId === 7202 && repaired.privacyEpoch === 3,
-      "contract repairs an old-writer row accepted during expand"
-    );
-    await expectMysqlCheckFailure(
-      connection.query(
-        "INSERT INTO `billing_intents` (`intent_id`,`workspace_id`,`mode`,`plan_code`,`kind`,`expected_amount`,`currency`,`interval`,`entitlements`,`mollie_description`,`status`,`idempotency_key`,`checkout_scope_key`,`messenger_sender_user_key`,`messenger_page_id`,`billing_profile_version`,`authorization_epoch`) VALUES ('72000000-0000-4000-8000-000000000002',7201,'test','startpilot','startpilot_purchase','19.00','EUR','one-time',JSON_OBJECT('aiAnswers',300),'Old writer after contract','paid','staged-fenced-key','staged-fenced-scope','staged-user','staged-page',0,1)"
-      ),
-      "contract fences an old handoff writer"
+      terminal.connectionId === null && terminal.privacyEpoch === null,
+      "0016 remains the exact terminal schema without retired 0017 repair"
     );
   });
   await withDatabase(databases[22], connection =>
-    applyMigrationPrefix(connection, manifest.slice(0, -1))
-  );
-  const beforeVerifyOnlyRefusal = await withDatabaseResult(
-    databases[22],
-    connection => captureSchemaFingerprint(connection)
-  );
-  await expectFailure(
-    runProductionMigrations({
-      databaseUrl: databaseUrl(databases[22]),
-      verifyOnly: true,
-    }),
-    "verify-only release on pending 0017",
-    "schema is at 0016_expand; contract verification refused"
+    applyMigrationPrefix(connection, migrationPlan.through0016)
   );
   const verifiedExpand = await runProductionMigrationStage({
     databaseUrl: databaseUrl(databases[22]),
@@ -309,7 +276,7 @@ try {
   });
   assert(
     verifiedExpand.schemaPhase === "0016_expand" &&
-      verifiedExpand.appliedCount === 17,
+      verifiedExpand.appliedCount === migrationPlan.through0016.length,
     "expand release accepts the exact expanded schema"
   );
   const verifiedExpandBridge = await runProductionMigrationStage({
@@ -321,54 +288,28 @@ try {
     verifiedExpandBridge.schemaPhase === "0016_expand",
     "compatibility bridge accepts the expanded schema"
   );
-  const afterVerifyOnlyRefusal = await withDatabaseResult(
-    databases[22],
-    connection => captureSchemaFingerprint(connection)
-  );
-  assert(
-    beforeVerifyOnlyRefusal === afterVerifyOnlyRefusal,
-    "verify-only release leaves pending schema/history unchanged"
-  );
   const verifiedComplete = await runProductionMigrations({
     databaseUrl: concurrentUrl,
     verifyOnly: true,
   });
   assert(
-    verifiedComplete.appliedCount === 18,
+    verifiedComplete.appliedCount === migrationPlan.through0016.length,
     "verify-only release accepts exact completed schema"
-  );
-  for (const target of ["compatible", "expand"]) {
-    await expectFailure(
-      runProductionMigrationStage({
-        databaseUrl: concurrentUrl,
-        verifyOnly: true,
-        target,
-      }),
-      `${target} verifier on unauthorized 0017`,
-      `schema is at 0017_contract; ${target} verification refused`
-    );
-  }
-  const verifiedContract = await runProductionMigrationStage({
-    databaseUrl: concurrentUrl,
-    verifyOnly: true,
-    target: "contract",
-  });
-  assert(
-    verifiedContract.schemaPhase === "0017_contract",
-    "contract verification accepts only the contract schema"
   );
   await expectFailure(
     runProductionMigrationStage({
       databaseUrl: concurrentUrl,
-      verifyOnly: false,
-      target: "expand",
+      verifyOnly: true,
+      target: "contract",
     }),
-    "expand apply on unauthorized 0017",
-    "expand migration refuses the 0017 contract schema"
+    "retired contract target",
+    "migration target must be compatible, expand, or credit-wallet"
   );
-  const migration0016ForVerify = await readMigrationStatements(manifest.at(-2));
+  const migration0016ForVerify = await readMigrationStatements(
+    migrationPlan.expand0016
+  );
   await withDatabase(databases[1], async connection => {
-    await applyMigrationPrefix(connection, manifest.slice(0, -2));
+    await applyMigrationPrefix(connection, migrationPlan.through0015);
     await connection.query(
       "INSERT INTO `workspaces` (`id`,`name`,`slug`) VALUES (7101,'Verify only','verify-only')"
     );
@@ -435,8 +376,8 @@ try {
     databaseUrl: databaseUrl(databases[19]),
   });
   assert(
-    migratedLegacy.appliedCount === 18,
-    "bridged 0014 continues through canonical 0017"
+    migratedLegacy.appliedCount === migrationPlan.through0016.length,
+    "bridged 0014 continues through canonical 0016"
   );
 
   await withDatabase(databases[20], async connection => {
@@ -462,13 +403,10 @@ try {
     "database is not an exact supported legacy 0007/0014 state"
   );
   const migration0016Statements = await readMigrationStatements(
-    manifest.at(-2)
-  );
-  const migration0017Statements = await readMigrationStatements(
-    manifest.at(-1)
+    migrationPlan.expand0016
   );
   const migration0015Statements = await readMigrationStatements(
-    manifest.at(-3)
+    migrationPlan.base0015
   );
   await withDatabase(databases[14], async connection => {
     await connection.query("SET SESSION sql_safe_updates=1");
@@ -492,7 +430,7 @@ try {
     databaseUrl: databaseUrl(databases[14]),
   });
   assert(
-    canonicalizedSession.appliedCount === 18,
+    canonicalizedSession.appliedCount === migrationPlan.through0016.length,
     "poisoned session values are canonicalized before fresh migration"
   );
 
@@ -505,17 +443,17 @@ try {
       databaseUrl: databaseUrl(databases[15]),
     });
     assert(
-      primaryKeyFresh.appliedCount === 18,
+      primaryKeyFresh.appliedCount === migrationPlan.through0016.length,
       "fresh migration supports required primary keys"
     );
     await withDatabase(databases[16], connection =>
-      applyMigrationPrefix(connection, manifest.slice(0, -1))
+      applyMigrationPrefix(connection, migrationPlan.through0015)
     );
     const primaryKeyUpgrade = await runProductionMigrations({
       databaseUrl: databaseUrl(databases[16]),
     });
     assert(
-      primaryKeyUpgrade.appliedCount === 18,
+      primaryKeyUpgrade.appliedCount === migrationPlan.through0016.length,
       "0015 upgrade supports required primary keys"
     );
   } finally {
@@ -563,16 +501,54 @@ try {
     assertNoApplicationTables(connection, "single prepared slot refusal")
   );
   await testCompletedSchemaRefusals(databases[0], migration0015Statements);
-  await testHistoryRefusals(databases[0], manifest);
+  await testHistoryRefusals(databases[0], migrationPlan);
   await testEveryTailStatementBoundary({
-    manifest,
+    migrationPlan,
     migration0016Statements,
+  });
+  const migration0017Statements = await readMigrationStatements(
+    migrationPlan.creditWallet0017
+  );
+  await testEvery0017StatementBoundary({
+    migrationPlan,
     migration0017Statements,
   });
-  await testHandoffPrivacyBackfill(manifest);
+  const migration0018Statements = await readMigrationStatements(
+    migrationPlan.creditCheckout0018
+  );
+  await testEvery0018StatementBoundary({
+    migrationPlan,
+    migration0018Statements,
+  });
+  await testBridgeArtifactDualPhaseVerification(migrationPlan);
+  const freshCredit = await runProductionMigrationStage({
+    databaseUrl: databaseUrl(creditFreshDatabase),
+    target: "credit-wallet",
+    verifyOnly: false,
+    allowEmptyBootstrap: true,
+    privilegeProfile: "credit-bootstrap",
+  });
+  assert(
+    freshCredit.appliedCount === migrationPlan.through0018.length &&
+      freshCredit.schemaPhase === "0018_credit_checkout_reservation",
+    "fresh credit-wallet bootstrap reaches exact 0018"
+  );
+  await assertExactCreditWalletObjects(creditFreshDatabase);
+  await testCreditWalletLeastPrivilegeProfiles(migrationPlan);
+  const creditNoop = await runProductionMigrationStage({
+    databaseUrl: databaseUrl(creditFreshDatabase),
+    target: "credit-wallet",
+    verifyOnly: false,
+    privilegeProfile: "credit-bootstrap",
+  });
+  assert(
+    creditNoop.appliedCount === migrationPlan.through0018.length &&
+      creditNoop.schemaPhase === "0018_credit_checkout_reservation",
+    "complete 0018 is an exact no-op"
+  );
 
   await withDatabase(databases[2], async connection => {
-    await applyMigrationPrefix(connection, manifest.slice(0, -3));
+    await applyMigrationPrefix(connection, migrationPlan.through0014);
     await createLegacyMessengerState(connection);
     await connection.query(
       "INSERT INTO `messengerState` (`psid`,`userKey`) VALUES ('migration-preserved-psid','migration-preserved-key')"
@@ -590,8 +566,8 @@ try {
     databaseUrl: databaseUrl(databases[2]),
   });
   assert(
-    upgradedWithState.appliedCount === 18,
-    "0014 with exact legacy state continues through 0017"
+    upgradedWithState.appliedCount === migrationPlan.through0016.length,
+    "0014 with exact legacy state continues through 0016"
   );
   await withDatabase(databases[2], async connection => {
     const [[row]] = await connection.query(
@@ -610,7 +586,7 @@ try {
   );
 
   await withDatabase(databases[4], async connection => {
-    await applyMigrationPrefix(connection, manifest.slice(0, -3));
+    await applyMigrationPrefix(connection, migrationPlan.through0014);
     await createLegacyMessengerState(connection);
     await connection.query(
       "ALTER TABLE `billing_outbox` MODIFY COLUMN `attempt_count` bigint NOT NULL DEFAULT 0"
@@ -643,7 +619,7 @@ try {
   await withDatabase(databases[0], async connection => {
     await connection.query(
       "UPDATE `__drizzle_migrations` SET `hash`=REPEAT('0',64) WHERE `created_at`=?",
-      [manifest.at(-1).when]
+      [migrationPlan.expand0016.when]
     );
   });
   await expectFailure(
@@ -710,7 +686,7 @@ try {
   );
 
   await withDatabase(databases[12], async connection => {
-    await applyMigrationPrefix(connection, manifest.slice(0, -2));
+    await applyMigrationPrefix(connection, migrationPlan.through0015);
     await applyStatements(connection, migration0016Statements.slice(0, 4));
     await connection.query(
       "ALTER TABLE `messenger_privacy_subjects` ADD COLUMN `unexpected_partial_drift` int NULL"
@@ -723,7 +699,7 @@ try {
   );
 
   await withDatabase(databases[13], async connection => {
-    await applyMigrationPrefix(connection, manifest.slice(0, -3));
+    await applyMigrationPrefix(connection, migrationPlan.through0014);
     await connection.query(
       "ALTER TABLE `__drizzle_migrations` AUTO_INCREMENT=100"
     );
@@ -737,21 +713,8 @@ try {
     assertNo0015Objects(connection, "advanced 0014 history refusal")
   );
 
-  await withDatabase(databases[6], async connection => {
-    await applyMigrationPrefix(connection, manifest.slice(0, -1));
-    await applyStatements(connection, migration0017Statements.slice(0, 4));
-    await connection.query(
-      "ALTER TABLE `billing_intents` ADD COLUMN `unexpected_partial_drift` int NULL"
-    );
-  });
-  await expectFailure(
-    runProductionMigrations({ databaseUrl: databaseUrl(databases[6]) }),
-    "arbitrary 0017 partial drift",
-    "0017 partial schema fingerprint mismatch"
-  );
-
   await withDatabase(databases[7], async connection => {
-    await applyMigrationPrefix(connection, manifest.slice(0, -2));
+    await applyMigrationPrefix(connection, migrationPlan.through0015);
     await connection.query(
       "INSERT INTO `workspaces` (`id`,`name`,`slug`) VALUES (7001,'Partial data','partial-data')"
     );
@@ -770,7 +733,7 @@ try {
     databaseUrl: databaseUrl(databases[7]),
   });
   assert(
-    resumedReactivatedSubject.appliedCount === manifest.length,
+    resumedReactivatedSubject.appliedCount === migrationPlan.through0016.length,
     "0016 resume accepts a reactivated subject with retained erasure history"
   );
   await withDatabase(databases[7], async connection => {
@@ -786,7 +749,7 @@ try {
   });
 
   await withDatabase(databases[8], async connection => {
-    await applyMigrationPrefix(connection, manifest.slice(0, -3));
+    await applyMigrationPrefix(connection, migrationPlan.through0014);
     await createLegacyMessengerState(connection);
     await connection.query(
       "ALTER TABLE `messengerState` MODIFY COLUMN `updatedAt` timestamp DEFAULT (now()) NOT NULL"
@@ -821,11 +784,12 @@ try {
     "0014 schema fingerprint mismatch"
   );
   await resetLegacyMessengerState(databases[8]);
-  await withDatabase(databases[8], connection =>
-    connection.query(
+  await withDatabase(databases[8], async connection => {
+    await connection.query("SET SESSION sql_require_primary_key=OFF");
+    await connection.query(
       "ALTER TABLE `messengerState` ADD UNIQUE INDEX `temporary_id_unique` (`id`), DROP PRIMARY KEY"
-    )
-  );
+    );
+  });
   await expectFailure(
     runProductionMigrations({ databaseUrl: databaseUrl(databases[8]) }),
     "messengerState malformed primary key",
@@ -853,35 +817,15 @@ try {
     }
   });
 
-  await withDatabase(handoffWriterLockDatabase, async connection => {
-    await applyMigrationPrefix(connection, manifest.slice(0, -1));
-    const lockName = billingHandoffWriterLockName(handoffWriterLockDatabase);
-    const [[lock]] = await connection.query(
-      "SELECT GET_LOCK(?,0) AS acquired",
-      [lockName]
-    );
-    assert(Number(lock.acquired) === 1, "handoff writer test lock acquired");
-    try {
-      await expectFailure(
-        runProductionMigrations({
-          databaseUrl: databaseUrl(handoffWriterLockDatabase),
-          lockTimeoutSeconds: 0,
-        }),
-        "handoff writer lock contention",
-        "billing handoff writer lock is unavailable"
-      );
-    } finally {
-      await connection.query("SELECT RELEASE_LOCK(?)", [lockName]);
-    }
-  });
-  await runProductionMigrations({
-    databaseUrl: databaseUrl(handoffWriterLockDatabase),
-  });
-
   process.stdout.write(
-    "Production migrator passed: singleton, exact manifest, forward resume at every 0016/0017 boundary, and drift refusal.\n"
+    "Production migrator passed: singleton, exact 0000-0018 plan, fresh and 0017-to-0018 apply, every 0016/0017/0018 boundary resume, routine/trigger inventory, no-op, and drift refusal.\n"
   );
 } finally {
+  await admin.query(`DROP USER IF EXISTS \`${creditMigrationUser}\`@'%'`);
+  await admin.query(`DROP USER IF EXISTS \`${creditProvisionerUser}\`@'%'`);
+  await admin.query(`DROP USER IF EXISTS \`${creditRuntimeUser}\`@'%'`);
+  await admin.query(`DROP USER IF EXISTS \`${bridgeLegacyUser}\`@'%'`);
+  await admin.query(`DROP USER IF EXISTS \`${bridgeCreditUser}\`@'%'`);
   for (const database of databases) {
     await admin.query(`DROP DATABASE IF EXISTS \`${database}\``);
   }
@@ -889,9 +833,8 @@ try {
 }
 
 async function testEveryTailStatementBoundary({
-  manifest,
+  migrationPlan,
   migration0016Statements,
-  migration0017Statements,
 }) {
   for (
     let boundary = 0;
@@ -900,7 +843,7 @@ async function testEveryTailStatementBoundary({
   ) {
     const database = resume0016Databases[boundary];
     await withDatabase(database, async connection => {
-      await applyMigrationPrefix(connection, manifest.slice(0, -2));
+      await applyMigrationPrefix(connection, migrationPlan.through0015);
       await applyStatements(
         connection,
         migration0016Statements.slice(0, boundary)
@@ -910,221 +853,713 @@ async function testEveryTailStatementBoundary({
       databaseUrl: databaseUrl(database),
     });
     assert(
-      resumed.appliedCount === manifest.length,
+      resumed.appliedCount === migrationPlan.through0016.length,
       `0016 resumes after statement boundary ${boundary}`
     );
   }
+}
 
+async function testEvery0017StatementBoundary({
+  migrationPlan,
+  migration0017Statements,
+}) {
+  assert(
+    migration0017Statements.length === 54,
+    "0017 exposes the exact 54-statement migration contract"
+  );
   for (
     let boundary = 0;
     boundary <= migration0017Statements.length;
     boundary += 1
   ) {
-    const database = resume0017Databases[boundary];
-    await withDatabase(database, async connection => {
-      await applyMigrationPrefix(connection, manifest.slice(0, -1));
+    await admin.query(`DROP DATABASE IF EXISTS \`${creditBoundaryDatabase}\``);
+    await admin.query(
+      `CREATE DATABASE \`${creditBoundaryDatabase}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci`
+    );
+    await withDatabase(creditBoundaryDatabase, async connection => {
+      await applyMigrationPrefix(connection, migrationPlan.through0016);
       await applyStatements(
         connection,
         migration0017Statements.slice(0, boundary)
       );
-      if (boundary === 12) {
-        await insertInterruptedLegacyDeletionFixture(connection);
-      }
-      if (boundary === 15) {
-        await insertPostErasureLegacyWriterFixture(connection);
-      }
     });
-    const resumed = await runProductionMigrations({
-      databaseUrl: databaseUrl(database),
+    const resumed = await runProductionMigrationStage({
+      databaseUrl: databaseUrl(creditBoundaryDatabase),
+      target: "credit-wallet",
+      verifyOnly: false,
+      privilegeProfile: "credit-bootstrap",
     });
     assert(
-      resumed.appliedCount === manifest.length,
+      resumed.appliedCount === migrationPlan.through0018.length &&
+        resumed.schemaPhase === "0018_credit_checkout_reservation",
       `0017 resumes after statement boundary ${boundary}`
     );
-    if (boundary === 15) {
-      await withDatabase(database, async connection => {
-        const [[contained]] = await connection.query(
-          "SELECT `status`,`messengerSenderUserKey` AS userKey,`facebookPageId` AS pageId,`messenger_channel_connection_id` AS connectionId,`messenger_privacy_epoch` AS privacyEpoch FROM `portalHandoffTokens` WHERE `tokenHash`='post-erasure-token'"
-        );
-        assert(
-          contained.status === "revoked" &&
-            contained.userKey === null &&
-            contained.pageId === null &&
-            contained.connectionId === null &&
-            contained.privacyEpoch === null,
-          "post-erasure legacy write is scrubbed before constraints"
-        );
-        await expectMysqlCheckFailure(
-          connection.query(
-            "INSERT INTO `portalHandoffTokens` (`workspaceId`,`tokenHash`,`messengerSenderUserKey`,`facebookPageId`,`purpose`,`status`,`expiresAt`) VALUES (7701,'old-shape-after-check','post-erasure-user','post-erasure-page','workspace_onboarding','pending',DATE_ADD(NOW(),INTERVAL 1 HOUR))"
-          ),
-          "old-shape writer after strict handoff check"
-        );
-      });
-    }
-    if (boundary === 12) {
-      await withDatabase(database, async connection => {
-        const [[intent]] = await connection.query(
-          "SELECT `status`,`messenger_sender_user_key` AS userKey,`messenger_page_id` AS pageId,`messenger_channel_connection_id` AS connectionId,`messenger_privacy_epoch` AS privacyEpoch FROM `billing_intents` WHERE `intent_id`='79000000-0000-4000-8000-000000000001'"
-        );
-        assert(
-          intent.status === "paid" &&
-            intent.userKey === null &&
-            intent.pageId === null &&
-            intent.connectionId === null &&
-            intent.privacyEpoch === null,
-          "resume contains a legacy deletion that landed after data COMMIT"
-        );
-      });
-    }
   }
+  await assertExactCreditWalletObjects(creditBoundaryDatabase);
 }
 
-async function insertInterruptedLegacyDeletionFixture(connection) {
-  await connection.query(
-    "INSERT INTO `workspaces` (`id`,`name`,`slug`) VALUES (7901,'Interrupted deletion','interrupted-deletion')"
+async function testEvery0018StatementBoundary({
+  migrationPlan,
+  migration0018Statements,
+}) {
+  assert(
+    migration0018Statements.length === 5,
+    "0018 exposes the exact five-statement migration contract"
   );
-  await connection.query(
-    "INSERT INTO `channelConnections` (`id`,`workspaceId`,`channel`,`status`,`externalId`) VALUES (7902,7901,'facebook_messenger','connected','interrupted-page')"
-  );
-  await connection.query(
-    "INSERT INTO `messenger_privacy_subjects` (`workspace_id`,`channel_connection_id`,`user_key`,`privacy_epoch`,`status`) VALUES (7901,7902,'interrupted-user',3,'active')"
-  );
-  await connection.query(
-    "INSERT INTO `billing_intents` (`intent_id`,`workspace_id`,`mode`,`plan_code`,`kind`,`expected_amount`,`currency`,`interval`,`entitlements`,`mollie_description`,`status`,`idempotency_key`,`checkout_scope_key`,`messenger_sender_user_key`,`messenger_page_id`,`messenger_channel_connection_id`,`messenger_privacy_epoch`,`billing_profile_version`,`authorization_epoch`) VALUES ('79000000-0000-4000-8000-000000000001',7901,'test','startpilot','startpilot_purchase','19.00','EUR','one-time',JSON_OBJECT('aiAnswers',300),'Interrupted deletion','paid','interrupted-deletion-key','interrupted-deletion-scope','interrupted-user','interrupted-page',7902,3,0,1)"
-  );
-  await connection.query(
-    "UPDATE `messenger_privacy_subjects` SET `privacy_epoch`=4,`status`='erased',`erased_at`='2026-08-23 10:30:00',`last_erased_at`='2026-08-23 10:30:00.000' WHERE `workspace_id`=7901 AND `channel_connection_id`=7902 AND `user_key`='interrupted-user'"
-  );
-  // Old code knows only the legacy pair. This is the reachable durable shape
-  // if it erases identity after the migration data COMMIT but before CHECK DDL.
-  await connection.query(
-    "UPDATE `billing_intents` SET `messenger_sender_user_key`=NULL,`messenger_page_id`=NULL WHERE `intent_id`='79000000-0000-4000-8000-000000000001'"
-  );
+  for (
+    let boundary = 0;
+    boundary <= migration0018Statements.length;
+    boundary += 1
+  ) {
+    await admin.query(`DROP DATABASE IF EXISTS \`${creditBoundaryDatabase}\``);
+    await admin.query(
+      `CREATE DATABASE \`${creditBoundaryDatabase}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci`
+    );
+    await withDatabase(creditBoundaryDatabase, async connection => {
+      await applyMigrationPrefix(connection, migrationPlan.through0017);
+      await applyStatements(
+        connection,
+        migration0018Statements.slice(0, boundary)
+      );
+    });
+    const resumed = await runProductionMigrationStage({
+      databaseUrl: databaseUrl(creditBoundaryDatabase),
+      target: "credit-wallet",
+      verifyOnly: false,
+      privilegeProfile: "credit-bootstrap",
+    });
+    assert(
+      resumed.appliedCount === migrationPlan.through0018.length &&
+        resumed.schemaPhase === "0018_credit_checkout_reservation",
+      `0018 resumes after statement boundary ${boundary}`
+    );
+  }
+  await assertExactCreditWalletObjects(creditBoundaryDatabase);
 }
 
-async function insertPostErasureLegacyWriterFixture(connection) {
-  await connection.query(
-    "INSERT INTO `workspaces` (`id`,`name`,`slug`) VALUES (7701,'Post erasure','post-erasure')"
+async function testBridgeArtifactDualPhaseVerification(migrationPlan) {
+  const bridgeOptions = productionMigrationOptionsForMode(
+    "verify-artifact",
+    "migration-bridge"
   );
-  await connection.query(
-    "INSERT INTO `channelConnections` (`id`,`workspaceId`,`channel`,`status`,`externalId`) VALUES (7702,7701,'facebook_messenger','connected','post-erasure-page')"
+  if (!bridgeOptions) {
+    throw new Error("bridge artifact verification options are unavailable");
+  }
+  await withDatabase(bridgeArtifactDatabase, connection =>
+    applyMigrationPrefix(connection, migrationPlan.through0016)
   );
-  await connection.query(
-    "INSERT INTO `messenger_privacy_subjects` (`workspace_id`,`channel_connection_id`,`user_key`,`privacy_epoch`,`status`,`erased_at`,`last_erased_at`) VALUES (7701,7702,'post-erasure-user',2,'erased','2026-08-23 10:00:00','2026-08-23 10:00:00.000')"
+  await admin.query(`CREATE USER \`${bridgeLegacyUser}\`@'%'`);
+  await admin.query(
+    `GRANT SELECT, INSERT, UPDATE, DELETE ON \`${bridgeArtifactDatabase}\`.* TO \`${bridgeLegacyUser}\`@'%'`
   );
-  // Simulates an old process that was already past its application-level
-  // privacy check when deletion completed, but writes before the DB CHECK.
-  await connection.query(
-    "INSERT INTO `portalHandoffTokens` (`workspaceId`,`tokenHash`,`messengerSenderUserKey`,`facebookPageId`,`purpose`,`status`,`expiresAt`) VALUES (7701,'post-erasure-token','post-erasure-user','post-erasure-page','workspace_onboarding','pending',DATE_ADD(NOW(),INTERVAL 1 HOUR))"
-  );
-}
 
-async function testHandoffPrivacyBackfill(manifest) {
-  const database = "leaderbot_production_migrator_handoff_backfill";
-  await withDatabase(database, async connection => {
-    await applyMigrationPrefix(connection, manifest.slice(0, -1));
-    await connection.query(
-      "INSERT INTO `workspaces` (`id`,`name`,`slug`) VALUES (7801,'Handoff backfill','handoff-backfill')"
-    );
-    await connection.query(
-      "INSERT INTO `channelConnections` (`id`,`workspaceId`,`channel`,`status`,`externalId`) VALUES (7802,7801,'facebook_messenger','connected','backfill-page')"
-    );
-    await connection.query(
-      "INSERT INTO `messenger_privacy_subjects` (`workspace_id`,`channel_connection_id`,`user_key`,`privacy_epoch`,`status`,`erased_at`,`last_erased_at`) VALUES (7801,7802,'active-user',4,'active',NULL,NULL),(7801,7802,'erased-user',7,'erased','2026-08-23 09:00:00','2026-08-23 09:00:00.000')"
-    );
-    await connection.query(
-      "INSERT INTO `billing_intents` (`intent_id`,`workspace_id`,`mode`,`plan_code`,`kind`,`expected_amount`,`currency`,`interval`,`entitlements`,`mollie_description`,`status`,`idempotency_key`,`checkout_scope_key`,`messenger_sender_user_key`,`messenger_page_id`,`billing_profile_version`,`authorization_epoch`) VALUES ('78000000-0000-4000-8000-000000000001',7801,'test','startpilot','startpilot_purchase','19.00','EUR','one-time',JSON_OBJECT('aiAnswers',300),'Valid backfill','paid','backfill-valid-key','backfill-valid-scope','active-user','backfill-page',0,1),('78000000-0000-4000-8000-000000000002',7801,'test','startpilot','startpilot_purchase','19.00','EUR','one-time',JSON_OBJECT('aiAnswers',300),'Erased backfill','paid','backfill-erased-key','backfill-erased-scope','erased-user','backfill-page',0,1)"
-    );
-    await connection.query(
-      "INSERT INTO `portalHandoffTokens` (`workspaceId`,`tokenHash`,`messengerSenderUserKey`,`facebookPageId`,`purpose`,`status`,`expiresAt`) VALUES (7801,'backfill-valid-token','active-user','backfill-page','workspace_onboarding','consumed',DATE_SUB(NOW(),INTERVAL 1 HOUR)),(7801,'backfill-erased-token','erased-user','backfill-page','workspace_onboarding','pending',DATE_ADD(NOW(),INTERVAL 1 HOUR))"
-    );
-    await connection.query(
-      "INSERT INTO `billing_outbox` (`id`,`delivery_id`,`workspace_id`,`mode`,`event_type`,`deduplication_key`,`payload`,`status`,`available_at`) VALUES (7803,'78000000-0000-4000-8000-000000000003',7801,'test','send_portal_handoff','backfill-valid-outbox',JSON_OBJECT('intentId','78000000-0000-4000-8000-000000000001','messengerSenderUserKey','active-user','messengerPageId','backfill-page'),'pending',NOW()),(7804,'78000000-0000-4000-8000-000000000004',7801,'test','send_portal_handoff','backfill-erased-outbox',JSON_OBJECT('intentId','78000000-0000-4000-8000-000000000002','messengerSenderUserKey','erased-user','messengerPageId','backfill-page'),'pending',NOW())"
-    );
-    await connection.query(
-      "INSERT INTO `billing_handoff_recovery_events` (`outbox_id`,`workspace_id`,`event_id_hash`,`source`,`event_timestamp`) VALUES (7804,7801,REPEAT('a',64),'migration-test',NOW())"
-    );
-  });
-
-  const migrated = await runProductionMigrations({
-    databaseUrl: databaseUrl(database),
+  const legacyVerified = await runProductionMigrationStage({
+    ...bridgeOptions,
+    databaseUrl: databaseUrlForUser(bridgeArtifactDatabase, bridgeLegacyUser),
   });
   assert(
-    migrated.appliedCount === manifest.length,
-    "handoff privacy fixture reaches final schema"
+    legacyVerified.schemaPhase === "0016_expand" &&
+      legacyVerified.appliedCount === migrationPlan.through0016.length,
+    "bridge artifact accepts only the legacy runtime profile on stable 0016"
   );
+
+  const migration0017Statements = await readMigrationStatements(
+    migrationPlan.creditWallet0017
+  );
+  await withDatabase(bridgeArtifactDatabase, connection =>
+    applyStatements(connection, migration0017Statements.slice(0, 3))
+  );
+  await expectFailure(
+    runProductionMigrationStage({
+      ...bridgeOptions,
+      databaseUrl: databaseUrlForUser(bridgeArtifactDatabase, bridgeLegacyUser),
+    }),
+    "bridge artifact rejects interrupted 0017 before principal selection",
+    "exact stable bridge schema phase"
+  );
+
+  await withDatabase(bridgeArtifactDatabase, async connection => {
+    await applyStatements(connection, migration0017Statements.slice(3));
+    await connection.query(
+      "INSERT INTO `__drizzle_migrations` (`hash`,`created_at`) VALUES (?,?)",
+      [
+        migrationPlan.creditWallet0017.sha256,
+        migrationPlan.creditWallet0017.when,
+      ]
+    );
+    const migration0018Statements = await readMigrationStatements(
+      migrationPlan.creditCheckout0018
+    );
+    await applyStatements(connection, migration0018Statements.slice(0, 1));
+  });
+  await expectFailure(
+    runProductionMigrationStage({
+      ...bridgeOptions,
+      databaseUrl: databaseUrlForUser(bridgeArtifactDatabase, bridgeLegacyUser),
+    }),
+    "bridge artifact rejects interrupted 0018 before principal selection",
+    "exact stable bridge schema phase"
+  );
+
+  await withDatabase(bridgeArtifactDatabase, async connection => {
+    const migration0018Statements = await readMigrationStatements(
+      migrationPlan.creditCheckout0018
+    );
+    await applyStatements(connection, migration0018Statements.slice(1));
+    await connection.query(
+      "INSERT INTO `__drizzle_migrations` (`hash`,`created_at`) VALUES (?,?)",
+      [
+        migrationPlan.creditCheckout0018.sha256,
+        migrationPlan.creditCheckout0018.when,
+      ]
+    );
+  });
+  await admin.query(`CREATE USER \`${bridgeCreditUser}\`@'%'`);
+  await admin.query(
+    `GRANT SELECT ON \`${bridgeArtifactDatabase}\`.* TO \`${bridgeCreditUser}\`@'%'`
+  );
+  for (const tableName of productionRuntimeWritableTableNames) {
+    await admin.query(
+      `GRANT INSERT, UPDATE, DELETE ON \`${bridgeArtifactDatabase}\`.\`${tableName}\` TO \`${bridgeCreditUser}\`@'%'`
+    );
+  }
+  for (const routine of creditWalletRoutineNames) {
+    await admin.query(
+      `GRANT EXECUTE ON PROCEDURE \`${bridgeArtifactDatabase}\`.\`${routine}\` TO \`${bridgeCreditUser}\`@'%'`
+    );
+  }
+  const creditVerified = await runProductionMigrationStage({
+    ...bridgeOptions,
+    databaseUrl: databaseUrlForUser(bridgeArtifactDatabase, bridgeCreditUser),
+  });
+  assert(
+    creditVerified.schemaPhase === "0018_credit_checkout_reservation" &&
+      creditVerified.appliedCount === migrationPlan.through0018.length,
+    "bridge artifact accepts the exact credit runtime profile on stable 0018"
+  );
+  await expectFailure(
+    runProductionMigrationStage({
+      ...bridgeOptions,
+      databaseUrl: databaseUrlForUser(bridgeArtifactDatabase, bridgeLegacyUser),
+    }),
+    "bridge artifact rejects the legacy runtime profile on stable 0018",
+    "credit runtime privilege boundary mismatch"
+  );
+}
+
+async function assertExactCreditWalletObjects(database) {
   await withDatabase(database, async connection => {
-    const [intents] = await connection.query(
-      "SELECT `intent_id` AS id,`status`,`messenger_sender_user_key` AS userKey,`messenger_page_id` AS pageId,`messenger_channel_connection_id` AS connectionId,`messenger_privacy_epoch` AS privacyEpoch FROM `billing_intents` WHERE `workspace_id`=7801 ORDER BY `intent_id`"
+    const [[tables]] = await connection.query(
+      "SELECT COUNT(*) AS count FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN ('credit_ledger','credit_reservations','credit_wallets')"
+    );
+    const [[routines]] = await connection.query(
+      "SELECT COUNT(*) AS count FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA=DATABASE() AND ROUTINE_NAME LIKE 'credit\\_%'"
+    );
+    const [[triggers]] = await connection.query(
+      "SELECT COUNT(*) AS count FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=DATABASE() AND TRIGGER_NAME LIKE 'credit\\_%'"
     );
     assert(
-      intents[0].status === "paid" &&
-        intents[0].userKey === "active-user" &&
-        intents[0].connectionId === 7802 &&
-        intents[0].privacyEpoch === 4,
-      "active billing identity receives immutable scope"
+      Number(tables.count) === 3,
+      "0017 creates exactly three credit tables"
     );
     assert(
-      intents[1].status === "paid" &&
-        intents[1].userKey === null &&
-        intents[1].pageId === null &&
-        intents[1].connectionId === null &&
-        intents[1].privacyEpoch === null,
-      "erased billing identity is scrubbed without changing financial truth"
-    );
-    const [tokens] = await connection.query(
-      "SELECT `tokenHash` AS tokenHash,`status`,`messengerSenderUserKey` AS userKey,`messenger_channel_connection_id` AS connectionId,`messenger_privacy_epoch` AS privacyEpoch FROM `portalHandoffTokens` WHERE `workspaceId`=7801 ORDER BY `tokenHash`"
+      Number(routines.count) === creditWalletRoutineNames.length,
+      "0018 retains the exact reviewed credit routine count"
     );
     assert(
-      tokens[0].status === "revoked" && tokens[0].userKey === null,
-      "erased portal capability is revoked and scrubbed"
+      Number(triggers.count) === 14,
+      "0017 creates exactly fourteen credit triggers"
+    );
+    const [routineRows] = await connection.query(
+      "SELECT ROUTINE_NAME AS name FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA=DATABASE() AND ROUTINE_NAME LIKE 'credit\\_%' ORDER BY ROUTINE_NAME"
     );
     assert(
-      tokens[1].status === "consumed" &&
-        tokens[1].userKey === "active-user" &&
-        tokens[1].connectionId === 7802 &&
-        tokens[1].privacyEpoch === 4,
-      "consumed active portal capability keeps its immutable scope"
+      JSON.stringify(routineRows.map(row => row.name).sort()) ===
+        JSON.stringify([...creditWalletRoutineNames].sort()),
+      "0018 exposes only the exact reviewed credit routine inventory"
     );
-    const [outbox] = await connection.query(
-      "SELECT `id`,`status`,`last_error_code` AS errorCode,`privacy_erased_at` AS privacyErasedAt,JSON_UNQUOTE(JSON_EXTRACT(`payload`,'$.messengerChannelConnectionId')) AS payloadConnection,JSON_UNQUOTE(JSON_EXTRACT(`payload`,'$.messengerPrivacyEpoch')) AS payloadEpoch,JSON_UNQUOTE(JSON_EXTRACT(`payload`,'$.privacyErased')) AS payloadErased FROM `billing_outbox` WHERE `workspace_id`=7801 ORDER BY `id`"
-    );
-    assert(
-      outbox[0].status === "pending" &&
-        Number(outbox[0].payloadConnection) === 7802 &&
-        Number(outbox[0].payloadEpoch) === 4,
-      "valid handoff job receives the immutable scope"
-    );
-    assert(
-      outbox[1].status === "failed" &&
-        outbox[1].errorCode === "privacy_erased" &&
-        outbox[1].privacyErasedAt instanceof Date &&
-        outbox[1].payloadErased === "true",
-      "invalid handoff job is fenced and scrubbed"
-    );
-    const [[recovery]] = await connection.query(
-      "SELECT COUNT(*) AS count FROM `billing_handoff_recovery_events` WHERE `outbox_id`=7804"
-    );
-    assert(Number(recovery.count) === 0, "invalid handoff recovery is removed");
   });
 }
 
-async function expectMysqlCheckFailure(promise, label) {
-  try {
-    await promise;
-  } catch (error) {
-    if (
-      error?.code === "ER_CHECK_CONSTRAINT_VIOLATED" ||
-      Number(error?.errno) === 3819
-    ) {
-      return;
-    }
-    throw new Error(`${label} failed for an unexpected reason`, {
-      cause: error,
-    });
+async function testCreditWalletLeastPrivilegeProfiles(migrationPlan) {
+  await withDatabase(creditPrivilegeDatabase, connection =>
+    applyMigrationPrefix(connection, migrationPlan.through0016)
+  );
+  await admin.query(`CREATE USER \`${creditMigrationUser}\`@'%'`);
+  await admin.query(`CREATE USER \`${creditProvisionerUser}\`@'%'`);
+  const [[triggerRuntime]] = await admin.query(
+    "SELECT @@GLOBAL.log_bin AS logBin, @@GLOBAL.log_bin_trust_function_creators AS trustFunctionCreators"
+  );
+  if (
+    Number(triggerRuntime.logBin) === 1 &&
+    Number(triggerRuntime.trustFunctionCreators) === 0
+  ) {
+    await admin.query(`GRANT SUPER ON *.* TO \`${creditMigrationUser}\`@'%'`);
   }
-  throw new Error(`expected MySQL CHECK refusal: ${label}`);
+  const migrationPrivileges =
+    "CREATE, CREATE TEMPORARY TABLES, ALTER, INDEX, REFERENCES, SELECT, INSERT, UPDATE, TRIGGER, CREATE ROUTINE, ALTER ROUTINE";
+  await admin.query(
+    `GRANT ${migrationPrivileges} ON \`${creditPrivilegeDatabase}\`.* TO \`${creditMigrationUser}\`@'%'`
+  );
+  await admin.query(
+    `GRANT CREATE USER ON *.* TO \`${creditProvisionerUser}\`@'%'`
+  );
+  await admin.query(
+    `GRANT SELECT ON \`mysql\`.\`user\` TO \`${creditProvisionerUser}\`@'%'`
+  );
+  await admin.query(
+    `GRANT SELECT, EXECUTE ON \`${creditPrivilegeDatabase}\`.* TO \`${creditProvisionerUser}\`@'%' WITH GRANT OPTION`
+  );
+  for (const tableName of productionRuntimeWritableTableNames) {
+    await admin.query(
+      `GRANT INSERT, UPDATE, DELETE ON \`${creditPrivilegeDatabase}\`.\`${tableName}\` TO \`${creditProvisionerUser}\`@'%' WITH GRANT OPTION`
+    );
+  }
+  await admin.query(
+    `GRANT CREATE, DELETE ON \`${creditPrivilegeDatabase}\`.\`credit_wallets\` TO \`${creditProvisionerUser}\`@'%' WITH GRANT OPTION`
+  );
+
+  const migrationConnection = await mysql.createConnection(
+    databaseUrlForUser(creditPrivilegeDatabase, creditMigrationUser)
+  );
+  const provisionerConnection = await mysql.createConnection(
+    databaseUrlForUser(creditPrivilegeDatabase, creditProvisionerUser)
+  );
+  try {
+    await expectFailure(
+      grantCreditMigrationDefinerPrivileges({
+        migration: migrationConnection,
+        provisioner: migrationConnection,
+      }),
+      "credit definer grant rejects one shared database account",
+      "credit migration database identity is invalid"
+    );
+    const wrongDatabaseProvisioner = await mysql.createConnection(
+      databaseUrlForUser("mysql", creditProvisionerUser)
+    );
+    try {
+      await expectFailure(
+        grantCreditMigrationDefinerPrivileges({
+          migration: migrationConnection,
+          provisioner: wrongDatabaseProvisioner,
+        }),
+        "credit definer grant rejects a provisioner on another database",
+        "credit migration database identity is invalid"
+      );
+    } finally {
+      await wrongDatabaseProvisioner.end();
+    }
+    const excessiveProvisioner = await mysql.createConnection(
+      databaseUrl(creditPrivilegeDatabase)
+    );
+    try {
+      await expectFailure(
+        grantCreditMigrationDefinerPrivileges({
+          migration: migrationConnection,
+          provisioner: excessiveProvisioner,
+        }),
+        "credit definer grant rejects an excessive administrative account",
+        "credit provisioner privilege boundary mismatch"
+      );
+    } finally {
+      await excessiveProvisioner.end();
+    }
+    await grantCreditMigrationDefinerPrivileges({
+      migration: migrationConnection,
+      provisioner: provisionerConnection,
+    });
+  } finally {
+    await migrationConnection.end();
+    await provisionerConnection.end();
+  }
+
+  const runnerResult = await execFileAsync(
+    process.execPath,
+    ["scripts/run-credit-migration-definer-grants.mjs"],
+    {
+      cwd: appDirectory,
+      env: {
+        ...process.env,
+        DATABASE_MIGRATION_URL: databaseUrlForUser(
+          creditPrivilegeDatabase,
+          creditMigrationUser
+        ),
+        DATABASE_PROVISIONER_URL: databaseUrlForUser(
+          creditPrivilegeDatabase,
+          creditProvisionerUser
+        ),
+      },
+    }
+  );
+  assert(
+    runnerResult.stdout === "Credit migration definer grants verified.\n" &&
+      runnerResult.stderr === "",
+    "credit definer grant runner emits only its fixed success marker"
+  );
+  await admin.query(
+    `REVOKE DELETE ON \`${creditPrivilegeDatabase}\`.\`billing_intents\` FROM \`${creditMigrationUser}\`@'%'`
+  );
+  await admin.query(
+    `REVOKE CREATE, DELETE ON \`${creditPrivilegeDatabase}\`.\`credit_wallets\` FROM \`${creditMigrationUser}\`@'%'`
+  );
+  const bundledRunnerPath = path.join(
+    appDirectory,
+    "dist/credit-migration-definer-grants.cjs"
+  );
+  await fs.access(bundledRunnerPath);
+  const bundledRunnerResult = await execFileAsync(
+    process.execPath,
+    [bundledRunnerPath],
+    {
+      cwd: appDirectory,
+      env: {
+        ...process.env,
+        DATABASE_MIGRATION_URL: databaseUrlForUser(
+          creditPrivilegeDatabase,
+          creditMigrationUser
+        ),
+        DATABASE_PROVISIONER_URL: databaseUrlForUser(
+          creditPrivilegeDatabase,
+          creditProvisionerUser
+        ),
+      },
+    }
+  );
+  assert(
+    bundledRunnerResult.stdout ===
+      "Credit migration definer grants verified.\n" &&
+      bundledRunnerResult.stderr === "",
+    "bundled credit definer grant runner executes against the exact MySQL fixture"
+  );
+  const bundledGrantVerification = await mysql.createConnection(
+    databaseUrlForUser(creditPrivilegeDatabase, creditMigrationUser)
+  );
+  try {
+    await assertProductionMigrationRuntime(
+      bundledGrantVerification,
+      "credit-expand"
+    );
+  } finally {
+    await bundledGrantVerification.end();
+  }
+  let bundledFailure;
+  try {
+    await execFileAsync(process.execPath, [bundledRunnerPath], {
+      cwd: appDirectory,
+      env: {
+        ...process.env,
+        DATABASE_MIGRATION_URL: "",
+        DATABASE_PROVISIONER_URL: "",
+      },
+    });
+  } catch (error) {
+    bundledFailure = error;
+  }
+  assert(
+    bundledFailure?.code === 1 &&
+      bundledFailure.stdout === "" &&
+      bundledFailure.stderr ===
+        "Credit migration definer grants failed closed. Reason: configuration_invalid.\n",
+    "bundled credit definer grant runner classifies missing configuration without serializing it"
+  );
+  let bundledConnectionFailure;
+  try {
+    await execFileAsync(process.execPath, [bundledRunnerPath], {
+      cwd: appDirectory,
+      env: {
+        ...process.env,
+        DATABASE_MIGRATION_URL:
+          "mysql://sensitive_migration_user:sensitive_password@127.0.0.1:1/sensitive_database",
+        DATABASE_PROVISIONER_URL: databaseUrlForUser(
+          creditPrivilegeDatabase,
+          creditProvisionerUser
+        ),
+      },
+    });
+  } catch (error) {
+    bundledConnectionFailure = error;
+  }
+  assert(
+    bundledConnectionFailure?.code === 1 &&
+      bundledConnectionFailure.stdout === "" &&
+      bundledConnectionFailure.stderr ===
+        "Credit migration definer grants failed closed. Reason: migration_connection_failed.\n" &&
+      !bundledConnectionFailure.stderr.includes("sensitive_migration_user") &&
+      !bundledConnectionFailure.stderr.includes("sensitive_password") &&
+      !bundledConnectionFailure.stderr.includes("sensitive_database") &&
+      !bundledConnectionFailure.stderr.includes("127.0.0.1"),
+    "bundled credit definer grant runner redacts dynamic MySQL connection failures"
+  );
+  const [[futureWalletTable]] = await admin.query(
+    "SELECT COUNT(*) AS count FROM information_schema.TABLES WHERE TABLE_SCHEMA=? AND TABLE_NAME='credit_wallets'",
+    [creditPrivilegeDatabase]
+  );
+  assert(
+    Number(futureWalletTable.count) === 0,
+    "credit wallet CREATE+DELETE is granted before the future table exists"
+  );
+  await admin.query(
+    `REVOKE CREATE ROUTINE, ALTER ROUTINE ON \`${creditPrivilegeDatabase}\`.* FROM \`${creditMigrationUser}\`@'%'`
+  );
+  await expectFailure(
+    runProductionMigrationStage({
+      databaseUrl: databaseUrlForUser(
+        creditPrivilegeDatabase,
+        creditMigrationUser
+      ),
+      target: "credit-wallet",
+      verifyOnly: false,
+      privilegeProfile: "credit-expand",
+    }),
+    "credit migration principal without CREATE ROUTINE",
+    "missing CREATE ROUTINE"
+  );
+  await withDatabase(creditPrivilegeDatabase, async connection => {
+    const [[creditObjects]] = await connection.query(
+      "SELECT COUNT(*) AS count FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN ('credit_ledger','credit_reservations','credit_wallets')"
+    );
+    assert(
+      Number(creditObjects.count) === 0,
+      "credit privilege refusal occurs before permanent 0017 DDL"
+    );
+  });
+  await admin.query(
+    `GRANT CREATE ROUTINE ON \`${creditPrivilegeDatabase}\`.* TO \`${creditMigrationUser}\`@'%'`
+  );
+  await expectFailure(
+    runProductionMigrationStage({
+      databaseUrl: databaseUrlForUser(
+        creditPrivilegeDatabase,
+        creditMigrationUser
+      ),
+      target: "credit-wallet",
+      verifyOnly: false,
+      privilegeProfile: "credit-expand",
+    }),
+    "credit migration principal without ALTER ROUTINE",
+    "missing ALTER ROUTINE"
+  );
+  await withDatabase(creditPrivilegeDatabase, async connection => {
+    const [[creditObjects]] = await connection.query(
+      "SELECT COUNT(*) AS count FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN ('credit_ledger','credit_reservations','credit_wallets')"
+    );
+    assert(
+      Number(creditObjects.count) === 0,
+      "credit privilege refusal for ALTER ROUTINE occurs before permanent 0017 DDL"
+    );
+  });
+  await admin.query(
+    `GRANT ALTER ROUTINE ON \`${creditPrivilegeDatabase}\`.* TO \`${creditMigrationUser}\`@'%'`
+  );
+  const [[routinePrivilegeRuntime]] = await admin.query(
+    "SELECT @@GLOBAL.automatic_sp_privileges AS automaticSpPrivileges"
+  );
+  assert(
+    Number(routinePrivilegeRuntime.automaticSpPrivileges) === 1,
+    "MySQL 8.4 rehearsal enables automatic stored-routine privileges"
+  );
+  const migration0017Statements = await readMigrationStatements(
+    migrationPlan.creditWallet0017
+  );
+  const createWalletStatementIndexes = migration0017Statements.flatMap(
+    (statement, index) =>
+      statement.startsWith("CREATE PROCEDURE `credit_create_wallet`(")
+        ? [index]
+        : []
+  );
+  assert(
+    createWalletStatementIndexes.length === 1,
+    "0017 contains one exact transitional wallet helper"
+  );
+  const partialMigrationConnection = await mysql.createConnection(
+    databaseUrlForUser(creditPrivilegeDatabase, creditMigrationUser)
+  );
+  try {
+    await configureProductionSchemaSession(partialMigrationConnection);
+    await applyStatements(
+      partialMigrationConnection,
+      migration0017Statements.slice(0, createWalletStatementIndexes[0] + 1)
+    );
+    const [automaticRoutineGrants] = await partialMigrationConnection.query(
+      "SHOW GRANTS FOR CURRENT_USER()"
+    );
+    const serializedRoutineGrants = automaticRoutineGrants
+      .flatMap(row => Object.values(row))
+      .map(String)
+      .join("\n")
+      .replaceAll("`", "");
+    assert(
+      serializedRoutineGrants.includes(
+        `PROCEDURE ${creditPrivilegeDatabase}.credit_create_wallet`
+      ) && serializedRoutineGrants.includes("EXECUTE"),
+      "0017 helper creation grants the same principal exact routine privileges"
+    );
+  } finally {
+    await partialMigrationConnection.end();
+  }
+  const applied = await runProductionMigrationStage({
+    databaseUrl: databaseUrlForUser(
+      creditPrivilegeDatabase,
+      creditMigrationUser
+    ),
+    target: "credit-wallet",
+    verifyOnly: false,
+    privilegeProfile: "credit-expand",
+  });
+  assert(
+    applied.appliedCount === migrationPlan.through0018.length,
+    "least-privilege credit migration resumes after 0017 helper creation and applies 0018"
+  );
+
+  await admin.query(`CREATE USER \`${creditRuntimeUser}\`@'%'`);
+  await admin.query(
+    `GRANT SELECT ON \`${creditPrivilegeDatabase}\`.* TO \`${creditRuntimeUser}\`@'%'`
+  );
+  for (const tableName of productionRuntimeWritableTableNames) {
+    await admin.query(
+      `GRANT INSERT, UPDATE, DELETE ON \`${creditPrivilegeDatabase}\`.\`${tableName}\` TO \`${creditRuntimeUser}\`@'%'`
+    );
+  }
+  for (const routine of creditWalletRoutineNames) {
+    await admin.query(
+      `GRANT EXECUTE ON PROCEDURE \`${creditPrivilegeDatabase}\`.\`${routine}\` TO \`${creditRuntimeUser}\`@'%'`
+    );
+  }
+  const verified = await runProductionMigrationStage({
+    databaseUrl: databaseUrlForUser(creditPrivilegeDatabase, creditRuntimeUser),
+    target: "credit-wallet",
+    verifyOnly: true,
+    privilegeProfile: "credit-runtime",
+  });
+  assert(
+    verified.appliedCount === migrationPlan.through0018.length,
+    "least-privilege runtime verifies exact 0018 schema"
+  );
+  const runtimeConnection = await mysql.createConnection(
+    databaseUrlForUser(creditPrivilegeDatabase, creditRuntimeUser)
+  );
+  try {
+    await assertBillingTriggerRuntimePreflight(runtimeConnection, "test");
+
+    const procedureScope = await withDatabaseResult(
+      creditPrivilegeDatabase,
+      async connection => {
+        const suffix = sha256(`combined-runtime-${Date.now()}`);
+        const [workspace] = await connection.query(
+          "INSERT INTO `workspaces` (`name`,`slug`) VALUES ('Combined runtime procedure preflight',?)",
+          [`combined-runtime-${suffix.slice(0, 24)}`]
+        );
+        await connection.query(
+          "INSERT INTO `billing_execution_controls` (`workspace_id`,`mode`,`commercial_enabled`,`authorization_epoch`) VALUES (?,'test',true,2)",
+          [workspace.insertId]
+        );
+        const [channel] = await connection.query(
+          "INSERT INTO `channelConnections` (`workspaceId`,`channel`,`status`,`externalId`,`bindingEpoch`) VALUES (?,'facebook_messenger','connected',?,1)",
+          [workspace.insertId, `page-${suffix.slice(0, 32)}`]
+        );
+        const userKey = "a".repeat(64);
+        await connection.query(
+          "INSERT INTO `messenger_privacy_subjects` (`workspace_id`,`channel_connection_id`,`user_key`,`privacy_epoch`,`status`) VALUES (?,?,?,1,'active')",
+          [workspace.insertId, channel.insertId, userKey]
+        );
+        return {
+          channelConnectionId: channel.insertId,
+          suffix,
+          userKey,
+          workspaceId: workspace.insertId,
+        };
+      }
+    );
+    const intentId = "10000000-0000-4000-8000-000000000001";
+    const walletId = "10000000-0000-4000-8000-000000000002";
+    const financialSubjectRef = "b".repeat(64);
+    const [procedureRows] = await runtimeConnection.query(
+      "CALL `credit_reserve_checkout_intent`(?, ?, ?, 'test', ?, 1, 1, ?, ?, 2, 'premium_images_8_medium_v1', '4.99', 8, 'Leaderbot - 8 premium beeldcredits', ?, ?, ?, ?, TIMESTAMPADD(MINUTE,10,CURRENT_TIMESTAMP))",
+      [
+        intentId,
+        walletId,
+        procedureScope.workspaceId,
+        procedureScope.channelConnectionId,
+        procedureScope.userKey,
+        financialSubjectRef,
+        "c".repeat(64),
+        `credit-payment:${intentId}`,
+        `credit-checkout:v1:${"d".repeat(64)}`,
+        "e".repeat(64),
+      ]
+    );
+    assert(
+      procedureRows[0]?.[0]?.result === "applied",
+      "combined runtime executes checkout for the production legacy user-key shape"
+    );
+    const [[procedureEffect]] = await runtimeConnection.query(
+      "SELECT (SELECT COUNT(*) FROM `credit_wallets` WHERE `wallet_id`=?) AS walletCount,(SELECT COUNT(*) FROM `billing_intents` WHERE `intent_id`=? AND `credit_wallet_id`=?) AS intentCount",
+      [walletId, intentId, walletId]
+    );
+    assert(
+      Number(procedureEffect.walletCount) === 1 &&
+        Number(procedureEffect.intentCount) === 1,
+      "combined runtime procedure result is durably bound"
+    );
+    const [[capabilityExpiry]] = await runtimeConnection.query(
+      "SELECT UNIX_TIMESTAMP(`checkout_capability_expires_at`) AS expiresAt FROM `billing_intents` WHERE `intent_id`=?",
+      [intentId]
+    );
+    await runtimeConnection.query("SET timestamp=?", [
+      Number(capabilityExpiry.expiresAt) + 1,
+    ]);
+    const [expiryRows] = await runtimeConnection.query(
+      "CALL `credit_expire_pristine_checkout`(?, 'test', ?, 1, 1, ?, ?, ?, ?)",
+      [
+        procedureScope.workspaceId,
+        procedureScope.channelConnectionId,
+        procedureScope.userKey,
+        walletId,
+        financialSubjectRef,
+        intentId,
+      ]
+    );
+    assert(
+      expiryRows[0]?.[0]?.result === "applied",
+      "combined runtime executes pristine expiry through the exact definer DELETE grants"
+    );
+    const [[expiredEffect]] = await runtimeConnection.query(
+      "SELECT (SELECT COUNT(*) FROM `credit_wallets` WHERE `wallet_id`=?) AS walletCount,(SELECT COUNT(*) FROM `billing_intents` WHERE `intent_id`=?) AS intentCount",
+      [walletId, intentId]
+    );
+    assert(
+      Number(expiredEffect.walletCount) === 0 &&
+        Number(expiredEffect.intentCount) === 0,
+      "least-privilege pristine expiry deletes only the empty wallet and intent"
+    );
+    await runtimeConnection.query("SET timestamp=DEFAULT");
+  } finally {
+    await runtimeConnection.end();
+  }
+  await admin.query(
+    `REVOKE EXECUTE ON PROCEDURE \`${creditPrivilegeDatabase}\`.\`credit_reserve_checkout_intent\` FROM \`${creditRuntimeUser}\`@'%'`
+  );
+  await expectFailure(
+    runProductionMigrationStage({
+      databaseUrl: databaseUrlForUser(
+        creditPrivilegeDatabase,
+        creditRuntimeUser
+      ),
+      target: "credit-wallet",
+      verifyOnly: true,
+      privilegeProfile: "credit-runtime",
+    }),
+    "credit runtime partial routine revoke",
+    "missing routines credit_reserve_checkout_intent"
+  );
+}
+
+function databaseUrlForUser(database, user) {
+  const url = new URL(adminUrl);
+  url.username = user;
+  url.password = "";
+  url.pathname = `/${database}`;
+  return url.toString();
 }
 
 function databaseUrl(database) {
@@ -1185,15 +1620,16 @@ async function assertNo0015Objects(connection, label) {
 }
 
 async function testCompletedSchemaRefusals(database, migration0015Statements) {
-  await withDatabase(database, connection =>
-    connection.query(
+  await withDatabase(database, async connection => {
+    await connection.query("SET SESSION sql_require_primary_key=OFF");
+    await connection.query(
       "ALTER TABLE `messengerState` ADD UNIQUE INDEX `temporary_id_unique` (`id`), DROP PRIMARY KEY"
-    )
-  );
+    );
+  });
   await expectRunnerRefusal(
     database,
     "complete schema malformed primary key",
-    "0017 schema fingerprint mismatch"
+    "0017 partial schema fingerprint mismatch"
   );
   await withDatabase(database, connection =>
     connection.query(
@@ -1212,7 +1648,7 @@ async function testCompletedSchemaRefusals(database, migration0015Statements) {
   await expectRunnerRefusal(
     database,
     "complete schema altered check body",
-    "0017 schema fingerprint mismatch"
+    "0017 partial schema fingerprint mismatch"
   );
   await withDatabase(database, async connection => {
     await connection.query(
@@ -1240,7 +1676,7 @@ async function testCompletedSchemaRefusals(database, migration0015Statements) {
   await expectRunnerRefusal(
     database,
     "complete schema altered trigger body",
-    "0017 schema fingerprint mismatch"
+    "0017 partial schema fingerprint mismatch"
   );
   await withDatabase(database, async connection => {
     await connection.query(
@@ -1251,24 +1687,31 @@ async function testCompletedSchemaRefusals(database, migration0015Statements) {
 
   await withDatabase(database, async connection => {
     await connection.query(
-      "CREATE TABLE `unexpected_schema_object` (`id` int)"
+      "CREATE TABLE `unexpected_schema_object` (`id` int PRIMARY KEY)"
     );
     await connection.query(
       "CREATE PROCEDURE `unexpected_schema_routine`() SELECT 1"
     );
+  });
+  await expectRunnerRefusal(
+    database,
+    "complete schema extra table and routine",
+    "0017 partial schema fingerprint mismatch"
+  );
+  await withDatabase(database, async connection => {
+    await connection.query("DROP PROCEDURE `unexpected_schema_routine`");
+    await connection.query("DROP TABLE `unexpected_schema_object`");
     await connection.query(
       "CREATE EVENT `unexpected_schema_event` ON SCHEDULE AT CURRENT_TIMESTAMP + INTERVAL 1 DAY DO SET @unexpected_event = 1"
     );
   });
   await expectRunnerRefusal(
     database,
-    "complete schema extra objects",
-    "production schema contract requires no routines or events"
+    "complete schema extra event",
+    "production schema contract requires no events"
   );
   await withDatabase(database, async connection => {
     await connection.query("DROP EVENT `unexpected_schema_event`");
-    await connection.query("DROP PROCEDURE `unexpected_schema_routine`");
-    await connection.query("DROP TABLE `unexpected_schema_object`");
   });
 
   await withDatabase(database, connection =>
@@ -1279,7 +1722,7 @@ async function testCompletedSchemaRefusals(database, migration0015Statements) {
   await expectRunnerRefusal(
     database,
     "migration history table extra column",
-    "0017 migration history table contract mismatch"
+    "0016 migration history table contract mismatch"
   );
   await withDatabase(database, connection =>
     connection.query(
@@ -1288,18 +1731,18 @@ async function testCompletedSchemaRefusals(database, migration0015Statements) {
   );
 }
 
-async function testHistoryRefusals(database, manifest) {
+async function testHistoryRefusals(database, migrationPlan) {
   await withDatabase(database, connection =>
     connection.query("ALTER TABLE `__drizzle_migrations` AUTO_INCREMENT=100")
   );
   await expectRunnerRefusal(
     database,
     "complete migration history counter drift",
-    "0017 migration history table contract mismatch"
+    "0016 migration history table contract mismatch"
   );
   await withDatabase(database, connection =>
     connection.query(
-      `ALTER TABLE \`__drizzle_migrations\` AUTO_INCREMENT=${manifest.length + 1}`
+      `ALTER TABLE \`__drizzle_migrations\` AUTO_INCREMENT=${migrationPlan.through0016.length + 1}`
     )
   );
 
@@ -1343,18 +1786,18 @@ async function testHistoryRefusals(database, manifest) {
   await withDatabase(database, connection =>
     connection.query(
       "INSERT INTO `__drizzle_migrations` (`hash`,`created_at`) VALUES (?,?)",
-      ["f".repeat(64), manifest.at(-1).when + 1]
+      ["f".repeat(64), migrationPlan.expand0016.when + 1]
     )
   );
   await expectRunnerRefusal(
     database,
-    "migration history extra row",
-    "database contains unknown applied migrations"
+    "invalid 0017 history row on the 0016 runtime",
+    "applied migration hash/order mismatch at index 17"
   );
   await withDatabase(database, connection =>
     connection.query(
       "DELETE FROM `__drizzle_migrations` WHERE `created_at`=?",
-      [manifest.at(-1).when + 1]
+      [migrationPlan.expand0016.when + 1]
     )
   );
 }
@@ -1414,8 +1857,8 @@ async function applyMigrationPrefix(connection, migrations) {
 }
 
 async function apply0015PrerequisiteForTest(databaseUrlValue) {
-  const { migrations } = await loadAndVerifyMigrationManifest();
-  const migration = migrations.at(-3);
+  const { migrationPlan } = await loadAndVerifyMigrationManifest();
+  const migration = migrationPlan.base0015;
   const connection = await mysql.createConnection(databaseUrlValue);
   try {
     await assertProductionMigrationRuntime(connection);
@@ -1542,25 +1985,90 @@ async function testCleanupContracts() {
   );
 }
 
-function testBillingHandoffWriterLockContract() {
-  const first = billingHandoffWriterLockName("leaderbot_a");
-  const same = billingHandoffWriterLockName("leaderbot_a");
-  const other = billingHandoffWriterLockName("leaderbot_b");
-  assert(first === same, "handoff writer lock is stable per database");
-  assert(first !== other, "handoff writer lock is isolated per database");
-  assert(
-    first.startsWith("leaderbot:handoff:") && first.length <= 64,
-    "handoff writer lock fits the MySQL named-lock contract"
-  );
-}
-
 function testStagedRolloutContracts() {
   assert(
+    transitionInspectionPhase(
+      { kind: "resume-0018", nextStatement: 2 },
+      { inspectCreditWalletTransition: true }
+    ) === "0018_partial_2",
+    "credit checkout partial recovery remains inspectable"
+  );
+  assert(
+    transitionInspectionPhase(
+      { kind: "resume-0018", nextStatement: 2 },
+      { inspectCreditWalletTransition: false }
+    ) === null,
+    "credit checkout partial recovery is hidden outside its explicit inspection mode"
+  );
+  assert(
     JSON.stringify(productionSchemaPhases) ===
-      JSON.stringify(["0015_base", "0016_expand", "0017_contract"]),
+      JSON.stringify([
+        "0015_base",
+        "0016_expand",
+        "0017_credit_wallet_expand",
+        "0018_credit_checkout_reservation",
+      ]),
     "schema phase names are stable"
   );
-  assertContractRolloutRevision("a".repeat(40), "a".repeat(40));
+  const exactPlanRows = productionMigrationTags.map((tag, idx) => ({
+    idx,
+    tag,
+  }));
+  const exactPlan = resolveProductionMigrationPlan(exactPlanRows);
+  assert(
+    exactPlan.expand0016.tag === "0016_static_epoch_scope_fks" &&
+      exactPlan.creditWallet0017.tag === "0017_credit_wallet_expand" &&
+      exactPlan.creditCheckout0018.tag === "0018_credit_checkout_reservation" &&
+      exactPlan.through0018.length === productionMigrationTags.length,
+    "exact named production migration plan terminates at 0018"
+  );
+  for (const [label, tail] of [
+    ["unreviewed future tail", "0019_unreviewed_future_tail"],
+    ["later future tail", "0020_unreviewed_future_tail"],
+  ]) {
+    const planWithFutureTail = resolveProductionMigrationPlan([
+      ...exactPlanRows,
+      { idx: exactPlanRows.length, tag: tail },
+    ]);
+    assert(
+      planWithFutureTail.all.length === productionMigrationTags.length &&
+        planWithFutureTail.through0016.length ===
+          productionMigrationTags.length - 2 &&
+        planWithFutureTail.through0017.length ===
+          productionMigrationTags.length - 1 &&
+        planWithFutureTail.through0018.length ===
+          productionMigrationTags.length &&
+        !planWithFutureTail.all.some(migration => migration.tag === tail),
+      `${label} cannot alter the selected or bootstrapped migration count`
+    );
+  }
+  for (const [label, rows] of [
+    ["missing required migration", exactPlanRows.slice(0, -1)],
+    [
+      "duplicate migration tag",
+      [
+        ...exactPlanRows,
+        {
+          idx: exactPlanRows.length,
+          tag: "0016_static_epoch_scope_fks",
+        },
+      ],
+    ],
+    [
+      "different migration interleaved at 0018",
+      exactPlanRows.map((row, index) =>
+        index === exactPlanRows.length - 1
+          ? { idx: index, tag: "0018_handoff_privacy_scope" }
+          : row
+      ),
+    ],
+  ]) {
+    expectSynchronousFailure(
+      () => resolveProductionMigrationPlan(rows),
+      label,
+      "production migration plan"
+    );
+  }
   assert(
     JSON.stringify(
       productionMigrationOptionsForMode("inspect-recovery-compatibility")
@@ -1574,9 +2082,115 @@ function testStagedRolloutContracts() {
     "recovery inspection uses a read-only principal"
   );
   assert(
+    JSON.stringify(
+      productionMigrationOptionsForMode(
+        "apply-credit-wallet-expand",
+        "migration-bridge"
+      )
+    ) ===
+      JSON.stringify({
+        verifyOnly: false,
+        target: "credit-wallet",
+        privilegeProfile: "credit-expand",
+      }),
+    "credit-wallet apply mode requires the immutable bridge"
+  );
+  assert(
+    JSON.stringify(
+      productionMigrationOptionsForMode("verify-credit-wallet")
+    ) ===
+      JSON.stringify({
+        verifyOnly: true,
+        target: "credit-wallet",
+        privilegeProfile: "credit-runtime",
+      }),
+    "credit-wallet runtime verification uses exact procedure rights"
+  );
+  assert(
+    JSON.stringify(
+      productionMigrationOptionsForMode(
+        "verify-credit-wallet-transition",
+        "migration-bridge"
+      )
+    ) ===
+      JSON.stringify({
+        verifyOnly: true,
+        target: "credit-wallet",
+        privilegeProfile: "credit-expand",
+      }),
+    "credit-wallet transition verification retains the exact migration principal"
+  );
+  assert(
     productionMigrationOptionsForMode("inspect-expand-transition")
       ?.privilegeProfile === "expand",
     "schema-transition inspection retains the exact expand principal"
+  );
+  assert(
+    JSON.stringify(
+      productionMigrationOptionsForMode("inspect-credit-wallet-transition")
+    ) ===
+      JSON.stringify({
+        verifyOnly: true,
+        target: "expand",
+        inspectCreditWalletTransition: true,
+        privilegeProfile: "credit-expand-pregrant",
+      }),
+    "credit transition inspection remains non-mutating before recovery evidence"
+  );
+  assert(
+    productionDatabasePrivilegeProfiles.includes("credit-expand-pregrant"),
+    "credit pregrant inspection is an executable migration privilege profile"
+  );
+  for (const phase of [
+    "0016_expand",
+    "0017_credit_wallet_expand",
+    "0018_credit_checkout_reservation",
+  ]) {
+    assertVerifiedPhase("expand", phase, false, true);
+  }
+  expectSynchronousFailure(
+    () => assertVerifiedPhase("expand", "0015_base", false, true),
+    "credit transition inspection rejects a stable pre-0016 schema",
+    "credit transition inspection refused"
+  );
+  const pregrantCapturePlan = schemaCapturePlanForPrivilege(
+    {
+      tables: {},
+      views: {},
+      triggers: { credit_valid: {}, unrelated_trigger: {} },
+      routines: { credit_valid: {}, unrelated_routine: {} },
+    },
+    "credit-expand-pregrant"
+  );
+  assert(
+    JSON.stringify(pregrantCapturePlan.schemaCaptureOptions) ===
+      JSON.stringify({
+        includePrivilegedObjects: true,
+        privilegedObjectNamePrefix: "credit_",
+      }) &&
+      Object.hasOwn(pregrantCapturePlan.contract.triggers, "credit_valid") &&
+      !Object.hasOwn(
+        pregrantCapturePlan.contract.triggers,
+        "unrelated_trigger"
+      ) &&
+      Object.hasOwn(pregrantCapturePlan.contract.routines, "credit_valid") &&
+      !Object.hasOwn(
+        pregrantCapturePlan.contract.routines,
+        "unrelated_routine"
+      ),
+    "credit pregrant inspection captures only exact partial credit routines and triggers"
+  );
+  assert(
+    JSON.stringify(
+      productionMigrationOptionsForMode("apply-empty-credit-wallet-bootstrap")
+    ) ===
+      JSON.stringify({
+        verifyOnly: false,
+        target: "credit-wallet",
+        allowEmptyBootstrap: true,
+        privilegeProfile: "credit-bootstrap",
+      }),
+    "credit wallet empty bootstrap is bounded to the exact 0018 plan"
   );
   assert(
     JSON.stringify(
@@ -1596,43 +2210,131 @@ function testStagedRolloutContracts() {
       JSON.stringify({
         verifyOnly: true,
         target: "compatible",
-        privilegeProfile: "runtime",
+        bridgeArtifactVerification: true,
+        privilegeProfile: "phase-bound-runtime",
       }),
-    "migration bridge verifies both base and expand schemas"
+    "migration bridge resolves the exact runtime principal from the stable phase"
   );
+  assert(
+    bridgeArtifactPrivilegeProfileForState({
+      kind: "resume-0017",
+      nextStatement: 0,
+    }) === "runtime",
+    "stable 0016 bridge verification requires the legacy runtime principal"
+  );
+  assert(
+    bridgeArtifactPrivilegeProfileForState({ kind: "complete" }) ===
+      "credit-runtime",
+    "stable 0018 bridge verification requires the credit runtime principal"
+  );
+  for (const state of [
+    { kind: "resume-0016", phase: 0 },
+    { kind: "resume-0017", nextStatement: 1 },
+    { kind: "resume-0018", nextStatement: 0 },
+    { kind: "resume-0018", nextStatement: 1 },
+  ]) {
+    assert(
+      bridgeArtifactPrivilegeProfileForState(state) === null,
+      "bridge verification refuses legacy and interrupted states"
+    );
+  }
   assert(
     JSON.stringify(
       productionMigrationOptionsForMode("verify-artifact", "runtime")
     ) ===
       JSON.stringify({
         verifyOnly: true,
-        target: "expand",
-        privilegeProfile: "runtime",
+        target: "credit-wallet",
+        privilegeProfile: "credit-runtime",
       }),
-    "runtime artifact refuses the base schema"
+    "runtime artifact requires the exact final 0018 credit schema"
+  );
+  assert(
+    JSON.stringify(
+      productionMigrationOptionsForMode("apply-empty-bootstrap")
+    ) ===
+      JSON.stringify({
+        verifyOnly: false,
+        target: "expand",
+        allowEmptyBootstrap: true,
+      }),
+    "empty bootstrap is bounded to the exact 0016 expand plan"
   );
   assert(
     productionMigrationOptionsForMode("apply") === null &&
       productionMigrationOptionsForMode("verify") === null &&
       productionMigrationOptionsForMode("apply-expand") === null &&
       productionMigrationOptionsForMode("apply-expand", "runtime") === null &&
+      productionMigrationOptionsForMode(
+        "apply-credit-wallet-expand",
+        "runtime"
+      ) === null &&
+      productionMigrationOptionsForMode("verify-credit-wallet-transition") ===
+        null &&
+      productionMigrationOptionsForMode(
+        "verify-credit-wallet-transition",
+        "runtime"
+      ) === null &&
       productionMigrationOptionsForMode("verify-artifact") === null &&
       productionMigrationOptionsForMode("verify-artifact", "unknown") ===
         null &&
-      productionMigrationOptionsForMode("apply-contract") === null,
+      productionMigrationOptionsForMode("apply-contract") === null &&
+      productionMigrationOptionsForMode("verify-contract") === null,
     "legacy and production contract apply modes fail closed"
   );
-  expectSynchronousFailure(
-    () => assertContractRolloutRevision("a".repeat(40), "b".repeat(40)),
-    "contract rejects a different deployed writer",
-    "exact fully deployed reviewed writer"
-  );
-  expectSynchronousFailure(
-    () =>
-      assertContractRolloutRevision("unreviewed-local-build", "a".repeat(40)),
-    "contract rejects an unreviewed local image",
-    "exact fully deployed reviewed writer"
-  );
+}
+
+function testCreditMigrationRoutineOwnershipContracts() {
+  const routineGrant =
+    "GRANT EXECUTE ON PROCEDURE `leaderbot`.`credit_create_wallet` TO `credit_migrator`@`%`";
+  const valid = {
+    automaticSpPrivileges: 1,
+    currentUser: "credit_migrator@%",
+    databaseName: "leaderbot",
+    grants: [routineGrant],
+    routines: [{ name: "credit_create_wallet", definer: "credit_migrator@%" }],
+  };
+  assertCreditWalletMigrationRoutineOwnership(valid);
+  for (const [label, overrides, expected] of [
+    [
+      "automatic routine privileges disabled",
+      { automaticSpPrivileges: 0 },
+      "requires automatic stored-routine privileges",
+    ],
+    [
+      "wrong routine definer",
+      {
+        routines: [
+          { name: "credit_create_wallet", definer: "other_migrator@%" },
+        ],
+      },
+      "routine definer boundary mismatch",
+    ],
+    [
+      "missing creator grant",
+      { grants: [] },
+      "lacks creator execute privilege",
+    ],
+    [
+      "creator ALTER without EXECUTE",
+      {
+        grants: [
+          "GRANT ALTER ROUTINE ON PROCEDURE `leaderbot`.`credit_create_wallet` TO `credit_migrator`@`%`",
+        ],
+      },
+      "lacks creator execute privilege",
+    ],
+  ]) {
+    expectSynchronousFailure(
+      () =>
+        assertCreditWalletMigrationRoutineOwnership({
+          ...valid,
+          ...overrides,
+        }),
+      `credit migration rejects ${label}`,
+      expected
+    );
+  }
 }
 
 function testSchemaDigestContracts() {
@@ -1683,6 +2385,52 @@ function testSchemaDigestContracts() {
     () => canonicalTriggerTuple(trigger, "other@localhost"),
     "mismatched trigger definer",
     "trigger definer does not match the migration principal"
+  );
+  const routine = {
+    definer: "migrator@localhost",
+    routineType: "PROCEDURE",
+    securityType: "DEFINER",
+    isDeterministic: "NO",
+    sqlDataAccess: "MODIFIES SQL DATA",
+    sqlMode: productionSchemaSqlMode,
+    characterSetClient: "utf8mb4",
+    collationConnection: "utf8mb4_0900_ai_ci",
+    databaseCollation: "utf8mb4_0900_ai_ci",
+  };
+  const routineTuple = canonicalRoutineTuple(
+    routine,
+    "CREATE DEFINER=`migrator`@`localhost` PROCEDURE `credit_probe`() SQL SECURITY DEFINER BEGIN SELECT 1; END",
+    "migrator@localhost"
+  );
+  assert(
+    routineTuple.definer === "$MIGRATION_USER" &&
+      routineTuple.createStatement.includes("SQL SECURITY DEFINER"),
+    "routine body and definer are fingerprinted canonically"
+  );
+  expectSynchronousFailure(
+    () =>
+      canonicalRoutineTuple(
+        routine,
+        "CREATE DEFINER=`migrator`@`localhost` PROCEDURE `credit_probe`() SELECT 1",
+        "other@localhost"
+      ),
+    "mismatched routine definer",
+    "routine definer does not match the migration principal"
+  );
+  assert0017PreDdlStatementOrder([
+    "CREATE TEMPORARY TABLE `credit_0017_legacy_effect_preflight` (`id` int)",
+    "DROP TEMPORARY TABLE `credit_0017_legacy_effect_preflight`",
+    "ALTER TABLE `payment_ledger` ADD INDEX `probe` (`id`)",
+  ]);
+  expectSynchronousFailure(
+    () =>
+      assert0017PreDdlStatementOrder([
+        "ALTER TABLE `payment_ledger` ADD INDEX `probe` (`id`)",
+        "CREATE TEMPORARY TABLE `credit_0017_legacy_effect_preflight` (`id` int)",
+        "DROP TEMPORARY TABLE `credit_0017_legacy_effect_preflight`",
+      ]),
+    "0017 permanent DDL before data preflight",
+    "data preflight must precede permanent DDL"
   );
   expectSynchronousFailure(
     () =>
@@ -1783,6 +2531,405 @@ function testSchemaDigestContracts() {
     ],
     "leaderbot"
   );
+  const creditMigrationGrant =
+    "GRANT CREATE, CREATE TEMPORARY TABLES, ALTER, INDEX, REFERENCES, SELECT, INSERT, UPDATE, TRIGGER, CREATE ROUTINE, ALTER ROUTINE ON `leaderbot`.* TO `credit_migrator`@`%`";
+  const creditMigrationTableGrants = [
+    "GRANT DELETE ON `leaderbot`.`billing_intents` TO `credit_migrator`@`%`",
+    "GRANT CREATE, DELETE ON `leaderbot`.`credit_wallets` TO `credit_migrator`@`%`",
+  ];
+  assertCreditWalletMigrationGrantScope(
+    [creditMigrationGrant],
+    "leaderbot",
+    false,
+    true
+  );
+  assertCreditWalletMigrationGrantScope(
+    [creditMigrationGrant, creditMigrationTableGrants[0]],
+    "leaderbot",
+    false,
+    true
+  );
+  expectSynchronousFailure(
+    () =>
+      assertCreditWalletMigrationGrantScope(
+        [
+          creditMigrationGrant,
+          "REVOKE DELETE ON `leaderbot`.`billing_intents` FROM `credit_migrator`@`%`",
+        ],
+        "leaderbot",
+        false,
+        true
+      ),
+    "credit pregrant inspection rejects a partial revoke",
+    "contains revoke"
+  );
+  assertCreditWalletMigrationGrantScope(
+    [
+      "GRANT USAGE ON *.* TO `credit_migrator`@`%`",
+      creditMigrationGrant,
+      ...creditMigrationTableGrants,
+    ],
+    "leaderbot"
+  );
+  assertCreditWalletMigrationGrantScope(
+    [
+      "GRANT USAGE ON *.* TO `credit_migrator`@`%`",
+      creditMigrationGrant,
+      ...creditMigrationTableGrants,
+      "GRANT ALTER ROUTINE, EXECUTE ON PROCEDURE `leaderbot`.`credit_create_wallet` TO `credit_migrator`@`%`",
+    ],
+    "leaderbot"
+  );
+  expectSynchronousFailure(
+    () =>
+      assertCreditWalletMigrationGrantScope(
+        [
+          creditMigrationGrant,
+          ...creditMigrationTableGrants,
+          "GRANT ALTER ROUTINE, EXECUTE ON PROCEDURE `leaderbot`.`credit_unreviewed_helper` TO `credit_migrator`@`%`",
+        ],
+        "leaderbot"
+      ),
+    "credit migration rejects an unreviewed transitional routine grant",
+    "credit wallet migration principal privilege boundary mismatch"
+  );
+  assertCreditWalletMigrationGrantScope(
+    [
+      "GRANT USAGE ON *.* TO `credit_migrator`@`%`",
+      "GRANT SUPER ON *.* TO `credit_migrator`@`%`",
+      creditMigrationGrant,
+      ...creditMigrationTableGrants,
+    ],
+    "leaderbot",
+    true
+  );
+  expectSynchronousFailure(
+    () =>
+      assertCreditWalletMigrationGrantScope(
+        [creditMigrationGrant, ...creditMigrationTableGrants],
+        "leaderbot",
+        true
+      ),
+    "credit migration missing conditional SUPER",
+    "lacks global SUPER for triggers"
+  );
+  expectSynchronousFailure(
+    () =>
+      assertCreditWalletMigrationGrantScope(
+        [
+          creditMigrationGrant,
+          ...creditMigrationTableGrants,
+          "REVOKE CREATE ROUTINE ON `leaderbot`.* FROM `credit_migrator`@`%`",
+        ],
+        "leaderbot"
+      ),
+    "credit migration partial CREATE ROUTINE revoke",
+    "missing CREATE ROUTINE"
+  );
+  expectSynchronousFailure(
+    () =>
+      assertCreditWalletMigrationGrantScope(
+        [
+          creditMigrationGrant,
+          ...creditMigrationTableGrants,
+          "REVOKE ALTER ROUTINE ON `leaderbot`.* FROM `credit_migrator`@`%`",
+        ],
+        "leaderbot"
+      ),
+    "credit migration partial ALTER ROUTINE revoke",
+    "missing ALTER ROUTINE"
+  );
+  expectSynchronousFailure(
+    () =>
+      assertCreditWalletMigrationGrantScope(
+        [
+          creditMigrationGrant.replace("`leaderbot`", "`otherdb`"),
+          ...creditMigrationTableGrants,
+        ],
+        "leaderbot"
+      ),
+    "credit migration wrong schema",
+    "credit wallet migration principal privilege boundary mismatch"
+  );
+  for (const [label, grants, expected] of [
+    [
+      "missing billing intent delete",
+      [creditMigrationGrant, creditMigrationTableGrants[1]],
+      "billing_intents:missing DELETE",
+    ],
+    [
+      "missing future wallet create",
+      [
+        creditMigrationGrant,
+        creditMigrationTableGrants[0],
+        "GRANT DELETE ON `leaderbot`.`credit_wallets` TO `credit_migrator`@`%`",
+      ],
+      "credit_wallets:missing CREATE",
+    ],
+    [
+      "schema delete",
+      [
+        creditMigrationGrant.replace(
+          "SELECT, INSERT",
+          "SELECT, INSERT, DELETE"
+        ),
+        ...creditMigrationTableGrants,
+      ],
+      "excessive DELETE",
+    ],
+    [
+      "unreviewed table delete",
+      [
+        creditMigrationGrant,
+        ...creditMigrationTableGrants,
+        "GRANT DELETE ON `leaderbot`.`credit_ledger` TO `credit_migrator`@`%`",
+      ],
+      "credit wallet migration principal privilege boundary mismatch",
+    ],
+    [
+      "grant option",
+      [
+        creditMigrationGrant,
+        creditMigrationTableGrants[0],
+        `${creditMigrationTableGrants[1]} WITH GRANT OPTION`,
+      ],
+      "credit wallet migration principal privilege boundary mismatch",
+    ],
+    [
+      "backtick-confusable table",
+      [
+        creditMigrationGrant,
+        ...creditMigrationTableGrants,
+        "GRANT DELETE ON `leaderbot`.`billing``_intents` TO `credit_migrator`@`%`",
+      ],
+      "credit wallet migration principal privilege boundary mismatch",
+    ],
+    [
+      "backtick-confusable routine",
+      [
+        creditMigrationGrant,
+        ...creditMigrationTableGrants,
+        "GRANT EXECUTE ON PROCEDURE `leaderbot`.`credit_create``_wallet` TO `credit_migrator`@`%`",
+      ],
+      "credit wallet migration principal privilege boundary mismatch",
+    ],
+  ]) {
+    expectSynchronousFailure(
+      () => assertCreditWalletMigrationGrantScope(grants, "leaderbot"),
+      `credit migration rejects ${label}`,
+      expected
+    );
+  }
+  const creditProvisionerGrants = [
+    "GRANT CREATE USER ON *.* TO `credit_provisioner`@`%`",
+    "GRANT SELECT ON `mysql`.`user` TO `credit_provisioner`@`%`",
+    "GRANT SELECT, EXECUTE ON `leaderbot`.* TO `credit_provisioner`@`%` WITH GRANT OPTION",
+    ...productionRuntimeWritableTableNames.map(
+      tableName =>
+        `GRANT INSERT, UPDATE, DELETE ON \`leaderbot\`.\`${tableName}\` TO \`credit_provisioner\`@\`%\` WITH GRANT OPTION`
+    ),
+    "GRANT DELETE, CREATE ON `leaderbot`.`credit_wallets` TO `credit_provisioner`@`%` WITH GRANT OPTION",
+  ];
+  assertCreditProvisionerGrantScope(creditProvisionerGrants, "leaderbot");
+  for (const [label, grants] of [
+    [
+      "global all",
+      [...creditProvisionerGrants, "GRANT ALL PRIVILEGES ON *.* TO `root`@`%`"],
+    ],
+    [
+      "global super",
+      [
+        ...creditProvisionerGrants,
+        "GRANT SUPER ON *.* TO `credit_provisioner`@`%`",
+      ],
+    ],
+    [
+      "schema delete",
+      [
+        ...creditProvisionerGrants,
+        "GRANT DELETE ON `leaderbot`.* TO `credit_provisioner`@`%` WITH GRANT OPTION",
+      ],
+    ],
+    [
+      "missing table delegation",
+      creditProvisionerGrants.filter(
+        grant => !grant.includes("`billing_intents`")
+      ),
+    ],
+    [
+      "backtick-confusable table delegation",
+      [
+        ...creditProvisionerGrants,
+        "GRANT INSERT, UPDATE, DELETE ON `leaderbot`.`billing``_intents` TO `credit_provisioner`@`%` WITH GRANT OPTION",
+      ],
+    ],
+    [
+      "backtick-confusable database delegation",
+      [
+        ...creditProvisionerGrants,
+        "GRANT INSERT, UPDATE, DELETE ON `leader``bot`.`billing_intents` TO `credit_provisioner`@`%` WITH GRANT OPTION",
+      ],
+    ],
+    [
+      "quoted wildcard object",
+      [
+        ...creditProvisionerGrants,
+        "GRANT SELECT, EXECUTE ON `leaderbot`.`*` TO `credit_provisioner`@`%` WITH GRANT OPTION",
+      ],
+    ],
+    [
+      "quoted wildcard database",
+      [
+        ...creditProvisionerGrants,
+        "GRANT SELECT ON `*`.* TO `credit_provisioner`@`%` WITH GRANT OPTION",
+      ],
+    ],
+  ]) {
+    expectSynchronousFailure(
+      () => assertCreditProvisionerGrantScope(grants, "leaderbot"),
+      `credit provisioner rejects ${label}`,
+      "credit provisioner privilege boundary mismatch"
+    );
+  }
+  const creditRuntimeGrants = [
+    "GRANT USAGE ON *.* TO `credit_runtime`@`%`",
+    "GRANT SELECT ON `leaderbot`.* TO `credit_runtime`@`%`",
+    ...productionRuntimeWritableTableNames.map(
+      name =>
+        `GRANT INSERT, UPDATE, DELETE ON \`leaderbot\`.\`${name}\` TO \`credit_runtime\`@\`%\``
+    ),
+    ...creditWalletRoutineNames.map(
+      name =>
+        `GRANT EXECUTE ON PROCEDURE \`leaderbot\`.\`${name}\` TO \`credit_runtime\`@\`%\``
+    ),
+  ];
+  assert(
+    creditWalletRoutineNames.length === 17,
+    "credit runtime routine inventory contains exactly seventeen routines"
+  );
+  assert(
+    productionRuntimeWritableTableNames.length === 41 &&
+      new Set(productionRuntimeWritableTableNames).size === 41 &&
+      creditWalletTableNames.length === 3 &&
+      creditWalletTableNames.every(
+        name => !productionRuntimeWritableTableNames.includes(name)
+      ),
+    "combined runtime grant inventory is exact and excludes credit tables"
+  );
+  assertCreditWalletRuntimeGrantScope(creditRuntimeGrants, "leaderbot");
+  expectSynchronousFailure(
+    () =>
+      assertCreditWalletRuntimeGrantScope(
+        creditRuntimeGrants.filter(
+          grant => !grant.includes("`leaderbot`.`billing_intents`")
+        ),
+        "leaderbot"
+      ),
+    "credit runtime missing one writable table",
+    "missing table privileges billing_intents:INSERT+UPDATE+DELETE"
+  );
+  for (const [label, grant] of [
+    ["schema DML", "GRANT INSERT ON `leaderbot`.* TO `credit_runtime`@`%`"],
+    ["global DML", "GRANT UPDATE ON *.* TO `credit_runtime`@`%`"],
+    [
+      "credit table DML",
+      "GRANT DELETE ON `leaderbot`.`credit_wallets` TO `credit_runtime`@`%`",
+    ],
+    [
+      "extra table DML",
+      "GRANT INSERT, UPDATE, DELETE ON `leaderbot`.`dailyQuota` TO `credit_runtime`@`%`",
+    ],
+    [
+      "wrong schema",
+      "GRANT INSERT, UPDATE, DELETE ON `otherdb`.`billing_intents` TO `credit_runtime`@`%`",
+    ],
+    [
+      "ALL PRIVILEGES",
+      "GRANT ALL PRIVILEGES ON `leaderbot`.`billing_intents` TO `credit_runtime`@`%`",
+    ],
+    [
+      "grant option",
+      "GRANT INSERT, UPDATE, DELETE ON `leaderbot`.`billing_intents` TO `credit_runtime`@`%` WITH GRANT OPTION",
+    ],
+    [
+      "extra routine",
+      "GRANT EXECUTE ON PROCEDURE `leaderbot`.`credit_unreviewed` TO `credit_runtime`@`%`",
+    ],
+    ["role", "GRANT `billing_role`@`%` TO `credit_runtime`@`%`"],
+  ]) {
+    expectSynchronousFailure(
+      () =>
+        assertCreditWalletRuntimeGrantScope(
+          [...creditRuntimeGrants, grant],
+          "leaderbot"
+        ),
+      `credit runtime rejects ${label}`,
+      "credit runtime privilege boundary mismatch"
+    );
+  }
+  expectSynchronousFailure(
+    () =>
+      assertCreditWalletRuntimeGrantScope(
+        [
+          ...creditRuntimeGrants,
+          "REVOKE UPDATE ON `leaderbot`.`billing_intents` FROM `credit_runtime`@`%`",
+        ],
+        "leaderbot"
+      ),
+    "credit runtime table partial revoke wins",
+    "missing table privileges billing_intents:UPDATE"
+  );
+  expectSynchronousFailure(
+    () =>
+      assertCreditWalletRuntimeGrantScope(
+        [
+          ...creditRuntimeGrants,
+          "REVOKE SELECT ON `leaderbot`.* FROM `credit_runtime`@`%`",
+        ],
+        "leaderbot"
+      ),
+    "credit runtime schema partial revoke wins",
+    "schema SELECT mismatch"
+  );
+  expectSynchronousFailure(
+    () =>
+      assertCreditWalletRuntimeGrantScope(
+        creditRuntimeGrants.slice(0, -1),
+        "leaderbot"
+      ),
+    "credit runtime missing exact routine",
+    "credit runtime privilege boundary mismatch"
+  );
+  expectSynchronousFailure(
+    () =>
+      assertCreditWalletRuntimeGrantScope(
+        [
+          ...creditRuntimeGrants,
+          "REVOKE EXECUTE ON PROCEDURE `leaderbot`.`credit_reserve_checkout_intent` FROM `credit_runtime`@`%`",
+        ],
+        "leaderbot"
+      ),
+    "credit runtime partial routine revoke",
+    "missing routines credit_reserve_checkout_intent"
+  );
+  expectSynchronousFailure(
+    () =>
+      assertCreditWalletRuntimeGrantScope(
+        [
+          ...creditRuntimeGrants,
+          "GRANT EXECUTE ON *.* TO `credit_runtime`@`%`",
+        ],
+        "leaderbot"
+      ),
+    "credit runtime rejects global execute",
+    "credit runtime privilege boundary mismatch"
+  );
+  assertCreditWalletBinlogFormat({ binlogFormat: "ROW" });
+  expectSynchronousFailure(
+    () => assertCreditWalletBinlogFormat({ binlogFormat: "STATEMENT" }),
+    "credit migration statement binlog",
+    "requires ROW binary logging"
+  );
   expectSynchronousFailure(
     () =>
       assertExpandMigrationGrantScope(
@@ -1796,7 +2943,7 @@ function testSchemaDigestContracts() {
   );
   assertTriggerGrantScope(
     [
-      "GRANT CREATE, CREATE TEMPORARY TABLES, ALTER, INDEX, REFERENCES, SELECT, INSERT, UPDATE, TRIGGER ON `leaderbot`.* TO `migrator`@`%`",
+      "GRANT CREATE, CREATE TEMPORARY TABLES, ALTER, INDEX, REFERENCES, SELECT, INSERT, UPDATE, TRIGGER, CREATE ROUTINE ON `leaderbot`.* TO `migrator`@`%`",
     ],
     "leaderbot",
     false
@@ -1820,7 +2967,7 @@ function testSchemaDigestContracts() {
     () =>
       assertTriggerGrantScope(
         [
-          "GRANT CREATE, CREATE TEMPORARY TABLES, ALTER, INDEX, REFERENCES, SELECT, INSERT, UPDATE, TRIGGER ON `leaderbot`.* TO `migrator`@`%`",
+          "GRANT CREATE, CREATE TEMPORARY TABLES, ALTER, INDEX, REFERENCES, SELECT, INSERT, UPDATE, TRIGGER, CREATE ROUTINE ON `leaderbot`.* TO `migrator`@`%`",
         ],
         "leaderbot",
         true
@@ -1869,11 +3016,21 @@ function testSchemaDigestContracts() {
 }
 
 async function testContractManifestBinding() {
-  const { migrations, productionContract } =
+  const { migrations, migrationPlan, productionContract } =
     await loadAndVerifyMigrationManifest();
   assertProductionSchemaContractManifest(productionContract, migrations);
+  assertProductionSchemaContractManifest(productionContract, [
+    ...migrations,
+    {
+      idx: migrations.length,
+      tag: "0019_future_append_only",
+      when: Number(migrationPlan.creditCheckout0018.when) + 1,
+      sha256: "a".repeat(64),
+    },
+  ]);
   const changedManifest = migrations.map(row => ({ ...row }));
-  changedManifest.at(-1).sha256 = "0".repeat(64);
+  changedManifest.find(row => row.tag === migrationPlan.expand0016.tag).sha256 =
+    "0".repeat(64);
   expectSynchronousFailure(
     () =>
       assertProductionSchemaContractManifest(

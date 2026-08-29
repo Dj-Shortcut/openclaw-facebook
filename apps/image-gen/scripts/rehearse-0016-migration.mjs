@@ -3,19 +3,19 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import mysql from "mysql2/promise";
+import { loadAndVerifyMigrationManifest } from "./migrate-production.mjs";
 
 const urlValue = process.env.MYSQL_REHEARSAL_URL?.trim();
 if (!urlValue) throw new Error("MYSQL_REHEARSAL_URL is required");
 const adminUrl = new URL(urlValue);
 const drizzleDirectory = path.resolve("drizzle");
-const migrationFiles = (await fs.readdir(drizzleDirectory))
-  .filter(name => /^\d{4}_.+\.sql$/.test(name))
-  .sort();
-const through0015 = migrationFiles.filter(
-  name => Number(name.slice(0, 4)) <= 15
+const { migrationPlan } = await loadAndVerifyMigrationManifest();
+const through0015 = migrationPlan.through0015.map(
+  migration => `${migration.tag}.sql`
 );
-const migration0016 = await readStatements("0016_static_epoch_scope_fks.sql");
-const migration0017 = await readStatements("0017_handoff_privacy_scope.sql");
+const migration0016 = await readStatements(
+  `${migrationPlan.expand0016.tag}.sql`
+);
 const databases = {
   upgrade: "leaderbot_0016_epoch_upgrade_rehearsal",
   preflight: "leaderbot_0016_epoch_preflight_rehearsal",
@@ -153,29 +153,26 @@ try {
     await connection.query(
       "INSERT INTO `billing_intents` (`intent_id`,`workspace_id`,`mode`,`plan_code`,`kind`,`expected_amount`,`currency`,`interval`,`entitlements`,`mollie_description`,`status`,`idempotency_key`,`checkout_scope_key`,`messenger_sender_user_key`,`messenger_page_id`,`billing_profile_version`,`authorization_epoch`) VALUES ('31000000-0000-4000-8000-000000000001',31,'test','startpilot','startpilot_purchase','19.00','EUR','one-time',JSON_OBJECT('aiAnswers',300),'Expand writer','paid','rollout-expand-key','rollout-expand-scope','rollout-user','rollout-page',0,1)"
     );
-    await applyStatements(connection, migration0017);
-    const [[repaired]] = await connection.query(
+    const [[terminal]] = await connection.query(
       "SELECT `messenger_channel_connection_id` AS connectionId,`messenger_privacy_epoch` AS privacyEpoch FROM `billing_intents` WHERE `intent_id`='31000000-0000-4000-8000-000000000001'"
     );
     assert(
-      repaired.connectionId === 32 && repaired.privacyEpoch === 4,
-      "contract repairs a row written by the old shape during expand"
+      terminal.connectionId === null && terminal.privacyEpoch === null,
+      "0016 terminal keeps the retired handoff contract unapplied"
     );
-    await expectFailure(
-      connection.query(
-        "INSERT INTO `billing_intents` (`intent_id`,`workspace_id`,`mode`,`plan_code`,`kind`,`expected_amount`,`currency`,`interval`,`entitlements`,`mollie_description`,`status`,`idempotency_key`,`checkout_scope_key`,`messenger_sender_user_key`,`messenger_page_id`,`billing_profile_version`,`authorization_epoch`) VALUES ('31000000-0000-4000-8000-000000000002',31,'test','startpilot','startpilot_purchase','19.00','EUR','one-time',JSON_OBJECT('aiAnswers',300),'Contract writer','paid','rollout-contract-key','rollout-contract-scope','rollout-user','rollout-page',0,1)"
-      ),
-      "0017 contract fences the old write shape"
-    );
+    await assertExpandHasNoHandoffFence(connection);
   });
 
   await withDatabase(databases.fresh, async connection => {
-    await applyFiles(connection, migrationFiles);
+    await applyFiles(
+      connection,
+      migrationPlan.through0016.map(migration => `${migration.tag}.sql`)
+    );
     await assertStaticForeignKeyColumns(connection);
   });
 
   process.stdout.write(
-    "0016/0017 staged rehearsal passed: expand accepts old writers and contract fences them after repair.\n"
+    "0016 terminal rehearsal passed: exact fresh and upgrade plans preserve static epoch scope without applying a future tail.\n"
   );
 } finally {
   for (const database of Object.values(databases)) {

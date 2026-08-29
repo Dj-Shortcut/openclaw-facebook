@@ -13,6 +13,7 @@ const databaseMock = vi.hoisted(() => vi.fn());
 const handoffMock = vi.hoisted(() => vi.fn());
 const beginHandoffFenceMock = vi.hoisted(() => vi.fn());
 const advanceHandoffFenceMock = vi.hoisted(() => vi.fn());
+const retryCreditAdjustmentMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../db", () => ({
   getDatabaseOrThrow: databaseMock,
@@ -22,6 +23,15 @@ vi.mock("../../db", () => ({
 vi.mock("../portalHandoffDelivery", () => ({
   sendPortalHandoffLink: handoffMock,
 }));
+vi.mock("./creditPaymentWebhook", () => {
+  class CreditPaymentAdjustmentPendingError extends Error {}
+  return {
+    CreditPaymentAdjustmentPendingError,
+    retryPersistedCreditPaymentAdjustment: retryCreditAdjustmentMock,
+  };
+});
+
+import { CreditPaymentAdjustmentPendingError } from "./creditPaymentWebhook";
 
 import {
   cancelContainedMolliePayment,
@@ -31,7 +41,10 @@ import {
   failBillingOutboxItem,
   isCriticalContainmentJob,
   mandateMatchesCurrentSubscription,
+  processBillingOutboxItem,
+  readCreditAdjustmentRetryPayload,
   reconcileExecutionDisabledPayment,
+  runHistoricalBillingSafetyOutboxOnce,
   sendPaymentHandoff,
 } from "./outboxWorker";
 
@@ -51,9 +64,77 @@ beforeEach(() => {
     deliveryEpoch: 1,
   });
   advanceHandoffFenceMock.mockResolvedValue(true);
+  retryCreditAdjustmentMock.mockResolvedValue("duplicate");
 });
 
 describe("billing outbox containment safeguards", () => {
+  const adjustment = {
+    workspaceId: 42,
+    mode: "test",
+    channelConnectionId: 8,
+    bindingEpoch: 3,
+    privacyEpoch: 5,
+    walletId: "11111111-1111-4111-8111-111111111111",
+    financialSubjectRef: "a".repeat(64),
+    intentId: "22222222-2222-4222-8222-222222222222",
+    authorizationEpoch: 7,
+    paymentLedgerId: 9,
+    providerPaymentId: "tr_credit1",
+    rootGrantEntryId: "33333333-3333-4333-8333-333333333333",
+    evidenceHash: "b".repeat(64),
+    webhookPaymentId: "tr_credit1",
+    deliverySnapshotHash: "b".repeat(64),
+    kind: "refund_debit",
+    providerEffectIds: ["re_credit_1"],
+  } as const;
+
+  it("retries an exact persisted credit adjustment without a Mollie key", async () => {
+    delete process.env.MOLLIE_API_KEY;
+    const job = {
+      workspaceId: 42,
+      mode: "test",
+      eventType: "credit_adjustment_retry",
+      payload: { reason: "credit_adjustment_pending", adjustment },
+    } as BillingOutboxItem & { leaseToken: string };
+
+    await expect(processBillingOutboxItem(job)).resolves.toBeUndefined();
+
+    expect(retryCreditAdjustmentMock).toHaveBeenCalledExactlyOnceWith(
+      adjustment
+    );
+    expect(isCriticalContainmentJob(job)).toBe(true);
+  });
+
+  it("keeps a pending credit adjustment retryable and rejects altered scope", async () => {
+    retryCreditAdjustmentMock.mockRejectedValueOnce(
+      new CreditPaymentAdjustmentPendingError()
+    );
+    const payload = { reason: "credit_adjustment_pending", adjustment };
+    const job = {
+      workspaceId: 42,
+      mode: "test",
+      eventType: "credit_adjustment_retry",
+      payload,
+    } as BillingOutboxItem & { leaseToken: string };
+
+    await expect(processBillingOutboxItem(job)).rejects.toThrow(
+      "credit_adjustment_pending_holds"
+    );
+    expect(readCreditAdjustmentRetryPayload(payload, 42, "test")).toEqual(
+      adjustment
+    );
+    expect(
+      readCreditAdjustmentRetryPayload(
+        {
+          ...payload,
+          adjustment: { ...adjustment, workspaceId: 43 },
+        },
+        42,
+        "test"
+      )
+    ).toBeNull();
+  });
+
   it("reconciles a null-id checkout mismatch only to an exact one-off payment", async () => {
     const sourceIntentId = "550e8400-e29b-41d4-a716-446655440000";
     const selectResult = (rows: unknown[]) => ({
@@ -225,7 +306,8 @@ describe("billing outbox containment safeguards", () => {
     }
   );
 
-  it("durably escalates a permanent payment cancellation failure", async () => {
+  it("durably escalates a permanent credit-payment cancellation without a Mollie key", async () => {
+    delete process.env.MOLLIE_API_KEY;
     const insertValues = vi.fn(() => ({
       onDuplicateKeyUpdate: vi.fn(async () => undefined),
     }));
@@ -258,6 +340,7 @@ describe("billing outbox containment safeguards", () => {
         status: "processing",
         leaseToken: "lease-1",
         attemptCount: 12,
+        payload: { creditPurpose: "premium_image_credits" },
       } as BillingOutboxItem & { leaseToken: string },
       "payment_cancellation_target_mismatch"
     );
@@ -783,6 +866,137 @@ describe("billing outbox containment safeguards", () => {
     expect(tx.update).not.toHaveBeenCalled();
     expect(pendingSelect).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ["manual_review", false],
+    ["credit_adjustment_retry", true],
+  ] as const)(
+    "drains historical Test Mode %s without reopening Mollie after live cutover",
+    async (eventType, expectsAdjustment) => {
+      process.env.MOLLIE_MODE = "live";
+      process.env.BILLING_OPERATOR_NOTIFICATION_WEBHOOK_URL =
+        "https://notify.example/operator";
+      process.env.BILLING_OPERATOR_NOTIFICATION_SIGNING_SECRET = "s".repeat(32);
+      process.env.BILLING_OPERATOR_NOTIFICATION_KEY_ID = "operator-v1";
+      process.env.BILLING_NOTIFICATION_SOURCE_ID = "leaderbot-test";
+      const now = new Date("2026-08-28T12:00:00.000Z");
+      const job = {
+        id: 51,
+        deliveryId: "11111111-1111-4111-8111-111111111111",
+        workspaceId: 42,
+        mode: "test",
+        eventType,
+        deduplicationKey: `historical-key-free:${eventType}`,
+        payload: expectsAdjustment
+          ? { reason: "credit_adjustment_pending", adjustment }
+          : { reason: "credit_reservation_transport_ambiguous" },
+        status: "pending",
+        attemptCount: 0,
+        maxAttempts: 12,
+        availableAt: now,
+        lockedAt: null,
+        leaseToken: null,
+        lastErrorCode: null,
+        deliveryEpoch: 0,
+        deliveryState: "idle",
+        privacyErasedAt: null,
+        createdAt: now,
+        updatedAt: now,
+      } satisfies BillingOutboxItem;
+      const outsideUpdateWhere = vi
+        .fn()
+        .mockResolvedValueOnce([{ affectedRows: 0 }])
+        .mockResolvedValueOnce([{ affectedRows: 1 }]);
+      let transactionSelect = 0;
+      const tx = {
+        select: vi.fn(() => {
+          transactionSelect += 1;
+          if (transactionSelect === 1) {
+            return {
+              from: vi.fn(() => ({
+                where: vi.fn(() => ({
+                  limit: vi.fn(() => ({
+                    for: vi.fn(async () => [{ commercialEnabled: true }]),
+                  })),
+                })),
+              })),
+            };
+          }
+          if (transactionSelect === 2) {
+            return {
+              from: vi.fn(() => ({
+                where: vi.fn(() => ({ limit: vi.fn(async () => []) })),
+              })),
+            };
+          }
+          return {
+            from: vi.fn(() => ({
+              where: vi.fn(() => ({
+                orderBy: vi.fn(() => ({
+                  limit: vi.fn(() => ({
+                    for: vi.fn(async () => [job]),
+                  })),
+                })),
+              })),
+            })),
+          };
+        }),
+        update: vi.fn(() => ({
+          set: vi.fn(() => ({
+            where: vi.fn(async () => [{ affectedRows: 1 }]),
+          })),
+        })),
+      };
+      const database = {
+        select: vi.fn(() => ({
+          from: vi.fn(() => ({
+            innerJoin: vi.fn(() => ({
+              where: vi.fn(() => ({
+                orderBy: vi.fn(() => ({
+                  limit: vi.fn(async () => [{ workspaceId: 42 }]),
+                })),
+              })),
+            })),
+          })),
+        })),
+        update: vi.fn(() => ({
+          set: vi.fn(() => ({ where: outsideUpdateWhere })),
+        })),
+        transaction: vi.fn(async callback => callback(tx)),
+      };
+      databaseMock.mockResolvedValue(database);
+      const fetchMock = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValue(new Response(null, { status: 204 }));
+
+      try {
+        await expect(runHistoricalBillingSafetyOutboxOnce(now)).resolves.toBe(
+          true
+        );
+        if (expectsAdjustment) {
+          expect(fetchMock).not.toHaveBeenCalled();
+        } else {
+          expect(fetchMock).toHaveBeenCalledOnce();
+          expect(fetchMock.mock.calls[0]?.[0].toString()).toBe(
+            "https://notify.example/operator"
+          );
+          expect(fetchMock.mock.calls[0]?.[1]?.body).toContain('"mode":"test"');
+        }
+      } finally {
+        fetchMock.mockRestore();
+      }
+
+      expect(handoffMock).not.toHaveBeenCalled();
+      if (expectsAdjustment) {
+        expect(retryCreditAdjustmentMock).toHaveBeenCalledExactlyOnceWith(
+          adjustment
+        );
+      } else {
+        expect(retryCreditAdjustmentMock).not.toHaveBeenCalled();
+      }
+      expect(outsideUpdateWhere).toHaveBeenCalledTimes(2);
+    }
+  );
 });
 
 function handoffFenceDatabase(resultSets: unknown[][]) {

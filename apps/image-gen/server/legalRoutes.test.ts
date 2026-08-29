@@ -1,8 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { formatAmountMinor, getBillingPlan } from "./_core/billing/catalog";
+import { formatAmountMinor } from "./_core/billing/catalog";
+import {
+  PREMIUM_IMAGE_CREDIT_OFFER_ID,
+  PREMIUM_IMAGE_CREDIT_OFFER_VERSION,
+  getCreditOffer,
+} from "./_core/billing/creditCatalog";
 import { escapeHtml } from "./_core/html";
 import {
-  getStartpilotPricingDisplay,
+  getPremiumCreditPricingDisplay,
   registerLegalRoutes,
 } from "./_core/runtime/legalRoutes";
 
@@ -81,43 +86,58 @@ describe("legal routes", () => {
     expect(terms).toContain("/data-deletion");
   });
 
-  it("publishes the one-time Startpilot with signed-in checkout boundaries", () => {
+  it("publishes the one-time premium-credit offer with explicit checkout boundaries", () => {
     const privacy = renderLegalRoute("/privacy").body;
     const terms = renderLegalRoute("/terms").body;
     const billingPolicy = renderLegalRoute("/billing-policy").body;
-    const plan = getBillingPlan("startpilot_once_v1");
-    expect(plan).not.toBeNull();
-    if (!plan) throw new Error("Missing Startpilot billing plan");
-    const displayedPrice = `€${formatAmountMinor(plan.amountMinor).replace(
-      /\.00$/,
-      ""
-    )}`;
+    const offer = getCreditOffer(
+      PREMIUM_IMAGE_CREDIT_OFFER_ID,
+      PREMIUM_IMAGE_CREDIT_OFFER_VERSION
+    );
+    expect(offer).not.toBeNull();
+    if (!offer) throw new Error("Missing premium-credit offer");
+    const displayedPrice = `€${formatAmountMinor(offer.amountMinor)}`;
 
     expect(privacy).toContain(`Mollie processes one ${displayedPrice} payment`);
     expect(terms).toContain(
-      `costs ${displayedPrice} as a single payment for 30 days`
+      `cost ${displayedPrice} as a single payment for eight medium-quality image generations`
     );
-    expect(terms).toContain("Purchase starts only in the signed-in portal");
-    expect(terms).toContain("guided Messenger image controls");
-    expect(terms).not.toContain("AI answers");
-    expect(terms).toContain("20 Images 2.0");
-    expect(terms).toContain("maximum of five");
-    expect(terms).toContain("first AI-provider attempt starts");
-    expect(billingPolicy).toContain(
-      `${displayedPrice} once in ${plan.currency} for 30 days`
+    expect(terms).toContain("signed checkout link opened from Messenger");
+    expect(terms).toContain("Credits do not expire");
+    expect(terms).toContain(
+      "Provider, publication, or delivery failures do not consume a credit"
     );
     expect(billingPolicy).toContain(
-      "requires an explicit checkout confirmation"
+      `${displayedPrice} once in ${offer.amount.currency}`
     );
-    expect(billingPolicy).toContain("guided Messenger image controls");
-    expect(billingPolicy).not.toContain("300 AI answers");
+    expect(billingPolicy).toContain("requires explicit confirmation");
+    expect(billingPolicy).toContain("eight medium-quality image credits");
+    expect(billingPolicy).toContain("Credits do not expire");
     expect(billingPolicy).toContain("No renewal, top-up or overage");
-    expect(billingPolicy).toContain("one workspace, one Facebook Page");
     expect(billingPolicy).toContain(
-      "retries within the same request do not consume another pilot generation"
+      "a retry of the same delivered request does not consume another credit"
     );
+    expect(billingPolicy).not.toContain("Startpilot");
+    expect(billingPolicy).not.toContain("30-day");
+    expect(billingPolicy).not.toContain("one workspace");
     expect(billingPolicy).not.toContain("billing@leaderbot.live");
     expect(billingPolicy).not.toContain("Bijzondere vrijstellingsregeling");
+  });
+
+  it("retains the exact legacy Startpilot terms while that separate offer still exists", () => {
+    const terms = renderLegalRoute("/terms").body;
+
+    expect(terms).toContain("Separate legacy Startpilot offer");
+    expect(terms).toContain("eligible Belgian consumers");
+    expect(terms).toContain("costs €19 once");
+    expect(terms).toContain("30 days of access");
+    expect(terms).toContain("one workspace and one connected Facebook Page");
+    expect(terms).toContain("up to 300 AI answers and 20 image generations");
+    expect(terms).toContain("limited to 5 images per day");
+    expect(terms).toContain(
+      "no subscription, direct-debit mandate, automatic top-up or overage charge"
+    );
+    expect(terms).toContain("separate from the Messenger premium-credit pack");
   });
 
   it("uses the shared HTML escaper for text inserted into legal pages and receipts", () => {
@@ -126,18 +146,18 @@ describe("legal routes", () => {
     );
   });
 
-  it("keeps legal routes available when Startpilot pricing cannot be loaded", () => {
-    expect(getStartpilotPricingDisplay(() => null)).toEqual({
-      startpilotPrice: "€19",
-      startpilotCurrency: "EUR",
+  it("keeps legal routes available when premium-credit pricing cannot be loaded", () => {
+    expect(getPremiumCreditPricingDisplay(() => null)).toEqual({
+      premiumCreditPrice: "€4.99",
+      premiumCreditCurrency: "EUR",
     });
     expect(
-      getStartpilotPricingDisplay(() => {
+      getPremiumCreditPricingDisplay(() => {
         throw new Error("billing catalog unavailable");
       })
     ).toEqual({
-      startpilotPrice: "€19",
-      startpilotCurrency: "EUR",
+      premiumCreditPrice: "€4.99",
+      premiumCreditCurrency: "EUR",
     });
   });
 });

@@ -189,7 +189,10 @@ suite("billing identity privacy serialization", () => {
         ])
       );
     expect(erasureResult).toBe(0);
-    expect(oldShapeResult).toBe("rejected");
+    // The terminal 0016 schema deliberately keeps the nullable legacy bridge.
+    // A legacy-shaped row may therefore commit, but the serialized erasure
+    // must still remove every privacy-bearing identity before it returns.
+    expect(oldShapeResult).toBe("fulfilled");
     expect(tokenResult[0]).toBeDefined();
     expect(intentResult[0]).toBeDefined();
 

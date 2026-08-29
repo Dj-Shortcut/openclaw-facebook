@@ -73,7 +73,7 @@ jobs:
         run: |
           corepack pnpm --dir apps/image-gen install --frozen-lockfile
 
-      - name: Rehearse and apply the production migration contract
+      - name: Rehearse and apply the final production credit schema
         working-directory: apps/image-gen
         env:
           DATABASE_URL: mysql://root:root@127.0.0.1:3306/test_image_gen
@@ -81,6 +81,9 @@ jobs:
         run: |
           pnpm run db:rehearse-0015
           pnpm run db:rehearse-0016
+          pnpm run db:rehearse-0017
+          pnpm run db:rehearse-0018
+          pnpm run build:docker
           pnpm run db:test-production-migrator
           pnpm run db:generate-production-contract
           git diff --exit-code -- drizzle/production-schema-contract.json
@@ -89,9 +92,49 @@ jobs:
       - name: Verify migrated schema and history are exact and idempotent
         working-directory: apps/image-gen
         env:
-          DATABASE_URL: mysql://root:root@127.0.0.1:3306/test_image_gen
-          LEADERBOT_PRODUCTION_MIGRATION_MODE: verify-contract
-        run: node scripts/run-production-migrations.mjs
+          LEADERBOT_PRODUCTION_MIGRATION_MODE: verify-credit-wallet
+        run: |
+          set -euo pipefail
+          cleanup() {
+            mysql -h127.0.0.1 -uroot -proot \
+              -e "DROP USER IF EXISTS 'runtime_credit_smoke'@'%'"
+          }
+          trap cleanup EXIT
+          cleanup
+          mysql -h127.0.0.1 -uroot -proot \
+            -e "CREATE USER 'runtime_credit_smoke'@'%' IDENTIFIED BY 'runtime_credit_smoke'"
+          CREDIT_RUNTIME_ADMIN_URL=mysql://root:root@127.0.0.1:3306/test_image_gen \
+            CREDIT_RUNTIME_DATABASE=test_image_gen \
+            pnpm exec node --input-type=module <<'NODE'
+          import mysql from "mysql2/promise";
+          import {
+            creditWalletRoutineNames,
+            productionRuntimeWritableTableNames,
+          } from "./scripts/production-schema-contract.mjs";
+
+          const connection = await mysql.createConnection(
+            process.env.CREDIT_RUNTIME_ADMIN_URL
+          );
+          const database = `\`${process.env.CREDIT_RUNTIME_DATABASE}\``;
+          const account = "'runtime_credit_smoke'@'%'";
+          try {
+            await connection.query(`GRANT SELECT ON ${database}.* TO ${account}`);
+            for (const table of productionRuntimeWritableTableNames) {
+              await connection.query(
+                `GRANT INSERT, UPDATE, DELETE ON ${database}.\`${table}\` TO ${account}`
+              );
+            }
+            for (const routine of creditWalletRoutineNames) {
+              await connection.query(
+                `GRANT EXECUTE ON PROCEDURE ${database}.\`${routine}\` TO ${account}`
+              );
+            }
+          } finally {
+            await connection.end();
+          }
+          NODE
+          DATABASE_URL=mysql://runtime_credit_smoke:runtime_credit_smoke@127.0.0.1:3306/test_image_gen \
+            node scripts/run-production-migrations.mjs
 
       - name: Apply and verify from the exact production container
         working-directory: apps/image-gen
@@ -100,17 +143,55 @@ jobs:
           image="leaderbot-image-gen-migration:${GITHUB_SHA}"
           docker build --build-arg SOURCE_REVISION="$GITHUB_SHA" --tag "$image" .
           test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$image")" = "$GITHUB_SHA"
-          test "$(docker image inspect --format '{{ index .Config.Labels "io.leaderbot.schema.minimum" }}' "$image")" = "0016_expand"
-          test "$(docker image inspect --format '{{ index .Config.Labels "io.leaderbot.schema.maximum" }}' "$image")" = "0016_expand"
+          test "$(docker image inspect --format '{{ index .Config.Labels "io.leaderbot.schema.minimum" }}' "$image")" = "0018_credit_checkout_reservation"
+          test "$(docker image inspect --format '{{ index .Config.Labels "io.leaderbot.schema.maximum" }}' "$image")" = "0018_credit_checkout_reservation"
           docker run --rm --network host \
             --env DATABASE_URL=mysql://root:root@127.0.0.1:3306/test_image_gen_container \
             --env NODE_ENV=test \
             --env LEADERBOT_ALLOW_TEST_SCHEMA_BOOTSTRAP=1 \
-            --env LEADERBOT_PRODUCTION_MIGRATION_MODE=apply-empty-bootstrap \
+            --env LEADERBOT_PRODUCTION_MIGRATION_MODE=apply-empty-credit-wallet-bootstrap \
             "$image" node dist/migrate-production.cjs
+          cleanup() {
+            mysql -h127.0.0.1 -uroot -proot \
+              -e "DROP USER IF EXISTS 'runtime_credit_container'@'%'"
+          }
+          trap cleanup EXIT
+          cleanup
+          mysql -h127.0.0.1 -uroot -proot \
+            -e "CREATE USER 'runtime_credit_container'@'%' IDENTIFIED BY 'runtime_credit_container'"
+          CREDIT_RUNTIME_ADMIN_URL=mysql://root:root@127.0.0.1:3306/test_image_gen_container \
+            CREDIT_RUNTIME_DATABASE=test_image_gen_container \
+            pnpm exec node --input-type=module <<'NODE'
+          import mysql from "mysql2/promise";
+          import {
+            creditWalletRoutineNames,
+            productionRuntimeWritableTableNames,
+          } from "./scripts/production-schema-contract.mjs";
+
+          const connection = await mysql.createConnection(
+            process.env.CREDIT_RUNTIME_ADMIN_URL
+          );
+          const database = `\`${process.env.CREDIT_RUNTIME_DATABASE}\``;
+          const account = "'runtime_credit_container'@'%'";
+          try {
+            await connection.query(`GRANT SELECT ON ${database}.* TO ${account}`);
+            for (const table of productionRuntimeWritableTableNames) {
+              await connection.query(
+                `GRANT INSERT, UPDATE, DELETE ON ${database}.\`${table}\` TO ${account}`
+              );
+            }
+            for (const routine of creditWalletRoutineNames) {
+              await connection.query(
+                `GRANT EXECUTE ON PROCEDURE ${database}.\`${routine}\` TO ${account}`
+              );
+            }
+          } finally {
+            await connection.end();
+          }
+          NODE
           docker run --rm --network host \
-            --env DATABASE_URL=mysql://root:root@127.0.0.1:3306/test_image_gen_container \
-            --env LEADERBOT_PRODUCTION_MIGRATION_MODE=verify-contract \
+            --env DATABASE_URL=mysql://runtime_credit_container:runtime_credit_container@127.0.0.1:3306/test_image_gen_container \
+            --env LEADERBOT_PRODUCTION_MIGRATION_MODE=verify-credit-wallet \
             "$image" node dist/migrate-production.cjs
 
       - name: Verify dailyQuota composite index exists

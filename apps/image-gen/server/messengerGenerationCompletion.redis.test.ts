@@ -31,9 +31,11 @@ vi.mock("./storage", () => ({
 }));
 
 import {
+  confirmMessengerGenerationDeliveryReceipts,
   deleteMessengerGenerationCompletionsForUser,
   getMessengerGenerationCompletion,
   markMessengerGenerationCompleted,
+  markMessengerGenerationDeliveryAccepted,
   markMessengerGenerationDeliveryRetryable,
   markMessengerGenerationDeliveryStarted,
   markMessengerGenerationDelivered,
@@ -63,6 +65,38 @@ describe.skipIf(!enabled)("messenger completion Redis CAS", () => {
     ...fence("a"),
     userKey: `redis-completion-quota-${run}`,
   };
+  const receiptRaceFence = {
+    ...fence("a"),
+    userKey: createHash("sha256")
+      .update(`redis-completion-receipt-race-${run}`)
+      .digest("hex"),
+    channel: "facebook_messenger" as const,
+  };
+  const receiptOldFence = {
+    ...fence("a"),
+    bindingEpoch: 30,
+    privacyEpoch: 31,
+    userKey: createHash("sha256")
+      .update(`redis-completion-receipt-erasure-${run}`)
+      .digest("hex"),
+    pageId: "page-redis-receipt-old",
+    channel: "facebook_messenger" as const,
+  };
+  const receiptCurrentFence = {
+    ...receiptOldFence,
+    bindingEpoch: 31,
+    pageId: "page-redis-receipt-current",
+  };
+  const malformedReceiptFence = {
+    ...fence("a"),
+    bindingEpoch: 32,
+    privacyEpoch: 33,
+    userKey: createHash("sha256")
+      .update(`redis-completion-receipt-malformed-${run}`)
+      .digest("hex"),
+    pageId: "page-redis-receipt-malformed",
+    channel: "facebook_messenger" as const,
+  };
 
   beforeAll(async () => {
     await (await getRedisClient()).ping();
@@ -79,6 +113,10 @@ describe.skipIf(!enabled)("messenger completion Redis CAS", () => {
         fence("b"),
         deliveryFence,
         quotaFence,
+        receiptRaceFence,
+        receiptOldFence,
+        receiptCurrentFence,
+        malformedReceiptFence,
       ].map(scope =>
         deleteMessengerGenerationCompletionsForUser(scope.userKey, scope)
       )
@@ -376,6 +414,207 @@ describe.skipIf(!enabled)("messenger completion Redis CAS", () => {
     await expect(
       getMessengerGenerationCompletion(reqId, scope)
     ).resolves.toMatchObject({ deliveryStatus: "delivered" });
+  });
+
+  it("atomically consumes a receipt-first MID and rejects a duplicate exact-scope claim", async () => {
+    const scope = receiptRaceFence;
+    const messageId = `mid-receipt-first-${run}`;
+    const firstReqId = `req-receipt-first-${run}`;
+    const secondReqId = `req-receipt-conflict-${run}`;
+    const urls = [0, 1].map(index => {
+      const objectKey = buildMessengerStorageObjectKey({
+        kind: "generated_image",
+        scope,
+        fileName: `178746120020${index}-123e4567-e89b-42d3-a456-42661417420${index}.png`,
+      });
+      return `https://assets.example/${objectKey}`;
+    });
+
+    await markMessengerGenerationCompleted(
+      firstReqId,
+      urls[0],
+      scope.userKey,
+      Date.now(),
+      scope,
+      "paid_credit_delivery_v1",
+      null,
+      "test"
+    );
+    await markMessengerGenerationDeliveryStarted(
+      firstReqId,
+      urls[0],
+      scope.userKey,
+      Date.now(),
+      scope
+    );
+    await expect(
+      confirmMessengerGenerationDeliveryReceipts([messageId], scope)
+    ).resolves.toEqual([]);
+    await expect(
+      markMessengerGenerationDeliveryAccepted(
+        firstReqId,
+        urls[0],
+        messageId,
+        scope.userKey,
+        Date.now(),
+        scope
+      )
+    ).resolves.toBe("delivered");
+
+    await markMessengerGenerationCompleted(
+      secondReqId,
+      urls[1],
+      scope.userKey,
+      Date.now(),
+      scope,
+      "paid_credit_delivery_v1",
+      null,
+      "test"
+    );
+    await markMessengerGenerationDeliveryStarted(
+      secondReqId,
+      urls[1],
+      scope.userKey,
+      Date.now(),
+      scope
+    );
+    await expect(
+      markMessengerGenerationDeliveryAccepted(
+        secondReqId,
+        urls[1],
+        messageId,
+        scope.userKey,
+        Date.now(),
+        scope
+      )
+    ).rejects.toThrow("message claim conflict");
+    await expect(
+      getMessengerGenerationCompletion(firstReqId, scope)
+    ).resolves.toMatchObject({
+      deliveryStatus: "delivered",
+      deliveryProof: "meta_delivery_receipt_v1",
+    });
+  });
+
+  it("erases old-binding pending receipt and MID-claim keys through the current binding", async () => {
+    const oldScope = receiptOldFence;
+    const currentScope = receiptCurrentFence;
+    const reqId = `req-receipt-old-binding-${run}`;
+    const objectKey = buildMessengerStorageObjectKey({
+      kind: "generated_image",
+      scope: oldScope,
+      fileName: "1787461200210-123e4567-e89b-42d3-a456-426614174210.png",
+    });
+    const imageUrl = `https://assets.example/${objectKey}`;
+    await markMessengerGenerationCompleted(
+      reqId,
+      imageUrl,
+      oldScope.userKey,
+      Date.now(),
+      oldScope,
+      "paid_credit_delivery_v1",
+      null,
+      "test"
+    );
+    await markMessengerGenerationDeliveryStarted(
+      reqId,
+      imageUrl,
+      oldScope.userKey,
+      Date.now(),
+      oldScope
+    );
+    await expect(
+      markMessengerGenerationDeliveryAccepted(
+        reqId,
+        imageUrl,
+        `mid-old-claim-${run}`,
+        oldScope.userKey,
+        Date.now(),
+        oldScope
+      )
+    ).resolves.toBe("receipt_pending");
+    await expect(
+      confirmMessengerGenerationDeliveryReceipts(
+        [`mid-old-pending-${run}`],
+        oldScope
+      )
+    ).resolves.toEqual([]);
+
+    const subjectDigest = createHash("sha256")
+      .update(String(oldScope.workspaceId))
+      .update("\0")
+      .update(String(oldScope.channelConnectionId))
+      .update("\0")
+      .update(oldScope.userKey)
+      .digest("hex");
+    const tag = `{mgc:${subjectDigest}}`;
+    const receiptScopeDigest = createHash("sha256")
+      .update("leaderbot.messenger-delivery-scope.v1\0", "utf8")
+      .update(String(oldScope.workspaceId))
+      .update("\0")
+      .update(String(oldScope.channelConnectionId))
+      .update("\0")
+      .update(String(oldScope.bindingEpoch))
+      .update("\0")
+      .update(String(oldScope.privacyEpoch))
+      .update("\0")
+      .update(oldScope.userKey)
+      .update("\0")
+      .update(oldScope.pageId)
+      .update("\0")
+      .update(oldScope.channel)
+      .digest("hex");
+    const receiptKey = `messenger-generation-completion:user:${tag}:receipt:${receiptScopeDigest}`;
+    const claimKey = `messenger-generation-completion:user:${tag}:message-claim:${receiptScopeDigest}`;
+    const scopeRegistryKey = `messenger-generation-completion:user:${tag}:epoch:${oldScope.privacyEpoch}:receipt-scopes`;
+    const redis = await getRedisClient();
+    await expect(redis.exists(receiptKey)).resolves.toBe(1);
+    await expect(redis.exists(claimKey)).resolves.toBe(1);
+    await expect(redis.smembers(scopeRegistryKey)).resolves.toContain(
+      receiptScopeDigest
+    );
+
+    await deleteMessengerGenerationCompletionsForUser(
+      currentScope.userKey,
+      currentScope
+    );
+
+    await expect(redis.exists(receiptKey)).resolves.toBe(0);
+    await expect(redis.exists(claimKey)).resolves.toBe(0);
+    await expect(redis.exists(scopeRegistryKey)).resolves.toBe(0);
+    await expect(
+      getMessengerGenerationCompletion(reqId, oldScope)
+    ).resolves.toBeNull();
+  });
+
+  it("retains malformed indexed metadata through a receipt and erases it", async () => {
+    const scope = malformedReceiptFence;
+    const subjectDigest = createHash("sha256")
+      .update(String(scope.workspaceId))
+      .update("\0")
+      .update(String(scope.channelConnectionId))
+      .update("\0")
+      .update(scope.userKey)
+      .digest("hex");
+    const tag = `{mgc:${subjectDigest}}`;
+    const malformedKey = `messenger-generation-completion:${tag}:malformed:${run}`;
+    const epochIndexKey = `messenger-generation-completion:user:${tag}:epoch:${scope.privacyEpoch}:index`;
+    const redis = await getRedisClient();
+    await redis.set(malformedKey, "{not-json");
+    await redis.sadd(epochIndexKey, malformedKey);
+
+    await expect(
+      confirmMessengerGenerationDeliveryReceipts(
+        [`mid-malformed-index-${run}`],
+        scope
+      )
+    ).resolves.toEqual([]);
+    await expect(redis.sismember(epochIndexKey, malformedKey)).resolves.toBe(1);
+
+    await deleteMessengerGenerationCompletionsForUser(scope.userKey, scope);
+
+    await expect(redis.exists(malformedKey)).resolves.toBe(0);
+    await expect(redis.exists(epochIndexKey)).resolves.toBe(0);
   });
 
   it("refreshes a pending quota snapshot without moving its commit time", async () => {

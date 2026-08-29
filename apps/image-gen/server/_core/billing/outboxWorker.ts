@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { and, asc, eq, gt, inArray, isNull, lte, sql } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import {
   billingOutbox,
   billingCustomers,
@@ -43,6 +43,17 @@ import {
   deliverBillingNotification,
 } from "./billingNotificationDelivery";
 import {
+  cancelCustomerlessCreditPayment,
+  CreditPaymentRecoveryError,
+  isCustomerlessCreditPaymentPayload,
+  reconcileCustomerlessCreditPayment,
+} from "./creditPaymentRecovery";
+import {
+  CreditPaymentAdjustmentPendingError,
+  retryPersistedCreditPaymentAdjustment,
+} from "./creditPaymentWebhook";
+import type { CreditPaymentAdjustmentEvidence } from "./creditPaymentWebhookStore";
+import {
   claimNextBillingTenant,
   assertBillingTenantLeaseOwned,
   releaseBillingTenantLease,
@@ -53,6 +64,17 @@ import {
 
 const OUTBOX_POLL_INTERVAL_MS = 5_000;
 const OUTBOX_LEASE_TIMEOUT_MS = 15 * 60 * 1_000;
+const SAFETY_EVENT_TYPES = [
+  "cancel_subscription",
+  "cancel_payment",
+  "credit_adjustment_retry",
+  "payment_warning",
+  "manual_review",
+] as const;
+const HISTORICAL_KEY_FREE_EVENT_TYPES = [
+  "manual_review",
+  "credit_adjustment_retry",
+] as const;
 
 class RetryableOutboxError extends Error {
   constructor(readonly retryCode: string) {
@@ -221,12 +243,6 @@ export async function getNextBillingOutboxDue(
   if (!controls[0]) {
     throw new Error("billing execution control is not provisioned");
   }
-  const safetyEventTypes = [
-    "cancel_subscription",
-    "cancel_payment",
-    "payment_warning",
-    "manual_review",
-  ] as const;
   const rows = await database
     .select({ nextAt: sql<Date | null>`MIN(${billingOutbox.availableAt})` })
     .from(billingOutbox)
@@ -237,7 +253,7 @@ export async function getNextBillingOutboxDue(
         inArray(billingOutbox.status, ["pending", "processing"]),
         ...(controls[0].commercialEnabled
           ? []
-          : [inArray(billingOutbox.eventType, safetyEventTypes)])
+          : [inArray(billingOutbox.eventType, SAFETY_EVENT_TYPES)])
       )
     );
   const rawNextAt: unknown = rows[0]?.nextAt;
@@ -272,9 +288,33 @@ export async function runBillingOutboxOnce(
     throw new Error("invalid billing outbox workspace");
   }
   const mode = getConfiguredBillingMode();
-  await releaseStaleBillingLeases(mode, workspaceId);
-  const job = await claimBillingOutboxItem(mode, workspaceId);
+  return runBillingOutboxForModeOnce(
+    mode,
+    workspaceId,
+    clientOverride,
+    tenantLease
+  );
+}
+
+async function runBillingOutboxForModeOnce(
+  mode: MollieMode,
+  workspaceId: number,
+  clientOverride?: MollieClient,
+  tenantLease?: BillingTenantLease,
+  allowedEventTypes?: readonly BillingOutboxItem["eventType"][],
+  now = new Date()
+): Promise<boolean> {
+  await releaseStaleBillingLeases(mode, workspaceId, allowedEventTypes, now);
+  const job = await claimBillingOutboxItem(
+    mode,
+    workspaceId,
+    allowedEventTypes,
+    now
+  );
   if (!job) return false;
+  if (allowedEventTypes && !allowedEventTypes.includes(job.eventType)) {
+    throw new Error("billing outbox claim escaped its allowed event types");
+  }
   try {
     if (tenantLease) await assertBillingTenantLeaseOwned(tenantLease);
     await processBillingOutboxItem(job, clientOverride, tenantLease);
@@ -309,7 +349,74 @@ export async function runBillingOutboxOnce(
   return true;
 }
 
+/**
+ * Drains only provider-key-free safety work from the non-current payment mode.
+ * It never receives a Mollie client and its claim is fenced to metadata-only
+ * operator review and already-persisted refund/chargeback adjustment replays,
+ * so a Test Mode hold remains operable after a later live cutover without
+ * reopening historical provider work.
+ */
+export async function runHistoricalBillingSafetyOutboxOnce(
+  now = new Date()
+): Promise<boolean> {
+  const currentMode = getConfiguredBillingMode();
+  const historicalMode: MollieMode = currentMode === "test" ? "live" : "test";
+  const workspaceId = await findHistoricalKeyFreeWorkspace(historicalMode, now);
+  if (!workspaceId) return false;
+  return runBillingOutboxForModeOnce(
+    historicalMode,
+    workspaceId,
+    undefined,
+    undefined,
+    HISTORICAL_KEY_FREE_EVENT_TYPES,
+    now
+  );
+}
+
+async function findHistoricalKeyFreeWorkspace(
+  mode: MollieMode,
+  now: Date
+): Promise<number | null> {
+  const database = await getDatabaseOrThrow();
+  const staleBefore = new Date(now.getTime() - OUTBOX_LEASE_TIMEOUT_MS);
+  const rows = await database
+    .select({ workspaceId: billingOutbox.workspaceId })
+    .from(billingOutbox)
+    .innerJoin(
+      billingExecutionControls,
+      and(
+        eq(billingExecutionControls.workspaceId, billingOutbox.workspaceId),
+        eq(billingExecutionControls.mode, billingOutbox.mode)
+      )
+    )
+    .where(
+      and(
+        eq(billingOutbox.mode, mode),
+        inArray(billingOutbox.eventType, HISTORICAL_KEY_FREE_EVENT_TYPES),
+        or(
+          and(
+            eq(billingOutbox.status, "pending"),
+            lte(billingOutbox.availableAt, now)
+          ),
+          and(
+            eq(billingOutbox.status, "processing"),
+            lte(billingOutbox.lockedAt, staleBefore)
+          )
+        )
+      )
+    )
+    .orderBy(asc(billingOutbox.availableAt), asc(billingOutbox.id))
+    .limit(1);
+  return rows[0]?.workspaceId ?? null;
+}
+
 export function isCriticalContainmentJob(job: BillingOutboxItem): boolean {
+  if (job.eventType === "credit_adjustment_retry") {
+    return (
+      isRecord(job.payload) &&
+      job.payload.reason === "credit_adjustment_pending"
+    );
+  }
   if (
     job.eventType !== "cancel_subscription" &&
     job.eventType !== "cancel_payment"
@@ -337,6 +444,7 @@ async function rearmCriticalContainmentAfterExhaustion(
   job: ClaimedBillingOutboxItem,
   errorCode: string
 ): Promise<void> {
+  const creditAdjustment = job.eventType === "credit_adjustment_retry";
   const database = await getDatabaseOrThrow();
   await database.transaction(async tx => {
     const rows = await tx
@@ -379,9 +487,13 @@ async function rearmCriticalContainmentAfterExhaustion(
         workspaceId: job.workspaceId,
         mode: job.mode,
         eventType: "manual_review",
-        deduplicationKey: `containment_retry_exhausted:${job.deliveryId}`,
+        deduplicationKey: creditAdjustment
+          ? `credit_adjustment_retry_exhausted:${job.deliveryId}`
+          : `containment_retry_exhausted:${job.deliveryId}`,
         payload: {
-          reason: "billing_profile_containment_retry_exhausted",
+          reason: creditAdjustment
+            ? "credit_adjustment_retry_exhausted"
+            : "billing_profile_containment_retry_exhausted",
           sourceDeliveryId: job.deliveryId,
         },
         status: "pending",
@@ -427,6 +539,14 @@ export async function runBillingOutboxSchedulerSafely(): Promise<void> {
             : "UnknownError",
     });
   }
+  try {
+    await runHistoricalBillingSafetyOutboxOnce();
+  } catch (error) {
+    safeLog("billing_outbox_historical_notification_failed", {
+      level: "error",
+      errorCode: error instanceof Error ? error.name : "UnknownError",
+    });
+  }
 }
 
 export async function processBillingOutboxItem(
@@ -451,6 +571,25 @@ export async function processBillingOutboxItem(
   }
   if (job.eventType === "send_portal_handoff") {
     await sendPaymentHandoff(job);
+    return;
+  }
+  if (job.eventType === "credit_adjustment_retry") {
+    const adjustment = readCreditAdjustmentRetryPayload(
+      job.payload,
+      job.workspaceId,
+      job.mode
+    );
+    if (!adjustment) {
+      throw new PermanentOutboxError("credit_adjustment_payload_invalid");
+    }
+    try {
+      await retryPersistedCreditPaymentAdjustment(adjustment);
+    } catch (error) {
+      if (error instanceof CreditPaymentAdjustmentPendingError) {
+        throw new RetryableOutboxError("credit_adjustment_pending_holds");
+      }
+      throw error;
+    }
     return;
   }
 
@@ -1513,6 +1652,23 @@ export async function cancelContainedMolliePayment(
   job: ClaimedBillingOutboxItem,
   clientOverride?: MollieClient
 ): Promise<void> {
+  if (isCustomerlessCreditPaymentPayload(job.payload)) {
+    try {
+      const payload = job.payload as Record<string, unknown>;
+      if (payload.targetPaymentId === null) {
+        await reconcileCustomerlessCreditPayment(job, clientOverride);
+      } else {
+        await cancelCustomerlessCreditPayment(job, clientOverride);
+      }
+      return;
+    } catch (error) {
+      if (error instanceof CreditPaymentRecoveryError) {
+        if (error.retryable) throw new RetryableOutboxError(error.code);
+        throw new PermanentOutboxError(error.code);
+      }
+      throw error;
+    }
+  }
   const record =
     job.payload &&
     typeof job.payload === "object" &&
@@ -2821,7 +2977,9 @@ function isValidMollieId(
 
 export async function claimBillingOutboxItem(
   mode: MollieMode,
-  workspaceId: number
+  workspaceId: number,
+  allowedEventTypesOverride?: readonly BillingOutboxItem["eventType"][],
+  now = new Date()
 ): Promise<ClaimedBillingOutboxItem | null> {
   const database = await getDatabaseOrThrow();
   return database.transaction(async tx => {
@@ -2837,14 +2995,11 @@ export async function claimBillingOutboxItem(
       .limit(1)
       .for("update");
     if (!controls[0]) return null;
-    const allowedEventTypes = controls[0].commercialEnabled
-      ? undefined
-      : ([
-          "cancel_subscription",
-          "cancel_payment",
-          "payment_warning",
-          "manual_review",
-        ] as const);
+    const allowedEventTypes = allowedEventTypesOverride
+      ? [...allowedEventTypesOverride]
+      : controls[0].commercialEnabled
+        ? undefined
+        : SAFETY_EVENT_TYPES;
     const activeJobs = await tx
       .select({ id: billingOutbox.id })
       .from(billingOutbox)
@@ -2868,7 +3023,7 @@ export async function claimBillingOutboxItem(
           eq(billingOutbox.workspaceId, workspaceId),
           eq(billingOutbox.mode, mode),
           eq(billingOutbox.status, "pending"),
-          lte(billingOutbox.availableAt, new Date()),
+          lte(billingOutbox.availableAt, now),
           ...(allowedEventTypes
             ? [inArray(billingOutbox.eventType, allowedEventTypes)]
             : [])
@@ -2885,7 +3040,7 @@ export async function claimBillingOutboxItem(
       .update(billingOutbox)
       .set({
         status: "processing",
-        lockedAt: new Date(),
+        lockedAt: now,
         leaseToken,
         attemptCount,
       })
@@ -2908,10 +3063,12 @@ export async function claimBillingOutboxItem(
 
 async function releaseStaleBillingLeases(
   mode: MollieMode,
-  workspaceId: number
+  workspaceId: number,
+  allowedEventTypes?: readonly BillingOutboxItem["eventType"][],
+  now = new Date()
 ) {
   const database = await getDatabaseOrThrow();
-  const staleBefore = new Date(Date.now() - OUTBOX_LEASE_TIMEOUT_MS);
+  const staleBefore = new Date(now.getTime() - OUTBOX_LEASE_TIMEOUT_MS);
   await database
     .update(billingOutbox)
     .set({
@@ -2925,6 +3082,9 @@ async function releaseStaleBillingLeases(
         eq(billingOutbox.workspaceId, workspaceId),
         eq(billingOutbox.mode, mode),
         eq(billingOutbox.status, "processing"),
+        ...(allowedEventTypes
+          ? [inArray(billingOutbox.eventType, [...allowedEventTypes])]
+          : []),
         lte(billingOutbox.lockedAt, staleBefore)
       )
     );
@@ -3181,6 +3341,164 @@ export async function failBillingOutboxItem(
     errorCode,
     attempt: job.attemptCount,
   });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(
+    value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.getPrototypeOf(value) === Object.prototype
+  );
+}
+
+function hasExactKeys(
+  value: Record<string, unknown>,
+  expected: readonly string[]
+): boolean {
+  const actual = Object.keys(value).sort();
+  const sortedExpected = [...expected].sort();
+  return (
+    actual.length === sortedExpected.length &&
+    actual.every((key, index) => key === sortedExpected[index])
+  );
+}
+
+export function readCreditAdjustmentRetryPayload(
+  payload: unknown,
+  workspaceId: number,
+  mode: MollieMode
+): CreditPaymentAdjustmentEvidence | null {
+  if (
+    !isRecord(payload) ||
+    !hasExactKeys(payload, ["adjustment", "reason"]) ||
+    payload.reason !== "credit_adjustment_pending" ||
+    !isRecord(payload.adjustment)
+  ) {
+    return null;
+  }
+  const adjustment = payload.adjustment;
+  const commonKeys = [
+    "workspaceId",
+    "mode",
+    "channelConnectionId",
+    "bindingEpoch",
+    "privacyEpoch",
+    "walletId",
+    "financialSubjectRef",
+    "intentId",
+    "authorizationEpoch",
+    "paymentLedgerId",
+    "providerPaymentId",
+    "rootGrantEntryId",
+    "evidenceHash",
+    "webhookPaymentId",
+    "deliverySnapshotHash",
+    "kind",
+  ];
+  const replayEntryId = adjustment.replayEntryId;
+  const providerKeys =
+    adjustment.kind === "refund_debit"
+      ? ["providerEffectIds"]
+      : adjustment.kind === "chargeback_debit" ||
+          adjustment.kind === "chargeback_restore"
+        ? ["providerEffectId"]
+        : null;
+  if (
+    !providerKeys ||
+    !hasExactKeys(adjustment, [
+      ...commonKeys,
+      ...providerKeys,
+      ...(replayEntryId === undefined ? [] : ["replayEntryId"]),
+    ])
+  ) {
+    return null;
+  }
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+  const sha256 = /^[0-9a-f]{64}$/;
+  const paymentId = /^tr_[A-Za-z0-9]{1,60}$/;
+  const positiveInteger = (value: unknown) =>
+    Number.isSafeInteger(value) && Number(value) > 0;
+  if (
+    adjustment.workspaceId !== workspaceId ||
+    adjustment.mode !== mode ||
+    !positiveInteger(adjustment.channelConnectionId) ||
+    !positiveInteger(adjustment.bindingEpoch) ||
+    !positiveInteger(adjustment.privacyEpoch) ||
+    !positiveInteger(adjustment.authorizationEpoch) ||
+    !positiveInteger(adjustment.paymentLedgerId) ||
+    typeof adjustment.walletId !== "string" ||
+    !uuid.test(adjustment.walletId) ||
+    typeof adjustment.intentId !== "string" ||
+    !uuid.test(adjustment.intentId) ||
+    typeof adjustment.rootGrantEntryId !== "string" ||
+    !uuid.test(adjustment.rootGrantEntryId) ||
+    (replayEntryId !== undefined &&
+      (typeof replayEntryId !== "string" || !uuid.test(replayEntryId))) ||
+    typeof adjustment.financialSubjectRef !== "string" ||
+    !sha256.test(adjustment.financialSubjectRef) ||
+    typeof adjustment.evidenceHash !== "string" ||
+    !sha256.test(adjustment.evidenceHash) ||
+    typeof adjustment.deliverySnapshotHash !== "string" ||
+    !sha256.test(adjustment.deliverySnapshotHash) ||
+    typeof adjustment.providerPaymentId !== "string" ||
+    !paymentId.test(adjustment.providerPaymentId) ||
+    adjustment.webhookPaymentId !== adjustment.providerPaymentId
+  ) {
+    return null;
+  }
+  const common = {
+    workspaceId,
+    mode,
+    channelConnectionId: Number(adjustment.channelConnectionId),
+    bindingEpoch: Number(adjustment.bindingEpoch),
+    privacyEpoch: Number(adjustment.privacyEpoch),
+    walletId: adjustment.walletId,
+    financialSubjectRef: adjustment.financialSubjectRef,
+    intentId: adjustment.intentId,
+    authorizationEpoch: Number(adjustment.authorizationEpoch),
+    paymentLedgerId: Number(adjustment.paymentLedgerId),
+    providerPaymentId: adjustment.providerPaymentId,
+    rootGrantEntryId: adjustment.rootGrantEntryId,
+    evidenceHash: adjustment.evidenceHash,
+    ...(typeof replayEntryId === "string" ? { replayEntryId } : {}),
+    webhookPaymentId: adjustment.providerPaymentId,
+    deliverySnapshotHash: adjustment.deliverySnapshotHash,
+  };
+  if (adjustment.kind === "refund_debit") {
+    if (!Array.isArray(adjustment.providerEffectIds)) {
+      return null;
+    }
+    const providerEffectIds: string[] = [];
+    for (const value of adjustment.providerEffectIds as unknown[]) {
+      if (typeof value !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(value)) {
+        return null;
+      }
+      providerEffectIds.push(value);
+    }
+    if (
+      providerEffectIds.length < 1 ||
+      new Set(providerEffectIds).size !== providerEffectIds.length
+    ) {
+      return null;
+    }
+    return {
+      ...common,
+      kind: "refund_debit",
+      providerEffectIds,
+    };
+  }
+  if (
+    typeof adjustment.providerEffectId !== "string" ||
+    !/^[A-Za-z0-9_-]{1,64}$/.test(adjustment.providerEffectId)
+  ) {
+    return null;
+  }
+  return {
+    ...common,
+    kind: adjustment.kind as "chargeback_debit" | "chargeback_restore",
+    providerEffectId: adjustment.providerEffectId,
+  };
 }
 
 function readSourceIntentId(payload: unknown): string | null {

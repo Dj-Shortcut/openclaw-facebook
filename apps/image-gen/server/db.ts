@@ -11,8 +11,6 @@ import {
   sql,
 } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
-import type { RowDataPacket } from "mysql2";
-import mysql from "mysql2/promise";
 import {
   aiIdentities,
   auditLog,
@@ -20,6 +18,7 @@ import {
   billingHandoffRecoveryEvents,
   billingOutbox,
   channelConnections,
+  creditWallets,
   dailyQuota,
   InsertAiIdentity,
   InsertAuditLog,
@@ -70,11 +69,6 @@ import {
 import { parseStartpilotQuota } from "./_core/billing/startpilotQuota";
 
 let _db: ReturnType<typeof drizzle> | null = null;
-
-type NamedLockRow = RowDataPacket & {
-  acquired?: number | string | null;
-  released?: number | string | null;
-};
 
 function logDatabaseUnavailable(operation: string): void {
   safeLog("database_unavailable", {
@@ -136,6 +130,11 @@ export type MessengerPrivacyIdentityFence = Readonly<{
   pageId: string;
 }>;
 
+export type ExactMessengerPrivacyIdentityFence = MessengerPrivacyIdentityFence &
+  Readonly<{
+    bindingEpoch: number;
+  }>;
+
 /**
  * Serializes identity-bearing SQL writes with Messenger erasure. The subject
  * row is always locked before any intent, outbox, or handoff-token row.
@@ -143,6 +142,29 @@ export type MessengerPrivacyIdentityFence = Readonly<{
 export async function lockActiveMessengerPrivacyIdentity(
   tx: ImageGenTransaction,
   input: MessengerPrivacyIdentityFence
+): Promise<void> {
+  return lockMessengerPrivacyIdentity(tx, input);
+}
+
+/**
+ * Credit-bearing writes must prove the immutable Page-binding epoch. Legacy
+ * portal handoffs predate that stored field and continue to use the bounded
+ * compatibility helper above until their retirement migration is complete.
+ */
+export async function lockExactActiveMessengerPrivacyIdentity(
+  tx: ImageGenTransaction,
+  input: ExactMessengerPrivacyIdentityFence
+): Promise<void> {
+  if (!Number.isSafeInteger(input.bindingEpoch) || input.bindingEpoch <= 0) {
+    throw new Error("Exact Messenger Page binding epoch is required");
+  }
+  return lockMessengerPrivacyIdentity(tx, input, input.bindingEpoch);
+}
+
+async function lockMessengerPrivacyIdentity(
+  tx: ImageGenTransaction,
+  input: MessengerPrivacyIdentityFence,
+  bindingEpoch?: number
 ): Promise<void> {
   const pageId = input.pageId.trim();
   if (
@@ -189,7 +211,10 @@ export async function lockActiveMessengerPrivacyIdentity(
         eq(channelConnections.workspaceId, input.workspaceId),
         eq(channelConnections.channel, "facebook_messenger"),
         eq(channelConnections.status, "connected"),
-        eq(channelConnections.externalId, pageId)
+        eq(channelConnections.externalId, pageId),
+        ...(bindingEpoch === undefined
+          ? []
+          : [eq(channelConnections.bindingEpoch, bindingEpoch)])
       )
     )
     .limit(1)
@@ -1841,10 +1866,9 @@ export async function eraseBillingHandoffIdentity(
   }
   return db.transaction(async tx => {
     // Migration 0016 introduced the immutable connection/privacy columns as
-    // nullable so the 0017 backfill can populate them. During that bounded
-    // bridge, exact workspace + Page + user identity is still authoritative
-    // for rows where both new scope columns are NULL. Never treat a partially
-    // populated or mismatched non-NULL tuple as legacy.
+    // nullable. Exact workspace + Page + user identity remains authoritative
+    // for legacy rows where both scope columns are NULL. Never treat a
+    // partially populated or mismatched non-NULL tuple as legacy.
     const exactIntentScope = exactScope
       ? or(
           and(
@@ -2120,77 +2144,7 @@ export async function advanceBillingHandoffDeliveryFence(
     return getAffectedRows(result) === 1;
   };
 
-  if (state !== "transport_started") {
-    return await updateFence(db);
-  }
-
-  // Migration 0017 rewrites privacy-bearing handoff payloads. The named lock
-  // is held only while a writer makes transport irrevocable; the production
-  // migrator holds the same lock across its final preflight and data repair.
-  // A writer that encounters the migration fails closed and is retried without
-  // starting the external Messenger transport.
-  const databaseUrl = process.env.DATABASE_URL?.trim();
-  if (!databaseUrl) {
-    throw new Error("Database unavailable: billing delivery fence failed");
-  }
-  const lockConnection = await mysql.createConnection(databaseUrl);
-  let lockHeld = false;
-  let result = false;
-  let operationError: unknown;
-  try {
-    const [[acquired]] = await lockConnection.query<NamedLockRow[]>(
-      "SELECT GET_LOCK(CONCAT('leaderbot:handoff:', LEFT(SHA2(DATABASE(), 256), 40)), 0) AS acquired"
-    );
-    if (Number(acquired?.acquired) === 1) {
-      lockHeld = true;
-      // Drizzle's update resolves only after the autocommit is durable, so the
-      // migration cannot acquire the lock between the state write and commit.
-      result = await updateFence(db);
-    }
-  } catch (error) {
-    operationError = error;
-  }
-
-  let cleanupError: unknown;
-  if (lockHeld) {
-    try {
-      const [[released]] = await lockConnection.query<NamedLockRow[]>(
-        "SELECT RELEASE_LOCK(CONCAT('leaderbot:handoff:', LEFT(SHA2(DATABASE(), 256), 40))) AS released"
-      );
-      if (Number(released?.released) !== 1) {
-        cleanupError = new Error(
-          "Billing handoff migration fence release failed"
-        );
-      }
-    } catch (error) {
-      cleanupError = error;
-    }
-  }
-  try {
-    await lockConnection.end();
-  } catch (error) {
-    cleanupError ??= error;
-  }
-  if (operationError && cleanupError) {
-    throw new AggregateError(
-      [operationError, cleanupError],
-      "Billing handoff delivery failed and migration fence cleanup failed",
-      { cause: operationError }
-    );
-  }
-  if (operationError) {
-    throw operationError instanceof Error
-      ? operationError
-      : new Error("Billing handoff delivery failed", { cause: operationError });
-  }
-  if (cleanupError) {
-    throw cleanupError instanceof Error
-      ? cleanupError
-      : new Error("Billing handoff migration fence cleanup failed", {
-          cause: cleanupError,
-        });
-  }
-  return result;
+  return await updateFence(db);
 }
 
 export class ChannelConnectionClaimConflictError extends Error {
@@ -2211,6 +2165,13 @@ export class WhatsAppChannelConnectionMigrationRequiredError extends Error {
   constructor() {
     super("WhatsApp binding change requires an explicit migration");
     this.name = "WhatsAppChannelConnectionMigrationRequiredError";
+  }
+}
+
+export class FacebookChannelConnectionMigrationRequiredError extends Error {
+  constructor() {
+    super("Facebook Page binding change requires an explicit credit migration");
+    this.name = "FacebookChannelConnectionMigrationRequiredError";
   }
 }
 
@@ -2306,7 +2267,8 @@ export async function upsertChannelConnection(
       actorUserId: number;
       allowedRoles: readonly WorkspaceMember["role"][];
     }>;
-    updatePolicy?: "preserve_exact_whatsapp_binding";
+    updatePolicy?:
+      "preserve_exact_whatsapp_binding" | "preserve_exact_facebook_binding";
   }> = {}
 ) {
   const { externalId, providerAccountExternalId } =
@@ -2317,6 +2279,10 @@ export async function upsertChannelConnection(
     preservesExactWhatsAppBinding && externalId && providerAccountExternalId
       ? Object.freeze({ externalId, providerAccountExternalId })
       : null;
+  const preservesExactFacebookBinding =
+    options.updatePolicy === "preserve_exact_facebook_binding";
+  const exactFacebookPageId =
+    preservesExactFacebookBinding && externalId ? externalId : null;
   if (
     preservesExactWhatsAppBinding &&
     (values.channel !== "whatsapp" ||
@@ -2324,6 +2290,14 @@ export async function upsertChannelConnection(
       !exactWhatsAppEndpoint)
   ) {
     throw new WhatsAppChannelConnectionMigrationRequiredError();
+  }
+  if (
+    preservesExactFacebookBinding &&
+    (values.channel !== "facebook_messenger" ||
+      values.status === "disconnected" ||
+      !exactFacebookPageId)
+  ) {
+    throw new FacebookChannelConnectionMigrationRequiredError();
   }
   if (options.auditLog && options.auditLog.workspaceId !== values.workspaceId) {
     throw new Error("Channel connection audit workspace does not match");
@@ -2430,6 +2404,7 @@ export async function upsertChannelConnection(
           externalId: channelConnections.externalId,
           providerAccountExternalId:
             channelConnections.providerAccountExternalId,
+          bindingEpoch: channelConnections.bindingEpoch,
         })
         .from(channelConnections)
         .where(
@@ -2440,7 +2415,6 @@ export async function upsertChannelConnection(
         )
         .limit(1)
         .for("update");
-
       if (existing[0]) {
         if (preservesExactWhatsAppBinding) {
           if (!exactWhatsAppEndpoint) {
@@ -2477,6 +2451,75 @@ export async function upsertChannelConnection(
                 )
               )
             );
+        } else if (preservesExactFacebookBinding) {
+          if (!exactFacebookPageId) {
+            throw new FacebookChannelConnectionMigrationRequiredError();
+          }
+          if (
+            existing[0].status === "disconnected" &&
+            existing[0].externalId === null &&
+            existing[0].providerAccountExternalId === null
+          ) {
+            // A completed disconnect already advanced the epoch and removed
+            // the Page identity. Permit a fresh claim only while no retained
+            // paid balance still depends on this connection. The Page claim
+            // above is locked before this row is rebound.
+            const retainedCreditWallets = await tx
+              .select({ walletId: creditWallets.walletId })
+              .from(creditWallets)
+              .where(
+                and(
+                  eq(creditWallets.workspaceId, values.workspaceId),
+                  eq(creditWallets.channelConnectionId, existing[0].id),
+                  inArray(creditWallets.status, ["active", "frozen"])
+                )
+              )
+              .limit(1)
+              .for("update");
+            if (retainedCreditWallets[0]) {
+              throw new FacebookChannelConnectionMigrationRequiredError();
+            }
+            await tx
+              .update(channelConnections)
+              .set(updateSet)
+              .where(
+                and(
+                  eq(channelConnections.id, existing[0].id),
+                  eq(channelConnections.workspaceId, values.workspaceId),
+                  eq(channelConnections.channel, "facebook_messenger"),
+                  eq(channelConnections.status, "disconnected"),
+                  isNull(channelConnections.externalId),
+                  isNull(channelConnections.providerAccountExternalId)
+                )
+              );
+          } else {
+            if (
+              existing[0].status === "disconnected" ||
+              existing[0].externalId !== exactFacebookPageId ||
+              existing[0].providerAccountExternalId !== null
+            ) {
+              throw new FacebookChannelConnectionMigrationRequiredError();
+            }
+            await tx
+              .update(channelConnections)
+              .set({
+                status: values.status,
+                displayName: values.displayName ?? null,
+                encryptedAccessToken: values.encryptedAccessToken ?? null,
+                grantedScopes: values.grantedScopes ?? null,
+                lastCheckedAt,
+              })
+              .where(
+                and(
+                  eq(channelConnections.id, existing[0].id),
+                  eq(channelConnections.workspaceId, values.workspaceId),
+                  eq(channelConnections.channel, "facebook_messenger"),
+                  eq(channelConnections.externalId, exactFacebookPageId),
+                  isNull(channelConnections.providerAccountExternalId),
+                  eq(channelConnections.bindingEpoch, existing[0].bindingEpoch)
+                )
+              );
+          }
         } else {
           const providerFenceNow = new Date();
           // Every external provider call is hard-bounded below the 15-minute
@@ -2567,6 +2610,22 @@ export async function upsertChannelConnection(
                 "Channel connection has an active AI delivery; retry later"
               );
             }
+
+            const retainedCreditWallets = await tx
+              .select({ walletId: creditWallets.walletId })
+              .from(creditWallets)
+              .where(
+                and(
+                  eq(creditWallets.workspaceId, values.workspaceId),
+                  eq(creditWallets.channelConnectionId, existing[0].id),
+                  inArray(creditWallets.status, ["active", "frozen"])
+                )
+              )
+              .limit(1)
+              .for("update");
+            if (retainedCreditWallets[0]) {
+              throw new FacebookChannelConnectionMigrationRequiredError();
+            }
           }
           await tx
             .update(channelConnections)
@@ -2602,7 +2661,8 @@ export async function upsertChannelConnection(
     } catch (error) {
       if (
         error instanceof ChannelConnectionClaimConflictError ||
-        error instanceof WhatsAppChannelConnectionMigrationRequiredError
+        error instanceof WhatsAppChannelConnectionMigrationRequiredError ||
+        error instanceof FacebookChannelConnectionMigrationRequiredError
       ) {
         throw error;
       }
@@ -2745,6 +2805,22 @@ export async function disconnectChannelConnection(
         throw new Error(
           "Channel connection has an active AI delivery; retry later"
         );
+      }
+
+      const retainedCreditWallets = await tx
+        .select({ walletId: creditWallets.walletId })
+        .from(creditWallets)
+        .where(
+          and(
+            eq(creditWallets.workspaceId, workspaceId),
+            eq(creditWallets.channelConnectionId, existing[0].id),
+            inArray(creditWallets.status, ["active", "frozen"])
+          )
+        )
+        .limit(1)
+        .for("update");
+      if (retainedCreditWallets[0]) {
+        throw new FacebookChannelConnectionMigrationRequiredError();
       }
     }
 

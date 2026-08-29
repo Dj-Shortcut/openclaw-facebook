@@ -1,0 +1,442 @@
+name: Cleanup obsolete image-gen runtime principal
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Lock for the rollback window, unlock for recovery, or drop after reviewed lock evidence
+        required: true
+        type: choice
+        options:
+          - lock
+          - unlock
+          - drop
+      obsolete_principal:
+        description: Exact obsolete broad runtime principal (never a password)
+        required: true
+        type: string
+      expected_runtime_principal_sha256:
+        description: Reviewed SHA-256 fingerprint of the staged restricted principal
+        required: true
+        type: string
+      expected_deployment_identity:
+        description: Exact settled deployment identity that proved the cutover
+        required: true
+        type: string
+      lock_evidence_run_id:
+        description: Required for drop; protected lock workflow run ID
+        required: false
+        type: string
+      lock_evidence_run_attempt:
+        description: Required for drop; protected lock workflow run attempt
+        required: false
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  FLYCTL_VERSION: 0.4.85
+
+concurrency:
+  group: production-deploy-image-gen
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: Prove the obsolete principal is outside the rollback boundary
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production-inspection
+    steps:
+      - name: Require protected main
+        run: test "$GITHUB_REF" = "refs/heads/main"
+
+      - name: Check out exact source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install root dependencies
+        run: npm ci
+
+      - name: Install exact verified flyctl
+        timeout-minutes: 3
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$RUNNER_OS" = "Linux"
+          test "$RUNNER_ARCH" = "X64"
+          install_root="$(mktemp -d "$RUNNER_TEMP/leaderbot-flyctl.XXXXXX")"
+          archive="$install_root/flyctl_0.4.85_Linux_x86_64.tar.gz"
+          extract_dir="$install_root/extract"
+          bin_dir="$install_root/bin"
+          install -d -m 0700 "$extract_dir" "$bin_dir"
+          curl --fail --show-error --silent --location \
+            --proto '=https' --proto-redir '=https' --tlsv1.2 \
+            --retry 3 --retry-all-errors \
+            --output "$archive" \
+            "https://github.com/superfly/flyctl/releases/download/v0.4.85/flyctl_0.4.85_Linux_x86_64.tar.gz"
+          printf '%s  %s\n' \
+            "c3b5ed05319adf8a265d68171758ea7b37bd340c5c3dc4e09e17fb6344b8ff90" \
+            "$archive" | sha256sum --check --strict
+          tar --extract --gzip --file "$archive" --directory "$extract_dir" flyctl
+          test -f "$extract_dir/flyctl"
+          test ! -L "$extract_dir/flyctl"
+          install -m 0755 "$extract_dir/flyctl" "$bin_dir/flyctl"
+          ln -s flyctl "$bin_dir/fly"
+          version_output="$("$bin_dir/flyctl" version)"
+          [[ "$version_output" =~ ^flyctl\ v0\.4\.85([[:space:]]|$) ]]
+          printf '%s\n' "$bin_dir" >> "$GITHUB_PATH"
+
+      - name: Validate exact cleanup request and settled runtime
+        timeout-minutes: 8
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_PRODUCTION_READONLY_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+          CLEANUP_OPERATION: ${{ inputs.operation }}
+          OBSOLETE_PRINCIPAL: ${{ inputs.obsolete_principal }}
+          EXPECTED_RUNTIME_PRINCIPAL_SHA256: ${{ inputs.expected_runtime_principal_sha256 }}
+          EXPECTED_DEPLOYMENT_IDENTITY: ${{ inputs.expected_deployment_identity }}
+          LOCK_EVIDENCE_RUN_ID: ${{ inputs.lock_evidence_run_id }}
+          LOCK_EVIDENCE_RUN_ATTEMPT: ${{ inputs.lock_evidence_run_attempt }}
+        run: |
+          set -euo pipefail
+          test -n "$FLY_API_TOKEN"
+          echo "::add-mask::$OBSOLETE_PRINCIPAL"
+          [[ "$CLEANUP_OPERATION" =~ ^(lock|unlock|drop)$ ]]
+          [[ "$OBSOLETE_PRINCIPAL" =~ ^[a-z][a-z0-9_]{0,31}$ ]]
+          [[ "$EXPECTED_RUNTIME_PRINCIPAL_SHA256" =~ ^[a-f0-9]{64}$ ]]
+          [[ "$EXPECTED_DEPLOYMENT_IDENTITY" =~ ^deploy-[0-9]+-[0-9]+$ ]]
+          obsolete_sha256="$(printf '%s' "$OBSOLETE_PRINCIPAL" | sha256sum | cut -d ' ' -f1)"
+          test "$obsolete_sha256" != "$EXPECTED_RUNTIME_PRINCIPAL_SHA256"
+          if test "$CLEANUP_OPERATION" = "drop"; then
+            [[ "$LOCK_EVIDENCE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+            [[ "$LOCK_EVIDENCE_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+            lock_run="$(curl --fail --show-error --silent \
+              --header "Authorization: Bearer $GITHUB_TOKEN" \
+              --header "Accept: application/vnd.github+json" \
+              --header "X-GitHub-Api-Version: 2022-11-28" \
+              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs/$LOCK_EVIDENCE_RUN_ID")"
+            jq -e \
+              --argjson attempt "$LOCK_EVIDENCE_RUN_ATTEMPT" '
+                .event == "workflow_dispatch" and
+                .head_branch == "main" and
+                .path == ".github/workflows/cleanup-image-gen-runtime-principals.yml" and
+                .status == "completed" and
+                .conclusion == "success" and
+                .run_attempt == $attempt
+              ' <<<"$lock_run" > /dev/null
+          else
+            test -z "$LOCK_EVIDENCE_RUN_ID"
+            test -z "$LOCK_EVIDENCE_RUN_ATTEMPT"
+          fi
+          npm run production:validate
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(jq -er '.apps["image-gen"].databaseSchemaTransition.state' deploy/production/apps.json)" = "complete"
+          test "$(jq -er '.apps["image-gen"].databaseSchemaTransition.to' deploy/production/apps.json)" = "0018_credit_checkout_reservation"
+          test "$(jq -er '.apps["image-gen"].databaseSchemaTransition.runtimePrincipalSha256' deploy/production/apps.json)" = "$EXPECTED_RUNTIME_PRINCIPAL_SHA256"
+          bridge_image="$(jq -er '.apps["image-gen"].databaseSchemaTransition.bridgeImage' deploy/production/apps.json)"
+          jq -e --arg bridge "$bridge_image" '
+            .apps["image-gen"] as $app
+            | ($app.reviewedRollbackImages | length) >= 1 and
+              ($app.reviewedRollbackImages | index($bridge) | not) and
+              all($app.reviewedRollbackImages[]; $app.reviewedRollbackArtifactKinds[.] == "runtime")
+          ' deploy/production/apps.json > /dev/null
+          node scripts/validate-production-deployment.mjs --verify-source-ci "$GITHUB_SHA"
+          node scripts/validate-production-deployment.mjs \
+            --live image-gen \
+            --expected-deployment-identity "$EXPECTED_DEPLOYMENT_IDENTITY"
+          node scripts/validate-production-deployment.mjs \
+            --verify-settled-baseline image-gen "$EXPECTED_DEPLOYMENT_IDENTITY" \
+            --expected-image "$(jq -er '.apps["image-gen"].reviewedImage' deploy/production/apps.json)"
+          health_body="$(mktemp)"
+          test "$(curl --ipv4 --silent --show-error --max-time 20 --retry 2 --retry-all-errors --output "$health_body" --write-out '%{http_code}' https://leaderbot-fb-image-gen.fly.dev/healthz)" = "200"
+          grep -Fx "ok" "$health_body"
+          ready_body="$(mktemp)"
+          test "$(curl --ipv4 --silent --show-error --max-time 20 --retry 2 --retry-all-errors --output "$ready_body" --write-out '%{http_code}' https://leaderbot-fb-image-gen.fly.dev/readyz)" = "200"
+          jq -e '.ok == true' "$ready_body" > /dev/null
+
+      - name: Download protected lock evidence for irreversible drop
+        if: inputs.operation == 'drop'
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4
+        with:
+          name: image-gen-obsolete-principal-lock-${{ inputs.lock_evidence_run_id }}-${{ inputs.lock_evidence_run_attempt }}
+          path: ${{ runner.temp }}/leaderbot-principal-cleanup/lock-evidence
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.lock_evidence_run_id }}
+
+      - name: Require a completed rollback window before drop
+        if: inputs.operation == 'drop'
+        env:
+          OBSOLETE_PRINCIPAL: ${{ inputs.obsolete_principal }}
+          EXPECTED_RUNTIME_PRINCIPAL_SHA256: ${{ inputs.expected_runtime_principal_sha256 }}
+          EXPECTED_DEPLOYMENT_IDENTITY: ${{ inputs.expected_deployment_identity }}
+        run: |
+          set -euo pipefail
+          echo "::add-mask::$OBSOLETE_PRINCIPAL"
+          evidence="$RUNNER_TEMP/leaderbot-principal-cleanup/lock-evidence/evidence.json"
+          test -f "$evidence"
+          obsolete_sha256="$(printf '%s' "$OBSOLETE_PRINCIPAL" | sha256sum | cut -d ' ' -f1)"
+          jq -e \
+            --arg obsolete "$obsolete_sha256" \
+            --arg current "$EXPECTED_RUNTIME_PRINCIPAL_SHA256" \
+            --arg identity "$EXPECTED_DEPLOYMENT_IDENTITY" '
+              .operation == "lock" and
+              .obsoletePrincipalSha256 == $obsolete and
+              .runtimePrincipalSha256 == $current and
+              .deploymentIdentity == $identity and
+              .schemaPhase == "0018_credit_checkout_reservation" and
+              (.mutationAt | type == "string")
+            ' "$evidence" > /dev/null
+          EVIDENCE_PATH="$evidence" node --input-type=module <<'NODE'
+          import fs from "node:fs";
+          const evidence = JSON.parse(fs.readFileSync(process.env.EVIDENCE_PATH, "utf8"));
+          const lockedAt = Date.parse(evidence.mutationAt);
+          const now = Date.now();
+          if (!Number.isFinite(lockedAt) || now - lockedAt < 86_400_000 || now - lockedAt > 30 * 86_400_000) {
+            process.exit(1);
+          }
+          NODE
+
+  mutate:
+    name: Apply the protected runtime-principal cleanup transition
+    needs: preflight
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    environment: production
+    steps:
+      - name: Require protected main
+        run: test "$GITHUB_REF" = "refs/heads/main"
+
+      - name: Check out exact source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install exact verification dependencies
+        run: |
+          set -euo pipefail
+          npm ci
+          corepack enable
+          corepack prepare pnpm@10.28.1 --activate
+          pnpm --dir apps/image-gen install --frozen-lockfile
+
+      - name: Install exact verified flyctl
+        timeout-minutes: 3
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$RUNNER_OS" = "Linux"
+          test "$RUNNER_ARCH" = "X64"
+          install_root="$(mktemp -d "$RUNNER_TEMP/leaderbot-flyctl.XXXXXX")"
+          archive="$install_root/flyctl_0.4.85_Linux_x86_64.tar.gz"
+          extract_dir="$install_root/extract"
+          bin_dir="$install_root/bin"
+          install -d -m 0700 "$extract_dir" "$bin_dir"
+          curl --fail --show-error --silent --location \
+            --proto '=https' --proto-redir '=https' --tlsv1.2 \
+            --retry 3 --retry-all-errors \
+            --output "$archive" \
+            "https://github.com/superfly/flyctl/releases/download/v0.4.85/flyctl_0.4.85_Linux_x86_64.tar.gz"
+          printf '%s  %s\n' \
+            "c3b5ed05319adf8a265d68171758ea7b37bd340c5c3dc4e09e17fb6344b8ff90" \
+            "$archive" | sha256sum --check --strict
+          tar --extract --gzip --file "$archive" --directory "$extract_dir" flyctl
+          test -f "$extract_dir/flyctl"
+          test ! -L "$extract_dir/flyctl"
+          install -m 0755 "$extract_dir/flyctl" "$bin_dir/flyctl"
+          ln -s flyctl "$bin_dir/fly"
+          version_output="$("$bin_dir/flyctl" version)"
+          [[ "$version_output" =~ ^flyctl\ v0\.4\.85([[:space:]]|$) ]]
+          printf '%s\n' "$bin_dir" >> "$GITHUB_PATH"
+
+      - name: Reprove every successor Machine before database mutation
+        timeout-minutes: 12
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_IMAGE_GEN_DEPLOY_TOKEN }}
+          EXPECTED_RUNTIME_PRINCIPAL_SHA256: ${{ inputs.expected_runtime_principal_sha256 }}
+          EXPECTED_DEPLOYMENT_IDENTITY: ${{ inputs.expected_deployment_identity }}
+        run: |
+          set -euo pipefail
+          test -n "$FLY_API_TOKEN"
+          [[ "$EXPECTED_RUNTIME_PRINCIPAL_SHA256" =~ ^[a-f0-9]{64}$ ]]
+          [[ "$EXPECTED_DEPLOYMENT_IDENTITY" =~ ^deploy-[0-9]+-[0-9]+$ ]]
+          test "$(jq -er '.apps["image-gen"].databaseSchemaTransition.state' deploy/production/apps.json)" = "complete"
+          test "$(jq -er '.apps["image-gen"].databaseSchemaTransition.runtimePrincipalSha256' deploy/production/apps.json)" = "$EXPECTED_RUNTIME_PRINCIPAL_SHA256"
+          node scripts/validate-production-deployment.mjs \
+            --live image-gen \
+            --expected-deployment-identity "$EXPECTED_DEPLOYMENT_IDENTITY"
+          expected_machine_count="$(jq -er '.apps["image-gen"].desiredScale | to_entries | map(.value.count) | add' deploy/production/apps.json)"
+          machines="$(flyctl machine list --app leaderbot-fb-image-gen --json)"
+          mapfile -t machine_ids < <(jq -er \
+            --arg identity "$EXPECTED_DEPLOYMENT_IDENTITY" \
+            --argjson expected "$expected_machine_count" '
+              [.[] | select(.state == "started" and (.config.metadata.fly_process_group == "app" or .config.metadata.fly_process_group == "worker") and .config.env.LEADERBOT_DEPLOYMENT_IDENTITY == $identity) | .id]
+              | if length == $expected and (unique | length) == length and all(.[]; test("^[a-f0-9]{14}$")) then .[] else error("successor Machine proof set is not exact") end
+            ' <<<"$machines")
+          test "${#machine_ids[@]}" = "$expected_machine_count"
+          for machine_id in "${machine_ids[@]}"; do
+            output="$(timeout --signal=TERM 45s flyctl ssh console \
+              --app leaderbot-fb-image-gen --machine "$machine_id" --quiet \
+              --command "EXPECTED_RUNTIME_PRINCIPAL_SHA256=$EXPECTED_RUNTIME_PRINCIPAL_SHA256 node /app/dist/billing-trigger-runtime-preflight.cjs")"
+            test "$output" = "Billing trigger runtime preflight passed."
+          done
+          health_body="$(mktemp)"
+          test "$(curl --ipv4 --silent --show-error --max-time 20 --retry 2 --retry-all-errors --output "$health_body" --write-out '%{http_code}' https://leaderbot-fb-image-gen.fly.dev/healthz)" = "200"
+          grep -Fx "ok" "$health_body"
+          ready_body="$(mktemp)"
+          test "$(curl --ipv4 --silent --show-error --max-time 20 --retry 2 --retry-all-errors --output "$ready_body" --write-out '%{http_code}' https://leaderbot-fb-image-gen.fly.dev/readyz)" = "200"
+          jq -e '.ok == true' "$ready_body" > /dev/null
+
+      - name: Bind the one live database Machine
+        timeout-minutes: 5
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_DATABASE_MIGRATION_TOKEN }}
+        run: |
+          set -euo pipefail
+          db_app="$(jq -er '.apps["image-gen"].databaseRecovery.app' deploy/production/apps.json)"
+          volume_id="$(jq -er '.apps["image-gen"].databaseRecovery.volumeId' deploy/production/apps.json)"
+          database_name="$(jq -er '.apps["image-gen"].databaseRecovery.databaseName' deploy/production/apps.json)"
+          machines="$(flyctl machine list --app "$db_app" --json)"
+          database_machine="$(jq -cer --arg volume "$volume_id" '[.[] | select(.state=="started" and any(.config.mounts[]?; .volume==$volume and .path=="/var/lib/mysql"))] | if length==1 then .[0] else error("database Machine/volume binding mismatch") end' <<<"$machines")"
+          machine_id="$(jq -er '.id' <<<"$database_machine")"
+          private_ip="$(jq -er '.private_ip' <<<"$database_machine")"
+          [[ "$machine_id" =~ ^[0-9a-f]{14}$ ]]
+          [[ "$private_ip" =~ ^fdaa:[0-9a-f:]+$ ]]
+          {
+            echo "PRINCIPAL_CLEANUP_DATABASE_APP=$db_app"
+            echo "PRINCIPAL_CLEANUP_DATABASE_NAME=$database_name"
+            echo "PRINCIPAL_CLEANUP_DATABASE_PRIVATE_IP=$private_ip"
+          } >> "$GITHUB_ENV"
+
+      - name: Start isolated cleanup database tunnel
+        timeout-minutes: 5
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_DATABASE_MIGRATION_TOKEN }}
+          DATABASE_PROVISIONER_URL: ${{ secrets.IMAGE_GEN_DATABASE_PROVISIONER_URL }}
+        run: |
+          set -euo pipefail
+          echo "::add-mask::$DATABASE_PROVISIONER_URL"
+          # shellcheck disable=SC2016
+          EXPECTED_DATABASE_NAME="$PRINCIPAL_CLEANUP_DATABASE_NAME" node -e 'const u=new URL(process.env.DATABASE_PROVISIONER_URL);if(!new Set(["mysql:","mysql2:"]).has(u.protocol)||u.hostname!=="127.0.0.1"||u.port!=="13306"||!u.username||!u.password||u.pathname!==`/${process.env.EXPECTED_DATABASE_NAME}`)process.exit(1)'
+          mkdir -p "$RUNNER_TEMP/leaderbot-principal-cleanup"
+          flyctl proxy 13306:3306 "$PRINCIPAL_CLEANUP_DATABASE_PRIVATE_IP" --app "$PRINCIPAL_CLEANUP_DATABASE_APP" --bind-addr 127.0.0.1 --quiet \
+            > "$RUNNER_TEMP/leaderbot-principal-cleanup/proxy.log" 2>&1 &
+          proxy_pid="$!"
+          echo "PRINCIPAL_CLEANUP_PROXY_PID=$proxy_pid" >> "$GITHUB_ENV"
+          for _ in $(seq 1 60); do
+            kill -0 "$proxy_pid"
+            node -e 'const n=require("node:net");const s=n.createConnection(13306,"127.0.0.1",()=>{s.destroy();process.exit(0)});s.setTimeout(500,()=>{s.destroy();process.exit(1)});s.on("error",()=>process.exit(1))' && exit 0
+            sleep 1
+          done
+          exit 1
+
+      - name: Lock, unlock, or drop only the exact obsolete broad principal
+        timeout-minutes: 5
+        env:
+          DATABASE_PROVISIONER_URL: ${{ secrets.IMAGE_GEN_DATABASE_PROVISIONER_URL }}
+          CLEANUP_OPERATION: ${{ inputs.operation }}
+          OBSOLETE_PRINCIPAL: ${{ inputs.obsolete_principal }}
+          EXPECTED_RUNTIME_PRINCIPAL_SHA256: ${{ inputs.expected_runtime_principal_sha256 }}
+          EXPECTED_DEPLOYMENT_IDENTITY: ${{ inputs.expected_deployment_identity }}
+        run: |
+          set -euo pipefail
+          echo "::add-mask::$DATABASE_PROVISIONER_URL"
+          echo "::add-mask::$OBSOLETE_PRINCIPAL"
+          evidence="$RUNNER_TEMP/leaderbot-principal-cleanup/evidence.json"
+          EVIDENCE_PATH="$evidence" DATABASE_NAME="$PRINCIPAL_CLEANUP_DATABASE_NAME" node --input-type=module <<'NODE'
+          import { createHash } from "node:crypto";
+          import fs from "node:fs";
+          import mysql from "./apps/image-gen/node_modules/mysql2/promise.js";
+          import { assertCreditProvisionerGrantScope } from "./apps/image-gen/scripts/production-schema-contract.mjs";
+
+          const operation = process.env.CLEANUP_OPERATION;
+          const obsolete = process.env.OBSOLETE_PRINCIPAL;
+          const currentSha256 = process.env.EXPECTED_RUNTIME_PRINCIPAL_SHA256;
+          const databaseName = process.env.DATABASE_NAME;
+          if (!new Set(["lock", "unlock", "drop"]).has(operation) || !/^[a-z][a-z0-9_]{0,31}$/.test(obsolete ?? "") || !/^[a-f0-9]{64}$/.test(currentSha256 ?? "") || !/^[a-z][a-z0-9_]+$/.test(databaseName ?? "")) process.exit(1);
+          const obsoleteSha256 = createHash("sha256").update(obsolete).digest("hex");
+          if (obsoleteSha256 === currentSha256) process.exit(1);
+          const connection = await mysql.createConnection(process.env.DATABASE_PROVISIONER_URL);
+          try {
+            const [provisionerGrantRows] = await connection.query(
+              "SHOW GRANTS FOR CURRENT_USER()"
+            );
+            assertCreditProvisionerGrantScope(
+              provisionerGrantRows.flatMap(row => Object.values(row).map(String)),
+              databaseName
+            );
+            const [accounts] = await connection.query("SELECT `User` AS user,`Host` AS host,`account_locked` AS accountLocked FROM `mysql`.`user` WHERE `User`=? AND `Host`='%'", [obsolete]);
+            if (accounts.length !== 1) process.exit(1);
+            const [grantRows] = await connection.query(`SHOW GRANTS FOR '${obsolete}'@'%'`);
+            const grants = grantRows.flatMap(row => Object.values(row)).map(String);
+            const usage = new RegExp(`^GRANT USAGE ON \\*\\.\\* TO [\\x60']${obsolete}[\\x60']@[\\x60']%[\\x60']$`);
+            const broad = new RegExp(`^GRANT SELECT, INSERT, UPDATE, DELETE ON [\\x60]${databaseName}[\\x60]\\.\\* TO [\\x60']${obsolete}[\\x60']@[\\x60']%[\\x60']$`);
+            if (
+              grants.length !== 2 ||
+              !grants.some(grant => usage.test(grant)) ||
+              !grants.some(grant => broad.test(grant)) ||
+              grants.some(grant => /GRANT OPTION/.test(grant))
+            ) {
+              process.exit(1);
+            }
+            const account = `'${obsolete}'@'%'`;
+            if (operation === "lock") {
+              if (accounts[0].accountLocked !== "N") process.exit(1);
+              await connection.query(`ALTER USER ${account} ACCOUNT LOCK`);
+            } else if (operation === "unlock") {
+              if (accounts[0].accountLocked !== "Y") process.exit(1);
+              await connection.query(`ALTER USER ${account} ACCOUNT UNLOCK`);
+            } else {
+              if (accounts[0].accountLocked !== "Y") process.exit(1);
+              await connection.query(`DROP USER ${account}`);
+            }
+            const [remaining] = await connection.query("SELECT `account_locked` AS accountLocked FROM `mysql`.`user` WHERE `User`=? AND `Host`='%'", [obsolete]);
+            if (operation === "drop" ? remaining.length !== 0 : remaining.length !== 1 || remaining[0].accountLocked !== (operation === "lock" ? "Y" : "N")) process.exit(1);
+            fs.writeFileSync(process.env.EVIDENCE_PATH, `${JSON.stringify({
+              operation,
+              schemaPhase: "0018_credit_checkout_reservation",
+              obsoletePrincipalSha256: obsoleteSha256,
+              runtimePrincipalSha256: currentSha256,
+              deploymentIdentity: process.env.EXPECTED_DEPLOYMENT_IDENTITY,
+              mutationAt: new Date().toISOString(),
+            })}\n`, { mode: 0o600 });
+          } finally {
+            await connection.end().catch(() => undefined);
+          }
+          NODE
+          test -s "$evidence"
+
+      - name: Upload metadata-only principal cleanup evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: image-gen-obsolete-principal-${{ inputs.operation }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/leaderbot-principal-cleanup/evidence.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Stop isolated cleanup database tunnel
+        if: always()
+        run: |
+          set -euo pipefail
+          if test -n "${PRINCIPAL_CLEANUP_PROXY_PID:-}" && kill -0 "$PRINCIPAL_CLEANUP_PROXY_PID" 2>/dev/null; then
+            kill "$PRINCIPAL_CLEANUP_PROXY_PID"
+            wait "$PRINCIPAL_CLEANUP_PROXY_PID" || true
+          fi

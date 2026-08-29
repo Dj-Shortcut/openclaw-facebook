@@ -1,0 +1,393 @@
+name: Stage image-gen credit runtime principal
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  attestations: read
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  FLYCTL_VERSION: 0.4.85
+
+concurrency:
+  group: production-deploy-image-gen
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: Refuse an unreviewed runtime-principal stage
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production-inspection
+    steps:
+      - name: Require protected main
+        run: test "$GITHUB_REF" = "refs/heads/main"
+
+      - name: Check out exact source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Require the frozen final-schema staging state
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          npm ci
+          npm run production:validate
+          test "$(jq -er '.apps["image-gen"].databaseSchemaTransition.state' deploy/production/apps.json)" = "runtime_principal_pending"
+          test "$(jq -er '.apps["image-gen"].databaseSchemaPhase' deploy/production/apps.json)" = "0018_credit_checkout_reservation"
+          test "$(jq -er '.apps["image-gen"].deploymentEnabled' deploy/production/apps.json)" = "false"
+          reviewed_image="$(jq -er '.apps["image-gen"].reviewedImage' deploy/production/apps.json)"
+          node scripts/validate-production-deployment.mjs --verify-source-ci "$GITHUB_SHA"
+          node scripts/validate-production-deployment.mjs --verify-reviewed-ci image-gen "$reviewed_image"
+
+  stage:
+    name: Create and stage the exact runtime database principal
+    needs: preflight
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    steps:
+      - name: Require protected main
+        run: test "$GITHUB_REF" = "refs/heads/main"
+
+      - name: Check out exact source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install root and image-gen verification dependencies
+        run: |
+          set -euo pipefail
+          npm ci
+          corepack enable
+          corepack prepare pnpm@10.28.1 --activate
+          pnpm --dir apps/image-gen install --frozen-lockfile
+
+      - name: Recheck the exact reviewed staging source
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          npm run production:validate
+          test "$(jq -er '.apps["image-gen"].databaseSchemaTransition.state' deploy/production/apps.json)" = "runtime_principal_pending"
+          test "$(jq -er '.apps["image-gen"].databaseSchemaPhase' deploy/production/apps.json)" = "0018_credit_checkout_reservation"
+          test "$(jq -er '.apps["image-gen"].deploymentEnabled' deploy/production/apps.json)" = "false"
+          reviewed_image="$(jq -er '.apps["image-gen"].reviewedImage' deploy/production/apps.json)"
+          reviewed_source_commit="$(node scripts/validate-production-deployment.mjs --reviewed-source-commit image-gen "$reviewed_image")"
+          [[ "$reviewed_source_commit" =~ ^[a-f0-9]{40}$ ]]
+          node scripts/validate-production-deployment.mjs --verify-source-ci "$GITHUB_SHA"
+          node scripts/validate-production-deployment.mjs --verify-reviewed-ci image-gen "$reviewed_image"
+          {
+            echo "RUNTIME_PRINCIPAL_MANIFEST_SHA256=$(sha256sum deploy/production/apps.json | cut -d ' ' -f1)"
+            echo "RUNTIME_PRINCIPAL_DATABASE_NAME=$(jq -er '.apps["image-gen"].databaseRecovery.databaseName' deploy/production/apps.json)"
+            echo "RUNTIME_PRINCIPAL_ARTIFACT_IMAGE=$reviewed_image"
+            echo "RUNTIME_PRINCIPAL_ARTIFACT_SOURCE_COMMIT=$reviewed_source_commit"
+          } >> "$GITHUB_ENV"
+
+      - name: Install exact verified flyctl
+        timeout-minutes: 3
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$RUNNER_OS" = "Linux"
+          test "$RUNNER_ARCH" = "X64"
+          install_root="$(mktemp -d "$RUNNER_TEMP/leaderbot-flyctl.XXXXXX")"
+          archive="$install_root/flyctl_0.4.85_Linux_x86_64.tar.gz"
+          extract_dir="$install_root/extract"
+          bin_dir="$install_root/bin"
+          install -d -m 0700 "$extract_dir" "$bin_dir"
+          curl --fail --show-error --silent --location \
+            --proto '=https' --proto-redir '=https' --tlsv1.2 \
+            --retry 3 --retry-all-errors \
+            --output "$archive" \
+            "https://github.com/superfly/flyctl/releases/download/v0.4.85/flyctl_0.4.85_Linux_x86_64.tar.gz"
+          printf '%s  %s\n' \
+            "c3b5ed05319adf8a265d68171758ea7b37bd340c5c3dc4e09e17fb6344b8ff90" \
+            "$archive" | sha256sum --check --strict
+          tar --extract --gzip --file "$archive" --directory "$extract_dir" flyctl
+          test -f "$extract_dir/flyctl"
+          test ! -L "$extract_dir/flyctl"
+          install -m 0755 "$extract_dir/flyctl" "$bin_dir/flyctl"
+          ln -s flyctl "$bin_dir/fly"
+          version_output="$("$bin_dir/flyctl" version)"
+          [[ "$version_output" =~ ^flyctl\ v0\.4\.85([[:space:]]|$) ]]
+          printf '%s\n' "$bin_dir" >> "$GITHUB_PATH"
+
+      - name: Refuse an existing staged runtime credential
+        timeout-minutes: 3
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_IMAGE_GEN_DEPLOY_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$FLY_API_TOKEN"
+          database_url_status="$(flyctl secrets list --app leaderbot-fb-image-gen --json |
+            jq -er '[.[] | select(.name == "DATABASE_URL")] | if length == 1 then .[0].status else error("DATABASE_URL secret binding is not exact") end')"
+          test "$database_url_status" = "Deployed"
+
+      - name: Bind the one live database Machine
+        timeout-minutes: 5
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_DATABASE_MIGRATION_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$FLY_API_TOKEN"
+          db_app="$(jq -er '.apps["image-gen"].databaseRecovery.app' deploy/production/apps.json)"
+          volume_id="$(jq -er '.apps["image-gen"].databaseRecovery.volumeId' deploy/production/apps.json)"
+          machines="$(flyctl machine list --app "$db_app" --json)"
+          test "$(jq -r '[.[] | select(.state=="started")] | length' <<<"$machines")" = 1
+          database_machine="$(jq -cer --arg volume "$volume_id" '[.[] | select(.state=="started" and any(.config.mounts[]?; .volume==$volume and .path=="/var/lib/mysql"))] | if length==1 then .[0] else error("database Machine/volume binding mismatch") end' <<<"$machines")"
+          machine_id="$(jq -er '.id' <<<"$database_machine")"
+          private_ip="$(jq -er '.private_ip' <<<"$database_machine")"
+          [[ "$machine_id" =~ ^[0-9a-f]{14}$ ]]
+          [[ "$private_ip" =~ ^fdaa:[0-9a-f:]+$ ]]
+          {
+            echo "RUNTIME_PRINCIPAL_DATABASE_APP=$db_app"
+            echo "RUNTIME_PRINCIPAL_DATABASE_MACHINE_ID=$machine_id"
+            echo "RUNTIME_PRINCIPAL_DATABASE_PRIVATE_IP=$private_ip"
+          } >> "$GITHUB_ENV"
+
+      - name: Extract the exact reviewed runtime trigger preflight
+        timeout-minutes: 10
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_IMAGE_GEN_DEPLOY_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test -n "$FLY_API_TOKEN"
+          test -n "$GH_TOKEN"
+          node scripts/validate-production-deployment.mjs \
+            --validate-reviewed-image image-gen "$RUNTIME_PRINCIPAL_ARTIFACT_IMAGE"
+          flyctl auth docker
+          docker pull "$RUNTIME_PRINCIPAL_ARTIFACT_IMAGE"
+          actual_source_commit="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$RUNTIME_PRINCIPAL_ARTIFACT_IMAGE")"
+          test "$actual_source_commit" = "$RUNTIME_PRINCIPAL_ARTIFACT_SOURCE_COMMIT"
+          test "$(docker image inspect --format '{{ index .Config.Labels "io.leaderbot.artifact.kind" }}' "$RUNTIME_PRINCIPAL_ARTIFACT_IMAGE")" = "runtime"
+          test "$(docker image inspect --format '{{ index .Config.Labels "io.leaderbot.schema.minimum" }}' "$RUNTIME_PRINCIPAL_ARTIFACT_IMAGE")" = "0018_credit_checkout_reservation"
+          test "$(docker image inspect --format '{{ index .Config.Labels "io.leaderbot.schema.maximum" }}' "$RUNTIME_PRINCIPAL_ARTIFACT_IMAGE")" = "0018_credit_checkout_reservation"
+          signer="$GITHUB_REPOSITORY/.github/workflows/build-production-artifacts.yml"
+          gh attestation verify "oci://$RUNTIME_PRINCIPAL_ARTIFACT_IMAGE" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$signer" \
+            --source-digest "$RUNTIME_PRINCIPAL_ARTIFACT_SOURCE_COMMIT" \
+            --source-ref refs/heads/main \
+            --deny-self-hosted-runners
+          probe_container="$(docker create "$RUNTIME_PRINCIPAL_ARTIFACT_IMAGE")"
+          [[ "$probe_container" =~ ^[a-f0-9]{64}$ ]]
+          cleanup_container() {
+            if [[ "$probe_container" =~ ^[a-f0-9]{64}$ ]]; then
+              docker rm -f "$probe_container" > /dev/null 2>&1 || true
+            fi
+            docker logout registry.fly.io > /dev/null 2>&1 || true
+          }
+          trap cleanup_container EXIT
+          runtime_probe="$RUNNER_TEMP/leaderbot-runtime-principal/billing-trigger-runtime-preflight.cjs"
+          mkdir -p "$(dirname "$runtime_probe")"
+          docker cp "$probe_container:/app/dist/billing-trigger-runtime-preflight.cjs" "$runtime_probe"
+          test -s "$runtime_probe"
+          cleanup_container
+          trap - EXIT
+          echo "RUNTIME_PRINCIPAL_TRIGGER_PROBE=$runtime_probe" >> "$GITHUB_ENV"
+
+      - name: Start isolated runtime-principal database tunnel
+        timeout-minutes: 5
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_DATABASE_MIGRATION_TOKEN }}
+          DATABASE_PROVISIONER_URL: ${{ secrets.IMAGE_GEN_DATABASE_PROVISIONER_URL }}
+        run: |
+          set -euo pipefail
+          test -n "$FLY_API_TOKEN"
+          test -n "$DATABASE_PROVISIONER_URL"
+          echo "::add-mask::$DATABASE_PROVISIONER_URL"
+          [[ "$RUNTIME_PRINCIPAL_DATABASE_NAME" =~ ^[a-z][a-z0-9_]+$ ]]
+          # shellcheck disable=SC2016
+          EXPECTED_DATABASE_NAME="$RUNTIME_PRINCIPAL_DATABASE_NAME" node -e 'const u=new URL(process.env.DATABASE_PROVISIONER_URL);if(!new Set(["mysql:","mysql2:"]).has(u.protocol)||u.hostname!=="127.0.0.1"||u.port!=="13306"||!u.username||!u.password||u.pathname!==`/${process.env.EXPECTED_DATABASE_NAME}`)process.exit(1)'
+          mkdir -p "$RUNNER_TEMP/leaderbot-runtime-principal"
+          flyctl proxy 13306:3306 "$RUNTIME_PRINCIPAL_DATABASE_PRIVATE_IP" --app "$RUNTIME_PRINCIPAL_DATABASE_APP" --bind-addr 127.0.0.1 --quiet \
+            > "$RUNNER_TEMP/leaderbot-runtime-principal/proxy.log" 2>&1 &
+          proxy_pid="$!"
+          [[ "$proxy_pid" =~ ^[0-9]+$ ]]
+          echo "RUNTIME_PRINCIPAL_PROXY_PID=$proxy_pid" >> "$GITHUB_ENV"
+          for _ in $(seq 1 60); do
+            kill -0 "$proxy_pid"
+            node -e 'const n=require("node:net");const s=n.createConnection(13306,"127.0.0.1",()=>{s.destroy();process.exit(0)});s.setTimeout(500,()=>{s.destroy();process.exit(1)});s.on("error",()=>process.exit(1))' && exit 0
+            sleep 1
+          done
+          exit 1
+
+      - name: Create, verify, and stage the least-privilege runtime principal
+        timeout-minutes: 10
+        env:
+          DATABASE_PROVISIONER_URL: ${{ secrets.IMAGE_GEN_DATABASE_PROVISIONER_URL }}
+          IMAGE_GEN_FLY_TOKEN: ${{ secrets.FLY_IMAGE_GEN_DEPLOY_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$DATABASE_PROVISIONER_URL"
+          test -n "$IMAGE_GEN_FLY_TOKEN"
+          echo "::add-mask::$DATABASE_PROVISIONER_URL"
+          runtime_principal="lbcr_${GITHUB_SHA:0:12}_${GITHUB_RUN_ID}"
+          [[ "$runtime_principal" =~ ^[a-z0-9_]{1,32}$ ]]
+          runtime_password="Aa1!$(openssl rand -hex 48)"
+          [[ "$runtime_password" =~ ^Aa1\![a-f0-9]{96}$ ]]
+          runtime_verification_url="mysql://${runtime_principal}:${runtime_password}@127.0.0.1:13306/${RUNTIME_PRINCIPAL_DATABASE_NAME}"
+          runtime_database_url="mysql://${runtime_principal}:${runtime_password}@[${RUNTIME_PRINCIPAL_DATABASE_PRIVATE_IP}]:3306/${RUNTIME_PRINCIPAL_DATABASE_NAME}"
+          principal_fingerprint="$(printf '%s' "$runtime_principal" | sha256sum | cut -d ' ' -f1)"
+          [[ "$principal_fingerprint" =~ ^[a-f0-9]{64}$ ]]
+          echo "::add-mask::$runtime_principal"
+          echo "::add-mask::$runtime_password"
+          echo "::add-mask::$runtime_verification_url"
+          echo "::add-mask::$runtime_database_url"
+          created_marker="$RUNNER_TEMP/leaderbot-runtime-principal/created-by-this-attempt"
+          rm -f "$created_marker"
+          stage_started=0
+          stage_succeeded=0
+          cleanup() {
+            status="$?"
+            if test -f "$created_marker" && test "$stage_started" = 0; then
+              test "$(cat "$created_marker")" = "$runtime_principal" || exit "$status"
+              DATABASE_PROVISIONER_URL="$DATABASE_PROVISIONER_URL" RUNTIME_DATABASE_NAME="$RUNTIME_PRINCIPAL_DATABASE_NAME" RUNTIME_PRINCIPAL="$runtime_principal" node --input-type=module <<'NODE' || true
+          import mysql from "./apps/image-gen/node_modules/mysql2/promise.js";
+          import { assertCreditProvisionerGrantScope } from "./apps/image-gen/scripts/production-schema-contract.mjs";
+          const username = process.env.RUNTIME_PRINCIPAL;
+          const databaseName = process.env.RUNTIME_DATABASE_NAME;
+          const provisionerUrl = process.env.DATABASE_PROVISIONER_URL;
+          if (!/^[a-z0-9_]{1,32}$/.test(username ?? "") || !/^[a-z][a-z0-9_]*$/.test(databaseName ?? "")) process.exit(1);
+          let connection;
+          try {
+            connection = await mysql.createConnection(provisionerUrl);
+            const [provisionerGrantRows] = await connection.query(
+              "SHOW GRANTS FOR CURRENT_USER()"
+            );
+            assertCreditProvisionerGrantScope(
+              provisionerGrantRows.flatMap(row => Object.values(row).map(String)),
+              databaseName
+            );
+            await connection.query(`DROP USER IF EXISTS '${username}'@'%'`);
+          } catch {
+            process.exitCode = 1;
+          } finally {
+            await connection?.end().catch(() => undefined);
+          }
+          NODE
+            fi
+            if test "$stage_started" = 1 && test "$stage_succeeded" = 0; then
+              echo "::error::Runtime principal staging outcome is ambiguous; the new principal was retained and deployment remains blocked."
+            fi
+            exit "$status"
+          }
+          trap cleanup EXIT
+          CREATED_MARKER="$created_marker" DATABASE_PROVISIONER_URL="$DATABASE_PROVISIONER_URL" RUNTIME_DATABASE_URL="$runtime_verification_url" RUNTIME_PRINCIPAL="$runtime_principal" RUNTIME_PASSWORD="$runtime_password" RUNTIME_DATABASE_NAME="$RUNTIME_PRINCIPAL_DATABASE_NAME" node --input-type=module <<'NODE'
+          import fs from "node:fs";
+          import mysql from "./apps/image-gen/node_modules/mysql2/promise.js";
+          import {
+            assertCreditProvisionerGrantScope,
+            assertProductionMigrationRuntime,
+            creditWalletRoutineNames,
+            productionRuntimeWritableTableNames,
+          } from "./apps/image-gen/scripts/production-schema-contract.mjs";
+
+          const username = process.env.RUNTIME_PRINCIPAL;
+          const password = process.env.RUNTIME_PASSWORD;
+          const databaseName = process.env.RUNTIME_DATABASE_NAME;
+          const provisionerUrl = process.env.DATABASE_PROVISIONER_URL;
+          const runtimeUrl = process.env.RUNTIME_DATABASE_URL;
+          const identifier = (value) => {
+            if (!/^[A-Za-z0-9_]+$/.test(value ?? "")) throw new Error("invalid identifier");
+            return `\`${value}\``;
+          };
+          if (!/^[a-z0-9_]{1,32}$/.test(username ?? "") || !/^Aa1![a-f0-9]{96}$/.test(password ?? "")) {
+            process.exit(1);
+          }
+          let provisioner;
+          let runtime;
+          try {
+            provisioner = await mysql.createConnection(provisionerUrl);
+            const [provisionerGrantRows] = await provisioner.query(
+              "SHOW GRANTS FOR CURRENT_USER()"
+            );
+            assertCreditProvisionerGrantScope(
+              provisionerGrantRows.flatMap(row => Object.values(row).map(String)),
+              databaseName
+            );
+            const schema = identifier(databaseName);
+            const account = `'${username}'@'%'`;
+            await provisioner.query(`CREATE USER ${account} IDENTIFIED BY '${password}'`);
+            fs.writeFileSync(process.env.CREATED_MARKER, `${username}\n`, {
+              flag: "wx",
+              mode: 0o600,
+            });
+            await provisioner.query(`GRANT SELECT ON ${schema}.* TO ${account}`);
+            for (const table of productionRuntimeWritableTableNames) {
+              await provisioner.query(`GRANT INSERT, UPDATE, DELETE ON ${schema}.${identifier(table)} TO ${account}`);
+            }
+            for (const routine of creditWalletRoutineNames) {
+              await provisioner.query(`GRANT EXECUTE ON PROCEDURE ${schema}.${identifier(routine)} TO ${account}`);
+            }
+            runtime = await mysql.createConnection(runtimeUrl);
+            await assertProductionMigrationRuntime(runtime, "credit-runtime");
+          } catch {
+            process.exitCode = 1;
+          } finally {
+            await runtime?.end().catch(() => undefined);
+            await provisioner?.end().catch(() => undefined);
+          }
+          NODE
+          DATABASE_URL="$runtime_verification_url" \
+            MOLLIE_MODE=test \
+            EXPECTED_RUNTIME_PRINCIPAL_SHA256="$principal_fingerprint" \
+            timeout --signal=TERM 45s \
+            node "$RUNTIME_PRINCIPAL_TRIGGER_PROBE" \
+            | grep -Fx "Billing trigger runtime preflight passed."
+          stage_started=1
+          if ! FLY_API_TOKEN="$IMAGE_GEN_FLY_TOKEN" flyctl secrets set --stage "DATABASE_URL=$runtime_database_url" --app leaderbot-fb-image-gen > /dev/null 2>"$RUNNER_TEMP/leaderbot-runtime-principal/fly-stage.err"; then
+            exit 1
+          fi
+          stage_succeeded=1
+          rm -f "$created_marker"
+          jq -n \
+            --arg manifestSourceCommit "$GITHUB_SHA" \
+            --arg artifactImage "$RUNTIME_PRINCIPAL_ARTIFACT_IMAGE" \
+            --arg artifactSourceCommit "$RUNTIME_PRINCIPAL_ARTIFACT_SOURCE_COMMIT" \
+            --arg manifestSha256 "$RUNTIME_PRINCIPAL_MANIFEST_SHA256" \
+            --arg databaseMachineId "$RUNTIME_PRINCIPAL_DATABASE_MACHINE_ID" \
+            --arg principalSha256 "$principal_fingerprint" \
+            --arg stagedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{manifestSourceCommit:$manifestSourceCommit,artifact:{image:$artifactImage,sourceCommit:$artifactSourceCommit},schemaPhase:"0018_credit_checkout_reservation",deploymentEnabled:false,databaseMachineId:$databaseMachineId,principalSha256:$principalSha256,manifestSha256:$manifestSha256,triggerPreflightPassed:true,stagedAt:$stagedAt}' \
+            > "$RUNNER_TEMP/leaderbot-runtime-principal/staged.json"
+
+      - name: Upload metadata-only staging evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: image-gen-runtime-principal-stage-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/leaderbot-runtime-principal/staged.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Stop isolated runtime-principal database tunnel
+        if: always()
+        run: |
+          set -euo pipefail
+          if test -n "${RUNTIME_PRINCIPAL_PROXY_PID:-}" && kill -0 "$RUNTIME_PRINCIPAL_PROXY_PID" 2>/dev/null; then
+            kill "$RUNTIME_PRINCIPAL_PROXY_PID"
+            wait "$RUNTIME_PRINCIPAL_PROXY_PID" || true
+          fi

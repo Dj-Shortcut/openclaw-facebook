@@ -33,7 +33,12 @@ import {
 } from "./messengerRequestContext";
 import { recordInboundUserActivity } from "./messengerInboundActivity";
 import { resolveMessengerGenerationOwnership } from "./workspaceEntitlementRuntime";
-import { getErasingMessengerPrivacySubject } from "./messengerPrivacySubject";
+import {
+  getActiveMessengerPrivacySubjectEpoch,
+  getErasingMessengerPrivacySubject,
+} from "./messengerPrivacySubject";
+import { confirmMessengerGenerationDeliveryReceipts } from "./messengerGenerationCompletion";
+import { commitPaidCreditFromDeliveredCompletion } from "./webhookGenerationJobs";
 
 /** Routes every Messenger event in a Facebook webhook entry. */
 export async function handleEntry(
@@ -96,6 +101,7 @@ async function handleEvent(
   event: FacebookWebhookEvent,
   entryId?: string
 ): Promise<void> {
+  if (await handleMessengerDeliveryReceipt(event, entryId)) return;
   if (await resumePendingMessengerErasure(ctx, event, entryId)) return;
   const eventContext = await createTrackedEventContext(ctx, event, entryId);
   if (!eventContext) return;
@@ -158,6 +164,96 @@ async function handleEvent(
   }
 
   await eventContext.sendFallbackIfNeeded();
+}
+
+async function handleMessengerDeliveryReceipt(
+  event: FacebookWebhookEvent,
+  entryId?: string
+): Promise<boolean> {
+  if (!event.delivery) return false;
+  const rawMids = event.delivery.mids;
+  if (
+    !Array.isArray(rawMids) ||
+    rawMids.length < 1 ||
+    rawMids.length > 100 ||
+    rawMids.some(
+      mid =>
+        typeof mid !== "string" ||
+        mid.trim().length < 1 ||
+        Buffer.byteLength(mid.trim(), "ascii") > 1_024 ||
+        !/^[\x21-\x7e]+$/.test(mid.trim())
+    )
+  ) {
+    safeLog("messenger_delivery_receipt_ignored", {
+      reason: "invalid_message_ids",
+    });
+    return true;
+  }
+  const ownership = getMessengerRequestOwnership();
+  const inheritedPrivacy = getMessengerRequestPrivacySubject();
+  const pageId = getMessengerRequestPageId();
+  const senderId = event.sender?.id?.trim();
+  if (!ownership || !pageId || !entryId || pageId !== entryId || !senderId) {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("Messenger delivery receipt scope is unavailable");
+    }
+    return true;
+  }
+  const userKey = toUserKey(senderId);
+  if (inheritedPrivacy && inheritedPrivacy.userKey !== userKey) {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("Messenger delivery receipt scope is unavailable");
+    }
+    return true;
+  }
+  const privacyEpoch =
+    inheritedPrivacy?.privacyEpoch ??
+    (await getActiveMessengerPrivacySubjectEpoch({ ...ownership, userKey }));
+  if (!privacyEpoch) {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("Messenger delivery receipt scope is unavailable");
+    }
+    return true;
+  }
+  await runWithMessengerRequestContext(
+    pageId,
+    async () => {
+      const fence = {
+        ...ownership,
+        privacyEpoch,
+        userKey,
+        pageId,
+        channel: "facebook_messenger" as const,
+      };
+      const delivered = await confirmMessengerGenerationDeliveryReceipts(
+        rawMids.map(mid => (mid as string).trim()),
+        fence
+      );
+      for (const completion of delivered) {
+        if (completion.quotaAccountingMode !== "paid_credit_delivery_v1") {
+          continue;
+        }
+        await commitPaidCreditFromDeliveredCompletion({
+          reqId: completion.reqId,
+          userId: userKey,
+          imageUrl: completion.imageUrl,
+          completionFence: fence,
+          paidCreditMode: completion.paidCreditMode,
+        });
+      }
+      safeLog("messenger_delivery_receipt_processed", {
+        receivedCount: rawMids.length,
+        matchedGenerationCount: delivered.length,
+      });
+    },
+    {
+      channel: "facebook_messenger",
+      ...ownership,
+      userKey,
+      privacyEpoch,
+    }
+  );
+  return true;
 }
 
 async function resumePendingMessengerErasure(
