@@ -10,6 +10,10 @@ export const PUBLIC_BUSINESS_DETAILS = Object.freeze({
   phoneDisplay: "+32 469 79 26 56",
   phoneHref: "+32469792656",
   email: "privacy@leaderbot.live",
+  // TODO(andy): replace with the real Page username before merging, e.g.
+  // "https://m.me/yourpageusername". This placeholder is intentionally
+  // obvious so a wrong link doesn't silently ship.
+  messengerUrl: "https://m.me/REPLACE_WITH_LEADERBOT_PAGE_USERNAME",
 });
 
 export function formatPublicBusinessAddress(): string {

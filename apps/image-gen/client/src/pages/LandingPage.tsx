@@ -5,15 +5,15 @@ import {
 } from "@shared/publicBusinessDetails";
 import {
   ArrowRight,
-  Bot,
   Check,
-  Database,
-  Image,
-  LogIn,
+  Images,
+  Lock,
   Mail,
   MessageCircle,
   ShieldCheck,
   Sparkles,
+  Trash2,
+  Wand2,
 } from "lucide-react";
 import { SUPPORTED_LOCALES, type AppLocale } from "./portalLocales";
 
@@ -25,7 +25,7 @@ type LandingCopy = {
     howItWorks: string;
     pricing: string;
     faq: string;
-    portal: string;
+    admin: string;
   };
   eyebrow: string;
   title: string;
@@ -56,7 +56,7 @@ type LandingCopy = {
     features: string[];
     cta: string;
   };
-  premium: {
+  credits: {
     label: string;
     name: string;
     price: string;
@@ -85,142 +85,142 @@ type LandingCopy = {
 const landingCopies: Record<AppLocale, LandingCopy> = {
   "nl-BE": {
     languageLabel: "Taal",
-    interestSubject: "Interesse in Leaderbot Startpilot",
+    interestSubject: "Vraag over Leaderbot",
     nav: {
-      product: "Product",
+      product: "Wat Leaderbot doet",
       howItWorks: "Hoe het werkt",
-      pricing: "Prijs",
+      pricing: "Gratis & credits",
       faq: "Vragen",
-      portal: "Inloggen met Facebook",
+      admin: "Beheerder",
     },
-    eyebrow: "AI-assistent voor Facebook Messenger",
-    title: "Maak van je Facebookpagina een slimme klantenassistent.",
-    body: "Leaderbot helpt je antwoorden, kennis en AI-beelden vanuit één afgeschermde werkruimte beheren. Je klant praat gewoon verder in Messenger.",
-    primaryCta: "Bekijk hoe het werkt",
-    secondaryCta: "Vraag informatie",
+    eyebrow: "AI-beelden in Facebook Messenger",
+    title: "Typ een zin. Krijg een beeld. Rechtstreeks in Messenger.",
+    body: "Leaderbot is één Facebook-bot die AI-beelden maakt en bewerkt terwijl je gewoon verder chat. Geen account, geen app — stuur een bericht en je hebt elke dag gratis beelden.",
+    primaryCta: "Chat nu met Leaderbot",
+    secondaryCta: "Bekijk hoe het werkt",
     noPayment:
-      "Gratis verkennen of veilig inloggen om de Startpilot te kopen. Je betaalt één keer €19, zonder abonnement of automatische verlenging.",
-    previewLabel: "Voorbeeldweergave",
-    previewPrompt: "Maak een helder campagnebeeld voor onze zomeractie.",
-    previewReply:
-      "Komt eraan. Ik gebruik de instructies en merktoon uit je werkruimte.",
-    previewReady: "AI-beeld klaar",
+      "5 gratis beelden per dag, tot 20 per maand. Loop je tegen de limiet aan, dan stuurt Leaderbot je zelf een veilige eenmalige aankooplink — geen abonnement.",
+    previewLabel: "Voorbeeldgesprek",
+    previewPrompt: "Maak een helder zomerbeeld met citrusfruit en zon.",
+    previewReply: "Komt eraan — even geduld.",
+    previewReady: "Beeld klaar · 1 van je 5 gratis beelden vandaag",
     trustItems: [
-      "Aparte werkruimte per klant",
-      "Messenger als vertrouwd kanaal",
-      "Privacy- en gebruikscontrole",
+      "5 gratis beelden per dag",
+      "Eenmalig €4,99 voor 8 extra credits, geen vervaldatum",
+      "Vraag verwijdering van je gegevens wanneer je wil",
     ],
-    productEyebrow: "Eén werkruimte, één assistent",
-    productTitle: "Jouw informatie blijft bij jouw organisatie.",
+    productEyebrow: "Eén bot, gemaakt om te chatten",
+    productTitle: "Alles gebeurt in het gesprek zelf.",
     productBody:
-      "Stel de identiteit van je assistent in, verbind een Facebookpagina, voeg kennis toe en volg het gebruik zonder klantgegevens tussen werkruimtes te mengen.",
+      "Geen dashboard nodig om een beeld te maken. Typ wat je wil, stuur een foto om te bewerken, en Leaderbot antwoordt met het resultaat — net als elk ander Messenger-gesprek.",
     features: [
       {
-        title: "Eigen AI-identiteit",
-        body: "Bepaal naam, toon, taal en instructies voor een herkenbare assistent.",
+        title: "Tekst naar beeld",
+        body: "Beschrijf wat je wil zien en krijg een AI-beeld terug in de chat.",
       },
       {
-        title: "Kennis per werkruimte",
-        body: "Beheer website-, tekst- en integratiebronnen binnen de juiste klantomgeving.",
+        title: "Foto's bewerken",
+        body: "Stuur een eigen foto en laat Leaderbot ze aanpassen op jouw vraag.",
       },
       {
-        title: "Messenger-koppeling",
-        body: "Verbind een Facebookpagina die je mag beheren en volg de kanaalstatus centraal.",
+        title: "Meerdere foto's combineren",
+        body: "Voeg foto's samen tot één nieuw beeld.",
       },
       {
-        title: "Tekst en AI-beelden",
-        body: "Laat klanten natuurlijk vragen stellen en beelden genereren of bewerken.",
+        title: "Duidelijke dagquota",
+        body: "Je ziet altijd hoeveel gratis beelden je vandaag nog hebt.",
       },
       {
-        title: "Gebruik en limieten",
-        body: "Volg verbruik, quota en blokkades zodat kosten begrensd blijven.",
+        title: "Eenmalige credits",
+        body: "Nood aan meer? Eén vaste aankoop van €4,99 voor 8 extra beelden, zonder abonnement.",
       },
       {
-        title: "Privacybeheer",
-        body: "Bied export, verwijdering en bewaarkeuzes vanuit dezelfde werkruimte.",
+        title: "Verwijdering op aanvraag",
+        body: "Vraag je gegevens te wissen wanneer je maar wil, rechtstreeks vanuit Messenger.",
       },
     ],
-    howEyebrow: "Zo werkt het",
-    howTitle: "Van pagina naar assistent in drie duidelijke stappen.",
+    howEyebrow: "Zo simpel is het",
+    howTitle: "Van bericht naar beeld in drie stappen.",
     steps: [
       {
-        title: "Maak je werkruimte klaar",
-        body: "Kies de identiteit, instructies en kennis die alleen voor jouw assistent gelden.",
+        title: "Stuur een bericht",
+        body: "Open Messenger en zeg gewoon wat je wil maken of bewerken.",
       },
       {
-        title: "Verbind Messenger",
-        body: "Facebook Login koppelt één beheerbare Pagina automatisch; bij meerdere Pagina's kies je alleen de juiste.",
+        title: "Leaderbot maakt het beeld",
+        body: "Binnen enkele seconden krijg je het resultaat terug in de chat.",
       },
       {
-        title: "Test met echte vragen",
-        body: "Begin gratis en beslis daarna of de eenmalige Startpilot voldoende waarde biedt.",
+        title: "Gratis op? Ga verder",
+        body: "Zijn je vijf gratis beelden op, dan stuurt de bot een eenmalige aankooplink voor 8 extra credits.",
       },
     ],
-    pricingEyebrow: "Eenmalige Startpilot",
-    pricingTitle: "Test de kwaliteitsstap zonder abonnement.",
+    pricingEyebrow: "Gratis om te starten",
+    pricingTitle: "Elke dag gratis beelden, bijkopen kan wanneer je wil.",
     pricingBody:
-      "De Startpilot geeft je 30 dagen afgebakend gebruik voor één vaste prijs. De aankoop start altijd in het beveiligde klantenportaal.",
+      "Geen abonnement, geen automatische verlenging. Je betaalt alleen als je zelf kiest om bij te kopen.",
     free: {
-      name: "Gratis toegang",
+      name: "Dagelijks gratis",
       price: "€0",
-      suffix: "om te starten",
-      body: "Verken de portal en test de basisfuncties binnen de beschikbare gratis limieten.",
+      suffix: "elke dag opnieuw",
+      body: "5 beelden per dag, tot 20 per maand. Geen kaart nodig om te starten.",
       features: [
-        "Werkruimte en AI-identiteit",
-        "Messenger- en privacybeheer",
-        "Beperkte gratis gebruikslimieten",
+        "5 gratis beelden per dag",
+        "Tot 20 per maand",
+        "Tekst-naar-beeld en foto-bewerking",
+        "Geen account nodig",
       ],
-      cta: "Open het klantenportaal",
+      cta: "Start gratis op Messenger",
     },
-    premium: {
-      label: "Beschikbaar via het portaal",
-      name: "Leaderbot Startpilot",
-      price: "€19",
-      suffix: "eenmalig in EUR",
-      body: "Een afgebakende pilot om Leaderbot met je eigen Facebookpagina en de voelbare Images 2.0-kwaliteit te testen.",
+    credits: {
+      label: "Als je gratis limiet op is",
+      name: "Extra credit-bundel",
+      price: "€4,99",
+      suffix: "eenmalig, geen vervaldatum",
+      body: "8 extra beelden in medium kwaliteit. Je krijgt de aankooplink rechtstreeks van Leaderbot in de chat.",
       features: [
-        "30 dagen · 1 werkruimte · 1 Facebookpagina",
-        "Begeleide beeldfuncties en handige vervolgknoppen in Messenger",
-        "20 Images 2.0-beelden · maximaal 5 per dag",
-        "Geen abonnement, verlenging of kosten buiten het pakket",
+        "8 extra beelden",
+        "Credits vervallen niet",
+        "Geen abonnement of automatische verlenging",
+        "Betaling veilig via Mollie",
       ],
-      cta: "Inloggen en Startpilot kopen",
+      cta: "Chat met Leaderbot om te kopen",
     },
     pricingDisclosure:
-      "€19 is de eenmalige prijs voor de Leaderbot Startpilot. Een aankoop start alleen na Facebook-login in je eigen werkruimte; je controleert daar het bedrag en gaat daarna veilig verder naar Mollie.",
+      "€4,99 is de vaste, eenmalige prijs voor 8 extra beelden in medium kwaliteit. Een aankoop start nooit via deze website: de link komt van Leaderbot zelf in Messenger, en je bevestigt het bedrag altijd eerst op de beveiligde Mollie-pagina.",
     faqEyebrow: "Veelgestelde vragen",
     faqTitle: "Duidelijk vóór je begint.",
     questions: [
       {
-        question: "Kan ik de Startpilot nu al kopen?",
+        question: "Moet ik een account maken?",
         answer:
-          "Ja. Log in met Facebook, open de betaalkaart van je werkruimte en kies ‘Startpilot kopen via Mollie’. Je betaalt één keer €19; er is geen automatische verlenging.",
+          "Nee. Je hebt alleen Facebook Messenger nodig. Er is geen aparte app of inlog om te starten.",
       },
       {
-        question: "Wat gebeurt er na 30 dagen of wanneer een limiet op is?",
+        question: "Wat gebeurt er als mijn gratis limiet op is?",
         answer:
-          "De pilot stopt zonder automatische verlenging of extra kosten. Je kunt niet ongemerkt boven het inbegrepen gebruik gaan en er is geen automatische top-up.",
+          "Leaderbot laat het weten en stuurt je een eenmalige aankooplink voor 8 extra beelden van €4,99. Er is geen automatische top-up en geen verborgen kost.",
+      },
+      {
+        question: "Is dit een abonnement?",
+        answer:
+          "Nee. De €4,99-bundel is een eenmalige aankoop. Er is geen verlenging, geen domiciliëring en geen doorlopende betaling.",
       },
       {
         question: "Is Leaderbot onderdeel van Meta of Facebook?",
         answer:
-          "Nee. Leaderbot is een onafhankelijke dienst. Messenger, Facebookpagina’s en hun platformregels blijven onder beheer van Meta.",
+          "Nee. Leaderbot is een onafhankelijke dienst; Messenger en de platformregels blijven beheerd door Meta.",
       },
       {
-        question: "Worden gegevens tussen klanten gedeeld?",
+        question: "Kan ik mijn gegevens laten verwijderen?",
         answer:
-          "Nee. Assistentinstellingen, kennis en klantcontext horen bij de eigen werkruimte en mogen niet tussen klanten worden vermengd.",
-      },
-      {
-        question: "Voor wie wordt de Startpilot beschikbaar?",
-        answer:
-          "De Startpilot is gericht op Belgische consumenten. Zakelijke B2B-checkout en Peppol-facturatie zijn niet inbegrepen.",
+          "Ja, op elk moment. Vraag het rechtstreeks in Messenger en Leaderbot verwijdert je gegevens volgens het privacybeleid.",
       },
     ],
-    contactEyebrow: "Vragen vóór aankoop",
-    contactTitle: "Eerst iets vragen over de Startpilot?",
+    contactEyebrow: "Vraag vooraf?",
+    contactTitle: "Iets niet duidelijk voor je begint?",
     contactBody:
-      "Stuur ons je vraag of use-case. Een bericht aan ons maakt nooit automatisch een aankoop of abonnement aan.",
+      "Stuur ons gerust een vraag. Een bericht hier start nooit automatisch een aankoop.",
     contactCta: "Stuur je vraag",
     companyTitle: "Bedrijfsgegevens",
     enterpriseLabel: "Ondernemingsnummer",
@@ -232,143 +232,142 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
   },
   "fr-BE": {
     languageLabel: "Langue",
-    interestSubject: "Intérêt pour le pilote Leaderbot",
+    interestSubject: "Question sur Leaderbot",
     nav: {
-      product: "Produit",
+      product: "Ce que fait Leaderbot",
       howItWorks: "Fonctionnement",
-      pricing: "Prix",
+      pricing: "Gratuit et crédits",
       faq: "Questions",
-      portal: "Se connecter avec Facebook",
+      admin: "Administrateur",
     },
-    eyebrow: "Assistant IA pour Facebook Messenger",
-    title: "Transformez votre Page Facebook en assistant client intelligent.",
-    body: "Leaderbot centralise les réponses, les connaissances et les images IA dans un espace de travail isolé. Vos clients continuent simplement dans Messenger.",
-    primaryCta: "Voir le fonctionnement",
-    secondaryCta: "Demander des informations",
+    eyebrow: "Images IA dans Facebook Messenger",
+    title: "Tapez une phrase. Recevez une image. Directement dans Messenger.",
+    body: "Leaderbot est un bot Facebook qui crée et modifie des images IA pendant que vous discutez. Pas de compte, pas d'application — envoyez un message et recevez des images gratuites chaque jour.",
+    primaryCta: "Discuter avec Leaderbot",
+    secondaryCta: "Voir comment ça marche",
     noPayment:
-      "Découvrez gratuitement ou connectez-vous en toute sécurité pour acheter le pilote. Paiement unique de 19 €, sans abonnement ni renouvellement automatique.",
-    previewLabel: "Aperçu illustratif",
-    previewPrompt: "Crée une image claire pour notre campagne d'été.",
-    previewReply:
-      "Je m'en occupe avec les instructions et le ton de votre espace.",
-    previewReady: "Image IA prête",
+      "5 images gratuites par jour, jusqu'à 20 par mois. Si vous atteignez la limite, Leaderbot vous envoie lui-même un lien d'achat unique sécurisé — sans abonnement.",
+    previewLabel: "Exemple de conversation",
+    previewPrompt: "Crée une image d'été lumineuse avec des agrumes et du soleil.",
+    previewReply: "C'est parti — un instant.",
+    previewReady: "Image prête · 1 de vos 5 images gratuites aujourd'hui",
     trustItems: [
-      "Un espace par client",
-      "Messenger comme canal familier",
-      "Contrôles de confidentialité et d'usage",
+      "5 images gratuites chaque jour",
+      "4,99 € une fois pour 8 crédits supplémentaires, sans expiration",
+      "Demandez la suppression de vos données à tout moment",
     ],
-    productEyebrow: "Un espace, un assistant",
-    productTitle: "Vos informations restent dans votre organisation.",
+    productEyebrow: "Un bot pensé pour discuter",
+    productTitle: "Tout se passe dans la conversation.",
     productBody:
-      "Configurez l'identité, connectez une Page Facebook, ajoutez des connaissances et suivez l'usage sans mélanger les données des clients.",
+      "Pas besoin de tableau de bord. Décrivez ce que vous voulez, envoyez une photo à modifier, et Leaderbot répond avec le résultat — comme une conversation Messenger normale.",
     features: [
       {
-        title: "Identité IA",
-        body: "Définissez le nom, le ton, la langue et les instructions.",
+        title: "Texte vers image",
+        body: "Décrivez ce que vous voulez voir et recevez une image IA dans le chat.",
       },
       {
-        title: "Connaissances isolées",
-        body: "Gérez les sources dans le bon espace client.",
+        title: "Modifier des photos",
+        body: "Envoyez votre propre photo et laissez Leaderbot l'adapter à votre demande.",
       },
       {
-        title: "Connexion Messenger",
-        body: "Connectez une Page que vous êtes autorisé à gérer et suivez son état.",
+        title: "Combiner plusieurs photos",
+        body: "Assemblez plusieurs photos en une nouvelle image.",
       },
       {
-        title: "Texte et images IA",
-        body: "Répondez aux demandes et générez ou modifiez des images.",
+        title: "Quota journalier clair",
+        body: "Vous voyez toujours combien d'images gratuites il vous reste aujourd'hui.",
       },
       {
-        title: "Usage et limites",
-        body: "Suivez les quotas et gardez les coûts sous contrôle.",
+        title: "Crédits à l'achat unique",
+        body: "Besoin de plus ? Un achat fixe de 4,99 € pour 8 images supplémentaires, sans abonnement.",
       },
       {
-        title: "Contrôles de données",
-        body: "Gérez l'export, la suppression et la conservation.",
+        title: "Suppression sur demande",
+        body: "Demandez la suppression de vos données à tout moment, directement dans Messenger.",
       },
     ],
-    howEyebrow: "Fonctionnement",
-    howTitle: "De la Page à l'assistant en trois étapes claires.",
+    howEyebrow: "C'est aussi simple que ça",
+    howTitle: "Du message à l'image en trois étapes.",
     steps: [
       {
-        title: "Préparez l'espace",
-        body: "Choisissez l'identité, les instructions et les connaissances.",
+        title: "Envoyez un message",
+        body: "Ouvrez Messenger et dites simplement ce que vous voulez créer ou modifier.",
       },
       {
-        title: "Connectez Messenger",
-        body: "Facebook Login connecte automatiquement une Page administrable; s'il y en a plusieurs, choisissez simplement la bonne.",
+        title: "Leaderbot crée l'image",
+        body: "Vous recevez le résultat dans le chat en quelques secondes.",
       },
       {
-        title: "Testez de vraies demandes",
-        body: "Commencez gratuitement avant de décider si le pilote ponctuel vous convient.",
+        title: "Gratuit épuisé ? Continuez",
+        body: "Vos cinq images gratuites sont épuisées ? Le bot envoie un lien d'achat unique pour 8 crédits supplémentaires.",
       },
     ],
-    pricingEyebrow: "Pilote ponctuel",
-    pricingTitle: "Testez la qualité sans abonnement.",
+    pricingEyebrow: "Gratuit pour commencer",
+    pricingTitle: "Des images gratuites chaque jour, achetez-en plus quand vous voulez.",
     pricingBody:
-      "Le pilote offre 30 jours d'usage délimité pour un prix fixe. L'achat commence toujours dans le portail client sécurisé.",
+      "Pas d'abonnement, pas de renouvellement automatique. Vous ne payez que si vous choisissez d'acheter plus.",
     free: {
-      name: "Accès gratuit",
-      price: "€0",
-      suffix: "pour commencer",
-      body: "Découvrez le portail et les fonctions de base dans les limites gratuites disponibles.",
+      name: "Gratuit chaque jour",
+      price: "0 €",
+      suffix: "renouvelé chaque jour",
+      body: "5 images par jour, jusqu'à 20 par mois. Aucune carte requise pour commencer.",
       features: [
-        "Espace et identité IA",
-        "Gestion Messenger et confidentialité",
-        "Limites gratuites",
+        "5 images gratuites par jour",
+        "Jusqu'à 20 par mois",
+        "Texte vers image et retouche photo",
+        "Aucun compte requis",
       ],
-      cta: "Ouvrir le portail client",
+      cta: "Commencer gratuitement sur Messenger",
     },
-    premium: {
-      label: "Disponible via le portail",
-      name: "Leaderbot Startpilot",
-      price: "€19",
-      suffix: "paiement unique en EUR",
-      body: "Un pilote délimité pour tester Leaderbot avec votre Page Facebook et la qualité Images 2.0.",
+    credits: {
+      label: "Quand votre gratuit est épuisé",
+      name: "Pack de crédits supplémentaires",
+      price: "4,99 €",
+      suffix: "une fois, sans expiration",
+      body: "8 images supplémentaires en qualité medium. Le lien d'achat vous est envoyé directement par Leaderbot dans le chat.",
       features: [
-        "30 jours · 1 espace · 1 Page Facebook",
-        "Création d'images guidée et boutons de suivi dans Messenger",
-        "20 images Images 2.0 · maximum 5 par jour",
-        "Sans abonnement, renouvellement ni dépassement facturé",
+        "8 images supplémentaires",
+        "Les crédits n'expirent pas",
+        "Pas d'abonnement ni de renouvellement",
+        "Paiement sécurisé via Mollie",
       ],
-      cta: "Se connecter et acheter",
+      cta: "Discuter avec Leaderbot pour acheter",
     },
     pricingDisclosure:
-      "19 € est le prix unique du pilote Leaderbot. L'achat commence uniquement après connexion Facebook dans votre espace; vous vérifiez le montant avant de continuer vers Mollie.",
+      "4,99 € est le prix fixe et unique pour 8 images supplémentaires en qualité medium. Un achat ne démarre jamais depuis ce site : le lien vient de Leaderbot dans Messenger, et vous confirmez toujours le montant sur la page Mollie sécurisée.",
     faqEyebrow: "Questions fréquentes",
     faqTitle: "Tout savoir avant de commencer.",
     questions: [
       {
-        question: "Puis-je déjà acheter le pilote ?",
+        question: "Dois-je créer un compte ?",
         answer:
-          "Oui. Connectez-vous avec Facebook, ouvrez la section paiement de votre espace et choisissez l'achat via Mollie. Il s'agit d'un paiement unique de 19 €, sans renouvellement automatique.",
+          "Non. Il vous faut seulement Facebook Messenger. Aucune application ni connexion séparée n'est nécessaire pour commencer.",
       },
       {
-        question:
-          "Que se passe-t-il après 30 jours ou lorsqu'une limite est atteinte ?",
+        question: "Que se passe-t-il quand mon gratuit est épuisé ?",
         answer:
-          "Le pilote s'arrête sans renouvellement automatique ni frais supplémentaires. Il n'y a ni dépassement facturé ni recharge automatique.",
+          "Leaderbot vous prévient et envoie un lien d'achat unique pour 8 images supplémentaires à 4,99 €. Aucune recharge automatique ni frais caché.",
       },
       {
-        question: "Leaderbot fait-il partie de Meta ?",
+        question: "Est-ce un abonnement ?",
         answer:
-          "Non. Leaderbot est indépendant; les services et règles Facebook restent gérés par Meta.",
+          "Non. Le pack à 4,99 € est un achat unique. Pas de renouvellement, pas de prélèvement, pas de paiement récurrent.",
       },
       {
-        question: "Les données sont-elles partagées entre clients ?",
+        question: "Leaderbot fait-il partie de Meta ou Facebook ?",
         answer:
-          "Non. Les paramètres, connaissances et contextes restent liés à leur espace.",
+          "Non. Leaderbot est un service indépendant ; Messenger et ses règles restent gérés par Meta.",
       },
       {
-        question: "Où le pilote sera-t-il lancé ?",
+        question: "Puis-je faire supprimer mes données ?",
         answer:
-          "Le pilote vise les consommateurs belges. Le checkout B2B et la facturation Peppol ne sont pas inclus.",
+          "Oui, à tout moment. Demandez-le directement dans Messenger et Leaderbot supprime vos données selon la politique de confidentialité.",
       },
     ],
-    contactEyebrow: "Questions avant l'achat",
-    contactTitle: "Une question sur le pilote ?",
+    contactEyebrow: "Une question avant de commencer ?",
+    contactTitle: "Quelque chose n'est pas clair ?",
     contactBody:
-      "Envoyez-nous votre question ou cas d'usage. Un message ne crée jamais automatiquement un achat ou un abonnement.",
+      "Envoyez-nous votre question. Un message ici ne déclenche jamais d'achat automatique.",
     contactCta: "Envoyer ma question",
     companyTitle: "Informations d'entreprise",
     enterpriseLabel: "Numéro d'entreprise",
@@ -381,142 +380,142 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
   },
   en: {
     languageLabel: "Language",
-    interestSubject: "Interest in the Leaderbot Startpilot",
+    interestSubject: "Question about Leaderbot",
     nav: {
-      product: "Product",
+      product: "What Leaderbot does",
       howItWorks: "How it works",
-      pricing: "Pricing",
+      pricing: "Free & credits",
       faq: "FAQ",
-      portal: "Sign in with Facebook",
+      admin: "Admin",
     },
-    eyebrow: "AI assistant for Facebook Messenger",
-    title: "Turn your Facebook Page into a focused customer assistant.",
-    body: "Leaderbot keeps replies, knowledge and AI images in one isolated workspace while your customers continue the conversation in Messenger.",
-    primaryCta: "See how it works",
-    secondaryCta: "Ask a question",
+    eyebrow: "AI images inside Facebook Messenger",
+    title: "Type a sentence. Get an image. Right inside Messenger.",
+    body: "Leaderbot is one Facebook bot that creates and edits AI images while you chat. No account, no app — just send a message and get free images every day.",
+    primaryCta: "Chat with Leaderbot",
+    secondaryCta: "See how it works",
     noPayment:
-      "Explore for free or sign in securely to buy the Startpilot. It is one €19 payment with no subscription or automatic renewal.",
-    previewLabel: "Illustrative preview",
-    previewPrompt: "Create a clear campaign image for our summer promotion.",
-    previewReply:
-      "On it. I will use the instructions and brand tone from your workspace.",
-    previewReady: "AI image ready",
+      "5 free images a day, up to 20 a month. Hit the limit and Leaderbot itself sends you a secure one-time purchase link — no subscription.",
+    previewLabel: "Example conversation",
+    previewPrompt: "Make a bright summer image with citrus fruit and sunshine.",
+    previewReply: "On it — one moment.",
+    previewReady: "Image ready · 1 of your 5 free images today",
     trustItems: [
-      "A separate workspace per customer",
-      "Messenger as a familiar channel",
-      "Privacy and usage controls",
+      "5 free images every day",
+      "One-time €4.99 for 8 extra credits, no expiry",
+      "Ask for your data to be deleted anytime",
     ],
-    productEyebrow: "One workspace, one assistant",
-    productTitle: "Your information stays with your organisation.",
+    productEyebrow: "One bot, built for chatting",
+    productTitle: "Everything happens inside the conversation.",
     productBody:
-      "Set the assistant identity, connect a Facebook Page, add knowledge and monitor usage without mixing customer data across workspaces.",
+      "No dashboard needed to make an image. Describe what you want, send a photo to edit, and Leaderbot replies with the result — like any normal Messenger chat.",
     features: [
       {
-        title: "Owned AI identity",
-        body: "Set the name, tone, language and instructions.",
+        title: "Text to image",
+        body: "Describe what you want to see and get an AI image back in the chat.",
       },
       {
-        title: "Workspace knowledge",
-        body: "Keep sources inside the right customer environment.",
+        title: "Edit your photos",
+        body: "Send your own photo and let Leaderbot adjust it to your request.",
       },
       {
-        title: "Messenger connection",
-        body: "Connect a Page you are authorized to manage and monitor channel health.",
+        title: "Combine multiple photos",
+        body: "Merge several photos into one new image.",
       },
       {
-        title: "Text and AI images",
-        body: "Answer requests and generate or edit images naturally.",
+        title: "Clear daily quota",
+        body: "You always see how many free images you have left today.",
       },
       {
-        title: "Usage and limits",
-        body: "Monitor quotas and keep billable usage bounded.",
+        title: "One-time credits",
+        body: "Need more? One fixed €4.99 purchase for 8 extra images, no subscription.",
       },
       {
-        title: "Privacy controls",
-        body: "Manage export, deletion and retention choices.",
+        title: "Deletion on request",
+        body: "Ask for your data to be deleted anytime, right inside Messenger.",
       },
     ],
-    howEyebrow: "How it works",
-    howTitle: "From Page to assistant in three clear steps.",
+    howEyebrow: "It's this simple",
+    howTitle: "From message to image in three steps.",
     steps: [
       {
-        title: "Prepare the workspace",
-        body: "Choose the identity, instructions and knowledge.",
+        title: "Send a message",
+        body: "Open Messenger and just say what you want to create or edit.",
       },
       {
-        title: "Connect Messenger",
-        body: "Facebook Login connects one manageable Page automatically; if there are several, just choose the right one.",
+        title: "Leaderbot makes the image",
+        body: "You get the result back in the chat within seconds.",
       },
       {
-        title: "Test real questions",
-        body: "Start for free before deciding whether the one-time pilot is worthwhile.",
+        title: "Out of free? Keep going",
+        body: "Used your five free images? The bot sends a one-time purchase link for 8 extra credits.",
       },
     ],
-    pricingEyebrow: "One-time Startpilot",
-    pricingTitle: "Test the quality step without a subscription.",
+    pricingEyebrow: "Free to start",
+    pricingTitle: "Free images every day, top up whenever you want.",
     pricingBody:
-      "The Startpilot provides 30 days of bounded usage for one fixed price. Purchase always starts inside the secure customer portal.",
+      "No subscription, no automatic renewal. You only pay if you choose to buy more.",
     free: {
-      name: "Free access",
+      name: "Free every day",
       price: "€0",
-      suffix: "to get started",
-      body: "Explore the portal and core features within the available free limits.",
+      suffix: "resets daily",
+      body: "5 images a day, up to 20 a month. No card needed to start.",
       features: [
-        "Workspace and AI identity",
-        "Messenger and privacy controls",
-        "Limited free usage",
+        "5 free images a day",
+        "Up to 20 a month",
+        "Text-to-image and photo editing",
+        "No account required",
       ],
-      cta: "Open the customer portal",
+      cta: "Start free on Messenger",
     },
-    premium: {
-      label: "Available in the portal",
-      name: "Leaderbot Startpilot",
-      price: "€19",
-      suffix: "one-time in EUR",
-      body: "A bounded pilot to test Leaderbot with your own Facebook Page and the visible Images 2.0 quality step.",
+    credits: {
+      label: "When your free limit is used up",
+      name: "Extra credit pack",
+      price: "€4.99",
+      suffix: "one-time, no expiry",
+      body: "8 extra images in medium quality. Leaderbot sends you the purchase link directly in the chat.",
       features: [
-        "30 days · 1 workspace · 1 Facebook Page",
-        "Guided image creation and follow-up buttons in Messenger",
-        "20 Images 2.0 images · maximum 5 per day",
-        "No subscription, renewal or overage charges",
+        "8 extra images",
+        "Credits never expire",
+        "No subscription or renewal",
+        "Secure payment via Mollie",
       ],
-      cta: "Sign in and buy Startpilot",
+      cta: "Chat with Leaderbot to buy",
     },
     pricingDisclosure:
-      "€19 is the one-time price for the Leaderbot Startpilot. A purchase starts only after Facebook sign-in inside your own workspace; you review the amount there before continuing securely to Mollie.",
+      "€4.99 is the fixed, one-time price for 8 extra images in medium quality. A purchase never starts on this website: the link comes from Leaderbot itself in Messenger, and you always confirm the amount on the secure Mollie page first.",
     faqEyebrow: "Frequently asked questions",
     faqTitle: "Clear before you begin.",
     questions: [
       {
-        question: "Can I buy the Startpilot now?",
+        question: "Do I need to create an account?",
         answer:
-          "Yes. Sign in with Facebook, open your workspace billing card and choose the Mollie purchase. It is one €19 payment with no automatic renewal.",
+          "No. All you need is Facebook Messenger. There's no separate app or login to get started.",
       },
       {
-        question: "What happens after 30 days or when a limit is used?",
+        question: "What happens when my free limit runs out?",
         answer:
-          "The pilot stops without automatic renewal or extra charges. There are no overage charges or automatic top-ups.",
+          "Leaderbot lets you know and sends a one-time purchase link for 8 extra images at €4.99. There's no automatic top-up and no hidden cost.",
       },
       {
-        question: "Is Leaderbot part of Meta?",
+        question: "Is this a subscription?",
         answer:
-          "No. Leaderbot is independent; Facebook services and platform rules remain with Meta.",
+          "No. The €4.99 pack is a one-time purchase. There's no renewal, no direct debit and no recurring charge.",
       },
       {
-        question: "Is customer data shared?",
+        question: "Is Leaderbot part of Meta or Facebook?",
         answer:
-          "No. Assistant settings, knowledge and customer context remain bound to their workspace.",
+          "No. Leaderbot is an independent service; Messenger and its platform rules stay managed by Meta.",
       },
       {
-        question: "Where will the Startpilot launch first?",
+        question: "Can I have my data deleted?",
         answer:
-          "Startpilot is for Belgian consumers. Business checkout and Peppol invoicing are not included.",
+          "Yes, anytime. Ask directly in Messenger and Leaderbot deletes your data according to the privacy policy.",
       },
     ],
-    contactEyebrow: "Questions before purchase",
-    contactTitle: "Have a question about Startpilot?",
+    contactEyebrow: "Questions before you start?",
+    contactTitle: "Something not clear yet?",
     contactBody:
-      "Send us your question or use case. A message never creates a purchase or subscription automatically.",
+      "Send us your question. A message here never triggers a purchase automatically.",
     contactCta: "Send your question",
     companyTitle: "Business information",
     enterpriseLabel: "Enterprise number",
@@ -531,51 +530,44 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
 const commercialUnavailableCopies: Record<
   AppLocale,
   Pick<LandingCopy, "noPayment" | "pricingDisclosure"> & {
-    premiumLabel: string;
-    premiumCta: string;
+    creditsLabel: string;
+    creditsCta: string;
     firstFaqAnswer: string;
   }
 > = {
   "nl-BE": {
     noPayment:
-      "Je kunt Leaderbot gratis verkennen. De aankoopknop verschijnt pas wanneer de gecontroleerde Mollie-testfase beschikbaar is.",
-    premiumLabel: "Nog niet beschikbaar",
-    premiumCta: "Inloggen en Startpilot bekijken",
+      "Je kan nu al gratis chatten met Leaderbot op Messenger. De eenmalige creditaankoop verschijnt zodra de beveiligde Mollie-testfase live is.",
+    creditsLabel: "Nog niet beschikbaar",
+    creditsCta: "Chat gratis op Messenger",
     pricingDisclosure:
-      "€19 is de geplande eenmalige prijs voor de Leaderbot Startpilot. Er verschijnt pas een aankoopknop wanneer de beveiligde betaalroute beschikbaar is.",
+      "€4,99 is de geplande eenmalige prijs voor 8 extra beelden. Er verschijnt pas een aankooplink zodra de beveiligde betaalroute live is.",
     firstFaqAnswer:
-      "Nog niet. Je kunt al veilig inloggen en Leaderbot gratis verkennen. De aankoopknop verschijnt zodra de gecontroleerde Mollie-testfase beschikbaar is.",
+      "Nog niet. Chat nu al gratis met Leaderbot; de eenmalige aankoop verschijnt zodra de beveiligde Mollie-testfase live is.",
   },
   "fr-BE": {
     noPayment:
-      "Vous pouvez découvrir Leaderbot gratuitement. Le bouton d’achat apparaîtra uniquement lorsque la phase de test Mollie contrôlée sera disponible.",
-    premiumLabel: "Pas encore disponible",
-    premiumCta: "Se connecter et voir le pilote",
+      "Vous pouvez déjà discuter gratuitement avec Leaderbot sur Messenger. L'achat unique de crédits apparaîtra dès que la phase de test Mollie sécurisée sera active.",
+    creditsLabel: "Pas encore disponible",
+    creditsCta: "Discuter gratuitement sur Messenger",
     pricingDisclosure:
-      "19 € est le prix unique prévu pour le pilote Leaderbot. Le bouton d’achat apparaîtra uniquement lorsque le parcours de paiement sécurisé sera disponible.",
+      "4,99 € est le prix unique prévu pour 8 images supplémentaires. Un lien d'achat n'apparaîtra que lorsque le parcours de paiement sécurisé sera actif.",
     firstFaqAnswer:
-      "Pas encore. Vous pouvez déjà vous connecter en toute sécurité et découvrir Leaderbot gratuitement. Le bouton d’achat apparaîtra dès que la phase de test Mollie contrôlée sera disponible.",
+      "Pas encore. Discutez dès maintenant gratuitement avec Leaderbot ; l'achat unique apparaîtra dès que la phase de test Mollie sécurisée sera active.",
   },
   en: {
     noPayment:
-      "You can explore Leaderbot for free. The purchase button appears only when the controlled Mollie test phase is available.",
-    premiumLabel: "Not available yet",
-    premiumCta: "Sign in and view Startpilot",
+      "You can already chat with Leaderbot for free on Messenger. The one-time credit purchase appears once the secured Mollie test phase is live.",
+    creditsLabel: "Not available yet",
+    creditsCta: "Chat for free on Messenger",
     pricingDisclosure:
-      "€19 is the planned one-time price for the Leaderbot Startpilot. A purchase button appears only when the secured payment route is available.",
+      "€4.99 is the planned one-time price for 8 extra images. A purchase link appears only once the secure payment route is live.",
     firstFaqAnswer:
-      "Not yet. You can already sign in safely and explore Leaderbot for free. The purchase button appears when the controlled Mollie test phase is available.",
+      "Not yet. Chat with Leaderbot for free right now; the one-time purchase appears once the secured Mollie test phase is live.",
   },
 };
 
-const featureIcons = [
-  Bot,
-  Database,
-  MessageCircle,
-  Image,
-  Sparkles,
-  ShieldCheck,
-];
+const featureIcons = [Wand2, Images, Sparkles, MessageCircle, Sparkles, Trash2];
 
 function LanguagePicker({
   copy,
@@ -611,24 +603,42 @@ function LanguagePicker({
   );
 }
 
-function PortalButton({
-  copy,
+function MessengerCta({
   label,
+  variant = "accent",
+}: {
+  label: string;
+  variant?: "accent" | "light" | "outline";
+}) {
+  const classes =
+    variant === "accent"
+      ? "min-h-12 bg-lime-300 px-6 font-bold text-[#10211d] hover:bg-lime-200"
+      : variant === "light"
+        ? "min-h-11 border border-stone-300 bg-white px-5 font-semibold text-stone-900 hover:border-stone-400 hover:bg-stone-50"
+        : "min-h-12 border border-white/20 px-6 font-bold text-white hover:bg-white/10";
+  return (
+    <a
+      className={`inline-flex items-center justify-center gap-2 rounded-full text-sm shadow-sm transition ${classes}`}
+      href={PUBLIC_BUSINESS_DETAILS.messengerUrl}
+      rel="noreferrer"
+      target="_blank"
+    >
+      <MessageCircle className="h-4 w-4" aria-hidden="true" />
+      {label}
+    </a>
+  );
+}
+
+function AdminLink({
+  copy,
   loginConfigured,
-  variant = "light",
 }: {
   copy: LandingCopy;
-  label?: string;
   loginConfigured: boolean;
-  variant?: "accent" | "light";
 }) {
   return (
     <button
-      className={`inline-flex items-center justify-center gap-2 rounded-full text-sm shadow-sm transition disabled:cursor-not-allowed disabled:opacity-60 ${
-        variant === "accent"
-          ? "min-h-12 bg-lime-300 px-6 font-bold text-[#10211d] hover:bg-lime-200"
-          : "min-h-11 border border-stone-300 bg-white px-5 font-semibold text-stone-900 hover:border-stone-400 hover:bg-stone-50"
-      }`}
+      className="inline-flex items-center gap-1.5 text-xs font-semibold text-stone-400 transition hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
       disabled={!loginConfigured}
       title={!loginConfigured ? copy.loginUnavailable : undefined}
       type="button"
@@ -637,9 +647,30 @@ function PortalButton({
         if (loginUrl) window.location.href = loginUrl;
       }}
     >
-      <LogIn className="h-4 w-4" aria-hidden="true" />
-      {label ?? copy.nav.portal}
+      <Lock className="h-3.5 w-3.5" aria-hidden="true" />
+      {copy.nav.admin}
     </button>
+  );
+}
+
+/** Five dots for the daily free images, then a distinct "+8" credit badge —
+ * the whole free/paid mechanic in one glance. This is the page's signature
+ * element: it's what the product actually is, not a decoration. */
+function QuotaMeter({ usedToday = 1 }: { usedToday?: number }) {
+  return (
+    <div className="flex items-center gap-2" aria-hidden="true">
+      {Array.from({ length: 5 }).map((_, index) => (
+        <span
+          key={index}
+          className={`h-2.5 w-2.5 rounded-full ${
+            index < usedToday ? "bg-lime-300" : "bg-white/20"
+          }`}
+        />
+      ))}
+      <span className="ml-1 flex h-5 items-center rounded-full bg-white/10 px-2 text-[10px] font-bold uppercase tracking-wide text-stone-300">
+        +8
+      </span>
+    </div>
   );
 }
 
@@ -661,14 +692,14 @@ export default function LandingPage({
     : {
         ...baseCopy,
         noPayment: unavailable.noPayment,
-        premium: {
-          ...baseCopy.premium,
-          label: unavailable.premiumLabel,
-          cta: unavailable.premiumCta,
+        credits: {
+          ...baseCopy.credits,
+          label: unavailable.creditsLabel,
+          cta: unavailable.creditsCta,
         },
         pricingDisclosure: unavailable.pricingDisclosure,
         questions: baseCopy.questions.map((question, index) =>
-          index === 0
+          index === 1
             ? { ...question, answer: unavailable.firstFaqAnswer }
             : question
         ),
@@ -721,11 +752,14 @@ export default function LandingPage({
                 {copy.nav.faq}
               </a>
             </nav>
-            <LanguagePicker
-              copy={copy}
-              locale={locale}
-              onChange={onLocaleChange}
-            />
+            <div className="flex items-center gap-4">
+              <AdminLink copy={copy} loginConfigured={loginConfigured} />
+              <LanguagePicker
+                copy={copy}
+                locale={locale}
+                onChange={onLocaleChange}
+              />
+            </div>
           </header>
 
           <div
@@ -743,24 +777,13 @@ export default function LandingPage({
                 {copy.body}
               </p>
               <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
-                <PortalButton
-                  copy={copy}
-                  loginConfigured={loginConfigured}
-                  variant="accent"
-                />
+                <MessengerCta label={copy.primaryCta} variant="accent" />
                 <a
                   className="inline-flex min-h-12 items-center justify-center gap-2 rounded-full border border-white/20 px-6 text-sm font-bold text-white transition hover:bg-white/10"
                   href="#how-it-works"
                 >
-                  {copy.primaryCta}
-                  <ArrowRight className="h-4 w-4" aria-hidden="true" />
-                </a>
-                <a
-                  className="inline-flex min-h-12 items-center justify-center gap-2 rounded-full border border-white/20 px-6 text-sm font-bold text-white transition hover:bg-white/10"
-                  href={interestHref}
-                >
-                  <Mail className="h-4 w-4" aria-hidden="true" />
                   {copy.secondaryCta}
+                  <ArrowRight className="h-4 w-4" aria-hidden="true" />
                 </a>
               </div>
               <p className="mt-5 flex max-w-2xl items-start gap-2 text-sm leading-6 text-stone-400">
@@ -782,7 +805,7 @@ export default function LandingPage({
                   <div className="flex items-center justify-between border-b border-stone-200 pb-4">
                     <div className="flex items-center gap-3">
                       <span className="grid h-10 w-10 place-items-center rounded-full bg-[#10211d] text-lime-300">
-                        <Bot className="h-5 w-5" aria-hidden="true" />
+                        <MessageCircle className="h-5 w-5" aria-hidden="true" />
                       </span>
                       <div>
                         <div className="font-semibold">Leaderbot</div>
@@ -817,12 +840,15 @@ export default function LandingPage({
                           aria-hidden="true"
                         />
                       </div>
-                      <div className="mt-3 flex items-center gap-2 text-xs text-stone-300">
-                        <Check
-                          className="h-4 w-4 text-lime-300"
-                          aria-hidden="true"
-                        />
-                        {copy.previewReady}
+                      <div className="mt-3 flex items-center justify-between gap-2">
+                        <span className="flex items-center gap-2 text-xs text-stone-300">
+                          <Check
+                            className="h-4 w-4 text-lime-300"
+                            aria-hidden="true"
+                          />
+                          {copy.previewReady}
+                        </span>
+                        <QuotaMeter usedToday={1} />
                       </div>
                     </div>
                   </div>
@@ -913,6 +939,9 @@ export default function LandingPage({
               </article>
             ))}
           </div>
+          <div className="mt-8">
+            <MessengerCta label={copy.primaryCta} variant="light" />
+          </div>
         </div>
       </section>
 
@@ -957,30 +986,30 @@ export default function LandingPage({
                 ))}
               </ul>
               <div className="mt-8">
-                <PortalButton copy={copy} loginConfigured={loginConfigured} />
+                <MessengerCta label={copy.free.cta} variant="light" />
               </div>
             </article>
 
             <article className="rounded-3xl border border-[#10211d] bg-[#10211d] p-7 text-white shadow-xl shadow-stone-900/10 sm:p-9">
               <span className="inline-flex rounded-full bg-lime-300 px-3 py-1 text-xs font-bold uppercase tracking-wide text-[#10211d]">
-                {copy.premium.label}
+                {copy.credits.label}
               </span>
               <h3 className="mt-5 text-xl font-semibold">
-                {copy.premium.name}
+                {copy.credits.name}
               </h3>
               <div className="mt-6 flex items-end gap-3">
                 <span className="text-5xl font-semibold tracking-[-0.04em]">
-                  {copy.premium.price}
+                  {copy.credits.price}
                 </span>
                 <span className="pb-1 text-sm text-stone-400">
-                  {copy.premium.suffix}
+                  {copy.credits.suffix}
                 </span>
               </div>
               <p className="mt-5 text-sm leading-6 text-stone-300">
-                {copy.premium.body}
+                {copy.credits.body}
               </p>
               <ul className="mt-6 grid gap-3 text-sm text-stone-200">
-                {copy.premium.features.map(feature => (
+                {copy.credits.features.map(feature => (
                   <li className="flex items-start gap-3" key={feature}>
                     <Check
                       className="mt-0.5 h-4 w-4 shrink-0 text-lime-300"
@@ -991,12 +1020,7 @@ export default function LandingPage({
                 ))}
               </ul>
               <div className="mt-8">
-                <PortalButton
-                  copy={copy}
-                  label={copy.premium.cta}
-                  loginConfigured={loginConfigured}
-                  variant="accent"
-                />
+                <MessengerCta label={copy.credits.cta} variant="accent" />
               </div>
             </article>
           </div>
