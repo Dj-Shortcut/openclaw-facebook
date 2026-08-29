@@ -1222,6 +1222,7 @@ describe("assistantCommandsFeature", () => {
     expect(sendActions).toHaveBeenCalledWith(t("en", "flowExplanation"), [
       { id: "new_image", label: "New image", inputText: "new_image" },
       { id: "edit_photo", label: "Edit photo", inputText: "Edit photo" },
+      { id: "video", label: "Make video", inputText: "Make video" },
       { id: "privacy", label: "Privacy", inputText: "Privacy" },
       { id: "portal", label: "Customer portal", inputText: "portal" },
     ]);
@@ -1272,6 +1273,7 @@ describe("assistantCommandsFeature", () => {
     expect(sendActions).toHaveBeenCalledWith(t("en", "flowExplanation"), [
       { id: "new_image", label: "New image", inputText: "new_image" },
       { id: "edit_photo", label: "Edit photo", inputText: "Edit photo" },
+      { id: "video", label: "Make video", inputText: "Make video" },
       { id: "privacy", label: "Privacy", inputText: "Privacy" },
       { id: "portal", label: "Customer portal", inputText: "portal" },
     ]);
@@ -1321,6 +1323,101 @@ describe("assistantCommandsFeature", () => {
     expect(result).toEqual({ handled: true });
     expect(setFlowState).toHaveBeenCalledWith("AWAITING_EDIT_PROMPT");
     expect(sendText).toHaveBeenCalledWith(t("nl", "editImagePrompt"));
+  });
+
+  it("requires a source image for the video action", async () => {
+    const sendText = vi.fn(async () => undefined);
+    const runVideoGeneration = vi.fn(async () => undefined);
+
+    const result = await assistantCommandsFeature.onText?.(
+      makeContext({
+        lang: "nl",
+        normalizedText: "maak video",
+        messageText: "Maak video",
+        hasPhoto: false,
+        sendText,
+        runVideoGeneration,
+      })
+    );
+
+    expect(result).toEqual({ handled: true });
+    expect(runVideoGeneration).not.toHaveBeenCalled();
+    expect(sendText).toHaveBeenCalledWith(
+      t("nl", "videoGenerationRequiresPhoto")
+    );
+  });
+
+  it("starts the video flow for the video action when a source image exists", async () => {
+    const originalEnv = process.env.MESSENGER_VIDEO_GENERATION_ENABLED;
+    process.env.MESSENGER_VIDEO_GENERATION_ENABLED = "true";
+    const sendText = vi.fn(async () => undefined);
+    const runVideoGeneration = vi.fn(async () => undefined);
+
+    try {
+      const result = await assistantCommandsFeature.onText?.(
+        makeContext({
+          lang: "en",
+          normalizedText: "make video",
+          messageText: "Make video",
+          hasPhoto: true,
+          sendText,
+          runVideoGeneration,
+          state: makeState({
+            lastPhotoUrl: "https://img.example/source.jpg",
+          }),
+        })
+      );
+
+      expect(result).toEqual({ handled: true });
+      expect(runVideoGeneration).toHaveBeenCalledWith(
+        "https://img.example/source.jpg",
+        "Make video"
+      );
+      expect(sendText).toHaveBeenCalledWith(
+        t("en", "videoGenerationQueued")
+      );
+    } finally {
+      if (originalEnv === undefined) {
+        delete process.env.MESSENGER_VIDEO_GENERATION_ENABLED;
+      } else {
+        process.env.MESSENGER_VIDEO_GENERATION_ENABLED = originalEnv;
+      }
+    }
+  });
+
+  it("returns video unavailable when the video feature is disabled", async () => {
+    const originalEnv = process.env.MESSENGER_VIDEO_GENERATION_ENABLED;
+    process.env.MESSENGER_VIDEO_GENERATION_ENABLED = "false";
+    const sendText = vi.fn(async () => undefined);
+    const runVideoGeneration = vi.fn(async () => undefined);
+
+    try {
+      const result = await assistantCommandsFeature.onText?.(
+        makeContext({
+          lang: "en",
+          normalizedText: "make video",
+          messageText: "Make video",
+          hasPhoto: true,
+          sendText,
+          runVideoGeneration,
+          state: makeState({
+            lastPhotoUrl: "https://img.example/source.jpg",
+          }),
+        })
+      );
+
+      expect(result).toEqual({ handled: true });
+      expect(runVideoGeneration).not.toHaveBeenCalled();
+      expect(sendText).toHaveBeenCalledWith(
+        t("en", "videoGenerationUnavailable")
+      );
+    } finally {
+      if (originalEnv === undefined) {
+        delete process.env.MESSENGER_VIDEO_GENERATION_ENABLED;
+      } else {
+        process.env.MESSENGER_VIDEO_GENERATION_ENABLED = originalEnv;
+      }
+    }
   });
 
   it("turns new-image action input into a fresh prompt-first start", async () => {
@@ -1457,6 +1554,7 @@ describe("assistantCommandsFeature", () => {
     expect(sendActions).toHaveBeenCalledWith(t("nl", "flowExplanation"), [
       { id: "new_image", label: "Nieuwe afbeelding", inputText: "new_image" },
       { id: "edit_photo", label: "Pas foto aan", inputText: "Pas foto aan" },
+      { id: "video", label: "Maak video", inputText: "Maak video" },
       { id: "privacy", label: "Privacy", inputText: "Privacy" },
       { id: "portal", label: "Klantenportaal", inputText: "portal" },
     ]);
@@ -1552,6 +1650,7 @@ describe("assistantCommandsFeature", () => {
     expect(sendActions).toHaveBeenCalledWith(t("en", "flowExplanation"), [
       { id: "new_image", label: "New image", inputText: "new_image" },
       { id: "edit_photo", label: "Edit photo", inputText: "Edit photo" },
+      { id: "video", label: "Make video", inputText: "Make video" },
       { id: "privacy", label: "Privacy", inputText: "Privacy" },
       { id: "portal", label: "Customer portal", inputText: "portal" },
     ]);
