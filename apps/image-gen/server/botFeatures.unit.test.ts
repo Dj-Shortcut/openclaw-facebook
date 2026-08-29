@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ensureDefaultBotFeaturesRegistered } from "./_core/bot/defaultFeatures";
 import { assistantCommandsFeature } from "./_core/bot/features/assistantCommandsFeature";
 import { conversationalEditingFeature } from "./_core/bot/features/conversationalEditingFeature";
@@ -14,6 +14,21 @@ import { t } from "./_core/i18n";
 import type { BotTextContext } from "./_core/botContext";
 import type { MessengerUserState } from "./_core/messengerState";
 import { resetStateStore } from "./_core/messengerState";
+
+const originalPrivacyPepper = process.env.PRIVACY_PEPPER;
+beforeEach(() => {
+  if (process.env.PRIVACY_PEPPER === undefined) {
+    process.env.PRIVACY_PEPPER = "botfeatures-unit-test-pepper";
+  }
+});
+
+afterEach(() => {
+  if (originalPrivacyPepper === undefined) {
+    delete process.env.PRIVACY_PEPPER;
+  } else {
+    process.env.PRIVACY_PEPPER = originalPrivacyPepper;
+  }
+});
 
 function makeState(
   overrides: Partial<MessengerUserState> = {}
