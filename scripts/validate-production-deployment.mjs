@@ -196,7 +196,7 @@ function referencesExactHostnameToken(source, expectedHostname) {
     "\\$&",
   );
   return new RegExp(
-    `(^|[^a-z0-9.-])${escapedHostname}(?=$|[^a-z0-9.-])`,
+    `(^|[^a-z0-9.-])${escapedHostname}\\.?(?=$|[^a-z0-9.-])`,
     "iu",
   ).test(executableSource);
 }

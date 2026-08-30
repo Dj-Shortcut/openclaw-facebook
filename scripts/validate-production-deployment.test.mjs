@@ -2250,6 +2250,20 @@ describe("production deployment contract", () => {
     );
   });
 
+  it("forbids the DNS-equivalent trailing-dot gateway hostname", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/production-uptime.yml",
+      "https://leaderbot-fb-image-gen.fly.dev/healthz",
+      "https://leaderbot-openclaw-gateway.fly.dev./healthz",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      ".github/workflows/production-uptime.yml must not probe the legacy OpenClaw gateway after the Page callback is canonical",
+    );
+  });
+
   it("ignores a comment about the legacy gateway in the uptime workflow", () => {
     const root = createRepositoryFixture();
     const workflowPath = path.join(
