@@ -104,7 +104,9 @@ export async function assertBillingTriggerRuntimePreflight(
     await runStage("transaction", () => connection.beginTransaction());
     transactionStarted = true;
 
-    await assertCreditTableDmlDenied(connection);
+    if (grantProfile === "credit-runtime") {
+      await assertCreditTableDmlDenied(connection);
+    }
 
     const [sentinelRows] = await runStage("sentinel_absence", () =>
       connection.query(

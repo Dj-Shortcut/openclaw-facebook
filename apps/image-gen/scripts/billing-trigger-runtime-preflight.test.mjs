@@ -159,6 +159,16 @@ describe("billing trigger runtime preflight", () => {
     expect(connection.query).not.toHaveBeenCalledWith(
       expect.stringContaining("CALL `credit_reserve_checkout_intent`")
     );
+    const statements = connection.query.mock.calls.map(([statement]) =>
+      String(statement)
+    );
+    expect(
+      statements.some(statement =>
+        /^(INSERT INTO|UPDATE|DELETE FROM) `credit_(wallets|reservations|ledger)`/.test(
+          statement
+        )
+      )
+    ).toBe(false);
   });
 
   it("exercises all three triggers and always verifies the rollback", async () => {
