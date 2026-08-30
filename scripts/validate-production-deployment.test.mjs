@@ -1122,7 +1122,7 @@ describe("production deployment contract", () => {
     });
   });
 
-  it("records the attested 0016-to-0018 bridge before its protected deploy", () => {
+  it("freezes the attested 0016-to-0018 bridge after its protected deploy", () => {
     const manifest = JSON.parse(
       fs.readFileSync(
         path.join(repoRoot, "deploy/production/apps.json"),
@@ -1135,20 +1135,28 @@ describe("production deployment contract", () => {
     expect(app.databaseSchemaTransition).toMatchObject({
       from: "0016_expand",
       to: "0018_credit_checkout_reservation",
-      state: "bridge_reviewed",
+      state: "expand_pending",
       bridgeImage:
         "registry.fly.io/leaderbot-fb-image-gen@sha256:a37632c86a72a87cd94f5c030c8b88be330420289c553f4570e234c85df233b8",
       bridgeSourceCommit: "f26d80e1eb47361541b9812a1c0d47477afac535",
     });
-    expect(app.deploymentEnabled).toBe(true);
+    expect(app.deploymentEnabled).toBe(false);
     expect(app.reviewedArtifactKind).toBe("migration-bridge");
     expect(app.reviewedImage).toBe(app.databaseSchemaTransition.bridgeImage);
     expect(app.reviewedSourceCommit).toBe(
       app.databaseSchemaTransition.bridgeSourceCommit,
     );
     expect(app.reviewedRollbackImages).toEqual([
-      app.databaseSchemaTransition.legacyBaseImage,
+      app.databaseSchemaTransition.bridgeImage,
     ]);
+    expect(app.reviewedSettledPredecessor).toEqual({
+      identity: "deploy-33297361675-1",
+      image:
+        "registry.fly.io/leaderbot-fb-image-gen@sha256:a37632c86a72a87cd94f5c030c8b88be330420289c553f4570e234c85df233b8",
+      path: "deploy/production/rollback-configs/image-gen-a37632c86a72-deploy-33297361675-1.toml",
+      sha256:
+        "cd74c375ff2ebfa9c178cea325377b654851a71d105375ca51b826796bf9e9c0",
+    });
   });
 
   it("keeps runtime-principal staging manual, exact, and non-deploying", () => {
@@ -2592,6 +2600,20 @@ describe("production deployment contract", () => {
 
     expect(() => validateProductionRepository(root)).toThrow(
       "must run the exact bounded, reversible billing-trigger probe before image-gen rollout",
+    );
+  });
+
+  it("allows the pre-deploy billing-trigger probe gate to run only after final schema completion", () => {
+    const root = createRepositoryFixture();
+    const workflow = fs.readFileSync(
+      path.join(root, ".github/workflows/deploy-production.yml"),
+      "utf8",
+    );
+    const probeStep = workflow
+      .split("- name: Probe production billing triggers before rollout")[1]
+      ?.split("- name: Deploy reviewed image-gen config")[0];
+    expect(probeStep).toContain(
+      'if [[ "$transition_target" = "0018_credit_checkout_reservation" && "$transition_state" != "complete" ]]; then',
     );
   });
 
@@ -8592,7 +8614,7 @@ describe("settled production identity", () => {
         ),
         ...verificationOptions,
         fetchImpl: async () =>
-          jsonResponse(canonicalDeploymentRun("image-gen", "32860967800", "1")),
+          jsonResponse(canonicalDeploymentRun("image-gen", "33297361675", "1")),
       }),
     ).resolves.toMatchObject({
       identity: predecessor.identity,
