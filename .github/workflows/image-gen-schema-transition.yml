@@ -211,14 +211,24 @@ jobs:
           FLY_API_TOKEN: ${{ secrets.FLY_IMAGE_GEN_DEPLOY_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}
         run: |
-          live_config="$(flyctl config show --app leaderbot-fb-image-gen)"
-          settled_identity="$(jq -er '.env.LEADERBOT_DEPLOYMENT_IDENTITY // "none"' <<<"$live_config")"
+          set -euo pipefail
+          evidence_dir="$RUNNER_TEMP/leaderbot-schema-transition"
+          mkdir -p "$evidence_dir"
+          settled_state="$(node scripts/validate-production-deployment.mjs \
+            --settled-live image-gen \
+            --output-json)"
+          settled_tuple="$(jq -ceS 'select(
+            .target == "image-gen" and
+            .app == "leaderbot-fb-image-gen" and
+            (.identity | type == "string" and test("^deploy-[0-9]+-[0-9]+$")) and
+            (.expectedImage | type == "string" and test("^registry\\.fly\\.io/leaderbot-fb-image-gen@sha256:[a-f0-9]{64}$")) and
+            (.releaseVersion | type == "number") and
+            .releaseVersion > 0 and
+            .releaseVersion == (.releaseVersion | floor)
+          )' <<<"$settled_state")"
+          printf '%s\n' "$settled_tuple" > "$evidence_dir/settled-live.json"
+          settled_identity="$(jq -er '.identity' <<<"$settled_tuple")"
           [[ "$settled_identity" =~ ^deploy-[0-9]+-[0-9]+$ ]]
-          node scripts/validate-production-deployment.mjs \
-            --live image-gen \
-            --expected-deployment-identity "$settled_identity"
-          node scripts/validate-production-deployment.mjs \
-            --verify-settled-baseline image-gen "$settled_identity"
 
       - name: Prepare metadata-only recovery record
         run: mkdir -p "$RUNNER_TEMP/leaderbot-schema-transition"
@@ -696,6 +706,30 @@ jobs:
           path: ${{ runner.temp }}/leaderbot-schema-transition/snapshot.json
           if-no-files-found: error
           retention-days: 90
+
+      - name: Re-prove the exact settled bridge immediately before DDL
+        timeout-minutes: 5
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_IMAGE_GEN_DEPLOY_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          settled_tuple_path="$RUNNER_TEMP/leaderbot-schema-transition/settled-live.json"
+          test -f "$settled_tuple_path"
+          settled_tuple="$(jq -ceS . "$settled_tuple_path")"
+          current_state="$(node scripts/validate-production-deployment.mjs \
+            --settled-live image-gen \
+            --output-json)"
+          current_tuple="$(jq -ceS 'select(
+            .target == "image-gen" and
+            .app == "leaderbot-fb-image-gen" and
+            (.identity | type == "string" and test("^deploy-[0-9]+-[0-9]+$")) and
+            (.expectedImage | type == "string" and test("^registry\\.fly\\.io/leaderbot-fb-image-gen@sha256:[a-f0-9]{64}$")) and
+            (.releaseVersion | type == "number") and
+            .releaseVersion > 0 and
+            .releaseVersion == (.releaseVersion | floor)
+          )' <<<"$current_state")"
+          test "$current_tuple" = "$settled_tuple"
 
       - name: Grant the exact credit procedure definer table privileges
         timeout-minutes: 5
