@@ -24,6 +24,12 @@ const CREDIT_PROVISIONER_BOOTSTRAP_RUNNER_PATH =
   "scripts/provision-image-gen-credit-provisioner.mjs";
 const CREDIT_PROVISIONER_BOOTSTRAP_RUNNER_TEST_PATH =
   "scripts/provision-image-gen-credit-provisioner.test.mjs";
+const CREDIT_MIGRATION_PRINCIPAL_REPAIR_CONTRACT_PATH =
+  "scripts/image-gen-credit-migration-principal-repair-contract.mjs";
+const CREDIT_MIGRATION_PRINCIPAL_REPAIR_RUNNER_PATH =
+  "scripts/repair-image-gen-credit-migration-principal.mjs";
+const CREDIT_MIGRATION_PRINCIPAL_REPAIR_TEST_PATH =
+  "scripts/image-gen-credit-migration-principal-repair-contract.test.mjs";
 const CREDIT_PROVISIONER_RETIREMENT_WORKFLOW_PATH =
   ".github/workflows/retire-image-gen-credit-provisioners.yml";
 const CREDIT_PROVISIONER_RETIREMENT_RUNNER_PATH =
@@ -4360,18 +4366,41 @@ function validateSchemaTransitionWorkflow(rootDir) {
       `${SCHEMA_TRANSITION_WORKFLOW_PATH} must give the bounded Machine start, start poll, and 8m SSH probe enough outer time`,
     );
   }
-  const snapshotBaselineIndex = workflow.indexOf("snapshots-before.json");
-  const snapshotCreateIndex = workflow.indexOf("volumes snapshots create");
+  const credentialSnapshotBaselineIndex = workflow.indexOf(
+    "credential-snapshots-before.json",
+  );
+  const credentialSnapshotCreateIndex = workflow.indexOf(
+    "volumes snapshots create",
+    credentialSnapshotBaselineIndex,
+  );
+  const credentialSnapshotSelectorIndex = workflow.indexOf(
+    "scripts/select-fresh-fly-snapshot.mjs",
+    credentialSnapshotCreateIndex,
+  );
+  const snapshotBaselineIndex = workflow.indexOf(
+    'before="$RUNNER_TEMP/leaderbot-schema-transition/snapshots-before.json"',
+  );
+  const snapshotCreateIndex = workflow.indexOf(
+    "volumes snapshots create",
+    snapshotBaselineIndex,
+  );
   const snapshotSelectorIndex = workflow.indexOf(
     "scripts/select-fresh-fly-snapshot.mjs",
+    snapshotCreateIndex,
   );
   if (
+    credentialSnapshotBaselineIndex < 0 ||
+    credentialSnapshotCreateIndex <= credentialSnapshotBaselineIndex ||
+    credentialSnapshotSelectorIndex <= credentialSnapshotCreateIndex ||
     snapshotBaselineIndex < 0 ||
     snapshotCreateIndex <= snapshotBaselineIndex ||
-    snapshotSelectorIndex <= snapshotCreateIndex
+    snapshotSelectorIndex <= snapshotCreateIndex ||
+    (workflow.match(/node scripts\/select-fresh-fly-snapshot[.]mjs/g) ?? [])
+      .length !== 2 ||
+    (workflow.match(/flyctl volumes snapshots create/g) ?? []).length !== 2
   ) {
     fail(
-      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must capture the old snapshot ids before selecting the one fresh result`,
+      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must capture each old snapshot inventory before selecting each fresh result`,
     );
   }
   const recoveryUploadIndex = workflow.indexOf(
@@ -4382,6 +4411,12 @@ function validateSchemaTransitionWorkflow(rootDir) {
   );
   const schemaInspectionIndex = workflow.indexOf(
     "Inspect the exact live schema phase without changing it",
+  );
+  const migrationPrincipalRepairIndex = workflow.indexOf(
+    "Repair and verify only the approved migration-principal rights",
+  );
+  const credentialRecoveryUploadIndex = workflow.indexOf(
+    "Upload pre-repair credential-boundary recovery reference",
   );
   const applyExpandIndex = workflow.indexOf(
     "LEADERBOT_PRODUCTION_MIGRATION_MODE=apply-credit-wallet-expand",
@@ -4398,6 +4433,9 @@ function validateSchemaTransitionWorkflow(rootDir) {
     recoveryUploadIndex < 0 ||
     definerGrantIndex < 0 ||
     schemaInspectionIndex < 0 ||
+    credentialRecoveryUploadIndex <= credentialSnapshotSelectorIndex ||
+    migrationPrincipalRepairIndex <= credentialRecoveryUploadIndex ||
+    schemaInspectionIndex <= migrationPrincipalRepairIndex ||
     schemaInspectionIndex >= snapshotCreateIndex ||
     definerGrantIndex <= recoveryUploadIndex ||
     applyExpandIndex < 0 ||
@@ -4406,8 +4444,51 @@ function validateSchemaTransitionWorkflow(rootDir) {
     settledBridgeIndex > applyExpandIndex
   ) {
     fail(
-      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must inspect first and durably upload verified snapshot evidence before grant mutation or credit DDL`,
+      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must snapshot and repair the exact migration role, inspect the schema, and durably upload recovery evidence before definer grants or credit DDL`,
     );
+  }
+  const [credentialRecoveryUploadStep] = namedWorkflowStepBodies(
+    workflow,
+    "Upload pre-repair credential-boundary recovery reference",
+  );
+  if (
+    !credentialRecoveryUploadStep?.includes(
+      "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+    ) ||
+    !credentialRecoveryUploadStep.includes(
+      "credential-boundary-snapshot.json",
+    ) ||
+    !credentialRecoveryUploadStep.includes("if-no-files-found: error")
+  ) {
+    fail(
+      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must durably upload the pre-repair recovery reference before root mutation`,
+    );
+  }
+  const [migrationPrincipalRepairStep] = namedWorkflowStepBodies(
+    workflow,
+    "Repair and verify only the approved migration-principal rights",
+  );
+  for (const [required, message] of [
+    [
+      "secrets.IMAGE_GEN_DATABASE_MIGRATION_URL",
+      "must use only the protected migration URL for migration-role verification",
+    ],
+    [
+      "secrets.FLY_DATABASE_MIGRATION_TOKEN",
+      "must use only the reviewed database token for the private root session",
+    ],
+    [
+      "repair-image-gen-credit-migration-principal.mjs",
+      "must call the reviewed fixed-output repair runner",
+    ],
+    [
+      'test "$output" = "credit_migration_principal_ready"',
+      "must accept only the fixed successful repair marker",
+    ],
+  ]) {
+    if (!migrationPrincipalRepairStep?.includes(required)) {
+      fail(`${SCHEMA_TRANSITION_WORKFLOW_PATH} ${message}`);
+    }
   }
   const probeStepIndex = workflow.indexOf(
     "Prove the restored MySQL copy and remote command exit status",
@@ -4988,6 +5069,128 @@ function validateCreditProvisionerBootstrapHelper(rootDir) {
   ) {
     fail(
       `${CREDIT_PROVISIONER_BOOTSTRAP_RUNNER_PATH} must not log credentials, managed account names, grants, or dynamic failures`,
+    );
+  }
+}
+
+function validateCreditMigrationPrincipalRepair(rootDir) {
+  for (const relativePath of [
+    CREDIT_MIGRATION_PRINCIPAL_REPAIR_CONTRACT_PATH,
+    CREDIT_MIGRATION_PRINCIPAL_REPAIR_RUNNER_PATH,
+    CREDIT_MIGRATION_PRINCIPAL_REPAIR_TEST_PATH,
+  ]) {
+    if (!fs.existsSync(path.join(rootDir, relativePath))) {
+      fail(`Missing ${relativePath}`);
+    }
+  }
+  const contract = fs.readFileSync(
+    path.join(rootDir, CREDIT_MIGRATION_PRINCIPAL_REPAIR_CONTRACT_PATH),
+    "utf8",
+  );
+  for (const [required, message] of [
+    [
+      '"CREATE",\n  "TRIGGER",\n  "CREATE ROUTINE",\n  "ALTER ROUTINE"',
+      "must limit repair to the exact four reviewed schema privileges",
+    ],
+    [
+      "detectMissingCreditMigrationPrivileges",
+      "must prove the existing boundary is otherwise exact before mutation",
+    ],
+    [
+      'operation: "revoke"',
+      "must revoke only newly added privileges after failed verification",
+    ],
+    [
+      "const lockedState = await readState();",
+      "must decide the privilege delta only after the repair lock is held",
+    ],
+    [
+      "attemptedPrivileges = [...missing];",
+      "must arm uncertain-GRANT recovery before sending the mutation",
+    ],
+    [
+      "const observed = await readState();",
+      "must observe effective grants after an uncertain mutation result",
+    ],
+    [
+      "const recovered = await recoverRoot(activeRoot);",
+      "must reconnect under a fresh lock after root transport loss",
+    ],
+    [
+      "verifyRollback(attemptedPrivileges)",
+      "must verify the exact pre-repair boundary after rollback",
+    ],
+    [
+      "CreditMigrationPrincipalCleanupError",
+      "must distinguish an incomplete rollback from a clean refusal",
+    ],
+  ]) {
+    if (!contract.includes(required)) {
+      fail(`${CREDIT_MIGRATION_PRINCIPAL_REPAIR_CONTRACT_PATH} ${message}`);
+    }
+  }
+  if (/console[.]|process[.](?:stdout|stderr)/.test(contract)) {
+    fail(
+      `${CREDIT_MIGRATION_PRINCIPAL_REPAIR_CONTRACT_PATH} must not log database identities or failures`,
+    );
+  }
+  const runner = fs.readFileSync(
+    path.join(rootDir, CREDIT_MIGRATION_PRINCIPAL_REPAIR_RUNNER_PATH),
+    "utf8",
+  );
+  for (const [required, message] of [
+    [
+      "classifyCreditMigrationHistory",
+      "must bind repair and resume verification to exact credit histories",
+    ],
+    [
+      'if (initialPhase !== "0016_expand")',
+      "must keep completed 0017 and 0018 histories verification-only",
+    ],
+    [
+      'verifyRuntime(connection, "credit-expand")',
+      "must strictly verify the complete migration boundary after repair",
+    ],
+    [
+      "new RootMysqlSession",
+      "must keep root access inside the exact reviewed database Machine",
+    ],
+    [
+      '["PATH", "FLY_API_TOKEN", "TMPDIR", "NO_COLOR"]',
+      "must pass only the minimal Fly child environment to the root session",
+    ],
+    [
+      "CREDIT_MIGRATION_PRINCIPAL_CLEANUP_FAILURE_MARKER",
+      "must preserve the fixed cleanup-incomplete result",
+    ],
+  ]) {
+    if (!runner.includes(required)) {
+      fail(`${CREDIT_MIGRATION_PRINCIPAL_REPAIR_RUNNER_PATH} ${message}`);
+    }
+  }
+  if (/console[.]|error[.](?:message|stack)|String\(error/.test(runner)) {
+    fail(
+      `${CREDIT_MIGRATION_PRINCIPAL_REPAIR_RUNNER_PATH} must emit only fixed metadata markers`,
+    );
+  }
+  let packageJson;
+  try {
+    packageJson = JSON.parse(
+      fs.readFileSync(path.join(rootDir, "package.json"), "utf8"),
+    );
+  } catch {
+    fail("package.json must contain the reviewed production-contract command");
+  }
+  const tokens = String(
+    packageJson?.scripts?.["test:production-contracts"] ?? "",
+  ).split(/\s+/);
+  if (
+    tokens.filter(
+      (token) => token === CREDIT_MIGRATION_PRINCIPAL_REPAIR_TEST_PATH,
+    ).length !== 1
+  ) {
+    fail(
+      `package.json test:production-contracts must include exact ${CREDIT_MIGRATION_PRINCIPAL_REPAIR_TEST_PATH}`,
     );
   }
 }
@@ -7646,6 +7849,7 @@ export function validateProductionRepository(rootDir = process.cwd()) {
   validateImageGenMigrationCi(rootDir);
   validateTrustedArtifactWorkflow(rootDir);
   validateCreditMigrationDefinerGrant(rootDir);
+  validateCreditMigrationPrincipalRepair(rootDir);
   validateCreditProvisionerBootstrapHelper(rootDir);
   validateCreditProvisionerRetirementRunner(rootDir);
   validateCreditProvisionerRetirementWorkflow(rootDir);

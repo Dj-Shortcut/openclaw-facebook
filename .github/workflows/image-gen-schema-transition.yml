@@ -101,7 +101,11 @@ jobs:
           cache: npm
 
       - name: Install root validation dependencies
-        run: npm ci
+        run: |
+          npm ci
+          corepack enable
+          corepack prepare pnpm@10.28.1 --activate
+          pnpm --dir apps/image-gen install --frozen-lockfile
 
       - name: Require the frozen reviewed transition
         run: |
@@ -310,6 +314,74 @@ jobs:
             sleep 1
           done
           node -e 'const n=require("node:net");const s=n.createConnection(13306,"127.0.0.1",()=>{s.destroy();process.exit(0)});s.setTimeout(1000,()=>{s.destroy();process.exit(1)});s.on("error",()=>process.exit(1))'
+
+      - name: Snapshot the exact pre-repair credential boundary
+        timeout-minutes: 15
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_DATABASE_MIGRATION_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$FLY_API_TOKEN"
+          db_app="$(jq -er '.apps["image-gen"].databaseRecovery.app' deploy/production/apps.json)"
+          volume_id="$(jq -er '.apps["image-gen"].databaseRecovery.volumeId' deploy/production/apps.json)"
+          volume="$(flyctl volumes list --app "$db_app" --json | jq -cer --arg id "$volume_id" '[.[] | select(.id==$id)] | if length==1 then .[0] else error("database volume mismatch") end')"
+          test "$(jq -r '.encrypted' <<<"$volume")" = "true"
+          test "$(jq -r '.auto_backup_enabled' <<<"$volume")" = "true"
+          test "$(jq -er '.attached_machine_id' <<<"$volume")" = "$DATABASE_MACHINE_ID"
+          before="$RUNNER_TEMP/leaderbot-schema-transition/credential-snapshots-before.json"
+          current="$RUNNER_TEMP/leaderbot-schema-transition/credential-snapshots-current.json"
+          flyctl volumes snapshots list "$volume_id" --app "$db_app" --json > "$before"
+          snapshot_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          flyctl volumes snapshots create "$volume_id" --app "$db_app"
+          selection='{"state":"waiting"}'
+          for _ in $(seq 1 60); do
+            flyctl volumes snapshots list "$volume_id" --app "$db_app" --json > "$current"
+            selection="$(node scripts/select-fresh-fly-snapshot.mjs "$before" "$current" "$snapshot_started_at")"
+            test "$(jq -er '.state' <<<"$selection")" = "ready" && break
+            sleep 10
+          done
+          test "$(jq -er '.state' <<<"$selection")" = "ready"
+          jq -e '(.snapshot.id|test("^[A-Za-z0-9_-]{16,80}$")) and (.snapshot.digest|test("^[a-f0-9]{64}$")) and (.snapshot.createdAt|type)=="string"' <<<"$selection" > /dev/null
+          snapshot_id="$(jq -er '.snapshot.id' <<<"$selection")"
+          snapshot_digest="$(jq -er '.snapshot.digest' <<<"$selection")"
+          snapshot_created_at="$(jq -er '.snapshot.createdAt' <<<"$selection")"
+          jq -n \
+            --arg sourceCommit "$GITHUB_SHA" \
+            --arg runId "$GITHUB_RUN_ID" \
+            --arg runAttempt "$GITHUB_RUN_ATTEMPT" \
+            --arg databaseApp "$db_app" \
+            --arg databaseMachine "$DATABASE_MACHINE_ID" \
+            --arg databaseVolume "$volume_id" \
+            --arg snapshotId "$snapshot_id" \
+            --arg snapshotDigest "$snapshot_digest" \
+            --arg snapshotCreatedAt "$snapshot_created_at" \
+            --arg recordedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{sourceCommit:$sourceCommit,runId:$runId,runAttempt:$runAttempt,purpose:"migration_principal_repair_recovery_reference",database:{app:$databaseApp,machineId:$databaseMachine,volumeId:$databaseVolume},snapshot:{id:$snapshotId,digest:$snapshotDigest,createdAt:$snapshotCreatedAt,restoreVerified:false},recordedAt:$recordedAt}' \
+            > "$RUNNER_TEMP/leaderbot-schema-transition/credential-boundary-snapshot.json"
+
+      - name: Upload pre-repair credential-boundary recovery reference
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: image-gen-credential-boundary-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/leaderbot-schema-transition/credential-boundary-snapshot.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Repair and verify only the approved migration-principal rights
+        timeout-minutes: 8
+        env:
+          DATABASE_MIGRATION_URL: ${{ secrets.IMAGE_GEN_DATABASE_MIGRATION_URL }}
+          FLY_API_TOKEN: ${{ secrets.FLY_DATABASE_MIGRATION_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$DATABASE_MIGRATION_URL"
+          test -n "$FLY_API_TOKEN"
+          echo "::add-mask::$DATABASE_MIGRATION_URL"
+          db_app="$(jq -er '.apps["image-gen"].databaseRecovery.app' deploy/production/apps.json)"
+          output="$(node scripts/repair-image-gen-credit-migration-principal.mjs \
+            --database-app "$db_app" \
+            --database-machine-id "$DATABASE_MACHINE_ID")"
+          test "$output" = "credit_migration_principal_ready"
 
       - name: Inspect the exact live schema phase without changing it
         timeout-minutes: 5

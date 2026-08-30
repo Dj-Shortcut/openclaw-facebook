@@ -426,15 +426,23 @@ async function stopChild(child, timeoutMs = PROXY_STOP_TIMEOUT_MS) {
 }
 
 export class RootMysqlSession {
-  constructor({ app, machineId, signal, spawnChild = spawn }) {
-    if (typeof spawnChild !== "function") fail();
+  constructor({
+    app,
+    machineId,
+    signal,
+    spawnChild = spawn,
+    env = process.env,
+  }) {
+    if (typeof spawnChild !== "function" || !env || typeof env !== "object") {
+      fail();
+    }
     this.buffer = "";
     this.child = spawnChild(
       "flyctl",
       buildRootMysqlSshArgs({ app, machineId }),
       {
         cwd: repositoryRoot,
-        env: process.env,
+        env,
         shell: false,
         stdio: ["pipe", "pipe", "pipe"],
       },
