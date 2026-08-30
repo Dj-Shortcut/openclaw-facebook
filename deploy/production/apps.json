@@ -20,6 +20,7 @@
           "image": "registry.fly.io/leaderbot-openclaw-gateway:codex-codex-disabled-20260803@sha256:b0992d818d6fde9790f010f4866c97d78fd1d8c376492b515d50efa4778c704e",
           "machineConfigSha256": "0a5a744c8946b4a0c8d1ccf8d39cd31797992fe3d22c50e2febe2d137342c48f",
           "volumeId": "vol_v8elpyo26xwdmk1v",
+          "volumeState": "created",
           "mountPath": "/data",
           "region": "ams"
         },
@@ -32,9 +33,25 @@
           "readinessPassed": true
         },
         "rollback": {
-          "state": "available",
+          "state": "compute_recovery_only",
+          "routable": false,
           "order": ["uncordon", "start"],
-          "volumePreserved": true
+          "volumePreserved": true,
+          "requiredSecretStatuses": {
+            "FACEBOOK_APP_SECRET": "Deployed",
+            "GATEWAY_AUTH_TOKEN": "Deployed",
+            "LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN": "Deployed",
+            "LEADERBOT_IMAGE_GEN_URL": "Deployed",
+            "LEADERBOT_PORTAL_ORIGIN": "Deployed",
+            "MESSENGER_APP_SECRET": "Deployed",
+            "MESSENGER_PAGE_ACCESS_TOKEN": "Deployed",
+            "MESSENGER_PAGE_ID": "Deployed",
+            "MESSENGER_VERIFY_TOKEN": "Deployed",
+            "OPENAI_API_KEY": "Deployed",
+            "OPENCLAW_ADMIN_TOKEN": "Deployed",
+            "OPENCLAW_GATEWAY_TOKEN": "Deployed",
+            "REDIS_URL": "Deployed"
+          }
         }
       },
       "stateRebaseline": {

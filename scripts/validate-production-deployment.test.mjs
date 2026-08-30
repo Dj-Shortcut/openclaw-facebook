@@ -2282,6 +2282,36 @@ describe("production deployment contract", () => {
     expect(() => validateProductionRepository(root)).not.toThrow();
   });
 
+  it.each([
+    [
+      "callback check",
+      "          npm run production:drift:gateway\n",
+      "          npm run production:drift:image-gen\n",
+    ],
+    [
+      "Meta credential",
+      "          META_APP_SECRET: ${{ secrets.META_APP_SECRET }}\n",
+      "          META_APP_SECRET: ${{ secrets.UNREVIEWED_SECRET }}\n",
+    ],
+    [
+      "schedule",
+      '    - cron: "*/15 * * * *"\n',
+      '    - cron: "0 0 * * *"\n',
+    ],
+  ])("requires the scheduled gateway retirement %s", (_label, before, after) => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/production-uptime.yml",
+      before,
+      after,
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      ".github/workflows/production-uptime.yml must run one scheduled metadata-only gateway and Meta callback canary",
+    );
+  });
+
   it("does not allow the storage-proxy readiness path to be removed", () => {
     const root = createRepositoryFixture();
     const manifestPath = path.join(root, "deploy/production/apps.json");
@@ -2445,8 +2475,16 @@ describe("production deployment contract", () => {
     replaceFixtureText(
       root,
       ".github/workflows/production-uptime.yml",
-      "          persist-credentials: false\n",
-      "",
+      `      - name: Check out production readiness contract
+        if: github.event_name != 'pull_request'
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+`,
+      `      - name: Check out production readiness contract
+        if: github.event_name != 'pull_request'
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+`,
     );
 
     expect(() => validateProductionRepository(root)).toThrow(
@@ -2511,8 +2549,19 @@ describe("production deployment contract", () => {
     replaceFixtureText(
       root,
       ".github/workflows/production-uptime.yml",
-      "          persist-credentials: false\n",
-      "          persist-credentials: false\n          ref: deadbeef\n",
+      `      - name: Check out production readiness contract
+        if: github.event_name != 'pull_request'
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+`,
+      `      - name: Check out production readiness contract
+        if: github.event_name != 'pull_request'
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          ref: deadbeef
+`,
     );
 
     expect(() => validateProductionRepository(root)).toThrow(
@@ -6007,7 +6056,16 @@ describe("production deployment contract", () => {
       "machine config hash",
       (canary) => (canary.machine.machineConfigSha256 = "not-a-hash"),
     ],
+    ["volume state", (canary) => (canary.machine.volumeState = "pending")],
     ["preserved volume", (canary) => (canary.machine.volumeId = "vol_wrong")],
+    ["compute-only state", (canary) => (canary.rollback.state = "available")],
+    ["routing state", (canary) => (canary.rollback.routable = true)],
+    [
+      "required secret status",
+      (canary) =>
+        (canary.rollback.requiredSecretStatuses.MESSENGER_APP_SECRET =
+          "Staged"),
+    ],
     [
       "rollback order",
       (canary) => (canary.rollback.order = ["start", "uncordon"]),
@@ -9205,11 +9263,33 @@ describe("settled production identity", () => {
       `${JSON.stringify(manifest, null, 2)}\n`,
     );
     mutateMachines(machines);
+    const volumes = [
+      {
+        id: expected.volumeId,
+        state: expected.volumeState,
+        region: expected.region,
+        encrypted: true,
+        attached_machine_id: expected.id,
+      },
+    ];
+    const secrets = Object.entries(
+      app.retirementCanary.rollback.requiredSecretStatuses,
+    ).map(([name, status]) => ({ name, status, digest: "not-inspected" }));
     return (args) => {
-      expect(args).toEqual(["machine", "list", "--app", app.app, "--json"]);
-      return JSON.stringify(machines);
+      const command = args.slice(0, 2).join(" ");
+      expect(args.slice(2)).toEqual(["--app", app.app, "--json"]);
+      if (command === "machine list") return JSON.stringify(machines);
+      if (command === "volumes list") return JSON.stringify(volumes);
+      if (command === "secrets list") return JSON.stringify(secrets);
+      throw new Error(`unexpected Fly read: ${command}`);
     };
   }
+
+  const canonicalCallbackCheck = async () => ({
+    callbacks: [],
+    errors: [],
+    warnings: [],
+  });
 
   it("accepts only the exact stopped and cordoned gateway retirement canary", async () => {
     const root = createRepositoryFixture();
@@ -9217,6 +9297,7 @@ describe("settled production identity", () => {
       checkSettledLiveFlyDrift("gateway", {
         rootDir: root,
         runFly: gatewayRetirementFlyState(root),
+        checkMetaCallbacksImpl: canonicalCallbackCheck,
       }),
     ).resolves.toMatchObject({
       identity: "none",
@@ -9253,6 +9334,7 @@ describe("settled production identity", () => {
       const result = await checkSettledLiveFlyDrift("gateway", {
         rootDir: root,
         runFly: gatewayRetirementFlyState(root, mutate),
+        checkMetaCallbacksImpl: canonicalCallbackCheck,
       });
       expect(result.blockingErrors.length).toBeGreaterThan(0);
     },
@@ -9267,6 +9349,7 @@ describe("settled production identity", () => {
       checkSettledLiveFlyDrift("gateway", {
         rootDir: root,
         runFly: gatewayRetirementFlyState(root),
+        checkMetaCallbacksImpl: canonicalCallbackCheck,
         ...options,
       }),
     ).rejects.toThrow(
@@ -9969,6 +10052,81 @@ describe("settled production identity", () => {
       );
     },
   );
+
+  it("fails closed when the canonical Meta Page callback drifts", async () => {
+    const root = createRepositoryFixture();
+    const result = await checkSettledLiveFlyDrift("gateway", {
+      rootDir: root,
+      runFly: gatewayRetirementFlyState(root),
+      checkMetaCallbacksImpl: async () => ({
+        callbacks: [],
+        errors: ["page uses an unreviewed callback"],
+        warnings: [],
+      }),
+    });
+    expect(result.blockingErrors).toContain(
+      "Meta callback drift: page uses an unreviewed callback",
+    );
+  });
+
+  it.each([
+    ["missing", () => []],
+    [
+      "detached",
+      (volume) => [{ ...volume, attached_machine_id: null }],
+    ],
+    ["unencrypted", (volume) => [{ ...volume, encrypted: false }]],
+  ])("fails closed when the retirement volume is %s", async (_label, mutate) => {
+    const root = createRepositoryFixture();
+    const canonicalRun = gatewayRetirementFlyState(root);
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(root, "deploy/production/apps.json"), "utf8"),
+    );
+    const expected = manifest.apps.gateway.retirementCanary.machine;
+    const volume = {
+      id: expected.volumeId,
+      state: expected.volumeState,
+      region: expected.region,
+      encrypted: true,
+      attached_machine_id: expected.id,
+    };
+    const result = await checkSettledLiveFlyDrift("gateway", {
+      rootDir: root,
+      runFly: (args) =>
+        args.slice(0, 2).join(" ") === "volumes list"
+          ? JSON.stringify(mutate(volume))
+          : canonicalRun(args),
+      checkMetaCallbacksImpl: canonicalCallbackCheck,
+    });
+    expect(result.blockingErrors.length).toBeGreaterThan(0);
+  });
+
+  it("fails closed when a required rollback secret is not deployed", async () => {
+    const root = createRepositoryFixture();
+    const canonicalRun = gatewayRetirementFlyState(root);
+    const secrets = JSON.parse(
+      canonicalRun([
+        "secrets",
+        "list",
+        "--app",
+        "leaderbot-openclaw-gateway",
+        "--json",
+      ]),
+    );
+    secrets.find((secret) => secret.name === "MESSENGER_APP_SECRET").status =
+      "Staged";
+    const result = await checkSettledLiveFlyDrift("gateway", {
+      rootDir: root,
+      runFly: (args) =>
+        args.slice(0, 2).join(" ") === "secrets list"
+          ? JSON.stringify(secrets)
+          : canonicalRun(args),
+      checkMetaCallbacksImpl: canonicalCallbackCheck,
+    });
+    expect(result.blockingErrors).toContain(
+      "gateway retirement canary required secret MESSENGER_APP_SECRET is not Deployed",
+    );
+  });
 
   it("accepts only the exact storage-proxy legacy predecessor for its first trusted rollout", async () => {
     const root = createRepositoryFixture();

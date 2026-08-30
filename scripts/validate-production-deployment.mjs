@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { checkMetaCallbacks } from "./check-meta-callbacks.mjs";
 
 const MANIFEST_PATH = "deploy/production/apps.json";
 const PRODUCTION_WORKFLOW_PATH = ".github/workflows/deploy-production.yml";
@@ -89,6 +90,7 @@ const VERIFIED_FLYCTL_WORKFLOW_JOBS = Object.freeze({
     "recover-image-gen",
     "recover-storage-proxy",
   ],
+  [PRODUCTION_UPTIME_WORKFLOW_PATH]: ["gateway-retirement-canary"],
 });
 const FLY_RELEASE_COMMAND_PROCESS_GROUP = "fly_app_release_command";
 const RECOVERY_PROTOCOL_V1 = "v1";
@@ -652,6 +654,59 @@ function validateVerifiedFlyctlSupplyChain(rootDir) {
   }
 }
 
+function validateGatewayRetirementMonitor(rootDir) {
+  const workflow = fs.readFileSync(
+    path.join(rootDir, PRODUCTION_UPTIME_WORKFLOW_PATH),
+    "utf8",
+  );
+  const job = namedWorkflowJobBody(workflow, "gateway-retirement-canary");
+  const checkoutSteps = namedWorkflowStepBodies(
+    job ?? "",
+    "Check out retirement canary contract",
+  );
+  const checkSteps = namedWorkflowStepBodies(
+    job ?? "",
+    "Check stopped gateway and canonical Meta callback",
+  );
+  const checkStep = checkSteps[0] ?? "";
+  if (
+    !job ||
+    !job.includes("if: github.event_name != 'pull_request'") ||
+    !job.includes("runs-on: ubuntu-latest") ||
+    !job.includes("environment: production-inspection") ||
+    checkoutSteps.length !== 1 ||
+    !checkoutSteps[0].includes(
+      "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6",
+    ) ||
+    !checkoutSteps[0].includes("persist-credentials: false") ||
+    checkSteps.length !== 1 ||
+    !checkStep.includes(
+      "FLY_API_TOKEN: ${{ secrets.FLY_PRODUCTION_READONLY_TOKEN }}",
+    ) ||
+    !checkStep.includes("META_APP_ID: ${{ secrets.META_APP_ID }}") ||
+    !checkStep.includes("META_APP_SECRET: ${{ secrets.META_APP_SECRET }}") ||
+    !checkStep.includes("npm run production:drift:gateway") ||
+    occurrenceCount(workflow, "FLY_PRODUCTION_READONLY_TOKEN") !== 1 ||
+    occurrenceCount(workflow, "META_APP_ID") !== 3 ||
+    occurrenceCount(workflow, "META_APP_SECRET") !== 3 ||
+    !workflow.includes('cron: "*/15 * * * *"')
+  ) {
+    fail(
+      `${PRODUCTION_UPTIME_WORKFLOW_PATH} must run one scheduled metadata-only gateway and Meta callback canary`,
+    );
+  }
+  if (
+    /^ {4}env:/m.test(job) ||
+    /\bfly(?:ctl)?\s+(?:logs|ssh|proxy|deploy|machine\s+(?:start|stop|update|destroy|cordon|uncordon)|secrets\s+(?:set|unset))\b/.test(
+      job,
+    )
+  ) {
+    fail(
+      `${PRODUCTION_UPTIME_WORKFLOW_PATH} retirement canary must remain metadata-only and non-mutating`,
+    );
+  }
+}
+
 function assertPinnedNodeDockerfile(dockerfile, dockerfilePath, options = {}) {
   const firstFrom = dockerfile.search(/^FROM\s+/m);
   const nodeArg = `ARG NODE_BASE_IMAGE=${PINNED_NODE_BASE_IMAGE}`;
@@ -1143,6 +1198,7 @@ function validateGatewayRetirementCanary(app) {
       "image",
       "machineConfigSha256",
       "volumeId",
+      "volumeState",
       "mountPath",
       "region",
     ]) ||
@@ -1156,6 +1212,7 @@ function validateGatewayRetirementCanary(app) {
     machine.image !== baseline?.image ||
     !isExactSha256(machine.machineConfigSha256) ||
     machine.volumeId !== baseline?.volumeId ||
+    machine.volumeState !== "created" ||
     machine.mountPath !== baseline?.mountPath ||
     machine.region !== baseline?.region ||
     !hasExactObjectKeys(directRuntime, [
@@ -1173,10 +1230,35 @@ function validateGatewayRetirementCanary(app) {
     Date.parse(directRuntime.verifiedAt) < Date.parse(machine.cordonedAt) ||
     directRuntime.healthPassed !== true ||
     directRuntime.readinessPassed !== true ||
-    !hasExactObjectKeys(rollback, ["state", "order", "volumePreserved"]) ||
-    rollback.state !== "available" ||
+    !hasExactObjectKeys(rollback, [
+      "state",
+      "routable",
+      "order",
+      "volumePreserved",
+      "requiredSecretStatuses",
+    ]) ||
+    rollback.state !== "compute_recovery_only" ||
+    rollback.routable !== false ||
     JSON.stringify(rollback.order) !== JSON.stringify(["uncordon", "start"]) ||
-    rollback.volumePreserved !== true
+    rollback.volumePreserved !== true ||
+    !hasExactObjectKeys(rollback.requiredSecretStatuses, [
+      "FACEBOOK_APP_SECRET",
+      "GATEWAY_AUTH_TOKEN",
+      "LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN",
+      "LEADERBOT_IMAGE_GEN_URL",
+      "LEADERBOT_PORTAL_ORIGIN",
+      "MESSENGER_APP_SECRET",
+      "MESSENGER_PAGE_ACCESS_TOKEN",
+      "MESSENGER_PAGE_ID",
+      "MESSENGER_VERIFY_TOKEN",
+      "OPENAI_API_KEY",
+      "OPENCLAW_ADMIN_TOKEN",
+      "OPENCLAW_GATEWAY_TOKEN",
+      "REDIS_URL",
+    ]) ||
+    Object.values(rollback.requiredSecretStatuses).some(
+      (status) => status !== "Deployed",
+    )
   ) {
     fail(
       "gateway retirement canary must bind the exact stopped, cordoned Machine, preserved volume, direct-runtime evidence, and uncordon-then-start rollback",
@@ -7878,10 +7960,11 @@ export function validateProductionRepository(rootDir = process.cwd()) {
       "cleanup-image-gen-runtime-principals.yml",
       "deploy-production.yml",
       "image-gen-schema-transition.yml",
+      "production-uptime.yml",
     ])
   ) {
     fail(
-      "FLY_PRODUCTION_READONLY_TOKEN may exist only in the three trusted production-inspection preflights",
+      "FLY_PRODUCTION_READONLY_TOKEN may exist only in the four trusted production-inspection preflights",
     );
   }
   const provisionerSecretHolders = fs
@@ -8816,6 +8899,7 @@ export function validateProductionRepository(rootDir = process.cwd()) {
   }
 
   validateProductionWorkflow(rootDir);
+  validateGatewayRetirementMonitor(rootDir);
   validateRootValidationTriggers(rootDir);
 
   return {
@@ -10499,13 +10583,25 @@ export function checkLiveFlyDrift(target, options = {}) {
   };
 }
 
-function checkGatewayRetirementCanaryLive(app, machines) {
+function checkGatewayRetirementCanaryLive(
+  app,
+  machines,
+  volumes,
+  secrets,
+  callbackResult,
+) {
   validateGatewayRetirementCanary(app);
   const canary = app.retirementCanary;
   const expected = canary.machine;
   const blockingErrors = [];
   if (!Array.isArray(machines)) {
     fail("gateway retirement canary requires a Fly Machine list");
+  }
+  if (!Array.isArray(volumes)) {
+    fail("gateway retirement canary requires a Fly volume list");
+  }
+  if (!Array.isArray(secrets)) {
+    fail("gateway retirement canary requires a Fly secret-metadata list");
   }
   const matchingMachines = machines.filter(
     (machine) => machine?.id === expected.id,
@@ -10571,6 +10667,65 @@ function checkGatewayRetirementCanaryLive(app, machines) {
       `gateway retirement canary has ${activeMachines.length} non-stopped Machine(s)`,
     );
   }
+  const matchingVolumes = volumes.filter(
+    (volume) => volume?.id === expected.volumeId,
+  );
+  if (matchingVolumes.length !== 1) {
+    blockingErrors.push(
+      `retirement volume ${expected.volumeId}: expected exactly one, got ${matchingVolumes.length}`,
+    );
+  }
+  const volume = matchingVolumes[0];
+  if (
+    volume &&
+    (volume.state !== expected.volumeState ||
+      volume.region !== expected.region ||
+      volume.encrypted !== true ||
+      volume.attached_machine_id !== expected.id)
+  ) {
+    blockingErrors.push(
+      `retirement volume ${expected.volumeId} is not created, encrypted, and attached to the exact rollback Machine`,
+    );
+  }
+  const secretMetadata = new Map();
+  for (const secret of secrets) {
+    if (
+      typeof secret?.name !== "string" ||
+      typeof secret?.status !== "string" ||
+      secretMetadata.has(secret.name)
+    ) {
+      blockingErrors.push(
+        "gateway retirement canary secret metadata is malformed or duplicated",
+      );
+      continue;
+    }
+    secretMetadata.set(secret.name, secret.status);
+  }
+  for (const [name, status] of Object.entries(
+    canary.rollback.requiredSecretStatuses,
+  )) {
+    if (secretMetadata.get(name) !== status) {
+      blockingErrors.push(
+        `gateway retirement canary required secret ${name} is not ${status}`,
+      );
+    }
+  }
+  if (
+    !callbackResult ||
+    !Array.isArray(callbackResult.errors) ||
+    !Array.isArray(callbackResult.warnings)
+  ) {
+    blockingErrors.push(
+      "gateway retirement canary lacks a valid Meta callback inspection result",
+    );
+  } else {
+    for (const error of callbackResult.errors) {
+      blockingErrors.push(`Meta callback drift: ${error}`);
+    }
+    for (const warning of callbackResult.warnings) {
+      blockingErrors.push(`Meta callback drift: ${warning}`);
+    }
+  }
   return {
     target: "gateway",
     app: app.app,
@@ -10592,6 +10747,8 @@ export async function checkSettledLiveFlyDrift(target, options = {}) {
       !new Set([
         "config show",
         "machine list",
+        "volumes list",
+        "secrets list",
         "scale show",
         "image show",
         "releases --app",
@@ -10616,7 +10773,22 @@ export async function checkSettledLiveFlyDrift(target, options = {}) {
     const machines = JSON.parse(
       run(["machine", "list", "--app", app.app, "--json"]),
     );
-    return checkGatewayRetirementCanaryLive(app, machines);
+    const volumes = JSON.parse(
+      run(["volumes", "list", "--app", app.app, "--json"]),
+    );
+    const secrets = JSON.parse(
+      run(["secrets", "list", "--app", app.app, "--json"]),
+    );
+    const callbackCheck =
+      options.checkMetaCallbacksImpl ?? checkMetaCallbacks;
+    const callbackResult = await callbackCheck({ rootDir });
+    return checkGatewayRetirementCanaryLive(
+      app,
+      machines,
+      volumes,
+      secrets,
+      callbackResult,
+    );
   }
   const configArgs = ["config", "show", "--app", app.app];
   const machineArgs = ["machine", "list", "--app", app.app, "--json"];

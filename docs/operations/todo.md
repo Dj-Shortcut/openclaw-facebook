@@ -35,38 +35,36 @@ ClawHub, install, release, and rollback routes are proven.
 Owner-directed execution note (2026-08-28): implementation and Test Mode work
 for P2 through P4 may continue while the currently deployed bot remains in use.
 That sequencing decision is not production evidence for P1. P1 remains open
-until the direct owner Page callback, zero OpenClaw gateway traffic, rollback,
-retention, and standalone-channel extraction proofs below are actually recorded.
+until the direct owner Page callback, cordoned retirement canary, post-cordon
+Messenger smoke, recovery boundary, retention, and standalone-channel
+extraction proofs below are actually recorded.
 Live payment enablement remains gated by the relevant P1 through P4 evidence.
 
 - [ ] **P1 - Direct owner bot and OpenClaw retirement proof.** Point the owner
       Page at the direct `apps/image-gen` Messenger callback using the intended
       Meta app and credentials. Prove verification, signatures, text, consent,
       image generation, edits, quota, deletion, queue, delivery, monitoring,
-      and rollback without OpenClaw. Record zero gateway traffic before
-      disabling its callback and infrastructure. Preserve or delete legacy
-      volume data under an explicit privacy/retention decision. Extract the
-      generic OpenClaw channel to its standalone project before removing the
-      root package and ClawHub workflows from this repository.
-  - [x] PR #479 removed the automatic gateway health probe at exact `main`
-        merge `6f48774d9ffdb744441570ed0da619bf08be6fb7` on
-        `2026-08-30T17:37:55Z`. Because the observation duration had not yet
-        been fixed before that merge, this timestamp is not the observation
-        start.
-  - [x] PR #480 fixed the observation duration in advance at exactly 168
-        continuous hours (seven 24-hour periods) and merged to `main` as
-        `c251a5e34c46bd327ffa5c015ed038f1fced545e` on
-        `2026-08-30T17:44:08Z`. That exact SHA and UTC timestamp start the
-        observation clock.
-  - [x] On `2026-08-30`, the owner explicitly replaced the proposed 168-hour
-        zero-ingress proof with a reversible cordon canary. Machine
+      and rollback without OpenClaw. Keep the legacy gateway stopped and
+      cordoned under a scheduled fail-closed canary, then prove a real
+      post-cordon Messenger journey. Preserve or delete legacy volume data
+      under an explicit privacy/retention decision. Extract the generic
+      OpenClaw channel to its standalone project before removing the root
+      package and ClawHub workflows from this repository.
+  - [x] Protected deployment inspection run `33297361675` proved that the
+        owner Page uses the canonical direct callback
+        `https://leaderbot-fb-image-gen.fly.dev/facebook/webhook`.
+  - [x] On `2026-08-30`, Machine
         `28621d2c559558` stopped at `2026-08-30T18:32:57.629Z` and was cordoned
         at `2026-08-30T18:34:04.903Z`; its exact recorded legacy image and
         encrypted volume `vol_v8elpyo26xwdmk1v` remain attached and were not
         deleted. Every other gateway Machine was also stopped. The direct
         image-gen `/healthz` and `/readyz` both passed at
-        `2026-08-30T18:38:00Z`. This is stop/rollback evidence, not a claim that
-        the earlier observation proved zero valid ingress.
+        `2026-08-30T18:38:00Z`.
+  - [ ] Record the first green scheduled retirement-canary run after this
+        contract is merged. It must prove the exact stopped/cordoned Machine,
+        full Machine configuration, attached encrypted volume, required secret
+        names/statuses, and canonical direct Meta Page callback without reading
+        secret values, logs, volume contents, or user content.
   - [ ] Complete a real post-cordon Messenger smoke through the direct Page
         callback and record the metadata-only result. Keep the gateway
         deployment and generic recovery paths blocked. If the direct bot
@@ -134,19 +132,13 @@ Live payment enablement remains gated by the relevant P1 through P4 evidence.
 
 - Protected deployment inspection run `33297361675` proved the owner Page uses
   the canonical direct callback
-  `https://leaderbot-fb-image-gen.fly.dev/facebook/webhook`. PR #479 removed the
-  scheduled gateway health request. PR #480 then fixed and started the reviewed
-  168-hour observation contract at
-  `c251a5e34c46bd327ffa5c015ed038f1fced545e` on
-  `2026-08-30T17:44:08Z`, with conditional end
-  `2026-09-06T17:44:08Z`. That pre-instrumentation window did not prove zero
-  valid ingress. On `2026-08-30` the owner chose the documented reversible
-  cordon canary instead: the exact legacy Machine is stopped and cordoned, its
-  encrypted rollback volume remains attached, all other gateway Machines are
-  stopped, and direct image-gen health/readiness passed. P1 remains open until
-  a real post-cordon Messenger smoke passes, rollback and retention remain
-  proven, and the standalone channel publication is complete. No 168-hour
-  zero-ingress claim is made.
+  `https://leaderbot-fb-image-gen.fly.dev/facebook/webhook`. The exact legacy
+  Machine is stopped and cordoned, its encrypted rollback volume remains
+  attached, all other gateway Machines are stopped, and direct image-gen
+  health/readiness passed. P1 remains open until the scheduled canary records a
+  green run, a real post-cordon Messenger smoke passes, compute recovery and
+  callback-cutback boundaries remain proven, the retention decision closes,
+  and the standalone channel publication is complete.
 
 - Storage-proxy startup ordering was fixed and merged in PR #445 at reviewed
   source commit `6a7d0431e1e02076a2db7fcf12c8358d7fbf33cd`.

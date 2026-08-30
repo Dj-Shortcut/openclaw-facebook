@@ -101,11 +101,15 @@ these environment secrets:
 
 Create a second environment named `production-inspection`, limited to protected
 `main`, with no reviewer or wait timer and with administrator bypass disabled.
-It contains only `FLY_PRODUCTION_READONLY_TOKEN`, an expiring Fly organization
-read-only token. The early safety gate may use it only for metadata-only config,
-release, image, Machine, and scale reads. It must never use logs, SSH, volumes,
-secrets, or customer-content paths. This gate runs before a queued production
-approval can block an older recovery.
+It contains `FLY_PRODUCTION_READONLY_TOKEN`, an expiring Fly organization
+read-only token, plus `META_APP_ID` and `META_APP_SECRET` for the scheduled
+callback inspection. The early safety gate may use Fly access only for
+metadata-only config, release, image, Machine, and scale reads, plus
+retirement-volume inventory and secret-name/status reads. It never prints secret values or
+digests and must never use logs, SSH, volume contents, secret mutation, or
+customer-content paths. The Meta credentials are scoped to the reviewed
+callback checker and must never be interpolated into output. This gate runs
+before a queued production approval can block an older recovery.
 
 Create a third environment named `production-recovery`, also limited to
 protected `main`, with no reviewer or wait timer and with administrator bypass
@@ -332,8 +336,9 @@ stopped retirement canary, not a deployable production target. Both the
 workflow and canonical package script reject a gateway deployment. Adding a
 digest or changing that flag is not a supported way to restart it.
 `apps.gateway.retirementCanary` binds the exact stopped, cordoned Machine,
-full Machine-configuration hash, preserved encrypted volume, direct-runtime
-health evidence, and the narrow rollback order. Generic successor/recovery
+full Machine-configuration hash, preserved encrypted volume, required secret
+names/statuses, direct-runtime health evidence, and the narrow compute-recovery
+order. It is explicitly not routable recovery. Generic successor/recovery
 provenance options fail closed in this state. `apps.gateway.stateRebaseline` remains as historical metadata
 for the unchanged legacy Machine/volume tuple; it does not authorize a new
 gateway rollout. A future decision to resume gateway development would require
@@ -793,8 +798,10 @@ The deploy run remains failed so the incident is visible and its artifacts
 record both releases.
 
 The disabled gateway has no generic deployment or recovery shortcut. The sole
-exception is rollback of the recorded retirement canary: uncordon the exact
-preserved Machine and then start that same Machine, in that order. That does not
+exception is compute recovery of the recorded retirement canary: after the
+metadata-only canary proves the exact volume attachment and required secret
+names/statuses, uncordon the exact preserved Machine and then start that same
+Machine, in that order. This state is not marked available or routable recovery. That does not
 create, replace, deploy, scale, delete, or change the Meta callback. This is a
 compute rollback only. If Messenger routing must return to the gateway, perform
 a separate reviewed callback cutback after the Machine is healthy and before
@@ -829,10 +836,13 @@ secrets remain preserved. Every other gateway Machine was stopped when the
 canary was recorded. Direct image-gen `/healthz` and `/readyz` passed after the
 cordon. The scheduled production uptime workflow continues to monitor image-gen
 and the storage proxy and must not probe the intentionally stopped gateway.
-`production:drift:gateway` treats only this exact stopped, cordoned
-Machine/image/volume tuple with no other active gateway Machine as healthy
-retirement state; an uncordon, start, missing mount, image change, or another
-active gateway Machine fails closed.
+The scheduled `production:drift:gateway` canary treats only this exact stopped,
+cordoned Machine/image/volume tuple with no other active gateway Machine as
+healthy retirement state. It also reads the actual Fly volume inventory,
+checks the required secret names/statuses without printing values or digests,
+and runs the canonical Meta callback validator. An uncordon, start, missing or
+detached volume, changed Machine configuration, missing required secret, Page
+callback drift, or another active gateway Machine fails closed.
 
 Before calling the canary successful, run a real Messenger text/image/edit
 smoke through the direct Page callback and record metadata only. If that smoke
