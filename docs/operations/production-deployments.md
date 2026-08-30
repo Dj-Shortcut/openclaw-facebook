@@ -86,8 +86,11 @@ these environment secrets:
 - `FLY_IMAGE_GEN_DEPLOY_TOKEN`: limited to `leaderbot-fb-image-gen`;
 - `FLY_STORAGE_PROXY_DEPLOY_TOKEN`: limited to `leaderbot-storage-proxy`;
 - `FLY_DATABASE_MIGRATION_TOKEN`: limited to snapshot, temporary restore-volume,
-  restore-probe, and reviewer-approved orphan-cleanup operations for
-  `leaderbot-portal-mysql`;
+  restore-probe, reviewer-approved orphan cleanup, and the fixed-output
+  migration-principal repair inside the exact reviewed
+  `leaderbot-portal-mysql` Machine. The repair child receives only this Fly
+  token and basic process-runtime variables; the database URL is not passed to
+  `flyctl`;
 - `IMAGE_GEN_DATABASE_MIGRATION_URL`: `127.0.0.1:13306` URL for the dedicated
   expand principal;
 - `IMAGE_GEN_DATABASE_PROVISIONER_URL`: `127.0.0.1:13306` URL for the separate
@@ -218,9 +221,28 @@ must name the authenticated migration account from `CURRENT_USER()` as its
 definer and retain an exact procedure-level creator `EXECUTE` grant before the
 transition may resume. Schema-level `ALTER ROUTINE` remains part of the exact
 migration-principal contract; MySQL need not duplicate it per procedure.
-The protected workflow first performs a non-mutating migration-principal and
-schema-phase inspection, then creates, restores, validates, and durably uploads
-the exact pre-credit recovery evidence. This pregrant inspection accepts an
+Before that first inspection, the protected transition creates a fresh
+encrypted volume snapshot and uploads its metadata before any repair. This is
+a recovery reference, not restore proof; the later independently restored and
+verified snapshot remains the DDL rollback gate. It then runs the fixed-output
+migration-role repair. That repair accepts only an otherwise exact migration role missing a
+subset of `CREATE`, `TRIGGER`, `CREATE ROUTINE`, and `ALTER ROUTINE`; it uses the
+root credential only inside the exact reviewed database Machine, never exports
+the credential or account identity, and grants only the missing subset. It
+immediately runs the strict `credit-expand` inspection. A failed verification
+re-reads the effective grants even when transport failed after MySQL may have
+committed, reconnects under a fresh repair lock when the root transport was
+lost, revokes only rights proven to have been added by that attempt, and
+verifies the rollback; an incomplete rollback stops with a distinct fixed
+marker. The mutation decision is made only after the repair lock is held. An
+already-correct role is a no-op. A resumed exact 0017 or 0018 history is
+verification-only and never opens the root mutation path. The normal schema
+transition remains reviewer-gated and no credit DDL runs before this repair and
+inspection succeed.
+
+The protected workflow then performs the non-mutating migration-principal and
+schema-phase inspection, creates, restores, validates, and durably uploads the
+exact pre-credit recovery evidence. This pregrant inspection accepts an
 absent or incomplete subset of only the two reviewed definer table grants so a
 connection loss between their two statements remains resumable; it rejects any
 revoke or unreviewed privilege. Only after the recovery evidence exists does it

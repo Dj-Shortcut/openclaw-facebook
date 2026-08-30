@@ -95,6 +95,19 @@ Live payment enablement remains gated by the relevant P1 through P4 evidence.
       Mode, pass paid checkout, delayed/replayed webhook, cancellation, failure,
       refund, partially used wallet, provider failure, delivery failure,
       deletion, budget exhaustion, receipt, reconciliation, and rollback.
+  - [ ] Protected schema run `33300214073` stopped before any database change
+        because the dedicated migration role lacked exactly `CREATE`,
+        `TRIGGER`, `CREATE ROUTINE`, and `ALTER ROUTINE`. The reviewed
+        transition must first snapshot the encrypted database volume, add only
+        the missing subset through the fixed-output repair, prove the strict
+        migration boundary, and then run the existing `0016 -> 0018` transition
+        once. The repair must decide its exact delta under lock, recover an
+        uncertain `GRANT`, and keep exact 0017/0018 resumes verification-only.
+        Its pre-repair snapshot is a recorded recovery reference; the separate
+        restore-tested snapshot remains mandatory before DDL. Do not deploy a
+        `0019` runtime or start Mollie Test Mode before the exact `0018` runtime
+        and rollback evidence are settled; `0019` requires its own later
+        reviewed transition.
   - [ ] Before any Mollie Test Mode checkout, prove the restricted runtime,
         settle the manifest at `complete` with the bridge removed from rollback,
         then use the protected obsolete-principal flow to lock, retain the
