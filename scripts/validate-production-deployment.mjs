@@ -14,6 +14,14 @@ const CREDIT_MIGRATION_DEFINER_GRANT_PATH =
   "apps/image-gen/scripts/credit-migration-definer-grants.mjs";
 const CREDIT_MIGRATION_DEFINER_GRANT_RUNNER_PATH =
   "apps/image-gen/scripts/run-credit-migration-definer-grants.mjs";
+const CREDIT_PROVISIONER_BOOTSTRAP_CONTRACT_PATH =
+  "scripts/image-gen-credit-provisioner-bootstrap-contract.mjs";
+const CREDIT_PROVISIONER_BOOTSTRAP_CONTRACT_TEST_PATH =
+  "scripts/image-gen-credit-provisioner-bootstrap-contract.test.mjs";
+const CREDIT_PROVISIONER_BOOTSTRAP_RUNNER_PATH =
+  "scripts/provision-image-gen-credit-provisioner.mjs";
+const CREDIT_PROVISIONER_BOOTSTRAP_RUNNER_TEST_PATH =
+  "scripts/provision-image-gen-credit-provisioner.test.mjs";
 const RUNTIME_PRINCIPAL_STAGING_WORKFLOW_PATH =
   ".github/workflows/stage-image-gen-credit-runtime-principal.yml";
 const RUNTIME_PRINCIPAL_CLEANUP_WORKFLOW_PATH =
@@ -4568,6 +4576,401 @@ function validateCreditMigrationDefinerGrant(rootDir) {
   }
 }
 
+function validateCreditProvisionerBootstrapHelper(rootDir) {
+  const bootstrapTestPaths = [
+    CREDIT_PROVISIONER_BOOTSTRAP_CONTRACT_TEST_PATH,
+    CREDIT_PROVISIONER_BOOTSTRAP_RUNNER_TEST_PATH,
+  ];
+  for (const testPath of bootstrapTestPaths) {
+    if (!fs.existsSync(path.join(rootDir, testPath))) {
+      fail(`Missing ${testPath}`);
+    }
+  }
+  let packageJson;
+  try {
+    packageJson = JSON.parse(
+      fs.readFileSync(path.join(rootDir, "package.json"), "utf8"),
+    );
+  } catch {
+    fail("package.json must contain the reviewed production-contract command");
+  }
+  const productionContractTokens = String(
+    packageJson?.scripts?.["test:production-contracts"] ?? "",
+  ).split(/\s+/);
+  for (const testPath of bootstrapTestPaths) {
+    if (
+      productionContractTokens.filter((token) => token === testPath).length !==
+      1
+    ) {
+      fail(
+        `package.json test:production-contracts must include exact ${testPath}`,
+      );
+    }
+  }
+  const contractPath = path.join(
+    rootDir,
+    CREDIT_PROVISIONER_BOOTSTRAP_CONTRACT_PATH,
+  );
+  if (!fs.existsSync(contractPath)) {
+    fail(`Missing ${CREDIT_PROVISIONER_BOOTSTRAP_CONTRACT_PATH}`);
+  }
+  const contract = fs.readFileSync(contractPath, "utf8");
+  for (const [needle, message] of [
+    [
+      "assertCreditProvisionerGrantScope",
+      "must reuse the exact reviewed provisioner privilege contract",
+    ],
+    [
+      "productionRuntimeWritableTableNames",
+      "must derive runtime table grants from the canonical schema contract",
+    ],
+    [
+      "creditWalletMigrationTablePrivileges",
+      "must derive wallet migration grants from the canonical schema contract",
+    ],
+    [
+      "export function assertBootstrapManifest",
+      "must fail closed on the frozen 0016-to-0018 manifest transition",
+    ],
+    [
+      "export function selectReviewedDatabaseTarget",
+      "must bind account creation to the exact reviewed database Machine and volume",
+    ],
+    [
+      "export function assertRecoverySnapshot",
+      "must require an exact fresh completed recovery snapshot",
+    ],
+    [
+      "export function parseManagedProvisionerAccounts",
+      "must recognize only the reserved managed-account namespace",
+    ],
+    [
+      "export function buildProvisionerSql",
+      "must build account creation separately from the exact grants",
+    ],
+    [
+      "export function assertProvisionerGrants",
+      "must verify the resulting effective provisioner grants",
+    ],
+    [
+      "export function assertProvisionerUrl",
+      "must validate the loopback-only provisioner URL contract",
+    ],
+    [
+      "export function githubSecretSetArgs",
+      "must centralize the protected environment secret destination",
+    ],
+    [
+      '"leaderbot_credit_provisioner_bootstrap_v1"',
+      "must pin one MySQL advisory lock for the full operation",
+    ],
+    [
+      '"IMAGE_GEN_DATABASE_PROVISIONER_URL"',
+      "must target only the protected provisioner environment secret",
+    ],
+    [
+      '"credit_provisioner_ready"',
+      "must retain a fixed metadata-only success marker",
+    ],
+    [
+      '"credit_provisioner_bootstrap_failed"',
+      "must retain a fixed metadata-only failure marker",
+    ],
+    [
+      '"credit_provisioner_bootstrap_cleanup_incomplete"',
+      "must retain a fixed metadata-only cleanup failure marker",
+    ],
+  ]) {
+    if (!contract.includes(needle)) {
+      fail(`${CREDIT_PROVISIONER_BOOTSTRAP_CONTRACT_PATH} ${message}`);
+    }
+  }
+  if (
+    contract.includes("--body") ||
+    /console\.|process\.(?:stdout|stderr)|error\.(?:message|stack)/.test(
+      contract,
+    )
+  ) {
+    fail(
+      `${CREDIT_PROVISIONER_BOOTSTRAP_CONTRACT_PATH} must not serialize credentials, identities, grants, or dynamic failures`,
+    );
+  }
+
+  const runnerPath = path.join(
+    rootDir,
+    CREDIT_PROVISIONER_BOOTSTRAP_RUNNER_PATH,
+  );
+  if (!fs.existsSync(runnerPath)) {
+    fail(`Missing ${CREDIT_PROVISIONER_BOOTSTRAP_RUNNER_PATH}`);
+  }
+  const runner = fs.readFileSync(runnerPath, "utf8");
+  for (const [needle, message] of [
+    [
+      'from "./image-gen-credit-provisioner-bootstrap-contract.mjs"',
+      "must use the reviewed pure bootstrap contract",
+    ],
+    [
+      'PINNED_FLYCTL_VERSION = "0.4.94"',
+      "must pin the flyctl version that produced the reviewed database metadata shape",
+    ],
+    [
+      'return Object.freeze(["auth", "token", "--hostname", "github.com"])',
+      "must obtain the logged-in GitHub token without placing it in an argument",
+    ],
+    [
+      "GITHUB_REPOSITORY: REPOSITORY",
+      "must bind exact-main CI inspection to the reviewed repository",
+    ],
+    [
+      "GITHUB_TOKEN: token",
+      "must pass the in-memory GitHub token only to the CI inspection environment",
+    ],
+    [
+      "environment: sourceCiEnvironment",
+      "must scope the GitHub token to the exact-source CI child process",
+    ],
+    [
+      "buildSourceCiEnvironment(githubToken, {})",
+      "must isolate exact-source CI from ambient child-process environment",
+    ],
+    [
+      "/bin/sh -lc 'exec env MYSQL_PWD=",
+      "must cross Fly's direct-exec boundary through an explicit static remote shell",
+    ],
+    [
+      "buildRootMysqlSshArgs({ app, machineId })",
+      "must use the reviewed root-MySQL SSH arguments in the live session constructor",
+    ],
+    ['"0:3306"', "must let Fly atomically allocate the local proxy port"],
+    [
+      "parseFlyProxyPort",
+      "must accept only the exact Fly proxy binding announcement",
+    ],
+    [
+      "waitForFlyProxyStartup",
+      "must prove the exact proxy child remains alive before database authentication",
+    ],
+    [
+      "attachChildStdinFailureHandler",
+      "must route an early child stdin close through bounded failure handling",
+    ],
+    [
+      '"--recovery-snapshot-id"',
+      "must require the operator-supplied recovery snapshot identity",
+    ],
+    [
+      '"production:validate"',
+      "must run the complete production contract before mutation",
+    ],
+    [
+      '"--verify-source-ci"',
+      "must require green CI for the exact current main source",
+    ],
+    [
+      "accountMayExist = true",
+      "must arm account cleanup before the first account mutation",
+    ],
+    [
+      "secretMayExist = true",
+      "must arm ambiguous-publication preservation before the GitHub mutation",
+    ],
+    [
+      "observeStableSecretState",
+      "must observe stable secret state without rotating a concurrent valid publication",
+    ],
+    [
+      "assertExistingPublishedState",
+      "must reconcile an exact prior publication without remote mutation",
+    ],
+    [
+      "assertAccountUsable",
+      "must reject locked or password-expired provisioner accounts",
+    ],
+    [
+      "SECRET_STABILIZATION_WINDOW_MS",
+      "must require stable secret absence over a bounded window",
+    ],
+    [
+      "GET_LOCK",
+      "must acquire the reviewed advisory lock before account recovery or mutation",
+    ],
+    [
+      "IS_USED_LOCK",
+      "must prove the same advisory lock remains held before publishing the secret",
+    ],
+    [
+      "githubSecretSetArgs",
+      "must use the reviewed GitHub environment secret command",
+    ],
+    [
+      "input: storedProvisionerUrl",
+      "must pass the provisioner URL through stdin",
+    ],
+    [
+      'process.on("SIGINT"',
+      "must convert an interrupt into bounded fail-closed cleanup",
+    ],
+    [
+      'process.on("SIGTERM"',
+      "must convert termination into bounded fail-closed cleanup",
+    ],
+    [
+      "CREDIT_PROVISIONER_SUCCESS_MARKER",
+      "must emit only the fixed success marker",
+    ],
+    [
+      "CREDIT_PROVISIONER_FAILURE_MARKER",
+      "must retain the fixed failure marker",
+    ],
+    [
+      "CREDIT_PROVISIONER_CLEANUP_FAILURE_MARKER",
+      "must distinguish incomplete rollback without exposing details",
+    ],
+    ["timeoutMs", "must bound commands, tunnel startup, and cleanup"],
+  ]) {
+    if (!runner.includes(needle)) {
+      fail(`${CREDIT_PROVISIONER_BOOTSTRAP_RUNNER_PATH} ${message}`);
+    }
+  }
+  const accountMutation = runner.indexOf(
+    "await rootSession.execute(sql.createStatement",
+  );
+  const accountSqlBuild = runner.indexOf("const sql = buildProvisionerSql(");
+  const accountCleanupArm = runner.lastIndexOf(
+    "accountMayExist = true;",
+    accountMutation,
+  );
+  if (
+    accountCleanupArm < 0 ||
+    accountSqlBuild < 0 ||
+    accountMutation < 0 ||
+    accountCleanupArm < accountSqlBuild ||
+    accountCleanupArm > accountMutation
+  ) {
+    fail(
+      `${CREDIT_PROVISIONER_BOOTSTRAP_RUNNER_PATH} must arm account cleanup before the first account mutation`,
+    );
+  }
+  if (occurrenceCount(runner, "attachChildStdinFailureHandler(") < 3) {
+    fail(
+      `${CREDIT_PROVISIONER_BOOTSTRAP_RUNNER_PATH} must attach stdin failure handling to both command and MySQL children`,
+    );
+  }
+  const databaseCleanup = runner.indexOf(
+    "const databaseSignal = deps.createCleanupSignal()",
+  );
+  const bootstrapStart = runner.indexOf(
+    "export async function bootstrapCreditProvisioner",
+    databaseCleanup,
+  );
+  const cleanupBody = runner.slice(databaseCleanup, bootstrapStart);
+  const ambiguityPreservation = cleanupBody.indexOf(
+    "if (secretMayExist) {\n      cleanupComplete = false;",
+  );
+  const accountCleanup = runner.indexOf(
+    "await cleanupRoot.disableAndDrop(existing, databaseSignal)",
+    databaseCleanup,
+  );
+  if (
+    databaseCleanup < 0 ||
+    bootstrapStart <= databaseCleanup ||
+    ambiguityPreservation < 0 ||
+    accountCleanup <= databaseCleanup ||
+    runner
+      .slice(databaseCleanup, bootstrapStart)
+      .includes("deleteSecretIfPresent")
+  ) {
+    fail(
+      `${CREDIT_PROVISIONER_BOOTSTRAP_RUNNER_PATH} must preserve the account once protected-secret publication may have started`,
+    );
+  }
+  const bootstrapLock = runner.indexOf(
+    "await rootSession.acquireLock(signal)",
+    bootstrapStart,
+  );
+  const secretObservation = runner.indexOf(
+    "await deps.observeSecretState(signal)",
+    bootstrapLock,
+  );
+  const orphanInventory = runner.indexOf(
+    "await rootSession.listManagedAccounts(signal)",
+    secretObservation,
+  );
+  const orphanGuard = runner.indexOf(
+    "if (orphans.length !== 0)",
+    orphanInventory,
+  );
+  const orphanGuardBody = runner.slice(orphanGuard, accountMutation);
+  if (
+    bootstrapStart < 0 ||
+    bootstrapLock < bootstrapStart ||
+    secretObservation < bootstrapLock ||
+    orphanInventory < secretObservation ||
+    orphanGuard < orphanInventory ||
+    orphanGuard > accountMutation ||
+    !orphanGuardBody.includes("CREDIT_PROVISIONER_CLEANUP_FAILURE_MARKER") ||
+    !orphanGuardBody.includes("fail();")
+  ) {
+    fail(
+      `${CREDIT_PROVISIONER_BOOTSTRAP_RUNNER_PATH} must retain an absent-secret orphan without mutation`,
+    );
+  }
+  if (
+    occurrenceCount(
+      runner,
+      "await deps.assertExactRepository(expectedHead, signal)",
+    ) !== 2
+  ) {
+    fail(
+      `${CREDIT_PROVISIONER_BOOTSTRAP_RUNNER_PATH} must reprove exact clean remote main immediately before and after secret publication`,
+    );
+  }
+  const secretMutation = runner.indexOf(
+    "await deps.setSecret(storedProvisionerUrl",
+  );
+  const secretCleanupArm = runner.lastIndexOf(
+    "secretMayExist = true;",
+    secretMutation,
+  );
+  const prePublicationAbsence = runner.lastIndexOf(
+    "await deps.assertSecretPresence(false, signal)",
+    secretMutation,
+  );
+  if (
+    secretCleanupArm < 0 ||
+    secretMutation < 0 ||
+    secretCleanupArm > secretMutation ||
+    prePublicationAbsence < orphanInventory ||
+    prePublicationAbsence > secretMutation
+  ) {
+    fail(
+      `${CREDIT_PROVISIONER_BOOTSTRAP_RUNNER_PATH} must reprove secret absence and arm cleanup before publishing the protected secret`,
+    );
+  }
+  if (
+    runner.includes("findOpenLoopbackPort") ||
+    runner.includes("waitForLoopbackPort") ||
+    runner.includes("randomInt")
+  ) {
+    fail(
+      `${CREDIT_PROVISIONER_BOOTSTRAP_RUNNER_PATH} must not release a probed loopback port before Fly binds it`,
+    );
+  }
+  const stdoutWrites = runner.match(/process\.stdout\.write/g) ?? [];
+  if (
+    runner.includes("--body") ||
+    /console\.|process\.stderr|String\(error|JSON\.stringify\(error/.test(
+      runner,
+    ) ||
+    stdoutWrites.length !== 1 ||
+    !runner.includes("process.stdout.write(`${marker}\\n`)")
+  ) {
+    fail(
+      `${CREDIT_PROVISIONER_BOOTSTRAP_RUNNER_PATH} must not log credentials, managed account names, grants, or dynamic failures`,
+    );
+  }
+}
+
 function validateRuntimePrincipalStagingWorkflow(rootDir) {
   const workflowPath = path.join(
     rootDir,
@@ -6738,6 +7141,7 @@ export function validateProductionRepository(rootDir = process.cwd()) {
   validateImageGenMigrationCi(rootDir);
   validateTrustedArtifactWorkflow(rootDir);
   validateCreditMigrationDefinerGrant(rootDir);
+  validateCreditProvisionerBootstrapHelper(rootDir);
   validateSchemaTransitionWorkflow(rootDir);
   validateRuntimePrincipalStagingWorkflow(rootDir);
   validateRuntimePrincipalCleanupWorkflow(rootDir);

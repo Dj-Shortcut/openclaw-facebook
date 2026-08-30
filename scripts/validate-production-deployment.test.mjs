@@ -85,6 +85,10 @@ function createRepositoryFixture() {
     ".github/workflows/recover-completed-production-deployment.yml",
     ".github/workflows/reconcile-production-deployment.yml",
     "scripts/select-fresh-fly-snapshot.mjs",
+    "scripts/image-gen-credit-provisioner-bootstrap-contract.mjs",
+    "scripts/image-gen-credit-provisioner-bootstrap-contract.test.mjs",
+    "scripts/provision-image-gen-credit-provisioner.mjs",
+    "scripts/provision-image-gen-credit-provisioner.test.mjs",
     "scripts/verify-gateway-state-rebaseline.mjs",
     "scripts/validate-production-deployment.mjs",
   ]) {
@@ -3105,6 +3109,159 @@ describe("production deployment contract", () => {
 
     expect(() => validateProductionRepository(root)).toThrow(
       "must classify migration connection failure without serializing it",
+    );
+  });
+
+  it("requires exact effective-grant verification in the provisioner bootstrap contract", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      "scripts/image-gen-credit-provisioner-bootstrap-contract.mjs",
+      "export function assertProvisionerGrants",
+      "function inspectProvisionerGrants",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must verify the resulting effective provisioner grants",
+    );
+  });
+
+  it("forbids passing the provisioner URL through a GitHub CLI argument", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      "scripts/image-gen-credit-provisioner-bootstrap-contract.mjs",
+      '    "--env",\n    environment,',
+      '    "--env",\n    environment,\n    "--body",',
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must not serialize credentials, identities, grants, or dynamic failures",
+    );
+  });
+
+  it("arms provisioner-account cleanup before the first account mutation", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      "scripts/provision-image-gen-credit-provisioner.mjs",
+      "accountMayExist = true;\n      await rootSession.execute(sql.createStatement",
+      "accountMayExist = false;\n      await rootSession.execute(sql.createStatement",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must arm account cleanup before the first account mutation",
+    );
+  });
+
+  it("requires protected-secret observation under the database lock", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      "scripts/provision-image-gen-credit-provisioner.mjs",
+      "await deps.observeSecretState(signal)",
+      '"absent"',
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must retain an absent-secret orphan without mutation",
+    );
+  });
+
+  it("requires an absent-secret orphan to fail closed without mutation", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      "scripts/provision-image-gen-credit-provisioner.mjs",
+      "if (orphans.length !== 0)",
+      "if (orphans.length < 0)",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must retain an absent-secret orphan without mutation",
+    );
+  });
+
+  it("requires a final absence proof before protected-secret publication", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      "scripts/provision-image-gen-credit-provisioner.mjs",
+      "await deps.assertSecretPresence(false, signal);\n      await rootSession.assertLockHeld(signal);\n\n      secretMayExist = true;",
+      "await rootSession.assertLockHeld(signal);\n\n      secretMayExist = true;",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must reprove secret absence and arm cleanup before publishing the protected secret",
+    );
+  });
+
+  it("passes the provisioner URL to GitHub only through stdin", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      "scripts/provision-image-gen-credit-provisioner.mjs",
+      "input: storedProvisionerUrl",
+      "input: undefined",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must pass the provisioner URL through stdin",
+    );
+  });
+
+  it.each([
+    "scripts/image-gen-credit-provisioner-bootstrap-contract.test.mjs",
+    "scripts/provision-image-gen-credit-provisioner.test.mjs",
+  ])("pins bootstrap test %s in the production contract suite", (testPath) => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(root, "package.json", ` ${testPath}`, "");
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      `package.json test:production-contracts must include exact ${testPath}`,
+    );
+  });
+
+  it("does not accept a production-contract test path as a substring", () => {
+    const root = createRepositoryFixture();
+    const testPath = "scripts/provision-image-gen-credit-provisioner.test.mjs";
+    replaceFixtureText(
+      root,
+      "package.json",
+      ` ${testPath}`,
+      ` prefixed/${testPath}`,
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      `package.json test:production-contracts must include exact ${testPath}`,
+    );
+  });
+
+  it("rejects a loopback port probe that Fly does not own atomically", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      "scripts/provision-image-gen-credit-provisioner.mjs",
+      '"0:3306"',
+      "`${randomInt(20_000, 50_001)}:3306`",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must let Fly atomically allocate the local proxy port",
+    );
+  });
+
+  it("preserves the account after protected-secret publication may start", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      "scripts/provision-image-gen-credit-provisioner.mjs",
+      "if (secretMayExist) {\n      cleanupComplete = false;",
+      "if (secretMayExist) {\n      cleanupComplete = true;",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must preserve the account once protected-secret publication may have started",
     );
   });
 

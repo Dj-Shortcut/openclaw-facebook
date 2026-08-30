@@ -456,6 +456,81 @@ exactly one started Machine in `ams`, no drift, `/healthz` `200` with exact body
 Rollback and recovery were correctly skipped. This reviewed follow-up records
 `runtime_deployed` while retaining legacy digest `334f...` as the sole rollback.
 
+### Initial credit-provisioner bootstrap
+
+The protected credit-schema workflow needs one narrowly scoped MySQL
+provisioner before its first 0017/0018 run. Create it only with the reviewed
+one-shot helper after the manifest is frozen at `expand_pending`, application
+deployment is disabled, and the migration bridge is the sole rollback. The
+operator must supply the exact clean `main` commit and the ID of a fresh
+`created` snapshot of the reviewed 10 GB production database volume:
+
+```bash
+node scripts/provision-image-gen-credit-provisioner.mjs \
+  --expected-head <exact-40-character-reviewed-main-sha> \
+  --recovery-snapshot-id <exact-reviewed-fly-volume-snapshot-id>
+```
+
+The helper reruns `production:validate` and exact-source CI, rechecks the
+reviewed database Machine, image, private address, encrypted mount, volume, and
+snapshot, then holds one MySQL advisory lock across exact prior-publication
+reconciliation, orphan detection, account creation, exact-grant verification,
+local tunnel proof, and GitHub environment secret publication. A retry preserves
+an existing exact, unlocked account with exact grants and the protected secret
+name; the protected schema workflow remains the first consumer that proves the
+stored, unreadable URL actually connects. It sends a new URL to `gh secret set`
+only through stdin.
+It never prints the database account, URL, password, grants, snapshot identity,
+or command errors.
+
+Before the first production use of this reviewed version, record that no older
+bootstrap helper or `gh secret set/delete` process is running and that no prior
+unsafe helper invocation removed an account while a remote secret write was in
+flight. This clean-first-use/quiescence proof is required because GitHub does
+not expose a pending secret write. The helper treats any managed account with an
+absent secret as an ambiguity sentinel: it keeps the account, performs no new
+mutation, and returns cleanup-incomplete. No finite secret-absence interval
+authorizes account rotation. Once secret publication may have started, every
+later failure likewise preserves both the account and possible secret so a
+delayed write can never point at an automatically deleted credential. Do not
+manually delete either side; use a separately reviewed recovery.
+
+This one-shot helper requires local `flyctl v0.4.94`, the exact version used to
+review its Machine, volume, and snapshot JSON contract. The later protected
+schema workflow continues to install and verify its separately reviewed
+`flyctl v0.4.85`; do not replace that workflow pin as part of this bootstrap.
+Run `npm run image-gen:install` before the helper so its reviewed `mysql2`
+client is already present. The helper never installs packages after a database
+mutation has started. Use a clean checkout with the existing authenticated
+`flyctl` and `gh` sessions; no token or database credential is a command-line
+input.
+Use the operator's existing authenticated `gh` session; the helper reads that
+token only into the exact-source CI child process. Never paste, export, or add a
+GitHub token to this command.
+
+Only these fixed output markers are valid:
+
+- `credit_provisioner_ready`: the exact account was created and reverified, or
+  an exact prior publication was reconciled without rotation; the protected
+  secret name is present. GitHub does not expose the stored value, so the
+  protected schema workflow is the first consumer that proves the stored URL
+  parses and connects;
+- `credit_provisioner_bootstrap_failed`: a read-only preflight rejected the
+  operation before mutation, or cleanup proved every helper-started mutation
+  absent. Pre-existing state can still require review;
+- `credit_provisioner_bootstrap_cleanup_incomplete`: cleanup could not prove
+  a pre-publication mutation absent, a managed orphan was retained, or
+  publication may have started and both sides were deliberately preserved.
+  Stop and obtain a reviewed recovery before dispatching the schema workflow.
+
+A timeout, interrupt, authentication failure, or tunnel failure before secret
+publication may start uses bounded account cleanup. Once publication may have
+started, an ambiguous GitHub mutation preserves the account and possible secret
+and returns cleanup-incomplete. Do not paste root SQL, account names, passwords,
+grants, or a database URL into a shell, GitHub field, issue, log, or chat. Do
+not create the secret manually and do not dispatch the schema workflow after
+either failure marker.
+
 ### Image-gen database migration gate
 
 Production currently runs `0016_expand`. The only reviewed successor is the
@@ -484,25 +559,35 @@ trusted production artifact` with `image-gen-bridge`. The workflow proves
 4. **Freeze deploys.** In another reviewed manifest PR, set state
    `expand_pending`, disable application deploys, and retain only the bridge as
    recovery image.
-5. **Back up and prove recovery.** Dispatch `Apply reviewed image-gen credit
-schema`. The protected workflow first proves every Machine is the attested
+5. **Bootstrap the initial provisioner.** Create a fresh snapshot of the exact
+   reviewed production database volume, wait until Fly reports `created`, and
+   select its exact ID only while it is less than one hour old. Run the
+   one-shot helper above from exact clean reviewed `main` with that snapshot
+   ID. Accept only `credit_provisioner_ready`; either other fixed marker stops
+   the transition. Do not paste a secret or execute manual SQL. This bootstrap
+   snapshot provides a fresh recovery point before account creation; the helper
+   does not restore-test it. It is separate from the workflow's own pre-DDL
+   restore-tested snapshot in the next step.
+6. **Back up and prove recovery.** Only after the bootstrap is ready, dispatch
+   `Apply reviewed image-gen credit schema`. The protected workflow first
+   proves every Machine is the attested
    bridge and the live database is the exact 0016 base. It creates a fresh
    encrypted snapshot, restores it into an isolated encrypted volume, runs
    MySQL integrity checks, uploads metadata-only recovery evidence, and removes
    the temporary restore Machine and volume.
-6. **Apply only 0017 then 0018.** The same protected workflow applies only the
+7. **Apply only 0017 then 0018.** The same protected workflow applies only the
    reviewed credit migrations and verifies the exact final 0018 contract from
    the bridge. A resume must name the exact earlier recovery run and attempt;
    the snapshot, database, migration manifest, schema contract, bridge digest,
    and bridge source must all still match. Unknown or partial shapes fail
    closed.
-7. **Build the final runtime.** In a reviewed manifest PR, record the successful
+8. **Build the final runtime.** In a reviewed manifest PR, record the successful
    schema phase and state `runtime_build_pending`, leaving deploys frozen on the
    bridge. Then dispatch `Build trusted production artifact` with
    `image-gen-runtime`. The image must reject pre-0018 schemas, accept only the
    exact 0018 contract, and receive trusted provenance for its immutable digest
    and build-source commit.
-8. **Review the immutable runtime before staging credentials.** In a separate
+9. **Review the immutable runtime before staging credentials.** In a separate
    manifest PR, record that digest and its artifact build-source commit, set
    state `runtime_principal_pending`, keep deployment disabled, and retain the
    bridge as rollback. This manifest-review commit is expected to be later than
@@ -512,23 +597,42 @@ schema`. The protected workflow first proves every Machine is the attested
    artifact source, runs the exact trigger/runtime privilege probe through the
    newly created restricted principal, and stages `DATABASE_URL` without
    restarting a Machine.
-9. **Review and deploy the staged principal.** Record the metadata-only staged
-   principal fingerprint in another reviewed manifest PR, set state
-   `runtime_reviewed`, enable deployment, and keep the bridge as the only
-   application rollback. `Deploy production` must prove the exact candidate
-   image, configuration, and deployment identity, then run the reviewed probe
-   through the staged principal on every desired app and worker Machine before
-   `/healthz` and `/readyz` may complete the rollout. A failed rollout restores
-   the bridge and its captured configuration; the 0018 schema remains in place.
-10. **Settle before commercial exposure.** Record a healthy final-schema
-    runtime predecessor and move to `complete` only in a later reviewed
+10. **Review and deploy the staged principal.** Record the metadata-only staged
+    principal fingerprint in another reviewed manifest PR, set state
+    `runtime_reviewed`, enable deployment, and keep the bridge as the only
+    application rollback. `Deploy production` must prove the exact candidate
+    image, configuration, and deployment identity, then run the reviewed probe
+    through the staged principal on every desired app and worker Machine before
+    `/healthz` and `/readyz` may complete the rollout. A failed rollout restores
+    the bridge and its captured configuration; the 0018 schema remains in place.
+11. **Settle the final runtime before principal cleanup.** Record a healthy
+    final-schema runtime predecessor and move to `complete` only in a later reviewed
     manifest PR that removes the bridge from the rollback allowlist and retains
     at least one exact 0018 runtime rollback. Do not expose a Mollie checkout
-    while the only rollback is the migration bridge. Obsolete broad database
-    principals may be locked only after every desired Machine reproves the
-    restricted principal under the settled deployment identity. Preserve the
-    protected unlock path for at least 24 hours before a separately approved
-    drop.
+    while the only rollback is the migration bridge. This settled manifest is a
+    prerequisite for the protected obsolete-principal cleanup workflow; moving
+    to `complete` does not itself enable paid credits or checkout.
+12. **Retire the obsolete broad runtime principal.** Only after every desired
+    Machine reproves the restricted principal under the settled deployment
+    identity, run the protected cleanup workflow to lock the exact obsolete
+    broad principal. Preserve its protected unlock path for at least 24 hours,
+    then use that exact lock evidence for a separately approved drop. Keep
+    `IMAGE_GEN_DATABASE_PROVISIONER_URL` present through the successful drop,
+    because the protected cleanup workflow still requires it.
+13. **Retire the bootstrap provisioner.** After the obsolete runtime principal
+    is absent, use a separate reviewed bounded root/admin retirement path to
+    lock every reserved `lbcp_*` account under an explicit recovery path,
+    preserve that recovery window for at least 24 hours, then drop the accounts
+    and prove the managed inventory empty. Only then delete
+    `IMAGE_GEN_DATABASE_PROVISIONER_URL` and prove the protected secret remains
+    absent over a stabilization window. That retirement path is not part of the
+    bootstrap helper and must be reviewed before use; do not replace it with
+    manual SQL or a secret-field edit.
+14. **Keep Test Mode exposure separate.** Until both cleanup paths have
+    metadata-only success evidence, the commercial cutover is incomplete and
+    no Mollie Test Mode checkout may be exposed. Continue only through the
+    separately reviewed Test Mode activation gates; schema state `complete` is
+    not payment-readiness evidence.
 
 Before paid-credit exposure, set the non-secret
 `CREDIT_CHECKOUT_HMAC_ACTIVE_KEY_ID=k1` beside the dedicated Fly secret. A later
@@ -566,7 +670,7 @@ ad-hoc migration Machine. Normal releases use the image's compatibility check;
 the protected schema workflow is the only production path that changes this
 database.
 
-Application rollback after step 6 leaves the successfully applied 0018 schema
+Application rollback after step 7 leaves the successfully applied 0018 schema
 in place and may use only the reviewed migration bridge or a runtime explicitly
 reviewed for 0018. Never blindly restore the pre-migration snapshot after
 production writers continued: that would silently discard later writes. A
