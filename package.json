@@ -57,7 +57,7 @@
     "build": "npm run clean && tsc -p tsconfig.json",
     "test": "node ./scripts/run-vitest.mjs",
     "test:plugin": "node ./scripts/run-vitest.mjs configured-state.test.ts manifest.test.ts src scripts/openclaw-login-command.test.mjs scripts/update-openclaw.test.mjs",
-    "test:production-contracts": "node ./scripts/run-vitest.mjs scripts/check-package-manager-contract.test.mjs scripts/classify-ci-changes.test.mjs scripts/image-gen-credit-provisioner-bootstrap-contract.test.mjs scripts/image-gen-migration-smoke-workflow.test.mjs scripts/messenger-smoke-checklist.test.mjs scripts/provision-image-gen-credit-provisioner.test.mjs scripts/validate-production-deployment.test.mjs",
+    "test:production-contracts": "node ./scripts/run-vitest.mjs scripts/check-package-manager-contract.test.mjs scripts/classify-ci-changes.test.mjs scripts/image-gen-credit-provisioner-bootstrap-contract.test.mjs scripts/image-gen-migration-smoke-workflow.test.mjs scripts/messenger-smoke-checklist.test.mjs scripts/provision-image-gen-credit-provisioner.test.mjs scripts/retire-image-gen-credit-provisioners.test.mjs scripts/validate-production-deployment.test.mjs",
     "test:legacy-gateway": "node ./scripts/run-vitest.mjs deploy/fly-gateway scripts/gateway-state-rebaseline-workflow.test.mjs scripts/select-fresh-fly-snapshot.test.mjs scripts/validate-gateway-deployment-safety.test.mjs scripts/verify-gateway-state-rebaseline.test.mjs",
     "prepare": "npm run build",
     "pack:dry": "npm pack --dry-run",

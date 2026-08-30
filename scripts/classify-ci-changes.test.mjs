@@ -46,10 +46,13 @@ describe("CI change classification", () => {
   });
 
   it.each([
+    ".github/workflows/retire-image-gen-credit-provisioners.yml",
     "scripts/image-gen-credit-provisioner-bootstrap-contract.mjs",
     "scripts/image-gen-credit-provisioner-bootstrap-contract.test.mjs",
     "scripts/provision-image-gen-credit-provisioner.mjs",
     "scripts/provision-image-gen-credit-provisioner.test.mjs",
+    "scripts/retire-image-gen-credit-provisioners.mjs",
+    "scripts/retire-image-gen-credit-provisioners.test.mjs",
   ])("runs image-gen and migration checks for %s", (file) => {
     expect(classifyCiChanges([file])).toEqual({
       imageGen: true,
