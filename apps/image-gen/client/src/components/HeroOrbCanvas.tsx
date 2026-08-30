@@ -11,8 +11,14 @@ import {
   WebGLRenderer,
 } from "three";
 
-// Ashima Arts 3D simplex noise (public domain), used to displace the orb's
-// surface into a soft, organic pulse instead of a hard geometric spin.
+// 3D simplex noise, used to displace the orb's surface into a soft, organic
+// pulse instead of a hard geometric spin.
+//
+// Description : Array and textureless GLSL 2D/3D/4D simplex noise functions.
+//      Author : Ian McEwan, Ashima Arts.
+//     License : Copyright (C) 2011 Ashima Arts. All rights reserved.
+//               Distributed under the MIT License.
+//               https://github.com/ashima/webgl-noise
 const NOISE_GLSL = `
 vec3 mod289(vec3 x){return x - floor(x * (1.0/289.0)) * 289.0;}
 vec4 mod289(vec4 x){return x - floor(x * (1.0/289.0)) * 289.0;}

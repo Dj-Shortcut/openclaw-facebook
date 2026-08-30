@@ -117,7 +117,7 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
     secondaryCta: "Bekijk hoe het werkt",
     microTrust: "Elke dag gratis beelden · geen betaalgegevens nodig om te starten",
     trustItems: [
-      "Elke dag een beperkt aantal gratis beelden",
+      "5 gratis beelden per dag, tot 20 per maand",
       "Nadien optioneel 8 extra beelden voor eenmalig €4,99",
       "Geen abonnement, geen automatische verlenging, geen verborgen kosten",
     ],
@@ -181,10 +181,11 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
       name: "Dagelijks gratis",
       price: "€0",
       suffix: "elke dag opnieuw",
-      body: "Een beperkt aantal gratis beelden per dag. Geen kaart nodig om te starten.",
+      body: "5 beelden per dag, tot 20 per maand. Geen kaart nodig om te starten.",
       features: [
+        "5 gratis beelden per dag",
+        "Tot 20 per maand",
         "Tekst-naar-beeld en foto-bewerking",
-        "Elke dag opnieuw beschikbaar",
         "Geen account of app nodig",
       ],
       cta: "Start gratis op Messenger",
@@ -283,7 +284,7 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
     secondaryCta: "Voir comment ça marche",
     microTrust: "Images gratuites chaque jour · aucune donnée de paiement requise pour commencer",
     trustItems: [
-      "Un nombre limité d'images gratuites chaque jour",
+      "5 images gratuites par jour, jusqu'à 20 par mois",
       "Ensuite, en option, 8 images de plus pour 4,99 € une fois",
       "Pas d'abonnement, pas de renouvellement automatique, pas de frais cachés",
     ],
@@ -347,10 +348,11 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
       name: "Gratuit chaque jour",
       price: "0 €",
       suffix: "renouvelé chaque jour",
-      body: "Un nombre limité d'images gratuites par jour. Aucune carte requise pour commencer.",
+      body: "5 images par jour, jusqu'à 20 par mois. Aucune carte requise pour commencer.",
       features: [
+        "5 images gratuites par jour",
+        "Jusqu'à 20 par mois",
         "Texte vers image et retouche photo",
-        "Disponible à nouveau chaque jour",
         "Aucun compte ni application requis",
       ],
       cta: "Commencer gratuitement sur Messenger",
@@ -449,7 +451,7 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
     secondaryCta: "See how it works",
     microTrust: "Free images every day · no payment details needed to start",
     trustItems: [
-      "A limited number of free images every day",
+      "5 free images a day, up to 20 a month",
       "Afterwards, optionally, 8 more images for a one-time €4.99",
       "No subscription, no automatic renewal, no hidden costs",
     ],
@@ -512,10 +514,11 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
       name: "Free every day",
       price: "€0",
       suffix: "resets daily",
-      body: "A limited number of free images a day. No card needed to start.",
+      body: "5 images a day, up to 20 a month. No card needed to start.",
       features: [
+        "5 free images a day",
+        "Up to 20 a month",
         "Text-to-image and photo editing",
-        "Available again every day",
         "No account or app required",
       ],
       cta: "Start free on Messenger",
@@ -609,6 +612,9 @@ const commercialUnavailableCopies: Record<
     creditsCta: string;
     pricingDisclosure: string;
     faqAnswer: string;
+    paymentFaqAnswer: string;
+    trustPaymentTitle: string;
+    trustPaymentBody: string;
   }
 > = {
   "nl-BE": {
@@ -622,6 +628,11 @@ const commercialUnavailableCopies: Record<
       "€4,99 is de geplande eenmalige prijs voor 8 extra beelden. Er verschijnt pas een aankooplink zodra de beveiligde betaalroute via Mollie live is.",
     faqAnswer:
       "Nog niet. Chat nu al gratis met Leaderbot; de eenmalige aankoop verschijnt zodra de beveiligde Mollie-testfase live is.",
+    paymentFaqAnswer:
+      "Dat is nog niet actief. Chat nu al gratis met Leaderbot; zodra de beveiligde betaling via Mollie live is, verloopt een aankoop via hun betaalpagina en bevestig je zelf het bedrag voor de betaling start.",
+    trustPaymentTitle: "Veilig betalen komt eraan",
+    trustPaymentBody:
+      "De eenmalige aankoop van extra credits is nog niet actief. Zodra dat wel zo is, verloopt betalen via de beveiligde pagina van Mollie en bevestig je zelf het bedrag — nooit automatisch, nooit vanaf deze website.",
   },
   "fr-BE": {
     microTrust:
@@ -634,6 +645,11 @@ const commercialUnavailableCopies: Record<
       "4,99 € est le prix unique prévu pour 8 images supplémentaires. Un lien d'achat n'apparaîtra que lorsque le parcours de paiement sécurisé via Mollie sera actif.",
     faqAnswer:
       "Pas encore. Discutez dès maintenant gratuitement avec Leaderbot ; l'achat unique apparaîtra dès que la phase de test Mollie sécurisée sera active.",
+    paymentFaqAnswer:
+      "Ce n'est pas encore actif. Discutez dès maintenant gratuitement avec Leaderbot ; dès que le paiement sécurisé via Mollie sera actif, un achat passera par leur page de paiement et vous confirmerez vous-même le montant avant que le paiement ne démarre.",
+    trustPaymentTitle: "Le paiement sécurisé arrive bientôt",
+    trustPaymentBody:
+      "L'achat unique de crédits supplémentaires n'est pas encore actif. Une fois actif, le paiement passera par la page sécurisée de Mollie et vous confirmerez vous-même le montant — jamais automatiquement, jamais depuis ce site.",
   },
   en: {
     microTrust: "Free images every day · no payment details needed to start",
@@ -645,6 +661,11 @@ const commercialUnavailableCopies: Record<
       "€4.99 is the planned one-time price for 8 extra images. A purchase link appears only once the secure payment route via Mollie is live.",
     faqAnswer:
       "Not yet. Chat with Leaderbot for free right now; the one-time purchase appears once the secured Mollie test phase is live.",
+    paymentFaqAnswer:
+      "Not yet. Chat with Leaderbot for free right now; once secure payment via Mollie is live, a purchase will run through their payment page and you'll confirm the amount yourself before payment starts.",
+    trustPaymentTitle: "Secure payment is coming soon",
+    trustPaymentBody:
+      "The one-time purchase of extra credits isn't live yet. Once it is, payment will run through Mollie's secure page and you'll confirm the amount yourself — never automatically, never from this website.",
   },
 };
 
@@ -835,9 +856,22 @@ export default function LandingPage({
           cta: unavailable.creditsCta,
         },
         pricingDisclosure: unavailable.pricingDisclosure,
-        questions: baseCopy.questions.map((question, index) =>
-          index === 1 ? { ...question, answer: unavailable.faqAnswer } : question
+        trustCards: baseCopy.trustCards.map((card, index) =>
+          index === 0
+            ? {
+                ...card,
+                title: unavailable.trustPaymentTitle,
+                body: unavailable.trustPaymentBody,
+              }
+            : card
         ),
+        questions: baseCopy.questions.map((question, index) => {
+          if (index === 1) return { ...question, answer: unavailable.faqAnswer };
+          if (index === 4) {
+            return { ...question, answer: unavailable.paymentFaqAnswer };
+          }
+          return question;
+        }),
       };
 
   const faqSchema = {
