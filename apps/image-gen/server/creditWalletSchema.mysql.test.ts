@@ -480,11 +480,19 @@ suite("0018 credit wallet MySQL 8.4 procedure boundary", () => {
         databaseName,
       });
       await expect(
-        provisioner.query(`DELETE FROM \`${deniedTable}\` WHERE 1=0`)
-      ).rejects.toThrow();
+        provisioner.query("DELETE FROM ?? WHERE 1=0", [deniedTable])
+      ).rejects.toMatchObject({
+        code: "ER_TABLEACCESS_DENIED_ERROR",
+        errno: 1142,
+        sqlState: "42000",
+      });
       await expect(
-        provisioner.query(`DROP TABLE \`${deniedTable}\``)
-      ).rejects.toThrow();
+        provisioner.query("DROP TABLE ??", [deniedTable])
+      ).rejects.toMatchObject({
+        code: "ER_TABLEACCESS_DENIED_ERROR",
+        errno: 1142,
+        sqlState: "42000",
+      });
     } finally {
       if (provisioner) {
         await provisioner.end().catch(() => undefined);

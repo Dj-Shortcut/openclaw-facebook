@@ -5,6 +5,7 @@ import {
 } from "../apps/image-gen/scripts/production-schema-contract.mjs";
 
 export const CREDIT_PROVISIONER_ACCOUNT_PATTERN = /^lbcp_[a-f0-9]{16}$/;
+export const CREDIT_PROVISIONER_ACCOUNT_LEVEL_GRANT_COUNT = 3;
 export const CREDIT_PROVISIONER_LOCK_NAME =
   "leaderbot_credit_provisioner_bootstrap_v1";
 export const CREDIT_PROVISIONER_SECRET_NAME =
@@ -213,6 +214,9 @@ export function buildProvisionerSql({ databaseName, password, username }) {
     `GRANT SELECT ON \`mysql\`.\`user\` TO ${account}`,
     `GRANT SELECT, EXECUTE ON ${database}.* TO ${account} WITH GRANT OPTION`,
   ];
+  if (grantStatements.length !== CREDIT_PROVISIONER_ACCOUNT_LEVEL_GRANT_COUNT) {
+    fail("account-level grant contract drifted");
+  }
   for (const [tableName, privileges] of expectedTablePrivileges) {
     grantStatements.push(
       `GRANT ${[...privileges].sort().join(", ")} ON ${database}.${quoteMysqlIdentifier(tableName)} TO ${account} WITH GRANT OPTION`,
@@ -242,7 +246,9 @@ export function buildExpectedProvisionerGrants({ databaseName, username }) {
     password: `Aa1!${"a".repeat(96)}`,
     username,
   });
-  for (const statement of sql.grantStatements.slice(3)) {
+  for (const statement of sql.grantStatements.slice(
+    CREDIT_PROVISIONER_ACCOUNT_LEVEL_GRANT_COUNT,
+  )) {
     grants.push(statement.replace(` TO '${username}'@'%'`, ` TO ${account}`));
   }
   assertCreditProvisionerGrantScope(grants, databaseName);

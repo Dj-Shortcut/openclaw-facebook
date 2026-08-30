@@ -570,6 +570,7 @@ export class RootMysqlSession {
   }
 
   async accountExists(account, signal) {
+    quoteManagedAccount(account);
     const lines = await this.execute(
       `SELECT COUNT(*) FROM mysql.user WHERE User='${account.username}' AND Host='%'`,
       { signal },
@@ -579,6 +580,7 @@ export class RootMysqlSession {
   }
 
   async assertAccountUsable(account, signal) {
+    quoteManagedAccount(account);
     const lines = await this.execute(
       `SELECT account_locked,password_expired FROM mysql.user WHERE User='${account.username}' AND Host='%'`,
       { signal },
@@ -872,12 +874,21 @@ async function verifyProvisionerConnection({
     const grants = grantRows.flatMap((row) => Object.values(row)).map(String);
     assertProvisionerGrants(grants, databaseName);
   } finally {
-    await Promise.race([
-      connection.end(),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("database close failed")), 5_000),
-      ),
-    ]);
+    let closeTimer;
+    try {
+      await Promise.race([
+        connection.end(),
+        new Promise((_, reject) => {
+          closeTimer = setTimeout(
+            () => reject(new Error("database close failed")),
+            5_000,
+          );
+          closeTimer.unref?.();
+        }),
+      ]);
+    } finally {
+      clearTimeout(closeTimer);
+    }
   }
 }
 

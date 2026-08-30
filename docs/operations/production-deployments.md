@@ -670,7 +670,7 @@ ad-hoc migration Machine. Normal releases use the image's compatibility check;
 the protected schema workflow is the only production path that changes this
 database.
 
-Application rollback after step 6 leaves the successfully applied 0018 schema
+Application rollback after step 7 leaves the successfully applied 0018 schema
 in place and may use only the reviewed migration bridge or a runtime explicitly
 reviewed for 0018. Never blindly restore the pre-migration snapshot after
 production writers continued: that would silently discard later writes. A

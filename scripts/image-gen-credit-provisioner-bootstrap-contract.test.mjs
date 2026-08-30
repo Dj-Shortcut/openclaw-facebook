@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  CREDIT_PROVISIONER_ACCOUNT_LEVEL_GRANT_COUNT,
   assertBootstrapManifest,
   assertProvisionerGrants,
   assertProvisionerUrl,
@@ -473,7 +474,9 @@ describe("image-gen credit provisioner bootstrap contract", () => {
         grantStatements: expectedGrants,
       });
       expect(sql.grantStatements).toHaveLength(45);
-      for (const statement of sql.grantStatements.slice(3)) {
+      for (const statement of sql.grantStatements.slice(
+        CREDIT_PROVISIONER_ACCOUNT_LEVEL_GRANT_COUNT,
+      )) {
         const privileges = /^GRANT (.+) ON /.exec(statement)?.[1].split(", ");
         expect(privileges?.length).toBeGreaterThan(0);
         expect(

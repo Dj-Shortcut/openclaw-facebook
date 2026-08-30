@@ -155,7 +155,7 @@ function createHarness({
     createCleanupSignal: () => new AbortController().signal,
     async deleteSecretIfPresent() {
       calls.push("secret-cleanup");
-      secretPresent = false;
+      throw new Error("unexpected secret deletion");
     },
     async inspectProductionContext() {
       calls.push("context-proof");
@@ -402,6 +402,20 @@ describe("credit provisioner bootstrap runner", () => {
     );
   });
 
+  it("rejects unmanaged identities before account-state queries", async () => {
+    const { child, session } = rootSessionWithChild();
+    const unmanaged = { hostname: "%", username: "root" };
+
+    await expect(session.accountExists(unmanaged)).rejects.toThrow(
+      "managed account identity is invalid",
+    );
+    await expect(session.assertAccountUsable(unmanaged)).rejects.toThrow(
+      "managed account identity is invalid",
+    );
+    expect(child.stdinWrites).toEqual([]);
+    await session.close({ releaseLock: false });
+  });
+
   it("runs the remote MySQL client through the explicit Fly shell boundary", () => {
     expect(ROOT_MYSQL_REMOTE_COMMAND).toBe(
       "/bin/sh -lc 'exec env MYSQL_PWD=\"$MYSQL_ROOT_PASSWORD\" mysql --protocol=socket --batch --raw --skip-column-names --silent --unbuffered -uroot leaderbot'",
@@ -532,6 +546,15 @@ describe("credit provisioner bootstrap runner", () => {
     expect(calls).not.toContain("secret-cleanup");
     expect(calls.indexOf("secret-state")).toBeGreaterThan(
       calls.indexOf("lock-acquire"),
+    );
+    expect(
+      calls.filter((call) => call === "create-user-preflight"),
+    ).toHaveLength(1);
+    expect(calls.indexOf("create-user-preflight")).toBeGreaterThan(
+      calls.indexOf("lock-acquire"),
+    );
+    expect(calls.indexOf("create-user-preflight")).toBeLessThan(
+      calls.indexOf("secret-state"),
     );
     expect(calls.indexOf("secret-state")).toBeLessThan(calls.indexOf("create"));
     expect(calls.lastIndexOf("secret-absent")).toBeLessThan(
