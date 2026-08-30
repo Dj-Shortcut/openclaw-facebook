@@ -1,0 +1,801 @@
+name: Retire image-gen credit provisioners
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Lock, recover with unlock, drop after 24 hours, or verify the manually removed secret
+        required: true
+        type: choice
+        options:
+          - lock
+          - unlock
+          - drop
+          - verify_secret_absent
+      expected_head:
+        description: Exact reviewed main commit to execute
+        required: true
+        type: string
+      expected_runtime_principal_sha256:
+        description: Reviewed SHA-256 fingerprint of the settled restricted runtime principal
+        required: true
+        type: string
+      expected_deployment_identity:
+        description: Exact settled image-gen deployment identity
+        required: true
+        type: string
+      obsolete_drop_run_id:
+        description: Successful obsolete-runtime-principal drop workflow run ID
+        required: true
+        type: string
+      obsolete_drop_run_attempt:
+        description: Exact obsolete-runtime-principal drop run attempt
+        required: true
+        type: string
+      lock_evidence_run_id:
+        description: Required only for drop; successful provisioner lock workflow run ID
+        required: false
+        type: string
+      lock_evidence_run_attempt:
+        description: Required only for drop; exact provisioner lock run attempt
+        required: false
+        type: string
+      drop_evidence_run_id:
+        description: Required only for verify_secret_absent; successful provisioner drop workflow run ID
+        required: false
+        type: string
+      drop_evidence_run_attempt:
+        description: Required only for verify_secret_absent; exact provisioner drop run attempt
+        required: false
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  FLYCTL_VERSION: 0.4.85
+
+concurrency:
+  group: production-deploy-image-gen
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  preflight:
+    name: Prove the settled retirement boundary without mutation
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: production-inspection
+    steps:
+      - name: Require protected main
+        run: test "$GITHUB_REF" = "refs/heads/main"
+
+      - name: Check out exact source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Validate the exact request and settled 0018 contract
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RETIREMENT_OPERATION: ${{ inputs.operation }}
+          EXPECTED_HEAD: ${{ inputs.expected_head }}
+          EXPECTED_RUNTIME_PRINCIPAL_SHA256: ${{ inputs.expected_runtime_principal_sha256 }}
+          EXPECTED_DEPLOYMENT_IDENTITY: ${{ inputs.expected_deployment_identity }}
+          OBSOLETE_DROP_RUN_ID: ${{ inputs.obsolete_drop_run_id }}
+          OBSOLETE_DROP_RUN_ATTEMPT: ${{ inputs.obsolete_drop_run_attempt }}
+          LOCK_EVIDENCE_RUN_ID: ${{ inputs.lock_evidence_run_id }}
+          LOCK_EVIDENCE_RUN_ATTEMPT: ${{ inputs.lock_evidence_run_attempt }}
+          DROP_EVIDENCE_RUN_ID: ${{ inputs.drop_evidence_run_id }}
+          DROP_EVIDENCE_RUN_ATTEMPT: ${{ inputs.drop_evidence_run_attempt }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$EXPECTED_HEAD" = "$GITHUB_SHA"
+          [[ "$EXPECTED_HEAD" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$EXPECTED_RUNTIME_PRINCIPAL_SHA256" =~ ^[a-f0-9]{64}$ ]]
+          [[ "$EXPECTED_DEPLOYMENT_IDENTITY" =~ ^deploy-[1-9][0-9]*-[1-9][0-9]*$ ]]
+          [[ "$OBSOLETE_DROP_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$OBSOLETE_DROP_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+          case "$RETIREMENT_OPERATION" in
+            lock|unlock)
+              test -z "$LOCK_EVIDENCE_RUN_ID"
+              test -z "$LOCK_EVIDENCE_RUN_ATTEMPT"
+              test -z "$DROP_EVIDENCE_RUN_ID"
+              test -z "$DROP_EVIDENCE_RUN_ATTEMPT"
+              ;;
+            drop)
+              [[ "$LOCK_EVIDENCE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+              [[ "$LOCK_EVIDENCE_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+              test -z "$DROP_EVIDENCE_RUN_ID"
+              test -z "$DROP_EVIDENCE_RUN_ATTEMPT"
+              ;;
+            verify_secret_absent)
+              test -z "$LOCK_EVIDENCE_RUN_ID"
+              test -z "$LOCK_EVIDENCE_RUN_ATTEMPT"
+              [[ "$DROP_EVIDENCE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+              [[ "$DROP_EVIDENCE_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+              ;;
+            *) exit 1 ;;
+          esac
+          npm ci
+          npm run production:validate
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test "$(jq -er '.apps["image-gen"].databaseSchemaTransition.state' deploy/production/apps.json)" = "complete"
+          test "$(jq -er '.apps["image-gen"].databaseSchemaTransition.to' deploy/production/apps.json)" = "0018_credit_checkout_reservation"
+          test "$(jq -er '.apps["image-gen"].databaseSchemaPhase' deploy/production/apps.json)" = "0018_credit_checkout_reservation"
+          test "$(jq -er '.apps["image-gen"].reviewedArtifactKind' deploy/production/apps.json)" = "runtime"
+          test "$(jq -er '.apps["image-gen"].databaseSchemaTransition.runtimePrincipalSha256' deploy/production/apps.json)" = "$EXPECTED_RUNTIME_PRINCIPAL_SHA256"
+          bridge_image="$(jq -er '.apps["image-gen"].databaseSchemaTransition.bridgeImage' deploy/production/apps.json)"
+          jq -e --arg bridge "$bridge_image" '
+            .apps["image-gen"] as $app
+            | ($app.reviewedRollbackImages | length) >= 1 and
+              ($app.reviewedRollbackImages | index($bridge) | not) and
+              all($app.reviewedRollbackImages[]; $app.reviewedRollbackArtifactKinds[.] == "runtime")
+          ' deploy/production/apps.json > /dev/null
+          node scripts/validate-production-deployment.mjs --verify-source-ci "$EXPECTED_HEAD"
+
+      - name: Validate protected source runs and exact artifacts
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RETIREMENT_OPERATION: ${{ inputs.operation }}
+          OBSOLETE_DROP_RUN_ID: ${{ inputs.obsolete_drop_run_id }}
+          OBSOLETE_DROP_RUN_ATTEMPT: ${{ inputs.obsolete_drop_run_attempt }}
+          LOCK_EVIDENCE_RUN_ID: ${{ inputs.lock_evidence_run_id }}
+          LOCK_EVIDENCE_RUN_ATTEMPT: ${{ inputs.lock_evidence_run_attempt }}
+          DROP_EVIDENCE_RUN_ID: ${{ inputs.drop_evidence_run_id }}
+          DROP_EVIDENCE_RUN_ATTEMPT: ${{ inputs.drop_evidence_run_attempt }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { createHash } from "node:crypto";
+          import fs from "node:fs";
+
+          const fail = () => process.exit(1);
+          const token = process.env.GITHUB_TOKEN;
+          if (typeof token !== "string" || token.length < 20 || /\s/.test(token)) fail();
+          const request = async path => {
+            const response = await fetch(`${process.env.GITHUB_API_URL}${path}`, {
+              headers: {
+                Accept: "application/vnd.github+json",
+                Authorization: `Bearer ${token}`,
+                "X-GitHub-Api-Version": "2022-11-28",
+              },
+            });
+            if (response.status !== 200) fail();
+            return response.json().catch(fail);
+          };
+          const listArtifacts = async runId => {
+            const records = [];
+            let expectedTotal;
+            for (let page = 1; page <= 101; page += 1) {
+              const value = await request(`/repos/${process.env.GITHUB_REPOSITORY}/actions/runs/${runId}/artifacts?per_page=100&page=${page}`);
+              if (!Number.isSafeInteger(value?.total_count) || value.total_count < 0 || value.total_count > 10_000 || !Array.isArray(value.artifacts)) fail();
+              expectedTotal ??= value.total_count;
+              if (value.total_count !== expectedTotal || value.artifacts.length > 100) fail();
+              if (value.artifacts.length === 0) {
+                if (records.length !== expectedTotal) fail();
+                break;
+              }
+              for (const artifact of value.artifacts) {
+                if (!Number.isSafeInteger(artifact?.id) || artifact.id < 1 || typeof artifact.name !== "string" || artifact.expired !== false) fail();
+                records.push({ id: artifact.id, name: artifact.name });
+              }
+              if (records.length > expectedTotal || page === 101) fail();
+            }
+            if (records.length !== expectedTotal || new Set(records.map(item => item.id)).size !== records.length) fail();
+            return records;
+          };
+          const validateSource = async ({ attempt, artifactName, runId, workflowPath, envName }) => {
+            if (!/^[1-9][0-9]*$/.test(runId) || !/^[1-9][0-9]*$/.test(attempt)) fail();
+            const run = await request(`/repos/${process.env.GITHUB_REPOSITORY}/actions/runs/${runId}`);
+            if (
+              run?.event !== "workflow_dispatch" ||
+              run.head_branch !== "main" ||
+              run.head_repository?.full_name !== process.env.GITHUB_REPOSITORY ||
+              !/^[a-f0-9]{40}$/.test(run.head_sha ?? "") ||
+              run.path !== workflowPath ||
+              run.status !== "completed" ||
+              run.conclusion !== "success" ||
+              run.run_attempt !== Number(attempt)
+            ) fail();
+            const encodedWorkflowPath = workflowPath.split("/").map(encodeURIComponent).join("/");
+            const source = await request(`/repos/${process.env.GITHUB_REPOSITORY}/contents/${encodedWorkflowPath}?ref=${run.head_sha}`);
+            if (
+              source?.type !== "file" ||
+              source.encoding !== "base64" ||
+              source.name !== workflowPath.split("/").at(-1) ||
+              typeof source.content !== "string" ||
+              !Number.isSafeInteger(source.size) ||
+              source.size < 1 || source.size > 1_000_000 ||
+              !/^[a-f0-9]{40}$/.test(source.sha ?? "")
+            ) fail();
+            const remoteWorkflow = Buffer.from(source.content.replace(/\s/g, ""), "base64");
+            const currentWorkflow = fs.readFileSync(workflowPath);
+            const blobSha = createHash("sha1")
+              .update(`blob ${remoteWorkflow.length}\0`)
+              .update(remoteWorkflow)
+              .digest("hex");
+            if (
+              remoteWorkflow.length !== source.size ||
+              blobSha !== source.sha ||
+              !remoteWorkflow.equals(currentWorkflow)
+            ) fail();
+            const artifacts = await listArtifacts(runId);
+            if (artifacts.filter(item => item.name === artifactName).length !== 1) fail();
+            fs.appendFileSync(process.env.GITHUB_ENV, `${envName}=${run.head_sha}\n`, { encoding: "utf8" });
+          };
+
+          const operation = process.env.RETIREMENT_OPERATION;
+          await validateSource({
+            attempt: process.env.OBSOLETE_DROP_RUN_ATTEMPT,
+            artifactName: `image-gen-obsolete-principal-drop-${process.env.OBSOLETE_DROP_RUN_ID}-${process.env.OBSOLETE_DROP_RUN_ATTEMPT}`,
+            envName: "OBSOLETE_DROP_SOURCE_HEAD",
+            runId: process.env.OBSOLETE_DROP_RUN_ID,
+            workflowPath: ".github/workflows/cleanup-image-gen-runtime-principals.yml",
+          });
+          if (operation === "drop") {
+            await validateSource({
+              attempt: process.env.LOCK_EVIDENCE_RUN_ATTEMPT,
+              artifactName: `image-gen-credit-provisioner-retirement-lock-${process.env.LOCK_EVIDENCE_RUN_ID}-${process.env.LOCK_EVIDENCE_RUN_ATTEMPT}`,
+              envName: "LOCK_EVIDENCE_SOURCE_HEAD",
+              runId: process.env.LOCK_EVIDENCE_RUN_ID,
+              workflowPath: ".github/workflows/retire-image-gen-credit-provisioners.yml",
+            });
+          }
+          if (operation === "verify_secret_absent") {
+            await validateSource({
+              attempt: process.env.DROP_EVIDENCE_RUN_ATTEMPT,
+              artifactName: `image-gen-credit-provisioner-retirement-drop-${process.env.DROP_EVIDENCE_RUN_ID}-${process.env.DROP_EVIDENCE_RUN_ATTEMPT}`,
+              envName: "DROP_EVIDENCE_SOURCE_HEAD",
+              runId: process.env.DROP_EVIDENCE_RUN_ID,
+              workflowPath: ".github/workflows/retire-image-gen-credit-provisioners.yml",
+            });
+          }
+          NODE
+
+      - name: Download obsolete runtime-principal drop evidence
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4
+        with:
+          name: image-gen-obsolete-principal-drop-${{ inputs.obsolete_drop_run_id }}-${{ inputs.obsolete_drop_run_attempt }}
+          path: ${{ runner.temp }}/leaderbot-credit-provisioner-retirement/obsolete-drop
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.obsolete_drop_run_id }}
+
+      - name: Download protected provisioner lock evidence
+        if: inputs.operation == 'drop'
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4
+        with:
+          name: image-gen-credit-provisioner-retirement-lock-${{ inputs.lock_evidence_run_id }}-${{ inputs.lock_evidence_run_attempt }}
+          path: ${{ runner.temp }}/leaderbot-credit-provisioner-retirement/lock
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.lock_evidence_run_id }}
+
+      - name: Download protected provisioner drop evidence
+        if: inputs.operation == 'verify_secret_absent'
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4
+        with:
+          name: image-gen-credit-provisioner-retirement-drop-${{ inputs.drop_evidence_run_id }}-${{ inputs.drop_evidence_run_attempt }}
+          path: ${{ runner.temp }}/leaderbot-credit-provisioner-retirement/drop
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.drop_evidence_run_id }}
+
+      - name: Validate the exact retirement evidence chain
+        env:
+          RETIREMENT_OPERATION: ${{ inputs.operation }}
+          EXPECTED_RUNTIME_PRINCIPAL_SHA256: ${{ inputs.expected_runtime_principal_sha256 }}
+          EXPECTED_DEPLOYMENT_IDENTITY: ${{ inputs.expected_deployment_identity }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import fs from "node:fs";
+          import {
+            assertObsoletePrincipalDropEvidence,
+            assertRetirementEvidence,
+            deriveRetirementCohortSha256,
+          } from "./scripts/retire-image-gen-credit-provisioners.mjs";
+
+          const fail = () => process.exit(1);
+          const read = path => JSON.parse(fs.readFileSync(path, "utf8"));
+          const root = `${process.env.RUNNER_TEMP}/leaderbot-credit-provisioner-retirement`;
+          let obsolete;
+          try {
+            obsolete = assertObsoletePrincipalDropEvidence(read(`${root}/obsolete-drop/evidence.json`), {
+              deploymentIdentity: process.env.EXPECTED_DEPLOYMENT_IDENTITY,
+              runtimePrincipalSha256: process.env.EXPECTED_RUNTIME_PRINCIPAL_SHA256,
+            });
+          } catch {
+            fail();
+          }
+          const cohortSha256 = deriveRetirementCohortSha256({
+            deploymentIdentity: obsolete.deploymentIdentity,
+            obsoletePrincipalSha256: obsolete.obsoletePrincipalSha256,
+            runtimePrincipalSha256: obsolete.runtimePrincipalSha256,
+          });
+          const assertContext = evidence => {
+            if (
+              evidence.cohortSha256 !== cohortSha256 ||
+              evidence.deploymentIdentity !== obsolete.deploymentIdentity ||
+              evidence.obsoletePrincipalSha256 !== obsolete.obsoletePrincipalSha256 ||
+              evidence.runtimePrincipalSha256 !== obsolete.runtimePrincipalSha256
+            ) fail();
+          };
+          if (process.env.RETIREMENT_OPERATION === "drop") {
+            let lock;
+            try { lock = assertRetirementEvidence(read(`${root}/lock/evidence.json`)); } catch { fail(); }
+            assertContext(lock);
+            if (lock.operation !== "lock" || lock.sourceHead !== process.env.LOCK_EVIDENCE_SOURCE_HEAD) fail();
+            const age = Date.now() - Date.parse(lock.lockedAt);
+            if (!Number.isFinite(age) || age < 86_400_000) fail();
+          }
+          if (process.env.RETIREMENT_OPERATION === "verify_secret_absent") {
+            let drop;
+            try { drop = assertRetirementEvidence(read(`${root}/drop/evidence.json`)); } catch { fail(); }
+            assertContext(drop);
+            if (
+              drop.operation !== "drop" ||
+              drop.sourceHead !== process.env.DROP_EVIDENCE_SOURCE_HEAD ||
+              drop.managedAccountCountAfter !== 0
+            ) fail();
+          }
+          NODE
+
+  mutate:
+    name: Apply or prove the protected provisioner retirement transition
+    needs: preflight
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    environment: production
+    steps:
+      - name: Require protected main
+        run: test "$GITHUB_REF" = "refs/heads/main"
+
+      - name: Check out exact source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install exact verification dependencies
+        run: npm ci
+
+      - name: Install exact verified flyctl
+        timeout-minutes: 3
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$RUNNER_OS" = "Linux"
+          test "$RUNNER_ARCH" = "X64"
+          install_root="$(mktemp -d "$RUNNER_TEMP/leaderbot-flyctl.XXXXXX")"
+          archive="$install_root/flyctl_0.4.85_Linux_x86_64.tar.gz"
+          extract_dir="$install_root/extract"
+          bin_dir="$install_root/bin"
+          install -d -m 0700 "$extract_dir" "$bin_dir"
+          curl --fail --show-error --silent --location \
+            --proto '=https' --proto-redir '=https' --tlsv1.2 \
+            --retry 3 --retry-all-errors \
+            --output "$archive" \
+            "https://github.com/superfly/flyctl/releases/download/v0.4.85/flyctl_0.4.85_Linux_x86_64.tar.gz"
+          printf '%s  %s\n' \
+            "c3b5ed05319adf8a265d68171758ea7b37bd340c5c3dc4e09e17fb6344b8ff90" \
+            "$archive" | sha256sum --check --strict
+          tar --extract --gzip --file "$archive" --directory "$extract_dir" flyctl
+          test -f "$extract_dir/flyctl"
+          test ! -L "$extract_dir/flyctl"
+          install -m 0755 "$extract_dir/flyctl" "$bin_dir/flyctl"
+          ln -s flyctl "$bin_dir/fly"
+          version_output="$("$bin_dir/flyctl" version)"
+          [[ "$version_output" =~ ^flyctl\ v0\.4\.85([[:space:]]|$) ]]
+          printf '%s\n' "$bin_dir" >> "$GITHUB_PATH"
+
+      - name: Reprove every settled runtime Machine before database access
+        timeout-minutes: 12
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_IMAGE_GEN_DEPLOY_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+          EXPECTED_HEAD: ${{ inputs.expected_head }}
+          EXPECTED_RUNTIME_PRINCIPAL_SHA256: ${{ inputs.expected_runtime_principal_sha256 }}
+          EXPECTED_DEPLOYMENT_IDENTITY: ${{ inputs.expected_deployment_identity }}
+        run: |
+          set -euo pipefail
+          test -n "$FLY_API_TOKEN"
+          test "$EXPECTED_HEAD" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          npm run production:validate
+          test "$(jq -er '.apps["image-gen"].databaseSchemaTransition.state' deploy/production/apps.json)" = "complete"
+          test "$(jq -er '.apps["image-gen"].databaseSchemaTransition.to' deploy/production/apps.json)" = "0018_credit_checkout_reservation"
+          test "$(jq -er '.apps["image-gen"].databaseSchemaPhase' deploy/production/apps.json)" = "0018_credit_checkout_reservation"
+          test "$(jq -er '.apps["image-gen"].reviewedArtifactKind' deploy/production/apps.json)" = "runtime"
+          test "$(jq -er '.apps["image-gen"].databaseSchemaTransition.runtimePrincipalSha256' deploy/production/apps.json)" = "$EXPECTED_RUNTIME_PRINCIPAL_SHA256"
+          node scripts/validate-production-deployment.mjs --verify-source-ci "$EXPECTED_HEAD"
+          node scripts/validate-production-deployment.mjs \
+            --live image-gen \
+            --expected-deployment-identity "$EXPECTED_DEPLOYMENT_IDENTITY"
+          node scripts/validate-production-deployment.mjs \
+            --verify-settled-baseline image-gen "$EXPECTED_DEPLOYMENT_IDENTITY" \
+            --expected-image "$(jq -er '.apps["image-gen"].reviewedImage' deploy/production/apps.json)"
+          expected_scale="$(jq -cer '.apps["image-gen"].desiredScale | {app:.app.count,worker:.worker.count}' deploy/production/apps.json)"
+          expected_machine_count="$(jq -er '.app + .worker' <<<"$expected_scale")"
+          reviewed_image="$(jq -er '.apps["image-gen"].reviewedImage' deploy/production/apps.json)"
+          expected_digest="${reviewed_image##*@}"
+          [[ "$expected_digest" =~ ^sha256:[a-f0-9]{64}$ ]]
+          machines="$(flyctl machine list --app leaderbot-fb-image-gen --json)"
+          jq -e \
+            --arg identity "$EXPECTED_DEPLOYMENT_IDENTITY" \
+            --arg digest "$expected_digest" \
+            --argjson expected "$expected_scale" '
+              type == "array" and
+              length == ($expected.app + $expected.worker) and
+              ([.[].id] | length == (unique | length)) and
+              all(.[ ];
+                .state == "started" and
+                (.id | type == "string" and test("^[a-f0-9]{14}$")) and
+                (.config.metadata.fly_process_group == "app" or .config.metadata.fly_process_group == "worker") and
+                .config.env.LEADERBOT_DEPLOYMENT_IDENTITY == $identity and
+                .image_ref.digest == $digest
+              ) and
+              ([.[] | select(.config.metadata.fly_process_group == "app")] | length) == $expected.app and
+              ([.[] | select(.config.metadata.fly_process_group == "worker")] | length) == $expected.worker
+            ' <<<"$machines" > /dev/null
+          mapfile -t machine_ids < <(jq -er \
+            '.[].id' <<<"$machines")
+          test "${#machine_ids[@]}" = "$expected_machine_count"
+          for machine_id in "${machine_ids[@]}"; do
+            output="$(timeout --signal=TERM 45s flyctl ssh console \
+              --app leaderbot-fb-image-gen --machine "$machine_id" --quiet \
+              --command "EXPECTED_RUNTIME_PRINCIPAL_SHA256=$EXPECTED_RUNTIME_PRINCIPAL_SHA256 node /app/dist/billing-trigger-runtime-preflight.cjs")"
+            test "$output" = "Billing trigger runtime preflight passed."
+          done
+          health_body="$(mktemp)"
+          test "$(curl --ipv4 --silent --show-error --max-time 20 --retry 2 --retry-all-errors --output "$health_body" --write-out '%{http_code}' https://leaderbot-fb-image-gen.fly.dev/healthz)" = "200"
+          grep -Fx "ok" "$health_body"
+          ready_body="$(mktemp)"
+          test "$(curl --ipv4 --silent --show-error --max-time 20 --retry 2 --retry-all-errors --output "$ready_body" --write-out '%{http_code}' https://leaderbot-fb-image-gen.fly.dev/readyz)" = "200"
+          jq -e '.ok == true' "$ready_body" > /dev/null
+
+      - name: Download obsolete runtime-principal drop evidence
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4
+        with:
+          name: image-gen-obsolete-principal-drop-${{ inputs.obsolete_drop_run_id }}-${{ inputs.obsolete_drop_run_attempt }}
+          path: ${{ runner.temp }}/leaderbot-credit-provisioner-retirement/obsolete-drop
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.obsolete_drop_run_id }}
+
+      - name: Download protected provisioner lock evidence
+        if: inputs.operation == 'drop'
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4
+        with:
+          name: image-gen-credit-provisioner-retirement-lock-${{ inputs.lock_evidence_run_id }}-${{ inputs.lock_evidence_run_attempt }}
+          path: ${{ runner.temp }}/leaderbot-credit-provisioner-retirement/lock
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.lock_evidence_run_id }}
+
+      - name: Download protected provisioner drop evidence
+        if: inputs.operation == 'verify_secret_absent'
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4
+        with:
+          name: image-gen-credit-provisioner-retirement-drop-${{ inputs.drop_evidence_run_id }}-${{ inputs.drop_evidence_run_attempt }}
+          path: ${{ runner.temp }}/leaderbot-credit-provisioner-retirement/drop
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.drop_evidence_run_id }}
+
+      - name: Bind the exact reviewed database Machine and encrypted volume
+        timeout-minutes: 5
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_DATABASE_MIGRATION_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$FLY_API_TOKEN"
+          db_app="$(jq -er '.apps["image-gen"].databaseRecovery.app' deploy/production/apps.json)"
+          test "$db_app" = "leaderbot-portal-mysql"
+          root="$RUNNER_TEMP/leaderbot-credit-provisioner-retirement/database-target"
+          install -d -m 0700 "$root"
+          flyctl machine list --app "$db_app" --json > "$root/machines.json"
+          flyctl volumes list --app "$db_app" --json > "$root/volumes.json"
+          TARGET_ROOT="$root" node --input-type=module <<'NODE'
+          import fs from "node:fs";
+          import { selectReviewedDatabaseTarget } from "./scripts/image-gen-credit-provisioner-bootstrap-contract.mjs";
+
+          const fail = () => process.exit(1);
+          const manifest = JSON.parse(fs.readFileSync("deploy/production/apps.json", "utf8"));
+          const recovery = manifest?.apps?.["image-gen"]?.databaseRecovery;
+          if (recovery?.app !== "leaderbot-portal-mysql" || recovery.databaseName !== "leaderbot") fail();
+          let selected;
+          try {
+            selected = selectReviewedDatabaseTarget({
+              machines: JSON.parse(fs.readFileSync(`${process.env.TARGET_ROOT}/machines.json`, "utf8")),
+              recovery,
+              volumes: JSON.parse(fs.readFileSync(`${process.env.TARGET_ROOT}/volumes.json`, "utf8")),
+            });
+          } catch {
+            fail();
+          }
+          fs.appendFileSync(process.env.GITHUB_ENV, `RETIREMENT_DATABASE_APP=${recovery.app}\nRETIREMENT_DATABASE_MACHINE_ID=${selected.machine.id}\n`, { encoding: "utf8" });
+          NODE
+
+      - name: Lock, unlock, or drop the exact managed provisioner cohort
+        if: inputs.operation != 'verify_secret_absent'
+        timeout-minutes: 8
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_DATABASE_MIGRATION_TOKEN }}
+          RETIREMENT_OPERATION: ${{ inputs.operation }}
+          EXPECTED_HEAD: ${{ inputs.expected_head }}
+          EXPECTED_RUNTIME_PRINCIPAL_SHA256: ${{ inputs.expected_runtime_principal_sha256 }}
+          EXPECTED_DEPLOYMENT_IDENTITY: ${{ inputs.expected_deployment_identity }}
+          PROVISIONER_SECRET_RESOLVED: ${{ secrets.IMAGE_GEN_DATABASE_PROVISIONER_URL != '' }}
+        run: |
+          set -euo pipefail
+          test -n "$FLY_API_TOKEN"
+          test "$PROVISIONER_SECRET_RESOLVED" = "true"
+          root="$RUNNER_TEMP/leaderbot-credit-provisioner-retirement"
+          output_root="$root/output"
+          install -d -m 0700 "$output_root"
+          evidence="$output_root/evidence.json"
+          args=(
+            --operation "$RETIREMENT_OPERATION"
+            --expected-head "$EXPECTED_HEAD"
+            --expected-runtime-principal-sha256 "$EXPECTED_RUNTIME_PRINCIPAL_SHA256"
+            --expected-deployment-identity "$EXPECTED_DEPLOYMENT_IDENTITY"
+            --database-app "$RETIREMENT_DATABASE_APP"
+            --database-machine "$RETIREMENT_DATABASE_MACHINE_ID"
+            --obsolete-drop-evidence "$root/obsolete-drop/evidence.json"
+          )
+          if test "$RETIREMENT_OPERATION" = "drop"; then
+            args+=(--lock-evidence "$root/lock/evidence.json")
+          fi
+          args+=(--evidence-out "$evidence")
+          marker="$(node scripts/retire-image-gen-credit-provisioners.mjs "${args[@]}")"
+          case "$RETIREMENT_OPERATION" in
+            lock) test "$marker" = "credit_provisioners_locked" ;;
+            unlock) test "$marker" = "credit_provisioners_unlocked" ;;
+            drop) test "$marker" = "credit_provisioners_dropped" ;;
+            *) exit 1 ;;
+          esac
+          test -s "$evidence"
+
+      - name: Upload metadata-only provisioner retirement evidence
+        if: inputs.operation != 'verify_secret_absent'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: image-gen-credit-provisioner-retirement-${{ inputs.operation }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/leaderbot-credit-provisioner-retirement/output/evidence.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Reprove empty managed inventory and effective secret resolution
+        if: inputs.operation == 'verify_secret_absent'
+        timeout-minutes: 8
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_DATABASE_MIGRATION_TOKEN }}
+          TARGET_SECRET_RESOLVED: ${{ secrets.IMAGE_GEN_DATABASE_PROVISIONER_URL != '' }}
+          EXPECTED_HEAD: ${{ inputs.expected_head }}
+          EXPECTED_RUNTIME_PRINCIPAL_SHA256: ${{ inputs.expected_runtime_principal_sha256 }}
+          EXPECTED_DEPLOYMENT_IDENTITY: ${{ inputs.expected_deployment_identity }}
+        run: |
+          set -euo pipefail
+          test -n "$FLY_API_TOKEN"
+          test "$TARGET_SECRET_RESOLVED" = "false"
+          install -d -m 0700 "$RUNNER_TEMP/leaderbot-credit-provisioner-retirement/secret-resolution"
+          node --input-type=module <<'NODE'
+          import fs from "node:fs";
+          import {
+            assertObsoletePrincipalDropEvidence,
+            assertRetirementEvidence,
+            deriveRetirementCohortSha256,
+            CREDIT_PROVISIONER_RETIREMENT_INVENTORY_QUERY,
+          } from "./scripts/retire-image-gen-credit-provisioners.mjs";
+          import { RootMysqlSession } from "./scripts/provision-image-gen-credit-provisioner.mjs";
+
+          const fail = () => process.exit(1);
+          const read = path => JSON.parse(fs.readFileSync(path, "utf8"));
+          const root = `${process.env.RUNNER_TEMP}/leaderbot-credit-provisioner-retirement`;
+          const obsolete = assertObsoletePrincipalDropEvidence(read(`${root}/obsolete-drop/evidence.json`), {
+            deploymentIdentity: process.env.EXPECTED_DEPLOYMENT_IDENTITY,
+            runtimePrincipalSha256: process.env.EXPECTED_RUNTIME_PRINCIPAL_SHA256,
+          });
+          const drop = assertRetirementEvidence(read(`${root}/drop/evidence.json`));
+          const cohortSha256 = deriveRetirementCohortSha256({
+            deploymentIdentity: obsolete.deploymentIdentity,
+            obsoletePrincipalSha256: obsolete.obsoletePrincipalSha256,
+            runtimePrincipalSha256: obsolete.runtimePrincipalSha256,
+          });
+          if (
+            drop.operation !== "drop" ||
+            drop.cohortSha256 !== cohortSha256 ||
+            drop.deploymentIdentity !== obsolete.deploymentIdentity ||
+            drop.obsoletePrincipalSha256 !== obsolete.obsoletePrincipalSha256 ||
+            drop.runtimePrincipalSha256 !== obsolete.runtimePrincipalSha256 ||
+            drop.managedAccountCountAfter !== 0
+          ) fail();
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), 90_000);
+          const session = new RootMysqlSession({
+            app: process.env.RETIREMENT_DATABASE_APP,
+            machineId: process.env.RETIREMENT_DATABASE_MACHINE_ID,
+            signal: controller.signal,
+          });
+          try {
+            await session.initialize(controller.signal);
+            await session.acquireLock(controller.signal);
+            await session.assertLockHeld(controller.signal);
+            const inventory = await session.execute(CREDIT_PROVISIONER_RETIREMENT_INVENTORY_QUERY, { signal: controller.signal });
+            if (inventory.length !== 0) fail();
+          } finally {
+            clearTimeout(timeout);
+            await session.close({ releaseLock: true, signal: controller.signal }).catch(fail);
+          }
+          const evidence = {
+            cohortSha256,
+            contractVersion: 1,
+            deploymentIdentity: obsolete.deploymentIdentity,
+            membersSha256: drop.membersSha256,
+            observedAt: new Date().toISOString(),
+            obsoletePrincipalSha256: obsolete.obsoletePrincipalSha256,
+            operation: "verify_secret_absent_resolution",
+            resolvedSecretEmpty: true,
+            runtimePrincipalSha256: obsolete.runtimePrincipalSha256,
+            schemaPhase: "0018_credit_checkout_reservation",
+            sourceHead: process.env.EXPECTED_HEAD,
+          };
+          fs.writeFileSync(`${root}/secret-resolution/evidence.json`, `${JSON.stringify(evidence)}\n`, { encoding: "utf8", flag: "wx", mode: 0o600 });
+          process.stdout.write("credit_provisioner_secret_resolution_absent\n");
+          NODE
+
+      - name: Upload protected effective-secret resolution evidence
+        if: inputs.operation == 'verify_secret_absent'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: image-gen-credit-provisioner-secret-resolution-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/leaderbot-credit-provisioner-retirement/secret-resolution/evidence.json
+          if-no-files-found: error
+          retention-days: 90
+
+  postflight:
+    name: Reobserve secret absence after the stabilization boundary
+    needs: mutate
+    if: github.ref == 'refs/heads/main' && inputs.operation == 'verify_secret_absent'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    steps:
+      - name: Require protected main
+        run: test "$GITHUB_REF" = "refs/heads/main"
+
+      - name: Check out exact source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+
+      - name: Download protected effective-secret resolution evidence
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4
+        with:
+          name: image-gen-credit-provisioner-secret-resolution-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/leaderbot-credit-provisioner-retirement/secret-resolution
+
+      - name: Download protected provisioner drop evidence
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4
+        with:
+          name: image-gen-credit-provisioner-retirement-drop-${{ inputs.drop_evidence_run_id }}-${{ inputs.drop_evidence_run_attempt }}
+          path: ${{ runner.temp }}/leaderbot-credit-provisioner-retirement/drop
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.drop_evidence_run_id }}
+
+      - name: Reobserve effective secret absence and seal final evidence
+        env:
+          TARGET_SECRET_RESOLVED: ${{ secrets.IMAGE_GEN_DATABASE_PROVISIONER_URL != '' }}
+          EXPECTED_HEAD: ${{ inputs.expected_head }}
+          EXPECTED_RUNTIME_PRINCIPAL_SHA256: ${{ inputs.expected_runtime_principal_sha256 }}
+          EXPECTED_DEPLOYMENT_IDENTITY: ${{ inputs.expected_deployment_identity }}
+        run: |
+          set -euo pipefail
+          test "$TARGET_SECRET_RESOLVED" = "false"
+          install -d -m 0700 "$RUNNER_TEMP/leaderbot-credit-provisioner-retirement/final"
+          node --input-type=module <<'NODE'
+          import { createHash } from "node:crypto";
+          import fs from "node:fs";
+          import {
+            assertRetirementEvidence,
+            deriveRetirementCohortSha256,
+          } from "./scripts/retire-image-gen-credit-provisioners.mjs";
+
+          const fail = () => process.exit(1);
+          const root = `${process.env.RUNNER_TEMP}/leaderbot-credit-provisioner-retirement`;
+          const readSource = path => fs.readFileSync(path, "utf8");
+          const read = path => JSON.parse(readSource(path));
+          const assertExactKeys = (value, keys) => {
+            if (
+              !value || typeof value !== "object" || Array.isArray(value) ||
+              JSON.stringify(Object.keys(value).sort()) !== JSON.stringify([...keys].sort())
+            ) fail();
+          };
+          const resolvedPath = `${root}/secret-resolution/evidence.json`;
+          const resolved = read(resolvedPath);
+          assertExactKeys(resolved, [
+            "cohortSha256", "contractVersion", "deploymentIdentity", "observedAt",
+            "membersSha256", "obsoletePrincipalSha256", "operation", "resolvedSecretEmpty",
+            "runtimePrincipalSha256", "schemaPhase", "sourceHead",
+          ]);
+          const drop = assertRetirementEvidence(read(`${root}/drop/evidence.json`));
+          const cohortSha256 = deriveRetirementCohortSha256({
+            deploymentIdentity: drop.deploymentIdentity,
+            obsoletePrincipalSha256: drop.obsoletePrincipalSha256,
+            runtimePrincipalSha256: drop.runtimePrincipalSha256,
+          });
+          if (
+            drop.operation !== "drop" ||
+            drop.managedAccountCountAfter !== 0 ||
+            drop.cohortSha256 !== cohortSha256 ||
+            drop.deploymentIdentity !== process.env.EXPECTED_DEPLOYMENT_IDENTITY ||
+            drop.runtimePrincipalSha256 !== process.env.EXPECTED_RUNTIME_PRINCIPAL_SHA256 ||
+            resolved.contractVersion !== 1 ||
+            resolved.operation !== "verify_secret_absent_resolution" ||
+            resolved.cohortSha256 !== cohortSha256 ||
+            resolved.deploymentIdentity !== drop.deploymentIdentity ||
+            resolved.membersSha256 !== drop.membersSha256 ||
+            resolved.obsoletePrincipalSha256 !== drop.obsoletePrincipalSha256 ||
+            resolved.runtimePrincipalSha256 !== drop.runtimePrincipalSha256 ||
+            resolved.schemaPhase !== "0018_credit_checkout_reservation" ||
+            resolved.resolvedSecretEmpty !== true ||
+            resolved.sourceHead !== process.env.EXPECTED_HEAD
+          ) fail();
+          const firstAt = Date.parse(resolved.observedAt);
+          const currentAge = Date.now() - firstAt;
+          if (!Number.isFinite(currentAge) || currentAge < -60_000 || currentAge > 30 * 86_400_000) fail();
+          if (currentAge < 15_000) {
+            await new Promise(resolve => setTimeout(resolve, 15_000 - currentAge));
+          }
+          const secondObservedAt = new Date().toISOString();
+          if (Date.parse(secondObservedAt) - firstAt < 15_000) fail();
+          const targetSecretNameSha256 = createHash("sha256")
+            .update("leaderbot-credit-provisioner-secret-name-v1\0")
+            .update("IMAGE_GEN_DATABASE_PROVISIONER_URL")
+            .digest("hex");
+          const evidence = {
+            cohortSha256,
+            contractVersion: 1,
+            deploymentIdentity: drop.deploymentIdentity,
+            dropMutationAt: drop.mutationAt,
+            firstObservedAt: resolved.observedAt,
+            membersSha256: drop.membersSha256,
+            obsoletePrincipalSha256: drop.obsoletePrincipalSha256,
+            observationCount: 2,
+            operation: "verify_secret_absent",
+            resolvedSecretEmpty: true,
+            resolvedSecretEvidenceSha256: createHash("sha256").update(readSource(resolvedPath)).digest("hex"),
+            runtimePrincipalSha256: drop.runtimePrincipalSha256,
+            schemaPhase: "0018_credit_checkout_reservation",
+            secondObservedAt,
+            sourceHead: process.env.EXPECTED_HEAD,
+            targetSecretNameSha256,
+          };
+          fs.writeFileSync(`${root}/final/evidence.json`, `${JSON.stringify(evidence)}\n`, { encoding: "utf8", flag: "wx", mode: 0o600 });
+          process.stdout.write("credit_provisioner_secret_absence_verified\n");
+          NODE
+
+      - name: Upload final metadata-only secret-absence evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: image-gen-credit-provisioner-retirement-verify_secret_absent-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/leaderbot-credit-provisioner-retirement/final/evidence.json
+          if-no-files-found: error
+          retention-days: 90

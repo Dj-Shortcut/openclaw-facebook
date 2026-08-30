@@ -620,14 +620,20 @@ trusted production artifact` with `image-gen-bridge`. The workflow proves
     `IMAGE_GEN_DATABASE_PROVISIONER_URL` present through the successful drop,
     because the protected cleanup workflow still requires it.
 13. **Retire the bootstrap provisioner.** After the obsolete runtime principal
-    is absent, use a separate reviewed bounded root/admin retirement path to
-    lock every reserved `lbcp_*` account under an explicit recovery path,
-    preserve that recovery window for at least 24 hours, then drop the accounts
-    and prove the managed inventory empty. Only then delete
-    `IMAGE_GEN_DATABASE_PROVISIONER_URL` and prove the protected secret remains
-    absent over a stabilization window. That retirement path is not part of the
-    bootstrap helper and must be reviewed before use; do not replace it with
-    manual SQL or a secret-field edit.
+    is absent, use only
+    `.github/workflows/retire-image-gen-credit-provisioners.yml`: run `lock` to
+    bind every exact reserved `lbcp_*` account to one database-backed cohort,
+    retain the protected `unlock` recovery path for at least 24 hours, then run
+    `drop` with the exact lock-run evidence and prove the managed inventory
+    empty. The workflow rejects `expand_pending`, a retained migration bridge,
+    mixed account cohorts, and stale or incomplete evidence. Only after the
+    successful drop artifact may an authorized repository owner delete the
+    exact `production` environment secret
+    `IMAGE_GEN_DATABASE_PROVISIONER_URL`. Then run `verify_secret_absent`; its
+    two protected observations must prove the effective secret remains absent
+    across the stabilization window. The retirement workflow never deletes a
+    GitHub secret itself and is not part of the bootstrap helper. Do not replace
+    this sequence with manual SQL or an unreviewed secret-field edit.
 14. **Keep Test Mode exposure separate.** Until both cleanup paths have
     metadata-only success evidence, the commercial cutover is incomplete and
     no Mollie Test Mode checkout may be exposed. Continue only through the

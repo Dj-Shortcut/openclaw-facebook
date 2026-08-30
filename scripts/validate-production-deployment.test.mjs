@@ -74,6 +74,7 @@ function createRepositoryFixture() {
     ".github/workflows/build-production-artifacts.yml",
     ".github/workflows/cleanup-image-gen-schema-probes.yml",
     ".github/workflows/cleanup-image-gen-runtime-principals.yml",
+    ".github/workflows/retire-image-gen-credit-provisioners.yml",
     ".github/workflows/deploy-production.yml",
     ".github/workflows/gateway-state-rebaseline.yml",
     ".github/workflows/image-gen-ci.yml",
@@ -89,6 +90,8 @@ function createRepositoryFixture() {
     "scripts/image-gen-credit-provisioner-bootstrap-contract.test.mjs",
     "scripts/provision-image-gen-credit-provisioner.mjs",
     "scripts/provision-image-gen-credit-provisioner.test.mjs",
+    "scripts/retire-image-gen-credit-provisioners.mjs",
+    "scripts/retire-image-gen-credit-provisioners.test.mjs",
     "scripts/verify-gateway-state-rebaseline.mjs",
     "scripts/validate-production-deployment.mjs",
   ]) {
@@ -1433,6 +1436,205 @@ describe("production deployment contract", () => {
 
     expect(() => validateProductionRepository(root)).toThrow(
       "must derive the exact successor count from reviewed desiredScale",
+    );
+  });
+
+  it("keeps credit-provisioner retirement behind settled 0018 evidence", () => {
+    const workflow = fs.readFileSync(
+      path.join(
+        repoRoot,
+        ".github/workflows/retire-image-gen-credit-provisioners.yml",
+      ),
+      "utf8",
+    );
+
+    expect(workflow).toContain("environment: production-inspection");
+    expect(workflow).toContain("environment: production");
+    expect(workflow).toContain("group: production-deploy-image-gen");
+    expect(workflow).toContain("queue: max");
+    expect(workflow).toContain(
+      "node scripts/retire-image-gen-credit-provisioners.mjs",
+    );
+    expect(workflow).toContain(
+      "/contents/${encodedWorkflowPath}?ref=${run.head_sha}",
+    );
+    expect(workflow).toContain("!remoteWorkflow.equals(currentWorkflow)");
+    expect(workflow).not.toContain("IMAGE_GEN_RETIREMENT_METADATA_READ_TOKEN");
+    expect(workflow).not.toContain("gh secret delete");
+    expect(workflow).not.toContain("flyctl deploy");
+  });
+
+  it("retains every credit-provisioner retirement run in the shared queue", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/retire-image-gen-credit-provisioners.yml",
+      "  queue: max\n",
+      "",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must retain every protected retirement run in the shared image-gen lock queue",
+    );
+  });
+
+  it("requires the complete reviewed Machine topology before retirement", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/retire-image-gen-credit-provisioners.yml",
+      "length == ($expected.app + $expected.worker)",
+      "length >= 1",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must reject extra or missing settled Machines",
+    );
+  });
+
+  it("requires byte-exact historical workflow provenance", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/retire-image-gen-credit-provisioners.yml",
+      "!remoteWorkflow.equals(currentWorkflow)",
+      "remoteWorkflow.length < 1",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must reject evidence produced by a different workflow implementation",
+    );
+  });
+
+  it("requires the evidence run to come from the exact workflow path", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/retire-image-gen-credit-provisioners.yml",
+      "run.path !== workflowPath ||",
+      "false ||",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must bind every evidence artifact to the exact successful protected workflow source",
+    );
+  });
+
+  it("requires every settled Machine to be started before retirement", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/retire-image-gen-credit-provisioners.yml",
+      '.state == "started"',
+      '.state != "destroyed"',
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must reprove every exact started Machine inside the bounded topology loop",
+    );
+  });
+
+  it("keeps the runtime-principal proof inside the per-Machine loop", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/retire-image-gen-credit-provisioners.yml",
+      'for machine_id in "${machine_ids[@]}"; do',
+      'for machine_id in "${machine_ids[@]:0:0}"; do',
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must reprove every exact started Machine inside the bounded topology loop",
+    );
+  });
+
+  it("requires two protected production secret observations", () => {
+    const root = createRepositoryFixture();
+    replaceLastFixtureText(
+      root,
+      ".github/workflows/retire-image-gen-credit-provisioners.yml",
+      "    environment: production\n",
+      "    environment: production-inspection\n",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must use one inspection gate, two protected production observations, and exact secret-resolution boundaries",
+    );
+  });
+
+  it("binds each approval environment to its exact retirement job", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/retire-image-gen-credit-provisioners.yml",
+      "    environment: production-inspection\n",
+      "    environment: production\n",
+    );
+    replaceLastFixtureText(
+      root,
+      ".github/workflows/retire-image-gen-credit-provisioners.yml",
+      "    environment: production\n",
+      "    environment: production-inspection\n",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must bind preflight, mutation, and both secret observations to their exact protected jobs",
+    );
+  });
+
+  it("rejects provisioner retirement before the completed cutover", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/retire-image-gen-credit-provisioners.yml",
+      'databaseSchemaTransition.state\' deploy/production/apps.json)" = "complete"',
+      'databaseSchemaTransition.state\' deploy/production/apps.json)" = "expand_pending"',
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must wait for a completed schema cutover",
+    );
+  });
+
+  it("rejects provisioner retirement that deletes the protected secret", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/retire-image-gen-credit-provisioners.yml",
+      "credit_provisioner_secret_resolution_absent",
+      "gh secret delete IMAGE_GEN_DATABASE_PROVISIONER_URL && credit_provisioner_secret_resolution_absent",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must not use secret-inventory credentials, reuse migration credentials, remove secrets, deploy, mutate Machines or volumes, enable billing, or call product providers",
+    );
+  });
+
+  it("requires two separated secret-absence observations", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/retire-image-gen-credit-provisioners.yml",
+      "currentAge < 15_000",
+      "currentAge < 0",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must separate the two protected absence observations",
+    );
+  });
+
+  it("allows stale lock evidence to reach empty-inventory reconciliation", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/retire-image-gen-credit-provisioners.yml",
+      "if (!Number.isFinite(age) || age < 86_400_000) fail();",
+      "if (!Number.isFinite(age) || age < 86_400_000 || age > 30 * 86_400_000) fail();",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must preserve the 24-hour minimum before drop or reconciliation",
     );
   });
 
@@ -3219,6 +3421,58 @@ describe("production deployment contract", () => {
 
     expect(() => validateProductionRepository(root)).toThrow(
       `package.json test:production-contracts must include exact ${testPath}`,
+    );
+  });
+
+  it("pins the credit-provisioner retirement contract in the production suite", () => {
+    const root = createRepositoryFixture();
+    const testPath = "scripts/retire-image-gen-credit-provisioners.test.mjs";
+    replaceFixtureText(root, "package.json", ` ${testPath}`, "");
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      `package.json test:production-contracts must include exact ${testPath}`,
+    );
+  });
+
+  it("preserves the provisioner retirement recovery window", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      "scripts/retire-image-gen-credit-provisioners.mjs",
+      "const MIN_DROP_AGE_MS = 24 * 60 * 60 * 1_000",
+      "const MIN_DROP_AGE_MS = 0",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must preserve at least a 24-hour recovery window",
+    );
+  });
+
+  it("keeps provisioner retirement failures metadata-only", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      "scripts/retire-image-gen-credit-provisioners.mjs",
+      "function fail() {",
+      "console.error('database failure');\nfunction fail() {",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must expose only fixed markers and must not mutate deployments, secrets, billing, or providers",
+    );
+  });
+
+  it("requires the fixed post-transition evidence failure stage", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      "scripts/retire-image-gen-credit-provisioners.mjs",
+      "credit_provisioner_retirement_failed_stage=evidence_write_after_transition",
+      "credit_provisioner_retirement_failed_stage=unknown",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must identify post-transition evidence-write failures without dynamic details",
     );
   });
 

@@ -72,12 +72,15 @@ Live payment enablement remains gated by the relevant P1 through P4 evidence.
         then use the protected obsolete-principal flow to lock, retain the
         24-hour unlock window, and drop the old broad runtime principal. Keep
         `IMAGE_GEN_DATABASE_PROVISIONER_URL` until that drop succeeds. Next run
-        a separately reviewed bounded root/admin retirement path that locks all
-        reserved `lbcp_*` accounts under its own 24-hour recovery window, drops
-        them, proves the inventory empty, deletes the secret, and proves stable
-        secret absence. Commercial exposure remains incomplete until both
-        cleanup paths have metadata-only success evidence; do not substitute
-        manual SQL or secret-field edits.
+        the separately reviewed
+        `.github/workflows/retire-image-gen-credit-provisioners.yml` path to
+        lock all reserved `lbcp_*` accounts under its own database-backed
+        24-hour recovery window, drop them, and prove the inventory empty. An
+        authorized owner must then delete the exact production environment
+        secret before the workflow's separate stable-absence verification.
+        Commercial exposure remains incomplete until both cleanup paths have
+        metadata-only success evidence; do not substitute manual SQL or
+        unreviewed secret-field edits.
 
 - [ ] **P5 - Bounded live pilot and legacy removal.** Obtain legal/accounting
       approval, enable one reviewed live offer for a bounded audience, monitor

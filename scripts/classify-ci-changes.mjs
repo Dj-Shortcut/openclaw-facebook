@@ -5,11 +5,14 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const SHA_PATTERN = /^[a-f0-9]{40}$/;
-const IMAGE_GEN_CREDIT_PROVISIONER_BOOTSTRAP_PATHS = new Set([
+const IMAGE_GEN_CREDIT_DATABASE_CONTROL_PATHS = new Set([
+  ".github/workflows/retire-image-gen-credit-provisioners.yml",
   "scripts/image-gen-credit-provisioner-bootstrap-contract.mjs",
   "scripts/image-gen-credit-provisioner-bootstrap-contract.test.mjs",
   "scripts/provision-image-gen-credit-provisioner.mjs",
   "scripts/provision-image-gen-credit-provisioner.test.mjs",
+  "scripts/retire-image-gen-credit-provisioners.mjs",
+  "scripts/retire-image-gen-credit-provisioners.test.mjs",
 ]);
 
 function normalizedPath(value) {
@@ -25,9 +28,7 @@ export function classifyCiChanges(changedPaths) {
   const classifierChanged = paths.includes("scripts/classify-ci-changes.mjs");
   const imageGen =
     classifierChanged ||
-    paths.some((file) =>
-      IMAGE_GEN_CREDIT_PROVISIONER_BOOTSTRAP_PATHS.has(file),
-    ) ||
+    paths.some((file) => IMAGE_GEN_CREDIT_DATABASE_CONTROL_PATHS.has(file)) ||
     paths.some(
       (file) =>
         (file.startsWith("apps/image-gen/") &&
@@ -36,9 +37,7 @@ export function classifyCiChanges(changedPaths) {
     );
   const migration =
     classifierChanged ||
-    paths.some((file) =>
-      IMAGE_GEN_CREDIT_PROVISIONER_BOOTSTRAP_PATHS.has(file),
-    ) ||
+    paths.some((file) => IMAGE_GEN_CREDIT_DATABASE_CONTROL_PATHS.has(file)) ||
     paths.some(
       (file) =>
         (file.startsWith("apps/image-gen/") &&

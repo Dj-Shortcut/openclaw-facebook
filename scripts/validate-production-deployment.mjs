@@ -22,6 +22,12 @@ const CREDIT_PROVISIONER_BOOTSTRAP_RUNNER_PATH =
   "scripts/provision-image-gen-credit-provisioner.mjs";
 const CREDIT_PROVISIONER_BOOTSTRAP_RUNNER_TEST_PATH =
   "scripts/provision-image-gen-credit-provisioner.test.mjs";
+const CREDIT_PROVISIONER_RETIREMENT_WORKFLOW_PATH =
+  ".github/workflows/retire-image-gen-credit-provisioners.yml";
+const CREDIT_PROVISIONER_RETIREMENT_RUNNER_PATH =
+  "scripts/retire-image-gen-credit-provisioners.mjs";
+const CREDIT_PROVISIONER_RETIREMENT_RUNNER_TEST_PATH =
+  "scripts/retire-image-gen-credit-provisioners.test.mjs";
 const RUNTIME_PRINCIPAL_STAGING_WORKFLOW_PATH =
   ".github/workflows/stage-image-gen-credit-runtime-principal.yml";
 const RUNTIME_PRINCIPAL_CLEANUP_WORKFLOW_PATH =
@@ -69,6 +75,7 @@ const VERIFIED_FLYCTL_WORKFLOW_JOBS = Object.freeze({
   [SCHEMA_TRANSITION_WORKFLOW_PATH]: ["preflight", "expand"],
   [RUNTIME_PRINCIPAL_STAGING_WORKFLOW_PATH]: ["stage"],
   [RUNTIME_PRINCIPAL_CLEANUP_WORKFLOW_PATH]: ["preflight", "mutate"],
+  [CREDIT_PROVISIONER_RETIREMENT_WORKFLOW_PATH]: ["mutate"],
   [PRODUCTION_RECONCILIATION_WORKFLOW_PATH]: [
     "recover-gateway",
     "recover-image-gen",
@@ -5225,6 +5232,489 @@ function validateRuntimePrincipalStagingWorkflow(rootDir) {
   }
 }
 
+function validateCreditProvisionerRetirementRunner(rootDir) {
+  for (const relativePath of [
+    CREDIT_PROVISIONER_RETIREMENT_RUNNER_PATH,
+    CREDIT_PROVISIONER_RETIREMENT_RUNNER_TEST_PATH,
+  ]) {
+    if (!fs.existsSync(path.join(rootDir, relativePath))) {
+      fail(`Missing ${relativePath}`);
+    }
+  }
+  let packageJson;
+  try {
+    packageJson = JSON.parse(
+      fs.readFileSync(path.join(rootDir, "package.json"), "utf8"),
+    );
+  } catch {
+    fail("package.json must contain the reviewed production-contract command");
+  }
+  const productionContractTokens = String(
+    packageJson?.scripts?.["test:production-contracts"] ?? "",
+  ).split(/\s+/);
+  if (
+    productionContractTokens.filter(
+      (token) => token === CREDIT_PROVISIONER_RETIREMENT_RUNNER_TEST_PATH,
+    ).length !== 1
+  ) {
+    fail(
+      `package.json test:production-contracts must include exact ${CREDIT_PROVISIONER_RETIREMENT_RUNNER_TEST_PATH}`,
+    );
+  }
+  const runner = fs.readFileSync(
+    path.join(rootDir, CREDIT_PROVISIONER_RETIREMENT_RUNNER_PATH),
+    "utf8",
+  );
+  for (const [needle, message] of [
+    [
+      'from "./image-gen-credit-provisioner-bootstrap-contract.mjs"',
+      "must reuse the exact managed-account and advisory-lock contract",
+    ],
+    [
+      'from "./provision-image-gen-credit-provisioner.mjs"',
+      "must reuse the root-local Fly MySQL session",
+    ],
+    [
+      'const DATABASE_APP = "leaderbot-portal-mysql"',
+      "must pin the reviewed database app",
+    ],
+    [
+      'const DATABASE_NAME = "leaderbot"',
+      "must pin the reviewed database name",
+    ],
+    [
+      'const SCHEMA_PHASE = "0018_credit_checkout_reservation"',
+      "must run only after the final credit schema",
+    ],
+    ["const MAX_MANAGED_ACCOUNTS = 16", "must bound the managed cohort"],
+    [
+      "const MIN_DROP_AGE_MS = 24 * 60 * 60 * 1_000",
+      "must preserve at least a 24-hour recovery window",
+    ],
+    [
+      "const MAX_DROP_AGE_MS = 30 * 24 * 60 * 60 * 1_000",
+      "must reject stale lock evidence",
+    ],
+    [
+      'const ATTRIBUTE_KEY = "leaderbot_credit_provisioner_retirement_v1"',
+      "must persist the exact database-backed retirement cohort",
+    ],
+    [
+      "leaderbot-credit-provisioner-retirement-v1",
+      "must domain-separate the cohort fingerprint",
+    ],
+    [
+      "deriveRetirementMembersSha256",
+      "must fingerprint the exact managed-account membership",
+    ],
+    [
+      "membersSha256",
+      "must bind account membership into attributes and evidence",
+    ],
+    [
+      "CREDIT_PROVISIONER_RETIREMENT_INVENTORY_QUERY",
+      "must inspect every exact managed database account",
+    ],
+    [
+      "INFORMATION_SCHEMA.USER_ATTRIBUTES",
+      "must read the documented MySQL user-attribute surface",
+    ],
+    ["account_locked", "must prove account lock state from MySQL"],
+    [
+      "performance_schema.threads",
+      "must prove no managed provisioner session survives retirement",
+    ],
+    [
+      "assertNoActiveManagedSessions",
+      "must gate account mutation and completion on zero active sessions",
+    ],
+    ["ALTER USER", "must mutate only through reviewed account statements"],
+    ["ACCOUNT LOCK", "must provide the recoverable first phase"],
+    ["ACCOUNT UNLOCK", "must provide protected recovery"],
+    ["DROP USER", "must provide the explicit irreversible phase"],
+    [
+      "assertObsoletePrincipalDropEvidence",
+      "must require prior obsolete-runtime-principal removal evidence",
+    ],
+    ["assertLockEvidence", "must bind drop to the exact lock artifact"],
+    ["assertDropWindow", "must enforce the lock evidence time window"],
+    [
+      "enforceMaximum: inventory.length !== 0",
+      "must enforce maximum evidence age only for a new irreversible drop",
+    ],
+    ["acquireLock", "must serialize with provisioner bootstrap"],
+    ["assertLockHeld", "must reprove the shared database lock around mutation"],
+    [
+      "credit_provisioners_locked",
+      "must emit only the fixed lock success marker",
+    ],
+    [
+      "credit_provisioners_unlocked",
+      "must emit only the fixed unlock success marker",
+    ],
+    [
+      "credit_provisioners_dropped",
+      "must emit only the fixed drop success marker",
+    ],
+    [
+      "credit_provisioner_retirement_failed",
+      "must retain one redacted failure marker",
+    ],
+    [
+      "credit_provisioner_retirement_failed_stage=arguments",
+      "must identify argument-validation failures without dynamic details",
+    ],
+    [
+      "credit_provisioner_retirement_failed_stage=database_transition",
+      "must identify database-transition failures without dynamic details",
+    ],
+    [
+      "credit_provisioner_retirement_failed_stage=evidence_write_after_transition",
+      "must identify post-transition evidence-write failures without dynamic details",
+    ],
+    ['flag: "wx"', "must never overwrite existing retirement evidence"],
+    ["mode: 0o600", "must write retirement evidence owner-only"],
+  ]) {
+    if (!runner.includes(needle)) {
+      fail(`${CREDIT_PROVISIONER_RETIREMENT_RUNNER_PATH} ${message}`);
+    }
+  }
+  const stdoutWrites = runner.match(/process\.stdout\.write/g) ?? [];
+  const stderrWrites = runner.match(/process\.stderr\.write/g) ?? [];
+  if (
+    stdoutWrites.length !== 1 ||
+    stderrWrites.length !== 1 ||
+    !runner.includes("process.stdout.write(`${marker}\\n`)") ||
+    !runner.includes("process.stderr.write(`${stage}\\n`)") ||
+    /console\.|String\(error|JSON\.stringify\(error|error\.(?:message|stack)/.test(
+      runner,
+    ) ||
+    /gh secret delete|flyctl secrets|fly secrets|flyctl deploy|fly deploy|MOLLIE_[A-Z_]+_ENABLED=true/.test(
+      runner,
+    )
+  ) {
+    fail(
+      `${CREDIT_PROVISIONER_RETIREMENT_RUNNER_PATH} must expose only fixed markers and must not mutate deployments, secrets, billing, or providers`,
+    );
+  }
+}
+
+function validateCreditProvisionerRetirementWorkflow(rootDir) {
+  const workflowPath = path.join(
+    rootDir,
+    CREDIT_PROVISIONER_RETIREMENT_WORKFLOW_PATH,
+  );
+  if (!fs.existsSync(workflowPath)) {
+    fail(`Missing ${CREDIT_PROVISIONER_RETIREMENT_WORKFLOW_PATH}`);
+  }
+  const workflow = fs.readFileSync(workflowPath, "utf8");
+  assertNoDirectGithubExpressionsInRunBlocks(
+    workflow,
+    CREDIT_PROVISIONER_RETIREMENT_WORKFLOW_PATH,
+  );
+  for (const [needle, message] of [
+    ["workflow_dispatch:", "must be manually dispatched"],
+    ['test "$GITHUB_REF" = "refs/heads/main"', "must require protected main"],
+    ["actions: read", "must read only reviewed workflow evidence"],
+    ["contents: read", "must keep repository permissions read-only"],
+    [
+      "group: production-deploy-image-gen",
+      "must serialize with image-gen rollout work",
+    ],
+    ["cancel-in-progress: false", "must never cancel a retirement transition"],
+    [
+      "queue: max",
+      "must retain every protected retirement run in the shared image-gen lock queue",
+    ],
+    ["  preflight:", "must separate read-only proof from mutation"],
+    ["  mutate:", "must isolate the protected database operation"],
+    ["  postflight:", "must independently reobserve secret absence"],
+    ["environment: production-inspection", "must use protected inspection"],
+    ["environment: production", "must require protected approval"],
+    ["needs: preflight", "must finish inspection before production approval"],
+    ["needs: mutate", "must finish protected resolution before postflight"],
+    [
+      "inputs.operation == 'verify_secret_absent'",
+      "must reserve postflight for stable secret-absence proof",
+    ],
+    [
+      'databaseSchemaTransition.state\' deploy/production/apps.json)" = "complete"',
+      "must wait for a completed schema cutover",
+    ],
+    [
+      'databaseSchemaTransition.to\' deploy/production/apps.json)" = "0018_credit_checkout_reservation"',
+      "must require the final credit schema",
+    ],
+    [
+      'databaseSchemaPhase\' deploy/production/apps.json)" = "0018_credit_checkout_reservation"',
+      "must require the exact settled schema phase",
+    ],
+    [
+      'reviewedArtifactKind\' deploy/production/apps.json)" = "runtime"',
+      "must require the restricted runtime artifact",
+    ],
+    [
+      "$app.reviewedRollbackImages | index($bridge) | not",
+      "must retire the migration bridge before provisioner cleanup",
+    ],
+    [
+      'all($app.reviewedRollbackImages[]; $app.reviewedRollbackArtifactKinds[.] == "runtime")',
+      "must retain only runtime rollback images",
+    ],
+    [
+      '--verify-source-ci "$EXPECTED_HEAD"',
+      "must require green CI for the exact reviewed source",
+    ],
+    [
+      '--verify-settled-baseline image-gen "$EXPECTED_DEPLOYMENT_IDENTITY"',
+      "must bind cleanup to the settled deployment",
+    ],
+    [
+      '.apps["image-gen"].desiredScale | {app:.app.count,worker:.worker.count}',
+      "must derive the exact successor count from reviewed desiredScale",
+    ],
+    [
+      "length == ($expected.app + $expected.worker)",
+      "must reject extra or missing settled Machines",
+    ],
+    [
+      "([.[].id] | length == (unique | length))",
+      "must require unique settled Machine identities",
+    ],
+    [
+      ".config.env.LEADERBOT_DEPLOYMENT_IDENTITY == $identity",
+      "must bind every settled Machine to the reviewed deployment identity",
+    ],
+    [
+      ".image_ref.digest == $digest",
+      "must bind every settled Machine to the reviewed image digest",
+    ],
+    [
+      '([.[] | select(.config.metadata.fly_process_group == "app")] | length) == $expected.app',
+      "must require the exact reviewed app Machine count",
+    ],
+    [
+      '([.[] | select(.config.metadata.fly_process_group == "worker")] | length) == $expected.worker',
+      "must require the exact reviewed worker Machine count",
+    ],
+    [
+      "EXPECTED_RUNTIME_PRINCIPAL_SHA256=$EXPECTED_RUNTIME_PRINCIPAL_SHA256 node /app/dist/billing-trigger-runtime-preflight.cjs",
+      "must reprove the restricted principal on every Machine",
+    ],
+    [
+      "https://leaderbot-fb-image-gen.fly.dev/healthz",
+      "must reprove production liveness before database work",
+    ],
+    [
+      "https://leaderbot-fb-image-gen.fly.dev/readyz",
+      "must reprove production readiness before database work",
+    ],
+    [
+      ".github/workflows/cleanup-image-gen-runtime-principals.yml",
+      "must require the protected obsolete-principal drop workflow",
+    ],
+    [
+      "image-gen-obsolete-principal-drop-",
+      "must bind cleanup to exact obsolete-principal evidence",
+    ],
+    [
+      "image-gen-credit-provisioner-retirement-lock-",
+      "must bind irreversible drop to exact lock evidence",
+    ],
+    [
+      "if (!Number.isFinite(age) || age < 86_400_000) fail();",
+      "must preserve the 24-hour minimum before drop or reconciliation",
+    ],
+    [
+      "node scripts/retire-image-gen-credit-provisioners.mjs",
+      "must invoke only the reviewed retirement runner",
+    ],
+    [
+      '--expected-runtime-principal-sha256 "$EXPECTED_RUNTIME_PRINCIPAL_SHA256"',
+      "must bind account mutation to the restricted runtime principal",
+    ],
+    [
+      '--expected-deployment-identity "$EXPECTED_DEPLOYMENT_IDENTITY"',
+      "must bind account mutation to the exact deployment",
+    ],
+    [
+      '--obsolete-drop-evidence "$root/obsolete-drop/evidence.json"',
+      "must pass the exact obsolete-principal evidence to the runner",
+    ],
+    [
+      'args+=(--lock-evidence "$root/lock/evidence.json")',
+      "must pass lock evidence only for drop",
+    ],
+    [
+      "/contents/${encodedWorkflowPath}?ref=${run.head_sha}",
+      "must load every evidence workflow from its exact historical source",
+    ],
+    [
+      'source.encoding !== "base64"',
+      "must require byte-addressable historical workflow source",
+    ],
+    [
+      'createHash("sha1")',
+      "must independently derive the historical workflow Git blob identity",
+    ],
+    [
+      ".update(`blob ${remoteWorkflow.length}\\0`)",
+      "must hash the historical source as an exact Git blob",
+    ],
+    [
+      "blobSha !== source.sha",
+      "must compare historical source bytes with the Git blob identity",
+    ],
+    [
+      "!remoteWorkflow.equals(currentWorkflow)",
+      "must reject evidence produced by a different workflow implementation",
+    ],
+    [
+      "secrets.IMAGE_GEN_DATABASE_PROVISIONER_URL != ''",
+      "must prove effective protected-secret resolution is empty",
+    ],
+    [
+      "currentAge < 15_000",
+      "must separate the two protected absence observations",
+    ],
+    [
+      "credit_provisioner_secret_resolution_absent",
+      "must emit one fixed effective-resolution marker",
+    ],
+    [
+      "credit_provisioner_secret_absence_verified",
+      "must emit one fixed final absence marker",
+    ],
+    ["retention-days: 90", "must retain metadata-only retirement evidence"],
+  ]) {
+    if (!workflow.includes(needle)) {
+      fail(`${CREDIT_PROVISIONER_RETIREMENT_WORKFLOW_PATH} ${message}`);
+    }
+  }
+  const productionEnvironments =
+    workflow.match(/^\s{4}environment: production$/gmu) ?? [];
+  const inspectionEnvironments =
+    workflow.match(/^\s{4}environment: production-inspection$/gmu) ?? [];
+  if (
+    productionEnvironments.length !== 2 ||
+    inspectionEnvironments.length !== 1 ||
+    occurrenceCount(
+      workflow,
+      "secrets.IMAGE_GEN_DATABASE_PROVISIONER_URL != ''",
+    ) !== 3 ||
+    occurrenceCount(workflow, "TARGET_SECRET_RESOLVED:") !== 2 ||
+    occurrenceCount(workflow, 'test "$TARGET_SECRET_RESOLVED" = "false"') !== 2
+  ) {
+    fail(
+      `${CREDIT_PROVISIONER_RETIREMENT_WORKFLOW_PATH} must use one inspection gate, two protected production observations, and exact secret-resolution boundaries`,
+    );
+  }
+  if (
+    occurrenceCount(
+      workflow,
+      'databaseSchemaTransition.state\' deploy/production/apps.json)" = "complete"',
+    ) !== 2
+  ) {
+    fail(
+      `${CREDIT_PROVISIONER_RETIREMENT_WORKFLOW_PATH} must wait for a completed schema cutover in both protected phases`,
+    );
+  }
+  const jobNames = workflowJobNames(workflow);
+  const preflightJob = namedWorkflowJobBody(workflow, "preflight");
+  const mutateJob = namedWorkflowJobBody(workflow, "mutate");
+  const postflightJob = namedWorkflowJobBody(workflow, "postflight");
+  if (
+    JSON.stringify(jobNames) !==
+      JSON.stringify(["preflight", "mutate", "postflight"]) ||
+    !preflightJob?.includes("environment: production-inspection") ||
+    preflightJob.includes("environment: production\n") ||
+    !mutateJob?.includes("environment: production") ||
+    !mutateJob.includes("needs: preflight") ||
+    occurrenceCount(mutateJob, "PROVISIONER_SECRET_RESOLVED:") !== 1 ||
+    occurrenceCount(mutateJob, "TARGET_SECRET_RESOLVED:") !== 1 ||
+    !postflightJob?.includes("environment: production") ||
+    !postflightJob.includes("needs: mutate") ||
+    occurrenceCount(postflightJob, "TARGET_SECRET_RESOLVED:") !== 1
+  ) {
+    fail(
+      `${CREDIT_PROVISIONER_RETIREMENT_WORKFLOW_PATH} must bind preflight, mutation, and both secret observations to their exact protected jobs`,
+    );
+  }
+  const [sourceEvidenceStep] = namedWorkflowStepBodies(
+    workflow,
+    "Validate protected source runs and exact artifacts",
+  );
+  for (const required of [
+    'run?.event !== "workflow_dispatch"',
+    'run.head_branch !== "main"',
+    "run.head_repository?.full_name !== process.env.GITHUB_REPOSITORY",
+    "run.path !== workflowPath",
+    'run.status !== "completed"',
+    'run.conclusion !== "success"',
+    "run.run_attempt !== Number(attempt)",
+    "/contents/${encodedWorkflowPath}?ref=${run.head_sha}",
+    "blobSha !== source.sha",
+    "!remoteWorkflow.equals(currentWorkflow)",
+  ]) {
+    if (!sourceEvidenceStep?.includes(required)) {
+      fail(
+        `${CREDIT_PROVISIONER_RETIREMENT_WORKFLOW_PATH} must bind every evidence artifact to the exact successful protected workflow source`,
+      );
+    }
+  }
+  const [topologyStep] = namedWorkflowStepBodies(
+    workflow,
+    "Reprove every settled runtime Machine before database access",
+  );
+  const loopStart = topologyStep?.indexOf(
+    'for machine_id in "${machine_ids[@]}"; do',
+  );
+  const preflightCommand = topologyStep?.indexOf(
+    "EXPECTED_RUNTIME_PRINCIPAL_SHA256=$EXPECTED_RUNTIME_PRINCIPAL_SHA256 node /app/dist/billing-trigger-runtime-preflight.cjs",
+  );
+  const loopEnd = topologyStep?.indexOf("          done", loopStart ?? -1);
+  if (
+    !topologyStep?.includes('.state == "started"') ||
+    !topologyStep.includes('test("^[a-f0-9]{14}$")') ||
+    !topologyStep.includes("mapfile -t machine_ids") ||
+    !topologyStep.includes(
+      'test "${#machine_ids[@]}" = "$expected_machine_count"',
+    ) ||
+    loopStart === undefined ||
+    loopStart < 0 ||
+    preflightCommand === undefined ||
+    preflightCommand <= loopStart ||
+    loopEnd === undefined ||
+    loopEnd <= preflightCommand
+  ) {
+    fail(
+      `${CREDIT_PROVISIONER_RETIREMENT_WORKFLOW_PATH} must reprove every exact started Machine inside the bounded topology loop`,
+    );
+  }
+  if (
+    workflow.includes("IMAGE_GEN_DATABASE_MIGRATION_URL") ||
+    workflow.includes("IMAGE_GEN_RETIREMENT_METADATA_READ_TOKEN") ||
+    workflow.includes("github-environments-and-secrets-read-only-v1") ||
+    workflow.includes("/environments/production/secrets") ||
+    workflow.includes("/actions/organization-secrets") ||
+    workflow.includes("/actions/secrets") ||
+    workflow.includes("gh secret delete") ||
+    /method:\s*["']DELETE["']/.test(workflow) ||
+    /flyctl secrets|fly secrets|flyctl deploy|fly deploy/.test(workflow) ||
+    /flyctl machine (?:start|stop|restart|update|remove|destroy|clone)/.test(
+      workflow,
+    ) ||
+    /flyctl volumes? (?:create|destroy|extend|fork)/.test(workflow) ||
+    /MOLLIE_[A-Z_]+_ENABLED=true|api\.mollie\.com|api\.openai\.com|graph\.facebook\.com/.test(
+      workflow,
+    )
+  ) {
+    fail(
+      `${CREDIT_PROVISIONER_RETIREMENT_WORKFLOW_PATH} must not use secret-inventory credentials, reuse migration credentials, remove secrets, deploy, mutate Machines or volumes, enable billing, or call product providers`,
+    );
+  }
+}
+
 function validateRuntimePrincipalCleanupWorkflow(rootDir) {
   const workflowPath = path.join(
     rootDir,
@@ -7104,11 +7594,12 @@ export function validateProductionRepository(rootDir = process.cwd()) {
     JSON.stringify([
       "cleanup-image-gen-runtime-principals.yml",
       "image-gen-schema-transition.yml",
+      "retire-image-gen-credit-provisioners.yml",
       "stage-image-gen-credit-runtime-principal.yml",
     ])
   ) {
     fail(
-      "IMAGE_GEN_DATABASE_PROVISIONER_URL may exist only in the three protected image-gen database workflows",
+      "IMAGE_GEN_DATABASE_PROVISIONER_URL may exist only in the four protected image-gen database workflows",
     );
   }
   for (const [target, script] of [
@@ -7142,6 +7633,8 @@ export function validateProductionRepository(rootDir = process.cwd()) {
   validateTrustedArtifactWorkflow(rootDir);
   validateCreditMigrationDefinerGrant(rootDir);
   validateCreditProvisionerBootstrapHelper(rootDir);
+  validateCreditProvisionerRetirementRunner(rootDir);
+  validateCreditProvisionerRetirementWorkflow(rootDir);
   validateSchemaTransitionWorkflow(rootDir);
   validateRuntimePrincipalStagingWorkflow(rootDir);
   validateRuntimePrincipalCleanupWorkflow(rootDir);
