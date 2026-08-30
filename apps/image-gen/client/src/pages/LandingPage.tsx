@@ -86,7 +86,6 @@ type LandingCopy = {
   faqEyebrow: string;
   faqTitle: string;
   questions: Array<{ question: string; answer: string }>;
-  loginUnavailable: string;
 };
 
 const landingCopies: Record<AppLocale, LandingCopy> = {
@@ -192,11 +191,11 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
       suffix: "eenmalig",
       features: [
         "8 premium beeldcredits",
-        "Hogere beeldkwaliteit",
+        "Medium beeldkwaliteit",
         "Credits vervallen niet",
         "Geen abonnement of automatische verlenging",
       ],
-      note: "Je krijgt de aankoopoptie pas in Messenger te zien wanneer je gratis dagtegoed op is.",
+      note: "Je krijgt de aankoopoptie pas in Messenger te zien wanneer zowel je gratis dagtegoed als eventuele premiumcredits op zijn.",
     },
     trustEyebrow: "Vertrouwen",
     trustTitle: "Duidelijk over betalen en je gegevens",
@@ -215,7 +214,7 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
       },
       {
         title: "Privacy en verwijdering",
-        body: "Je gegevens worden zorgvuldig behandeld en op aanvraag verwijderd.",
+        body: "Je gegevens worden zorgvuldig behandeld. Vraag verwijdering wanneer je wil — voor zover wettelijke bewaarplicht of door Meta beheerde gegevens dat toelaten.",
         links: [
           { label: "Privacybeleid", href: "/privacy" },
           { label: "Gegevens verwijderen", href: "/data-deletion" },
@@ -233,12 +232,12 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
       {
         question: "Wanneer krijg ik opnieuw gratis afbeeldingen?",
         answer:
-          "Je gratis dagtegoed wordt elke dag automatisch ververst. Je hoeft daar zelf niets voor te doen.",
+          "Je gratis dagtegoed wordt elke dag automatisch ververst, tot een maandelijks maximum. Zodra je dat maandmaximum bereikt, moet je wachten tot de volgende maand voor er opnieuw gratis beelden vrijkomen.",
       },
       {
         question: "Hoe koop ik premiumcredits?",
         answer:
-          "Wanneer je gratis dagtegoed op is, stuurt Leaderbot je in Messenger een persoonlijke, beveiligde betaallink. Die link opent een eenmalige Mollie-checkout van €4,99 voor 8 premiumcredits.",
+          "Wanneer zowel je gratis dagtegoed als eventuele premiumcredits op zijn, stuurt Leaderbot je in Messenger een persoonlijke, beveiligde betaallink. Die link opent een eenmalige Mollie-checkout van €4,99 voor 8 premiumcredits.",
       },
       {
         question: "Vervallen mijn premiumcredits?",
@@ -261,7 +260,6 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
           "Bij een mislukte of niet-bevestigde betaling worden er geen premiumcredits toegevoegd en wordt er niets van je rekening afgeschreven. Je kan de aankoop gewoon opnieuw proberen via Messenger.",
       },
     ],
-    loginUnavailable: "Aanmelden is in deze omgeving nog niet ingesteld.",
   },
   "fr-BE": {
     languageLabel: "Langue",
@@ -365,11 +363,11 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
       suffix: "une fois",
       features: [
         "8 crédits d'images premium",
-        "Meilleure qualité d'image",
+        "Qualité d'image medium",
         "Les crédits n'expirent pas",
         "Pas d'abonnement ni de renouvellement automatique",
       ],
-      note: "L'option d'achat n'apparaît dans Messenger que lorsque votre crédit gratuit quotidien est épuisé.",
+      note: "L'option d'achat n'apparaît dans Messenger que lorsque votre crédit gratuit quotidien et vos éventuels crédits premium sont épuisés.",
     },
     trustEyebrow: "Confiance",
     trustTitle: "Clarté sur le paiement et vos données",
@@ -388,7 +386,7 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
       },
       {
         title: "Confidentialité et suppression",
-        body: "Vos données sont traitées avec soin et supprimées sur demande.",
+        body: "Vos données sont traitées avec soin. Demandez leur suppression quand vous le souhaitez — dans la limite des obligations légales de conservation ou des données gérées par Meta.",
         links: [
           { label: "Politique de confidentialité", href: "/privacy" },
           { label: "Supprimer mes données", href: "/data-deletion" },
@@ -406,12 +404,12 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
       {
         question: "Quand est-ce que je récupère des images gratuites ?",
         answer:
-          "Votre crédit gratuit quotidien se renouvelle automatiquement chaque jour, sans rien faire de votre côté.",
+          "Votre crédit gratuit quotidien se renouvelle automatiquement chaque jour, jusqu'à un maximum mensuel. Une fois ce maximum atteint, vous devez attendre le mois suivant pour retrouver des images gratuites.",
       },
       {
         question: "Comment acheter des crédits premium ?",
         answer:
-          "Quand votre crédit gratuit est épuisé, Leaderbot vous envoie dans Messenger un lien de paiement personnel et sécurisé. Ce lien ouvre un paiement unique de 4,99 € via Mollie pour 8 crédits premium.",
+          "Quand votre crédit gratuit et vos éventuels crédits premium sont épuisés, Leaderbot vous envoie dans Messenger un lien de paiement personnel et sécurisé. Ce lien ouvre un paiement unique de 4,99 € via Mollie pour 8 crédits premium.",
       },
       {
         question: "Mes crédits premium expirent-ils ?",
@@ -434,7 +432,6 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
           "En cas de paiement échoué ou non confirmé, aucun crédit premium n'est ajouté et rien n'est débité. Vous pouvez simplement réessayer l'achat via Messenger.",
       },
     ],
-    loginUnavailable: "La connexion n'est pas configurée dans cet environnement.",
   },
   en: {
     languageLabel: "Language",
@@ -537,11 +534,11 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
       suffix: "one-time",
       features: [
         "8 premium image credits",
-        "Higher image quality",
+        "Medium image quality",
         "Credits never expire",
         "No subscription or automatic renewal",
       ],
-      note: "You'll only see the purchase option in Messenger once your daily free credit is used up.",
+      note: "You'll only see the purchase option in Messenger once both your daily free credit and any premium credits are used up.",
     },
     trustEyebrow: "Trust",
     trustTitle: "Clear about payment and your data",
@@ -560,7 +557,7 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
       },
       {
         title: "Privacy and deletion",
-        body: "Your data is handled carefully and deleted on request.",
+        body: "Your data is handled carefully. Ask for it to be deleted whenever you want — within legal retention duties or data Meta controls.",
         links: [
           { label: "Privacy policy", href: "/privacy" },
           { label: "Delete your data", href: "/data-deletion" },
@@ -578,12 +575,12 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
       {
         question: "When do I get free images again?",
         answer:
-          "Your daily free credit refreshes automatically every day — you don't need to do anything.",
+          "Your daily free credit refreshes automatically every day, up to a monthly maximum. Once you reach that monthly maximum, you'll need to wait until next month for free images to return.",
       },
       {
         question: "How do I buy premium credits?",
         answer:
-          "Once your free daily credit is used up, Leaderbot sends you a personal, secure payment link in Messenger. That link opens a one-time €4.99 Mollie checkout for 8 premium credits.",
+          "Once both your free daily credit and any premium credits are used up, Leaderbot sends you a personal, secure payment link in Messenger. That link opens a one-time €4.99 Mollie checkout for 8 premium credits.",
       },
       {
         question: "Do my premium credits expire?",
@@ -606,30 +603,51 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
           "If a payment fails or isn't confirmed, no premium credits are added and nothing is charged. You can simply try the purchase again through Messenger.",
       },
     ],
-    loginUnavailable: "Sign-in is not configured in this environment.",
   },
 };
 
 const unavailablePremiumCopies: Record<
   AppLocale,
-  { badge: string; note: string; faqAnswer: string }
+  {
+    badge: string;
+    note: string;
+    faqAnswer: string;
+    microLine: string;
+    mollieCardBody: string;
+    creditsCardBody: string;
+  }
 > = {
   "nl-BE": {
     badge: "Nog niet beschikbaar",
     note: "De aankoopoptie verschijnt in Messenger zodra ze beschikbaar is.",
     faqAnswer:
       "Nog niet beschikbaar. Deze optie verschijnt in Messenger zodra ze actief is.",
+    microLine: "Dagelijks gratis proberen • Geen abonnement • Betalen komt eraan",
+    mollieCardBody:
+      "Betalen via Mollie is nog niet actief. Zodra dat wel zo is, verloopt elke aankoop via hun beveiligde betaalpagina.",
+    creditsCardBody:
+      "Er worden nog geen premiumcredits toegevoegd, want betalen is nog niet actief. Zodra dat zo is, gebeurt dat pas na bevestiging door Mollie.",
   },
   "fr-BE": {
     badge: "Pas encore disponible",
     note: "L'option d'achat apparaîtra dans Messenger dès qu'elle sera disponible.",
     faqAnswer:
       "Pas encore disponible. Cette option apparaîtra dans Messenger dès qu'elle sera active.",
+    microLine: "Essai gratuit chaque jour • Sans abonnement • Paiement bientôt disponible",
+    mollieCardBody:
+      "Le paiement via Mollie n'est pas encore actif. Une fois actif, chaque achat passera par leur page de paiement sécurisée.",
+    creditsCardBody:
+      "Aucun crédit premium n'est encore ajouté, le paiement n'étant pas actif. Une fois actif, l'ajout se fera après confirmation par Mollie.",
   },
   en: {
     badge: "Not available yet",
     note: "The purchase option will appear in Messenger once it's live.",
     faqAnswer: "Not available yet. This option will appear in Messenger once it's live.",
+    microLine: "Free to try every day • No subscription • Payment coming soon",
+    mollieCardBody:
+      "Payment via Mollie isn't live yet. Once it is, every purchase will run through their secure payment page.",
+    creditsCardBody:
+      "No premium credits are added yet, since payment isn't live. Once it is, that only happens after Mollie confirms the payment.",
   },
 };
 
@@ -709,8 +727,7 @@ function AdminLink({
   if (!loginConfigured) return null;
   return (
     <button
-      className="hidden items-center gap-1.5 text-xs font-semibold text-[#14203D]/50 transition hover:text-[#14203D] sm:inline-flex"
-      title={copy.loginUnavailable}
+      className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#14203D]/50 transition hover:text-[#14203D]"
       type="button"
       onClick={() => {
         const loginUrl = getLoginUrl("/portal");
@@ -806,9 +823,18 @@ export default function LandingPage({
 }) {
   const copy = landingCopies[locale];
   const unavailable = unavailablePremiumCopies[locale];
+  const microLine = commercialBillingAvailable
+    ? copy.microLine
+    : unavailable.microLine;
   const premiumNote = commercialBillingAvailable
     ? copy.credits.note
     : unavailable.note;
+  const trustCards = copy.trustCards.map((card, index) => {
+    if (commercialBillingAvailable) return card;
+    if (index === 0) return { ...card, body: unavailable.mollieCardBody };
+    if (index === 2) return { ...card, body: unavailable.creditsCardBody };
+    return card;
+  });
   const questions = copy.questions.map((question, index) =>
     index === 2 && !commercialBillingAvailable
       ? { ...question, answer: unavailable.faqAnswer }
@@ -901,7 +927,7 @@ export default function LandingPage({
                 className="mt-0.5 h-4 w-4 shrink-0 text-[#2541C9]"
                 aria-hidden="true"
               />
-              {copy.microLine}
+              {microLine}
             </p>
           </div>
 
@@ -1168,7 +1194,7 @@ export default function LandingPage({
             </h2>
           </div>
           <div className="mt-12 grid gap-5 sm:grid-cols-2">
-            {copy.trustCards.map((card, index) => {
+            {trustCards.map((card, index) => {
               const Icon = trustCardIcons[index] ?? ShieldCheck;
               return (
                 <article
