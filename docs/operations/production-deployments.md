@@ -792,6 +792,24 @@ has been backed up, migration has been rehearsed on a copy, and the canonical
 Machine-volume attachment is explicitly approved. The pre-deploy drift gate is
 intentionally fail-closed while this remains unresolved.
 
+### Gateway quiescence observation
+
+The canonical owner Page callback now points directly to `apps/image-gen`, but
+that callback proof alone does not authorize stopping the legacy gateway. The
+scheduled production uptime workflow must not probe the gateway during the
+zero-traffic observation window; it continues to monitor image-gen and the
+storage proxy.
+
+The observation clock starts only after the probe-removal change is merged to
+`main`. Record the exact merge SHA and UTC timestamp in
+`docs/operations/todo.md`; PR creation time and gateway logs collected before
+that point do not count. Collect metadata-only ingress evidence without calling
+the public gateway endpoint. Keep overlapping captures if the provider exposes
+only a bounded log window, and never record message content or user identifiers.
+The first quiescence change does not stop, scale, redeploy, delete, or otherwise
+mutate any gateway Machine, secret, or volume. Those actions remain separate,
+reviewed retirement steps with their own rollback and retention evidence.
+
 The manifest contract has four stages:
 
 1. `awaiting_rehearsal` binds the observed legacy Machine/image/volume tuple,

@@ -6,6 +6,8 @@ import { pathToFileURL } from "node:url";
 
 const MANIFEST_PATH = "deploy/production/apps.json";
 const PRODUCTION_WORKFLOW_PATH = ".github/workflows/deploy-production.yml";
+const PRODUCTION_UPTIME_WORKFLOW_PATH =
+  ".github/workflows/production-uptime.yml";
 const TRUSTED_ARTIFACT_WORKFLOW_PATH =
   ".github/workflows/build-production-artifacts.yml";
 const SCHEMA_TRANSITION_WORKFLOW_PATH =
@@ -185,6 +187,18 @@ function referencesExactHttpUrl(source, expected) {
     }
   }
   return false;
+}
+
+function referencesExactHostnameToken(source, expectedHostname) {
+  const executableSource = source.replace(/^\s*#.*$/gmu, "");
+  const escapedHostname = expectedHostname.replace(
+    /[.*+?^${}()|[\]\\]/g,
+    "\\$&",
+  );
+  return new RegExp(
+    `(^|[^a-z0-9.-])${escapedHostname}(?=$|[^a-z0-9.-])`,
+    "iu",
+  ).test(executableSource);
 }
 
 function readJson(filePath) {
@@ -8489,6 +8503,24 @@ export function validateProductionRepository(rootDir = process.cwd()) {
     }
     if (new Set(config.allowedFields).size !== config.allowedFields.length) {
       fail(`${object} allowed Meta fields must not contain duplicates`);
+    }
+  }
+
+  const pageCallback = manifest.meta.page;
+  const legacyGatewayHostname = `${CANONICAL_TARGETS.gateway.app}.fly.dev`;
+  if (
+    pageCallback?.migrationState === "canonical" &&
+    new URL(normalizeUrl(pageCallback.expectedCallback)).hostname !==
+      legacyGatewayHostname
+  ) {
+    const uptimeWorkflow = fs.readFileSync(
+      path.join(rootDir, PRODUCTION_UPTIME_WORKFLOW_PATH),
+      "utf8",
+    );
+    if (referencesExactHostnameToken(uptimeWorkflow, legacyGatewayHostname)) {
+      fail(
+        `${PRODUCTION_UPTIME_WORKFLOW_PATH} must not probe the legacy OpenClaw gateway after the Page callback is canonical`,
+      );
     }
   }
 

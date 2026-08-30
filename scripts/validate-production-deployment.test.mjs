@@ -2202,6 +2202,68 @@ describe("production deployment contract", () => {
     );
   });
 
+  it("forbids the automatic legacy gateway health probe after direct Page cutover", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/production-uptime.yml",
+      "https://leaderbot-fb-image-gen.fly.dev/healthz",
+      "https://leaderbot-openclaw-gateway.fly.dev/healthz",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      ".github/workflows/production-uptime.yml must not probe the legacy OpenClaw gateway after the Page callback is canonical",
+    );
+  });
+
+  it("forbids alternate automatic probes to the legacy gateway host", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/production-uptime.yml",
+      "https://leaderbot-fb-image-gen.fly.dev/healthz",
+      "https://leaderbot-openclaw-gateway.fly.dev/readyz?source=uptime",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      ".github/workflows/production-uptime.yml must not probe the legacy OpenClaw gateway after the Page callback is canonical",
+    );
+  });
+
+  it("forbids an interpolated automatic probe to the legacy gateway host", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/production-uptime.yml",
+      "          body=\"$(mktemp)\"\n",
+      '          gateway_host="leaderbot-openclaw-gateway.fly.dev"\n          body="$(mktemp)"\n',
+    );
+    replaceFixtureText(
+      root,
+      ".github/workflows/production-uptime.yml",
+      "https://leaderbot-fb-image-gen.fly.dev/healthz",
+      "https://${gateway_host}/healthz",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      ".github/workflows/production-uptime.yml must not probe the legacy OpenClaw gateway after the Page callback is canonical",
+    );
+  });
+
+  it("ignores a comment about the legacy gateway in the uptime workflow", () => {
+    const root = createRepositoryFixture();
+    const workflowPath = path.join(
+      root,
+      ".github/workflows/production-uptime.yml",
+    );
+    fs.appendFileSync(
+      workflowPath,
+      "\n# Retired host: leaderbot-openclaw-gateway.fly.dev\n",
+    );
+
+    expect(() => validateProductionRepository(root)).not.toThrow();
+  });
+
   it("does not allow the storage-proxy readiness path to be removed", () => {
     const root = createRepositoryFixture();
     const manifestPath = path.join(root, "deploy/production/apps.json");
