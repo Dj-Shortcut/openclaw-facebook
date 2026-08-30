@@ -2202,6 +2202,34 @@ describe("production deployment contract", () => {
     );
   });
 
+  it("forbids the automatic legacy gateway health probe after direct Page cutover", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/production-uptime.yml",
+      "https://leaderbot-fb-image-gen.fly.dev/healthz",
+      "https://leaderbot-openclaw-gateway.fly.dev/healthz",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      ".github/workflows/production-uptime.yml must not probe the legacy OpenClaw gateway after the Page callback is canonical",
+    );
+  });
+
+  it("forbids alternate automatic probes to the legacy gateway host", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/production-uptime.yml",
+      "https://leaderbot-fb-image-gen.fly.dev/healthz",
+      "https://leaderbot-openclaw-gateway.fly.dev/readyz?source=uptime",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      ".github/workflows/production-uptime.yml must not probe the legacy OpenClaw gateway after the Page callback is canonical",
+    );
+  });
+
   it("does not allow the storage-proxy readiness path to be removed", () => {
     const root = createRepositoryFixture();
     const manifestPath = path.join(root, "deploy/production/apps.json");

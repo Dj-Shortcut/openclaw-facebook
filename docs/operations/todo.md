@@ -48,6 +48,15 @@ Live payment enablement remains gated by the relevant P1 through P4 evidence.
       volume data under an explicit privacy/retention decision. Extract the
       generic OpenClaw channel to its standalone project before removing the
       root package and ClawHub workflows from this repository.
+  - [ ] Merge the reviewed removal of the automatic gateway health probe. The
+        zero-traffic observation window starts only at that exact `main` merge
+        SHA and UTC timestamp, not at PR creation or from earlier bounded logs.
+        Record both values here after merge: merge SHA `pending`; start UTC
+        `pending`.
+  - [ ] After that start, collect continuous metadata-only gateway ingress
+        evidence for the approved observation duration. A green health check is
+        not user-traffic evidence. Do not stop, delete, scale, or replace the
+        gateway Machine or its volumes as part of the probe-removal change.
 
 - [ ] **P2 - User-scoped purchased-credit ledger.** Add an append-only credit
       ledger, wallet projection, and idempotent reservation/commit/release model
@@ -90,6 +99,13 @@ Live payment enablement remains gated by the relevant P1 through P4 evidence.
       and stale secrets/workflows/docs.
 
 ## Current P1 gate
+
+- Protected deployment inspection run `33297361675` proved the owner Page uses
+  the canonical direct callback
+  `https://leaderbot-fb-image-gen.fly.dev/facebook/webhook`. The old scheduled
+  gateway health request still contaminates zero-traffic observations until its
+  removal is merged. Consequently the observation-window SHA and time above
+  remain `pending`, and P1 remains open.
 
 - Storage-proxy startup ordering was fixed and merged in PR #445 at reviewed
   source commit `6a7d0431e1e02076a2db7fcf12c8358d7fbf33cd`.
