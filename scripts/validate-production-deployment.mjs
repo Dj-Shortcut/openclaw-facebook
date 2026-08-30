@@ -3998,6 +3998,10 @@ function validateSchemaTransitionWorkflow(rootDir) {
       "must bind the pre-DDL proof to an exact Fly release version",
     ],
     [
+      '(.releaseWatermark | type == "string" and test("^[a-f0-9]{64}$"))',
+      "must bind the pre-DDL proof to the exact observed Fly release history",
+    ],
+    [
       '[[ "$settled_identity" =~ ^deploy-[0-9]+-[0-9]+$ ]]',
       "must refuse bootstrap, rollback, and malformed identities before schema DDL",
     ],
@@ -4310,6 +4314,17 @@ function validateSchemaTransitionWorkflow(rootDir) {
   ) {
     fail(
       `${SCHEMA_TRANSITION_WORKFLOW_PATH} must validate the exact Fly release version in both settled release tuples`,
+    );
+  }
+  if (
+    (
+      workflow.match(
+        /\(\.releaseWatermark \| type == "string" and test\("\^\[a-f0-9\]\{64\}\$"\)\)/g,
+      ) ?? []
+    ).length !== 2
+  ) {
+    fail(
+      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must validate the exact Fly release history in both settled release tuples`,
     );
   }
   const preflightJob = namedWorkflowJobBody(workflow, "preflight");
@@ -10561,13 +10576,6 @@ export async function checkSettledLiveFlyDrift(target, options = {}) {
   }
   const identity = [...machineIdentities][0];
   const liveEnv = live?.env ?? {};
-  if (
-    Object.hasOwn(liveEnv, "LEADERBOT_DEPLOYMENT_IDENTITY") &&
-    (typeof liveEnv.LEADERBOT_DEPLOYMENT_IDENTITY !== "string" ||
-      liveEnv.LEADERBOT_DEPLOYMENT_IDENTITY !== identity)
-  ) {
-    fail("live config deployment identity differs from the settled Machines");
-  }
   if (!Array.isArray(releases)) {
     fail("settled-live preflight requires a Fly release list");
   }
@@ -10609,6 +10617,30 @@ export async function checkSettledLiveFlyDrift(target, options = {}) {
   if (newerReleases.some((release) => release.Status !== "failed")) {
     fail("settled-live preflight found a newer non-terminal Fly release");
   }
+  if (
+    newerReleases.length === 0 &&
+    Object.hasOwn(liveEnv, "LEADERBOT_DEPLOYMENT_IDENTITY") &&
+    (typeof liveEnv.LEADERBOT_DEPLOYMENT_IDENTITY !== "string" ||
+      liveEnv.LEADERBOT_DEPLOYMENT_IDENTITY !== identity)
+  ) {
+    fail("live config deployment identity differs from the settled Machines");
+  }
+  const releaseWatermark = createHash("sha256")
+    .update(
+      JSON.stringify(
+        [...normalizedReleases]
+          .sort(
+            (left, right) => left.normalizedVersion - right.normalizedVersion,
+          )
+          .map((release) => [
+            release.normalizedVersion,
+            release.Status,
+            release.InProgress,
+            release.ImageRef ?? null,
+          ]),
+      ),
+    )
+    .digest("hex");
   const activeReleaseVersion = String(activeRelease.normalizedVersion);
   for (const machine of runtimeMachines) {
     const releaseVersion = machine?.config?.metadata?.fly_release_version;
@@ -10770,14 +10802,26 @@ export async function checkSettledLiveFlyDrift(target, options = {}) {
   const errors = [...result.blockingErrors, ...result.reconcilableDrift];
   const releaseVersion = activeRelease.normalizedVersion;
   if (errors.length) {
-    return { ...result, identity, expectedImage, releaseVersion };
+    return {
+      ...result,
+      identity,
+      expectedImage,
+      releaseVersion,
+      releaseWatermark,
+    };
   }
   await verifySettledBaseline(target, identity, {
     ...options,
     rootDir,
     expectedImage,
   });
-  return { ...result, identity, expectedImage, releaseVersion };
+  return {
+    ...result,
+    identity,
+    expectedImage,
+    releaseVersion,
+    releaseWatermark,
+  };
 }
 
 const isMain =
@@ -11162,6 +11206,7 @@ if (isMain) {
           identity: result.identity,
           expectedImage: result.expectedImage,
           releaseVersion: result.releaseVersion,
+          releaseWatermark: result.releaseWatermark,
         })}\n`,
       );
     } else {

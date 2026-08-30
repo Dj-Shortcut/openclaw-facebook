@@ -224,7 +224,8 @@ jobs:
             (.expectedImage | type == "string" and test("^registry\\.fly\\.io/leaderbot-fb-image-gen@sha256:[a-f0-9]{64}$")) and
             (.releaseVersion | type == "number") and
             .releaseVersion > 0 and
-            .releaseVersion == (.releaseVersion | floor)
+            .releaseVersion == (.releaseVersion | floor) and
+            (.releaseWatermark | type == "string" and test("^[a-f0-9]{64}$"))
           )' <<<"$settled_state")"
           printf '%s\n' "$settled_tuple" > "$evidence_dir/settled-live.json"
           settled_identity="$(jq -er '.identity' <<<"$settled_tuple")"
@@ -727,7 +728,8 @@ jobs:
             (.expectedImage | type == "string" and test("^registry\\.fly\\.io/leaderbot-fb-image-gen@sha256:[a-f0-9]{64}$")) and
             (.releaseVersion | type == "number") and
             .releaseVersion > 0 and
-            .releaseVersion == (.releaseVersion | floor)
+            .releaseVersion == (.releaseVersion | floor) and
+            (.releaseWatermark | type == "string" and test("^[a-f0-9]{64}$"))
           )' <<<"$current_state")"
           test "$current_tuple" = "$settled_tuple"
 
