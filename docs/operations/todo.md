@@ -53,11 +53,11 @@ Live payment enablement remains gated by the relevant P1 through P4 evidence.
         `2026-08-30T17:37:55Z`. Because the observation duration had not yet
         been fixed before that merge, this timestamp is not the observation
         start.
-  - [ ] Merge the reviewed observation contract with a duration fixed in
-        advance at exactly 168 continuous hours (seven 24-hour periods). The
-        clock starts only at that contract's exact `main` merge SHA and UTC
-        timestamp. Record both values in a follow-up evidence commit: merge SHA
-        `pending`; start UTC `pending`.
+  - [x] PR #480 fixed the observation duration in advance at exactly 168
+        continuous hours (seven 24-hour periods) and merged to `main` as
+        `c251a5e34c46bd327ffa5c015ed038f1fced545e` on
+        `2026-08-30T17:44:08Z`. That exact SHA and UTC timestamp start the
+        observation clock.
   - [ ] After that start, collect continuous metadata-only gateway ingress
         evidence for all 168 hours. A green health check is not user-traffic
         evidence. Any evidence gap, gateway probe, gateway Machine mutation, or
