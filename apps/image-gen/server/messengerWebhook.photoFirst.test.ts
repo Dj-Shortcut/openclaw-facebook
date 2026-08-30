@@ -516,11 +516,6 @@ describe("photo-first onboarding", () => {
       [
         {
           content_type: "text",
-          title: "Klantenportaal",
-          payload: "OPENCLAW_ACTION:portal",
-        },
-        {
-          content_type: "text",
           title: "Nieuwe afbeelding",
           payload: "OPENCLAW_ACTION:new_image",
         },
@@ -620,11 +615,6 @@ describe("photo-first onboarding", () => {
       psid,
       t("nl", "flowExplanation"),
       [
-        {
-          content_type: "text",
-          title: "Klantenportaal",
-          payload: "OPENCLAW_ACTION:portal",
-        },
         {
           content_type: "text",
           title: "Nieuwe afbeelding",

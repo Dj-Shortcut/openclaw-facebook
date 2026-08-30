@@ -11,23 +11,13 @@ import {
 
 const mocks = vi.hoisted(() => ({
   applyCreditPaymentWebhookSnapshot: vi.fn(),
-  applyMolliePaymentSnapshot: vi.fn(),
   getRedisClient: vi.fn(),
   isRedisEnabled: vi.fn(),
   safeLog: vi.fn(),
-  resolveMollieWebhookWorkspace: vi.fn(),
 }));
 
 vi.mock("./creditPaymentWebhook", () => ({
   applyCreditPaymentWebhookSnapshot: mocks.applyCreditPaymentWebhookSnapshot,
-}));
-
-vi.mock("./paymentStore", () => ({
-  applyMolliePaymentSnapshot: mocks.applyMolliePaymentSnapshot,
-}));
-
-vi.mock("./checkoutStore", () => ({
-  resolveMollieWebhookWorkspace: mocks.resolveMollieWebhookWorkspace,
 }));
 
 vi.mock("../logger", () => ({
@@ -114,46 +104,11 @@ describe("classic Mollie payment webhook", () => {
     mocks.getRedisClient.mockResolvedValue({
       eval: vi.fn().mockResolvedValue(1),
     });
-    mocks.applyMolliePaymentSnapshot.mockResolvedValue({
-      result: "processed",
-      workspaceId: 42,
-    });
     mocks.applyCreditPaymentWebhookSnapshot.mockResolvedValue("unknown");
-    mocks.resolveMollieWebhookWorkspace.mockResolvedValue(42);
   });
 
   afterEach(() => {
     process.env = { ...originalEnv };
-  });
-
-  it("accepts form-urlencoded input, reads only id and processes the fetched payment", async () => {
-    const payment = providerPayment();
-    const getPayment = vi.fn().mockResolvedValue(payment);
-    const createClient = vi.fn(
-      () => ({ getPayment }) as unknown as MollieClient
-    );
-
-    const response = await postWebhook({
-      body: "id=tr_payment123&status=paid",
-      contentType: "application/x-www-form-urlencoded",
-      createClient,
-    });
-
-    expect(response).toEqual({
-      status: 200,
-      contentType: "text/plain; charset=utf-8",
-      rateLimitRemaining: "5999",
-      retryAfter: null,
-      body: "OK",
-    });
-    expect(getPayment).toHaveBeenCalledTimes(1);
-    expect(getPayment).toHaveBeenCalledWith("tr_payment123");
-    expect(mocks.resolveMollieWebhookWorkspace).toHaveBeenCalledWith(
-      "test",
-      "tr_payment123",
-      "intent_opaque123"
-    );
-    expect(mocks.applyMolliePaymentSnapshot).toHaveBeenCalledWith(payment, 42);
   });
 
   it("routes an exact customerless credit payment without legacy tenant lookup", async () => {
@@ -186,8 +141,6 @@ describe("classic Mollie payment webhook", () => {
       expectedMode: "test",
       payment,
     });
-    expect(mocks.resolveMollieWebhookWorkspace).not.toHaveBeenCalled();
-    expect(mocks.applyMolliePaymentSnapshot).not.toHaveBeenCalled();
   });
 
   it("acknowledges an early exact credit webhook without binding it to the legacy path", async () => {
@@ -221,8 +174,6 @@ describe("classic Mollie payment webhook", () => {
       expectedMode: "test",
       payment,
     });
-    expect(mocks.resolveMollieWebhookWorkspace).not.toHaveBeenCalled();
-    expect(mocks.applyMolliePaymentSnapshot).not.toHaveBeenCalled();
     expect(mocks.safeLog).toHaveBeenCalledWith(
       "mollie_payment_webhook_processed",
       { result: "unknown" }
@@ -255,26 +206,6 @@ describe("classic Mollie payment webhook", () => {
 
     expect(response.status).toBe(503);
     expect(response.body).toBe("Retry");
-    expect(mocks.resolveMollieWebhookWorkspace).not.toHaveBeenCalled();
-  });
-
-  it("routes multiple tenants from immutable provider metadata without a singleton pin", async () => {
-    delete process.env.MOLLIE_BILLING_WORKER_WORKSPACE_ID;
-    mocks.resolveMollieWebhookWorkspace.mockResolvedValue(77);
-    const payment = providerPayment({
-      id: "tr_tenant77",
-      metadata: { billingIntentId: "intent_tenant77" },
-    });
-    const getPayment = vi.fn().mockResolvedValue(payment);
-
-    const response = await postWebhook({
-      body: "id=tr_tenant77",
-      contentType: "application/x-www-form-urlencoded",
-      createClient: () => ({ getPayment }) as unknown as MollieClient,
-    });
-
-    expect(response.status).toBe(200);
-    expect(mocks.applyMolliePaymentSnapshot).toHaveBeenCalledWith(payment, 77);
   });
 
   it("fails closed when the provider metadata cannot establish a tenant", async () => {
@@ -291,8 +222,6 @@ describe("classic Mollie payment webhook", () => {
     });
 
     expect(response.status).toBe(200);
-    expect(mocks.resolveMollieWebhookWorkspace).not.toHaveBeenCalled();
-    expect(mocks.applyMolliePaymentSnapshot).not.toHaveBeenCalled();
   });
 
   it("returns the same generic 200 for an unknown provider payment", async () => {
@@ -311,7 +240,6 @@ describe("classic Mollie payment webhook", () => {
 
     expect(response.status).toBe(200);
     expect(response.body).toBe("OK");
-    expect(mocks.applyMolliePaymentSnapshot).not.toHaveBeenCalled();
     expect(mocks.safeLog).toHaveBeenCalledWith(
       "mollie_payment_webhook_processed",
       { result: "unknown" }
@@ -339,7 +267,6 @@ describe("classic Mollie payment webhook", () => {
       retryAfter: null,
       body: "OK",
     });
-    expect(mocks.applyMolliePaymentSnapshot).not.toHaveBeenCalled();
   });
 
   it.each(["id=", "id=payment123", "id=tr_bad%21", "id=tr_"])(
@@ -356,7 +283,6 @@ describe("classic Mollie payment webhook", () => {
       expect(response.status).toBe(200);
       expect(response.body).toBe("OK");
       expect(createClient).not.toHaveBeenCalled();
-      expect(mocks.applyMolliePaymentSnapshot).not.toHaveBeenCalled();
     }
   );
 

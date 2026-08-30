@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { assertAuthConfig, getFacebookConnectStorageMode } from "./_core/env";
+import { assertAuthConfig } from "./_core/env";
 
 function parseConsoleLogCalls(logSpy: ReturnType<typeof vi.spyOn>) {
   return logSpy.mock.calls.map(call => JSON.parse(String(call[0])));
@@ -8,8 +8,6 @@ function parseConsoleLogCalls(logSpy: ReturnType<typeof vi.spyOn>) {
 describe.sequential("OAuth SDK configuration guard", () => {
   const originalOAuthUrl = process.env.OAUTH_SERVER_URL;
   const originalJwtSecret = process.env.JWT_SECRET;
-  const originalFacebookConnectStorageMode =
-    process.env.FACEBOOK_CONNECT_STORAGE_MODE;
   const originalNodeEnv = process.env.NODE_ENV;
 
   afterEach(() => {
@@ -22,12 +20,6 @@ describe.sequential("OAuth SDK configuration guard", () => {
       delete process.env.JWT_SECRET;
     } else {
       process.env.JWT_SECRET = originalJwtSecret;
-    }
-    if (originalFacebookConnectStorageMode === undefined) {
-      delete process.env.FACEBOOK_CONNECT_STORAGE_MODE;
-    } else {
-      process.env.FACEBOOK_CONNECT_STORAGE_MODE =
-        originalFacebookConnectStorageMode;
     }
     if (originalNodeEnv === undefined) delete process.env.NODE_ENV;
     else process.env.NODE_ENV = originalNodeEnv;
@@ -101,18 +93,4 @@ describe.sequential("OAuth SDK configuration guard", () => {
     expect(() => assertAuthConfig()).toThrow("JWT_SECRET must be set");
   });
 
-  it("defaults Facebook connect storage to the legacy-compatible bridge", () => {
-    delete process.env.FACEBOOK_CONNECT_STORAGE_MODE;
-    expect(getFacebookConnectStorageMode()).toBe("legacy_compat");
-  });
-
-  it("fails production startup for an invalid Facebook connect storage mode", () => {
-    process.env.NODE_ENV = "production";
-    process.env.JWT_SECRET = "x".repeat(32);
-    process.env.FACEBOOK_CONNECT_STORAGE_MODE = "sealed_immediately";
-
-    expect(() => assertAuthConfig()).toThrow(
-      "FACEBOOK_CONNECT_STORAGE_MODE must be one of legacy_compat, sealed_compat, sealed_only"
-    );
-  });
 });

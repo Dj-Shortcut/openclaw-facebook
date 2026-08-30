@@ -3,7 +3,6 @@ import type { BotTextContext } from "../../botContext";
 import { t } from "../../i18n";
 import {
   buildAssistantPhotoHelpResponse,
-  buildPortalEnrollmentResponse,
   buildQuickStartResponse,
 } from "../../conversationActions";
 import {
@@ -94,15 +93,6 @@ const PRIVACY_COMMANDS = new Set([
 
 const VIDEO_COMMANDS = new Set(["video", "maak video", "make video"]);
 
-const PORTAL_COMMANDS = new Set([
-  "portal",
-  "/portal",
-  "dashboard",
-  "klantenportaal",
-  "open portal",
-  "customer portal",
-]);
-
 export function isAssistantCommandText(normalizedText: string): boolean {
   return (
     HELP_COMMANDS.has(normalizedText) ||
@@ -112,8 +102,7 @@ export function isAssistantCommandText(normalizedText: string): boolean {
     CHANGE_BACKGROUND_COMMANDS.has(normalizedText) ||
     COMBINE_PHOTOS_COMMANDS.has(normalizedText) ||
     PRIVACY_COMMANDS.has(normalizedText) ||
-    VIDEO_COMMANDS.has(normalizedText) ||
-    PORTAL_COMMANDS.has(normalizedText)
+    VIDEO_COMMANDS.has(normalizedText)
   );
 }
 
@@ -152,28 +141,6 @@ function getEditableImageUrl(ctx: BotTextContext): string | undefined {
 export const assistantCommandsFeature: BotFeature = {
   name: "assistant_commands",
   async onText(ctx) {
-    if (PORTAL_COMMANDS.has(ctx.normalizedText) && ctx.requestPortalHandoff) {
-      const result = await ctx.requestPortalHandoff();
-      if (result === "not_linked") {
-        const response = buildPortalEnrollmentResponse(ctx.lang);
-        if (response.actions?.length) {
-          await ctx.sendActions(response.text ?? "", response.actions);
-        } else {
-          await ctx.sendText(t(ctx.lang, "portalLinkNotLinked"));
-        }
-        return { handled: true };
-      }
-      await ctx.sendText(
-        t(
-          ctx.lang,
-          result === "sent"
-            ? "portalLinkSent"
-            : "portalLinkUnavailable"
-        )
-      );
-      return { handled: true };
-    }
-
     if (HELP_COMMANDS.has(ctx.normalizedText)) {
       if (getEditableImageUrl(ctx)) {
         const response = buildAssistantPhotoHelpResponse(ctx.lang);

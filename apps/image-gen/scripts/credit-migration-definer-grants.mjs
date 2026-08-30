@@ -57,6 +57,9 @@ export async function grantCreditMigrationDefinerPrivileges({
   const schema = provisioner.escapeId(databaseName);
   const account = quotedAccount(provisioner, migrationAccount);
   await provisioner.query(
+    `GRANT CREATE, TRIGGER, CREATE ROUTINE, ALTER ROUTINE ON ${schema}.* TO ${account}`
+  );
+  await provisioner.query(
     `GRANT DELETE ON ${schema}.${provisioner.escapeId("billing_intents")} TO ${account}`
   );
   await provisioner.query(

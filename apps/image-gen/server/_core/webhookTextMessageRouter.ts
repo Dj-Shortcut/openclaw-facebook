@@ -1,3 +1,4 @@
+import { createHash, randomUUID } from "node:crypto";
 import { sendMessengerBotResponse } from "./botResponseAdapters";
 import { getBotFeatures } from "./bot/features";
 import { t, type Lang } from "./i18n";
@@ -22,7 +23,16 @@ import {
 import {
   getMessengerRequestOwnership,
   getMessengerRequestPageId,
+  getMessengerRequestPrivacySubject,
 } from "./messengerRequestContext";
+import { getMollieConfig } from "./billing/config";
+import {
+  getCreditOffer,
+  PREMIUM_IMAGE_CREDIT_OFFER_ID,
+  PREMIUM_IMAGE_CREDIT_OFFER_VERSION,
+} from "./billing/creditCatalog";
+import { MollieClient } from "./billing/mollieClient";
+import { isMessengerAdmin } from "./messengerAdmin";
 import type { HandlerContext } from "./webhookHandlerTypes";
 
 type TextMessageInput = {
@@ -257,6 +267,63 @@ async function handleSharedMessengerText(
         messageText
       );
       return true;
+    },
+    runMollieTestCommand: async () => {
+      const ownership = getMessengerRequestOwnership();
+      const privacySubject = getMessengerRequestPrivacySubject();
+      if (
+        !ownership ||
+        !privacySubject ||
+        !ownership.workspaceId ||
+        !ownership.channelConnectionId ||
+        !ownership.bindingEpoch
+      ) {
+        return {
+          text: "De Mollie-testbetaling is tijdelijk niet beschikbaar.",
+        };
+      }
+      if (!isMessengerAdmin(input.psid, input.userId)) {
+        return {
+          text: "De Mollie-testbetaling is tijdelijk niet beschikbaar.",
+        };
+      }
+      try {
+        const config = getMollieConfig();
+        if (config.mode !== "test") throw new Error("test mode required");
+        const offer = getCreditOffer(
+          PREMIUM_IMAGE_CREDIT_OFFER_ID,
+          PREMIUM_IMAGE_CREDIT_OFFER_VERSION
+        );
+        if (!offer) throw new Error("test offer unavailable");
+        const metadataHash = createHash("sha256")
+          .update("leaderbot.mollie-test-command.v1\\0", "utf8")
+          .update(privacySubject.userKey, "utf8")
+          .digest("hex");
+        const client = new MollieClient(config);
+        const payment = await client.createCreditPayment({
+          amount: offer.amount,
+          description: offer.mollieDescription,
+          billingIntentId: randomUUID(),
+          metadataHash,
+          redirectUrl: new URL("/healthz", config.appBaseUrl).toString(),
+          webhookUrl: config.paymentWebhookUrl,
+          idempotencyKey: `mollie-test-command:${input.reqId}`,
+        });
+        return {
+          text: "Dit is een Mollie Test Mode-betaling van € 4,99 voor 8 premiumcredits. Er wordt niets echt afgeschreven.",
+          actions: [
+            {
+              id: "mollie_test_checkout",
+              label: "Open Mollie-testbetaling",
+              url: client.getHostedCheckoutUrl(payment),
+            },
+          ],
+        };
+      } catch {
+        return {
+          text: "De Mollie-testbetaling is nog niet geactiveerd voor deze Messenger-gebruiker.",
+        };
+      }
     },
     logState: (state, context) => {
       ctx.logUserState(input.psid, input.userId, state, input.reqId, context);

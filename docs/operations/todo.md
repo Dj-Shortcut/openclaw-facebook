@@ -61,6 +61,9 @@ Live payment enablement remains gated by the relevant P1 through P4 evidence.
       epoch, offer, and nonce. Show exact price, credit count, quality, validity,
       no-subscription disclosure, and no-purchase alternative. Grant once only
       after trusted Mollie payment verification; never from the browser return.
+      The temporary owner-only Mollie Test Mode command is test infrastructure
+      only and must be removed after the Test Mode journey is accepted; the
+      production trigger is the daily free-credit exhaustion path only.
 
 - [ ] **P4 - Premium quality and Test Mode journey.** Bind the paid offer to a
       versioned premium provider policy and prove unit economics. In Mollie Test
@@ -84,6 +87,51 @@ Live payment enablement remains gated by the relevant P1 through P4 evidence.
 - Production uptime was rechecked on 2026-08-27: image-gen, storage proxy, and
   legacy gateway health/readiness checks passed after one transient network
   failure from a GitHub runner.
+- On 2026-08-30 the owner explicitly approved a reversible gateway
+  decommission step. Fly machine `28621d2c559558` was stopped; all four
+  gateway machines are now stopped, gateway `/healthz` returns `502`, and the
+  direct image-gen `/healthz` remains `200 ok`. Gateway volumes and IPs were
+  intentionally preserved. This proves quiescence, not zero historical
+  gateway traffic or permission to delete the gateway state.
+- GitHub Actions deployment evidence from 2026-08-30 shows that production
+  deploys are target-specific, not a fan-out deployment of gateway,
+  image-gen, and storage-proxy. Successful image-gen run `33297361675` took
+  about four minutes end to end. Failed run `33310266008` stopped in about
+  nine seconds during the enabled-target validation because the protected
+  `0016-to-0018` credit-schema expansion freeze was active. The immediate
+  simplification is therefore to finish that schema gate and keep retired
+  targets disabled; deleting machines would not fix this Actions failure.
+- The latest protected schema attempt `33300214073` reached the database
+  preflight and failed closed because the configured migration principal is
+  missing the exact schema privileges `CREATE`, `TRIGGER`, `CREATE ROUTINE`,
+  and `ALTER ROUTINE`. This is production credential drift, not an
+  application-code failure. Repair must be performed through the separately
+  protected database provisioner, followed by the existing grant inspection;
+  do not broaden the app runtime or bypass the contract.
+- The reviewed repair now delegates only those four schema privileges to the
+  protected provisioner, grants them to the migration principal before the
+  credit DDL, and re-inspects the effective migration boundary. Repository
+  validation, TypeScript, and 1,535 deployment-contract tests pass, including
+  rejection of a provisioner missing this exact delegation. The MySQL
+  rehearsal still needs to run with its dedicated rehearsal URL before any
+  production attempt.
+- After the deletion-heavy simplification, the full image-gen suite passed on
+  2026-08-30: 185 test files passed, 17 skipped; 2,312 tests passed, 148
+  skipped. This covers the retained Messenger, privacy, quota, wallet,
+  payment, storage, queue, and deployment-boundary paths; it does not replace
+  the missing direct Page callback and production schema-transition evidence.
+- A live read-only check on 2026-08-30 returned HTTP 200 for
+  `https://app.leaderbot.live/`, but its HTML still advertised the retired
+  customer workspace, customer portal, and `€19` Startpilot. The repository's
+  current checkout page is already the minimal signed credit checkout, so the
+  live domain is stale deployment evidence rather than proof that the new
+  checkout is live. Do not claim checkout launch until the protected image-gen
+  deployment and browser smoke journey pass.
+- A source route audit on 2026-08-30 found no registered customer login,
+  customer portal, OAuth callback, or OpenClaw HTTP route in the active image-gen
+  server. The remaining `/api/trpc` surface is limited to internal operator
+  procedures; historical handoff and billing-drain workers remain only for
+  controlled retirement of durable records.
 - Build run `33092823815` produced and attested immutable storage-proxy digest
   `sha256:99ea65710abb9a2294dcaf02cf76f57b240cb153a69e6020b68a470278103a8d`
   from exact reviewed source `6a7d0431e1e02076a2db7fcf12c8358d7fbf33cd`;

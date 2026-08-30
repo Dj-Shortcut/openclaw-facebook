@@ -56,6 +56,7 @@ kill_timeout = 300
   # then checkout only in separate reviewed Test Mode transitions.
   MESSENGER_PAID_CREDITS_ENABLED = "false"
   MOLLIE_CREDIT_CHECKOUT_ENABLED = "false"
+  MOLLIE_TEST_COMMAND_ENABLED = "true"
   MOLLIE_CREDIT_WORKSPACE_ID = "1"
   # Conservative spend reservation for one paid medium image. This is not
   # booked as the provider's actual invoice cost and must be re-reviewed when
@@ -89,7 +90,6 @@ kill_timeout = 300
   NODE_ENV = "production"
   OPENAI_IMAGE_MAX_RETRIES = "0"
   PORT = "8080"
-  PORTAL_BASE_URL = "https://app.leaderbot.live"
   # Temporary storage migration bridge for existing and non-Messenger objects.
   # New Messenger writes are scoped even while this read/delete bridge is on.
   STORAGE_ALLOW_LEGACY_KEYS = "true"

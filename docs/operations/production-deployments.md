@@ -23,6 +23,10 @@ config file, process groups, desired scale, Machine ownership rule, service
 check, reviewed rollback-image allowlist, and Meta callback expectations.
 `npm run production:validate` checks the repository contract in PR CI. The
 production workflow checks live drift before and after every deploy.
+The shared validation job installs the pinned pnpm toolchain once and uses the
+image-gen lockfile for the Actions dependency cache; the image-gen release
+step therefore reuses packages without changing the immutable artifact or
+production approval gates.
 
 Every workflow job that can receive a Fly API token installs the same reviewed
 `flyctl` binary without a remote setup action or install script. Version
@@ -197,10 +201,11 @@ DELETE` only on the 41 entries in `productionRuntimeWritableTableNames`, and
   production inspection, automatic recovery, or no-review cleanup. Its exact
   grants are global `CREATE USER` without grant option, table-level `SELECT` on
   `mysql.user` without grant option, schema-level `SELECT, EXECUTE WITH GRANT
+OPTION`, schema-level `CREATE, TRIGGER, CREATE ROUTINE, ALTER ROUTINE WITH GRANT
 OPTION`, table-level `INSERT, UPDATE, DELETE WITH GRANT OPTION` only on the 41
   entries in `productionRuntimeWritableTableNames`, and table-level `CREATE,
 DELETE WITH GRANT OPTION` only on `credit_wallets`. It has no other grant, is
-  not root, and has no `ALL`, `SUPER`, or schema-wide DML or DDL grant. The
+not root, and has no `ALL`, `SUPER`, or other schema-wide DML or DDL grant. The
   schema-wide `EXECUTE` delegation is required because this credential exists
   before the 17 reviewed credit procedures do; the staging workflow still
   grants the runtime only their exact names.
@@ -681,6 +686,12 @@ converge, destroy, or replace detached gateway Machines until the volume state
 has been backed up, migration has been rehearsed on a copy, and the canonical
 Machine-volume attachment is explicitly approved. The pre-deploy drift gate is
 intentionally fail-closed while this remains unresolved.
+
+The legacy gateway is configured stopped-by-default in the repository and was
+reversibly quiesced in production on 2026-08-30. Stopping the Machine does not
+authorize deleting its volumes, IPs, or historical configuration. A reviewed
+rollback may start the preserved Machine only after the direct image-gen
+runtime has been checked and the rollback owner has approved it.
 
 The manifest contract has four stages:
 

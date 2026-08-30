@@ -8,7 +8,7 @@ personal OpenClaw Page is separate, pairing-only and outside the Leaderbot
 customer review path. Keep this file aligned with customer Messenger runtime
 behavior before enabling broader public traffic or adding capabilities.
 The personal Page uses a separate Meta app, callback and credential set; do not
-mix it into the customer app review or subscription.
+mix it into the owner-bot review or subscription behavior.
 
 ## Permission posture
 

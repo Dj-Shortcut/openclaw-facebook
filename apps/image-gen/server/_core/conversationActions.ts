@@ -9,16 +9,6 @@ const CONVERSATION_ACTION_VIDEO = "video";
 const CONVERSATION_ACTION_CHANGE_BACKGROUND = "change_background";
 const CONVERSATION_ACTION_COMBINE_PHOTOS = "combine_photos";
 const CONVERSATION_ACTION_PRIVACY_INFO = "privacy";
-const CONVERSATION_ACTION_PORTAL = "portal";
-
-function buildPortalQuickReply(lang: Lang) {
-  return {
-    id: CONVERSATION_ACTION_PORTAL,
-    label: t(lang, "portalAction"),
-    inputText: CONVERSATION_ACTION_PORTAL,
-  };
-}
-
 export function buildQuickStartResponse(lang: Lang): ConversationResponse {
   return {
     text: t(lang, "flowExplanation"),
@@ -43,7 +33,6 @@ export function buildQuickStartResponse(lang: Lang): ConversationResponse {
         label: "Privacy",
         inputText: "Privacy",
       },
-      buildPortalQuickReply(lang),
     ],
   };
 }
@@ -77,7 +66,6 @@ export function buildGenerationSuccessResponse(
         label: "Privacy",
         inputText: "Privacy",
       },
-      buildPortalQuickReply(lang),
     ],
   };
 }
@@ -95,59 +83,6 @@ export function buildGenerationFailureResponse(
         inputText: CONVERSATION_ACTION_NEW_IMAGE,
       },
     ],
-  };
-}
-
-function getSafePortalBaseUrl(): URL | undefined {
-  const configured =
-    process.env.PORTAL_BASE_URL?.trim() ||
-    process.env.LEADERBOT_PUBLIC_URL?.trim();
-  if (!configured) return undefined;
-
-  try {
-    const base = new URL(configured);
-    const isLocalDevelopment =
-      process.env.NODE_ENV !== "production" &&
-      base.protocol === "http:" &&
-      (base.hostname === "localhost" || base.hostname === "127.0.0.1");
-    if (
-      base.username ||
-      base.password ||
-      (base.protocol !== "https:" && !isLocalDevelopment)
-    ) {
-      return undefined;
-    }
-
-    return base;
-  } catch {
-    return undefined;
-  }
-}
-
-function getSafePortalAccessUrl(): string | undefined {
-  const base = getSafePortalBaseUrl();
-  if (!base) return undefined;
-  const target = new URL("/api/oauth/start", base);
-  target.searchParams.set("returnTo", "/portal");
-  return target.toString();
-}
-
-/** New Messenger users can self-enroll without receiving access to another tenant. */
-export function buildPortalEnrollmentResponse(
-  lang: Lang
-): ConversationResponse {
-  const url = getSafePortalAccessUrl();
-  return {
-    text: t(lang, "portalJoinPrompt"),
-    actions: url
-      ? [
-          {
-            id: "open_customer_portal",
-            label: t(lang, "openPortal"),
-            url,
-          },
-        ]
-      : [],
   };
 }
 

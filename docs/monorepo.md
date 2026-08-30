@@ -41,12 +41,6 @@ The personal OpenClaw Fly gateway is retirement-only. Preserve only the
 metadata needed to identify, disable, retain or delete data, and remove its
 Machines, volume, secrets, and Meta callback safely.
 
-### `apps/customer-app`
-
-The customer portal belongs to the abandoned multi-tenant SaaS model. Do not
-add features. Remove it after the active runtime no longer depends on its
-contracts or workflows.
-
 ## Dependency direction
 
 - Active runtime code must not import the root OpenClaw plugin.
@@ -57,8 +51,7 @@ contracts or workflows.
 
 ## Package managers
 
-- `apps/image-gen`, storage proxy, and customer app use their checked-in pnpm
-  lockfiles while they exist.
+- `apps/image-gen` and storage proxy use their checked-in pnpm lockfiles.
 - The root npm package and compatibility lockfiles remain until plugin
   extraction is complete.
 - Do not regenerate a lockfile owned by another package boundary casually.

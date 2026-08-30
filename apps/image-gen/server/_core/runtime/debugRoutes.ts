@@ -14,8 +14,6 @@ import {
   getMessengerGenerationQueueStats,
   type MessengerGenerationQueueStats,
 } from "../messengerGenerationQueue";
-import { sendPortalHandoffLink } from "../portalHandoffDelivery";
-import { isManualPortalHandoffRecoveryReady } from "../portalHandoffSecurity";
 import { isRedisReplayProtectionEnabled } from "../webhookReplayProtection";
 
 type VersionPayload = {
@@ -41,11 +39,6 @@ const costSummaryQuerySchema = z.object({
   period: z.string().refine(isValidUtcPeriod).optional(),
 });
 
-const portalHandoffSendBodySchema = z.object({
-  workspaceId: z.number().int().positive(),
-  messengerSenderUserKey: z.string().regex(/^[a-f0-9]{64}$/),
-});
-
 const adminCostSummaryRouteLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 60,
@@ -63,13 +56,6 @@ const adminCostDashboardRouteLimiter = rateLimit({
 const debugBuildRouteLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 30,
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-
-const adminPortalHandoffRouteLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 10,
   standardHeaders: true,
   legacyHeaders: false,
 });
@@ -389,64 +375,4 @@ export function registerDebugRoutes(app: express.Express, gitSha: string) {
     }
   );
 
-  app.post(
-    "/admin/portal-handoff/send",
-    adminPortalHandoffRouteLimiter,
-    createAdminAuthRateLimiter({
-      eventName: "admin_portal_handoff_auth_rate_limited",
-    }),
-    async (req, res) => {
-      if (
-        !verifyAdminToken({
-          providedToken: readAdminTokenHeader(req),
-          eventName: "admin_portal_handoff_auth_failed",
-        })
-      ) {
-        return res.sendStatus(403);
-      }
-
-      if (!isManualPortalHandoffRecoveryReady()) {
-        safeLog("admin_portal_handoff_tenant_boundary_unavailable", {
-          level: "warn",
-        });
-        return res.status(503).json({ error: "portal handoff unavailable" });
-      }
-
-      const parsedBody = portalHandoffSendBodySchema.safeParse(req.body);
-      if (!parsedBody.success) {
-        return res.status(400).json({ error: "invalid handoff request" });
-      }
-
-      let result: Awaited<ReturnType<typeof sendPortalHandoffLink>>;
-      try {
-        result = await sendPortalHandoffLink(parsedBody.data);
-      } catch (error) {
-        safeLog("admin_portal_handoff_send_failed", {
-          level: "error",
-          workspaceId: parsedBody.data.workspaceId,
-          user: parsedBody.data.messengerSenderUserKey.slice(0, 8),
-          errorCode:
-            error instanceof Error ? error.constructor.name : "UnknownError",
-        });
-        return res.status(502).json({ error: "handoff send failed" });
-      }
-
-      if (result.ok) {
-        return res.status(200).json({
-          sent: true,
-          expiresAt: result.expiresAt.toISOString(),
-        });
-      }
-
-      if (result.reason === "messenger_user_not_found") {
-        return res.status(404).json({ error: result.reason });
-      }
-
-      if (result.reason === "response_window_closed") {
-        return res.status(409).json({ error: result.reason });
-      }
-
-      return res.status(502).json({ error: result.reason });
-    }
-  );
 }

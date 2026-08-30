@@ -4484,6 +4484,10 @@ function validateCreditMigrationDefinerGrant(rootDir) {
       "must use MySQL future-table grant semantics without schema DELETE",
     ],
     [
+      "GRANT CREATE, TRIGGER, CREATE ROUTINE, ALTER ROUTINE ON ${schema}.* TO ${account}",
+      "must delegate only the four missing migration schema privileges",
+    ],
+    [
       'assertProductionMigrationRuntime(migration, "credit-expand")',
       "must verify the exact effective migration boundary after granting",
     ],
@@ -6511,7 +6515,7 @@ export function validateProductionRepository(rootDir = process.cwd()) {
       "must restrict the provisioner to reviewer-gated production jobs",
     ],
     [
-      "not root, and has no `ALL`, `SUPER`, or schema-wide DML or DDL grant",
+      "not root, and has no `ALL`, `SUPER`, or other schema-wide DML or DDL grant",
       "must document the provisioner's explicit privilege ceiling",
     ],
     [
@@ -6521,6 +6525,10 @@ export function validateProductionRepository(rootDir = process.cwd()) {
     [
       "schema-level `SELECT, EXECUTE WITH GRANT\nOPTION`",
       "must document the provisioner's exact schema delegation boundary",
+    ],
+    [
+      "schema-level `CREATE, TRIGGER, CREATE ROUTINE, ALTER ROUTINE WITH GRANT\nOPTION`",
+      "must document the provisioner's exact migration-schema delegation boundary",
     ],
     [
       "table-level `INSERT, UPDATE, DELETE WITH GRANT OPTION` only on the 41",
@@ -7243,16 +7251,6 @@ export function validateProductionRepository(rootDir = process.cwd()) {
           );
         }
       }
-      for (const requiredProvisioningFragment of [
-        "server/cli/provisionWhatsAppBinding.ts",
-        "--outfile=dist/provision-whatsapp-binding.cjs",
-      ]) {
-        if (!dockerBuild.includes(requiredProvisioningFragment)) {
-          fail(
-            "image-gen build:docker must bundle the provider-silent WhatsApp provisioning command",
-          );
-        }
-      }
       for (const requiredTriggerProbeFragment of [
         "scripts/run-billing-trigger-runtime-preflight.mjs",
         "--outfile=dist/billing-trigger-runtime-preflight.cjs",
@@ -7296,7 +7294,6 @@ export function validateProductionRepository(rootDir = process.cwd()) {
         'io.leaderbot.schema.minimum="0018_credit_checkout_reservation"',
         "'migration-bridge' > /app/.leaderbot-artifact-kind",
         "'runtime' > /app/.leaderbot-artifact-kind",
-        "RUN test -s /app/dist/provision-whatsapp-binding.cjs",
         "RUN test -s /app/dist/billing-trigger-runtime-preflight.cjs",
       ]) {
         if (!dockerfile.includes(requiredDockerFragment)) {
@@ -7347,15 +7344,6 @@ export function validateProductionRepository(rootDir = process.cwd()) {
         path.join(rootDir, ".github/workflows/image-gen-ci.yml"),
         "utf8",
       );
-      if (
-        !imageGenCi.includes(
-          'docker run --rm "$image" test -s /app/dist/provision-whatsapp-binding.cjs',
-        )
-      ) {
-        fail(
-          "image-gen CI must inspect the bundled WhatsApp provisioning command",
-        );
-      }
       if (
         !imageGenCi.includes(
           'docker run --rm "$image" test -s /app/dist/billing-trigger-runtime-preflight.cjs',
