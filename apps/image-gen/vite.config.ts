@@ -25,6 +25,13 @@ function manualChunks(id: string): string | undefined {
     return "vendor-ui";
   }
 
+  // Kept out of the shared "vendor" bucket: three.js is only pulled in by
+  // the lazy-loaded hero canvas, so it must stay its own chunk instead of
+  // riding along on every route's initial load.
+  if (/[\\/]node_modules[\\/]three[\\/]/.test(id)) {
+    return "vendor-three";
+  }
+
   return "vendor";
 }
 
