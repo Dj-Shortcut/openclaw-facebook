@@ -166,6 +166,7 @@ export async function executeRepair(
   if (!signal || signal.aborted) fail();
   const url = assertMigrationUrl(migrationUrl);
   let connection;
+  let operationError;
   const roots = [];
   let root;
   const createRoot = async () => {
@@ -225,13 +226,30 @@ export async function executeRepair(
         if ((await readPhase(connection)) !== initialPhase) fail();
       },
     });
+  } catch (error) {
+    operationError = error;
+    throw error;
   } finally {
     for (const openedRoot of roots.reverse()) {
       await openedRoot
         .close({ releaseLock: false, signal })
         .catch(() => undefined);
     }
-    await closeConnection(connection);
+    try {
+      await closeConnection(connection);
+    } catch (closeError) {
+      if (operationError instanceof CreditMigrationPrincipalCleanupError) {
+        throw operationError;
+      }
+      if (operationError) {
+        throw new AggregateError(
+          [operationError, closeError],
+          "credit migration principal repair and connection cleanup failed",
+          { cause: operationError },
+        );
+      }
+      throw closeError;
+    }
   }
 }
 

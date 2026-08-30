@@ -307,6 +307,39 @@ describe("credit migration principal repair contract", () => {
 });
 
 describe("credit migration principal repair resumability", () => {
+  it("preserves cleanup-incomplete when closing the migration connection also fails", async () => {
+    const connection = {
+      end: vi.fn(async () => {
+        throw new Error("synthetic close failure");
+      }),
+    };
+    const { readState, root } = rootHarness({ failRevoke: true });
+
+    await expect(
+      executeRepair(
+        {
+          app: "leaderbot-portal-mysql",
+          machineId: "080d3ddb5099e8",
+        },
+        {
+          migrationUrl:
+            "mysql://credit_migrator:secret@127.0.0.1:13306/leaderbot",
+          mysql: {
+            createConnection: vi.fn(async () => connection),
+          },
+          openRoot: vi.fn(async () => root),
+          readPhase: vi.fn(async () => "0016_expand"),
+          readState,
+          signal: new AbortController().signal,
+          verifyRuntime: vi.fn(async () => {
+            throw new Error("synthetic verification failure");
+          }),
+        },
+      ),
+    ).rejects.toBeInstanceOf(CreditMigrationPrincipalCleanupError);
+    expect(connection.end).toHaveBeenCalledOnce();
+  });
+
   it.each(["0017_credit_wallet_expand", "0018_credit_checkout_reservation"])(
     "keeps %s verification-only and never opens root",
     async (phase) => {
