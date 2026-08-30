@@ -53,16 +53,19 @@ Live payment enablement remains gated by the relevant P1 through P4 evidence.
         `2026-08-30T17:37:55Z`. Because the observation duration had not yet
         been fixed before that merge, this timestamp is not the observation
         start.
-  - [ ] Merge the reviewed observation contract with a duration fixed in
-        advance at exactly 168 continuous hours (seven 24-hour periods). The
-        clock starts only at that contract's exact `main` merge SHA and UTC
-        timestamp. Record both values in a follow-up evidence commit: merge SHA
-        `pending`; start UTC `pending`.
+  - [x] PR #480 fixed the observation duration in advance at exactly 168
+        continuous hours (seven 24-hour periods) and merged to `main` as
+        `c251a5e34c46bd327ffa5c015ed038f1fced545e` on
+        `2026-08-30T17:44:08Z`. That exact SHA and UTC timestamp start the
+        observation clock.
   - [ ] After that start, collect continuous metadata-only gateway ingress
-        evidence for all 168 hours. A green health check is not user-traffic
-        evidence. Any evidence gap, gateway probe, gateway Machine mutation, or
-        direct Page-callback drift resets the clock. Do not stop, delete, scale,
-        or replace the gateway Machine or its volumes during this window.
+        evidence for all 168 hours. The scheduled end is
+        `2026-09-06T17:44:08Z` only if the full window remains uninterrupted. A
+        green health check is not user-traffic evidence. Any evidence gap,
+        gateway probe, gateway Machine mutation, or direct Page-callback drift
+        resets the clock and requires a new reviewed start and scheduled end.
+        Do not stop, delete, scale, or replace the gateway Machine or its
+        volumes during this window.
 
 - [ ] **P2 - User-scoped purchased-credit ledger.** Add an append-only credit
       ledger, wallet projection, and idempotent reservation/commit/release model
@@ -108,10 +111,15 @@ Live payment enablement remains gated by the relevant P1 through P4 evidence.
 
 - Protected deployment inspection run `33297361675` proved the owner Page uses
   the canonical direct callback
-  `https://leaderbot-fb-image-gen.fly.dev/facebook/webhook`. The old scheduled
-  gateway health request still contaminates zero-traffic observations until its
-  removal is merged. Consequently the observation-window SHA and time above
-  remain `pending`, and P1 remains open.
+  `https://leaderbot-fb-image-gen.fly.dev/facebook/webhook`. PR #479 removed the
+  scheduled gateway health request. PR #480 then fixed and started the reviewed
+  168-hour observation contract at
+  `c251a5e34c46bd327ffa5c015ed038f1fced545e` on
+  `2026-08-30T17:44:08Z`, with conditional end
+  `2026-09-06T17:44:08Z`. P1 remains open until uninterrupted metadata-only
+  zero-ingress evidence, direct Messenger smokes, rollback/retention decisions,
+  the later reviewed gateway stop, and standalone channel publication are
+  complete.
 
 - Storage-proxy startup ordering was fixed and merged in PR #445 at reviewed
   source commit `6a7d0431e1e02076a2db7fcf12c8358d7fbf33cd`.
