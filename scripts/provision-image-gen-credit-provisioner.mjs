@@ -425,15 +425,20 @@ async function stopChild(child, timeoutMs = PROXY_STOP_TIMEOUT_MS) {
   });
 }
 
-class RootMysqlSession {
-  constructor({ app, machineId, signal }) {
+export class RootMysqlSession {
+  constructor({ app, machineId, signal, spawnChild = spawn }) {
+    if (typeof spawnChild !== "function") fail();
     this.buffer = "";
-    this.child = spawn("flyctl", buildRootMysqlSshArgs({ app, machineId }), {
-      cwd: repositoryRoot,
-      env: process.env,
-      shell: false,
-      stdio: ["pipe", "pipe", "pipe"],
-    });
+    this.child = spawnChild(
+      "flyctl",
+      buildRootMysqlSshArgs({ app, machineId }),
+      {
+        cwd: repositoryRoot,
+        env: process.env,
+        shell: false,
+        stdio: ["pipe", "pipe", "pipe"],
+      },
+    );
     this.pending = null;
     this.closed = false;
     this.stderrBytes = 0;
@@ -573,6 +578,14 @@ class RootMysqlSession {
     return lines[0] === "1";
   }
 
+  async assertAccountUsable(account, signal) {
+    const lines = await this.execute(
+      `SELECT account_locked,password_expired FROM mysql.user WHERE User='${account.username}' AND Host='%'`,
+      { signal },
+    );
+    if (lines.length !== 1 || lines[0] !== "N\tN") fail();
+  }
+
   async showGrants(account, signal) {
     return this.execute(`SHOW GRANTS FOR ${quoteManagedAccount(account)}`, {
       signal,
@@ -612,8 +625,51 @@ function sameContext(left, right) {
     left.volume.id === right.volume.id &&
     left.snapshot.id === right.snapshot.id &&
     left.snapshot.digest === right.snapshot.digest &&
-    left.snapshot.createdAt === right.snapshot.createdAt
+    left.snapshot.createdAt === right.snapshot.createdAt &&
+    left.snapshot.size === right.snapshot.size &&
+    left.snapshot.status === right.snapshot.status &&
+    left.snapshot.volumeSize === right.snapshot.volumeSize
   );
+}
+
+async function assertExistingPublishedState({
+  context,
+  deps,
+  expectedHead,
+  rootSession,
+  signal,
+  snapshotId,
+}) {
+  const managed = await rootSession.listManagedAccounts(signal);
+  if (managed.length !== 1) fail();
+  const account = managed[0];
+  await rootSession.assertAccountUsable(account, signal);
+  assertProvisionerGrants(
+    await rootSession.showGrants(account, signal),
+    context.recovery.databaseName,
+  );
+  const rechecked = await deps.inspectProductionContext({
+    expectedHead,
+    signal,
+    snapshotId,
+  });
+  if (!sameContext(context, rechecked)) fail();
+  await rootSession.assertLockHeld(signal);
+  if (!(await deps.readSecretPresence(signal))) fail();
+  const finalManaged = await rootSession.listManagedAccounts(signal);
+  if (
+    finalManaged.length !== 1 ||
+    finalManaged[0].username !== account.username
+  ) {
+    fail();
+  }
+  await rootSession.assertAccountUsable(account, signal);
+  assertProvisionerGrants(
+    await rootSession.showGrants(account, signal),
+    context.recovery.databaseName,
+  );
+  await rootSession.assertLockHeld(signal);
+  return account;
 }
 
 async function verifyExactRepositoryState(expectedHead, signal) {
@@ -692,12 +748,17 @@ async function secretNames(signal) {
   return rows.map((row) => row.name);
 }
 
-async function assertSecretPresence(expected, signal) {
+async function readSecretPresence(signal) {
   const names = await secretNames(signal);
   const count = names.filter(
     (name) => name === CREDIT_PROVISIONER_SECRET_NAME,
   ).length;
-  if (count !== (expected ? 1 : 0)) fail();
+  if (count > 1) fail();
+  return count === 1;
+}
+
+async function assertSecretPresence(expected, signal) {
+  if ((await readSecretPresence(signal)) !== expected) fail();
 }
 
 async function inspectProductionContext({ expectedHead, snapshotId, signal }) {
@@ -742,14 +803,13 @@ async function inspectProductionContext({ expectedHead, snapshotId, signal }) {
     recovery,
     snapshotId,
   });
-  await assertSecretPresence(false, signal);
   return Object.freeze({ machine, recovery, snapshot, volume });
 }
 
 async function startProxy(context, signal) {
   const child = spawn("flyctl", buildFlyProxyArgs(context), {
     cwd: repositoryRoot,
-    env: process.env,
+    env: { ...process.env, FLY_NO_UPDATE_CHECK: "1" },
     shell: false,
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -843,8 +903,7 @@ function waitBounded(milliseconds, signal) {
   });
 }
 
-export async function reconcileSecretAbsence({
-  deleteSecret,
+export async function observeStableSecretState({
   listSecretNames,
   now = Date.now,
   signal,
@@ -853,7 +912,6 @@ export async function reconcileSecretAbsence({
   wait = waitBounded,
 }) {
   if (
-    typeof deleteSecret !== "function" ||
     typeof listSecretNames !== "function" ||
     typeof now !== "function" ||
     typeof wait !== "function" ||
@@ -879,43 +937,12 @@ export async function reconcileSecretAbsence({
       (name) => name === CREDIT_PROVISIONER_SECRET_NAME,
     ).length;
     if (count > 1) fail();
-    if (count === 1) {
-      absentSince = undefined;
-      await deleteSecret(signal);
-    } else {
-      absentSince ??= now();
-      if (now() - absentSince >= stabilizationWindowMs) return;
-    }
+    if (count === 1) return "present";
+    absentSince ??= now();
+    if (now() - absentSince >= stabilizationWindowMs) return "absent";
     await wait(1_000, signal);
   }
   fail();
-}
-
-async function deleteSecretIfPresent(signal) {
-  await reconcileSecretAbsence({
-    deleteSecret: async (cleanupSignal) => {
-      await runCommand(
-        "gh",
-        [
-          "secret",
-          "delete",
-          CREDIT_PROVISIONER_SECRET_NAME,
-          "--repo",
-          REPOSITORY,
-          "--env",
-          ENVIRONMENT,
-        ],
-        {
-          acceptedExitCodes: [0, 1],
-          signal: cleanupSignal,
-          timeoutMs: 60_000,
-        },
-      );
-    },
-    listSecretNames: secretNames,
-    signal,
-  });
-  await assertSecretPresence(false, signal);
 }
 
 function createProductionDependencies() {
@@ -924,8 +951,9 @@ function createProductionDependencies() {
     assertExactRepository: verifyExactRepositoryState,
     assertSecretPresence,
     createCleanupSignal: () => AbortSignal.timeout(CLEANUP_TIMEOUT_MS),
-    deleteSecretIfPresent,
     inspectProductionContext,
+    observeSecretState: (signal) =>
+      observeStableSecretState({ listSecretNames: secretNames, signal }),
     openRootSession: async (context, signal) => {
       const session = new RootMysqlSession({
         app: context.recovery.app,
@@ -945,6 +973,7 @@ function createProductionDependencies() {
       }
     },
     randomHex: (bytes) => randomBytes(bytes).toString("hex"),
+    readSecretPresence,
     setSecret,
     startProxy,
     verifyProvisionerConnection: (input) =>
@@ -983,33 +1012,40 @@ async function cleanupFailedBootstrap({
       cleanupRoot = await deps.openRootSession(context, databaseSignal);
       await cleanupRoot.acquireLock(databaseSignal);
     }
-    if (accountMayExist) {
-      const managed = await cleanupRoot.listManagedAccounts(databaseSignal);
-      for (const existing of managed) {
-        await cleanupRoot.disableAndDrop(existing, databaseSignal);
+    // Once a GitHub write may have started, the account is the durable
+    // ambiguity sentinel. Removing it could leave a delayed secret pointing
+    // at a deleted credential, so only a separately reviewed recovery may
+    // mutate either side of that state.
+    if (secretMayExist) {
+      cleanupComplete = false;
+      await cleanupRoot.assertLockHeld(databaseSignal);
+    } else {
+      await deps.assertSecretPresence(false, databaseSignal);
+      await cleanupRoot.assertLockHeld(databaseSignal);
+      if (accountMayExist) {
+        const managed = await cleanupRoot.listManagedAccounts(databaseSignal);
+        for (const existing of managed) {
+          await cleanupRoot.disableAndDrop(existing, databaseSignal);
+        }
+        if (
+          account &&
+          (await cleanupRoot.accountExists(account, databaseSignal))
+        ) {
+          fail();
+        }
       }
       if (
-        account &&
-        (await cleanupRoot.accountExists(account, databaseSignal))
+        (await cleanupRoot.listManagedAccounts(databaseSignal)).length !== 0
       ) {
         fail();
       }
-    }
-    if ((await cleanupRoot.listManagedAccounts(databaseSignal)).length !== 0) {
-      fail();
+      await cleanupRoot.assertLockHeld(databaseSignal);
     }
   } catch {
     cleanupComplete = false;
   }
   try {
     await cleanupRoot?.close({ releaseLock: true, signal: databaseSignal });
-  } catch {
-    cleanupComplete = false;
-  }
-  const secretSignal = deps.createCleanupSignal();
-  try {
-    if (secretMayExist) await deps.deleteSecretIfPresent(secretSignal);
-    await deps.assertSecretPresence(false, secretSignal);
   } catch {
     cleanupComplete = false;
   }
@@ -1022,11 +1058,11 @@ export async function bootstrapCreditProvisioner(
 ) {
   let account;
   let accountMayExist = false;
+  let cleanupArmed = false;
   let context;
   let proxy;
   let rootSession;
   let secretMayExist = false;
-  let secretSetSettled = false;
   let succeeded = false;
   let marker = CREDIT_PROVISIONER_FAILURE_MARKER;
   try {
@@ -1038,94 +1074,135 @@ export async function bootstrapCreditProvisioner(
     rootSession = await deps.openRootSession(context, signal);
     await rootSession.acquireLock(signal);
     await rootSession.assertNoUnexpectedCreateUserPrincipal(signal);
-    const orphans = await rootSession.listManagedAccounts(signal);
-    if (orphans.length) accountMayExist = true;
-    for (const orphan of orphans) {
-      await rootSession.disableAndDrop(orphan, signal);
-    }
-    if ((await rootSession.listManagedAccounts(signal)).length !== 0) fail();
-
-    account = Object.freeze({
-      hostname: "%",
-      username: `lbcp_${deps.randomHex(8)}`,
-    });
-    const password = `Aa1!${deps.randomHex(48)}`;
-    const sql = buildProvisionerSql({
-      databaseName: context.recovery.databaseName,
-      password,
-      username: account.username,
-    });
-    accountMayExist = true;
-    await rootSession.execute(sql.createStatement, { signal });
-    for (const statement of sql.grantStatements) {
-      await rootSession.execute(statement, { signal });
-    }
-    const grants = await rootSession.showGrants(account, signal);
-    assertProvisionerGrants(grants, context.recovery.databaseName);
-    const managedAfterCreate = await rootSession.listManagedAccounts(signal);
-    if (
-      managedAfterCreate.length !== 1 ||
-      managedAfterCreate[0].username !== account.username
-    ) {
+    const initialSecretState = await deps.observeSecretState(signal);
+    if (initialSecretState === "present") {
+      // A retry can arrive after the previous process atomically published the
+      // protected secret but before it emitted its result marker. Preserve an
+      // exact, usable account/secret pair instead of rotating it underneath a
+      // protected schema job that may already be starting.
+      marker = CREDIT_PROVISIONER_CLEANUP_FAILURE_MARKER;
+      account = await assertExistingPublishedState({
+        context,
+        deps,
+        expectedHead,
+        rootSession,
+        signal,
+        snapshotId,
+      });
+      succeeded = true;
+      marker = CREDIT_PROVISIONER_SUCCESS_MARKER;
+    } else if (initialSecretState !== "absent") {
       fail();
     }
+    if (!succeeded) {
+      const orphans = await rootSession.listManagedAccounts(signal);
+      if (orphans.length !== 0) {
+        marker = CREDIT_PROVISIONER_CLEANUP_FAILURE_MARKER;
+        fail();
+      }
 
-    proxy = await deps.startProxy(context, signal);
-    const verificationUrl = buildProvisionerUrl({
-      databaseName: context.recovery.databaseName,
-      password,
-      port: proxy.port,
-      username: account.username,
-    });
-    const storedProvisionerUrl = buildProvisionerUrl({
-      databaseName: context.recovery.databaseName,
-      password,
-      username: account.username,
-    });
-    await deps.verifyProvisionerConnection({
-      databaseName: context.recovery.databaseName,
-      signal,
-      url: verificationUrl,
-      username: account.username,
-    });
+      account = Object.freeze({
+        hostname: "%",
+        username: `lbcp_${deps.randomHex(8)}`,
+      });
+      const password = `Aa1!${deps.randomHex(48)}`;
+      const sql = buildProvisionerSql({
+        databaseName: context.recovery.databaseName,
+        password,
+        username: account.username,
+      });
+      cleanupArmed = true;
+      accountMayExist = true;
+      await rootSession.execute(sql.createStatement, { signal });
+      for (const statement of sql.grantStatements) {
+        await rootSession.execute(statement, { signal });
+      }
+      const grants = await rootSession.showGrants(account, signal);
+      assertProvisionerGrants(grants, context.recovery.databaseName);
+      const managedAfterCreate = await rootSession.listManagedAccounts(signal);
+      if (
+        managedAfterCreate.length !== 1 ||
+        managedAfterCreate[0].username !== account.username
+      ) {
+        fail();
+      }
 
-    const rechecked = await deps.inspectProductionContext({
-      expectedHead,
-      signal,
-      snapshotId,
-    });
-    if (!sameContext(context, rechecked)) fail();
-    await rootSession.assertLockHeld(signal);
-    assertProvisionerGrants(
-      await rootSession.showGrants(account, signal),
-      context.recovery.databaseName,
-    );
-    await deps.verifyProvisionerConnection({
-      databaseName: context.recovery.databaseName,
-      signal,
-      url: verificationUrl,
-      username: account.username,
-    });
-    await deps.assertExactRepository(expectedHead, signal);
+      proxy = await deps.startProxy(context, signal);
+      const verificationUrl = buildProvisionerUrl({
+        databaseName: context.recovery.databaseName,
+        password,
+        port: proxy.port,
+        username: account.username,
+      });
+      const storedProvisionerUrl = buildProvisionerUrl({
+        databaseName: context.recovery.databaseName,
+        password,
+        username: account.username,
+      });
+      await deps.verifyProvisionerConnection({
+        databaseName: context.recovery.databaseName,
+        signal,
+        url: verificationUrl,
+        username: account.username,
+      });
 
-    secretMayExist = true;
-    await deps.setSecret(storedProvisionerUrl, signal);
-    secretSetSettled = true;
-    await deps.assertSecretPresence(true, signal);
-    await deps.assertExactRepository(expectedHead, signal);
-    await rootSession.assertLockHeld(signal);
-    assertProvisionerGrants(
-      await rootSession.showGrants(account, signal),
-      context.recovery.databaseName,
-    );
-    await deps.verifyProvisionerConnection({
-      databaseName: context.recovery.databaseName,
-      signal,
-      url: verificationUrl,
-      username: account.username,
-    });
-    succeeded = true;
-    marker = CREDIT_PROVISIONER_SUCCESS_MARKER;
+      const rechecked = await deps.inspectProductionContext({
+        expectedHead,
+        signal,
+        snapshotId,
+      });
+      if (!sameContext(context, rechecked)) fail();
+      await rootSession.assertLockHeld(signal);
+      assertProvisionerGrants(
+        await rootSession.showGrants(account, signal),
+        context.recovery.databaseName,
+      );
+      const managedBeforePublication =
+        await rootSession.listManagedAccounts(signal);
+      if (
+        managedBeforePublication.length !== 1 ||
+        managedBeforePublication[0].username !== account.username
+      ) {
+        fail();
+      }
+      await deps.verifyProvisionerConnection({
+        databaseName: context.recovery.databaseName,
+        signal,
+        url: verificationUrl,
+        username: account.username,
+      });
+      await deps.assertExactRepository(expectedHead, signal);
+      await rootSession.assertLockHeld(signal);
+      await deps.assertSecretPresence(false, signal);
+      await rootSession.assertLockHeld(signal);
+
+      secretMayExist = true;
+      await deps.setSecret(storedProvisionerUrl, signal);
+      await deps.assertSecretPresence(true, signal);
+      await deps.assertExactRepository(expectedHead, signal);
+      await rootSession.assertLockHeld(signal);
+      assertProvisionerGrants(
+        await rootSession.showGrants(account, signal),
+        context.recovery.databaseName,
+      );
+      const managedAfterPublication =
+        await rootSession.listManagedAccounts(signal);
+      if (
+        managedAfterPublication.length !== 1 ||
+        managedAfterPublication[0].username !== account.username
+      ) {
+        fail();
+      }
+      await rootSession.assertAccountUsable(account, signal);
+      await deps.verifyProvisionerConnection({
+        databaseName: context.recovery.databaseName,
+        signal,
+        url: verificationUrl,
+        username: account.username,
+      });
+      succeeded = true;
+      marker = CREDIT_PROVISIONER_SUCCESS_MARKER;
+    }
   } catch {
     succeeded = false;
   } finally {
@@ -1139,9 +1216,10 @@ export async function bootstrapCreditProvisioner(
         await rootSession?.close({ releaseLock: true, signal });
       } catch {
         succeeded = false;
+        marker = CREDIT_PROVISIONER_CLEANUP_FAILURE_MARKER;
       }
     }
-    if (!succeeded && context) {
+    if (!succeeded && context && cleanupArmed) {
       let cleaned = false;
       try {
         cleaned = await cleanupFailedBootstrap({
@@ -1155,11 +1233,16 @@ export async function bootstrapCreditProvisioner(
       } catch {
         cleaned = false;
       }
-      const secretPublicationAmbiguous = secretMayExist && !secretSetSettled;
-      if (!cleaned || secretPublicationAmbiguous) {
+      if (!cleaned || secretMayExist) {
         marker = CREDIT_PROVISIONER_CLEANUP_FAILURE_MARKER;
       } else {
         marker = CREDIT_PROVISIONER_FAILURE_MARKER;
+      }
+    } else if (!succeeded) {
+      try {
+        await rootSession?.close({ releaseLock: true, signal });
+      } catch {
+        marker = CREDIT_PROVISIONER_CLEANUP_FAILURE_MARKER;
       }
     }
   }

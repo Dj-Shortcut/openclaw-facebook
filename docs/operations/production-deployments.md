@@ -473,11 +473,27 @@ node scripts/provision-image-gen-credit-provisioner.mjs \
 
 The helper reruns `production:validate` and exact-source CI, rechecks the
 reviewed database Machine, image, private address, encrypted mount, volume, and
-snapshot, then holds one MySQL advisory lock across orphan recovery, account
-creation, exact-grant verification, local tunnel proof, and GitHub environment
-secret publication. It sends the URL to `gh secret set` only through stdin.
+snapshot, then holds one MySQL advisory lock across exact prior-publication
+reconciliation, orphan detection, account creation, exact-grant verification,
+local tunnel proof, and GitHub environment secret publication. A retry preserves
+an existing exact, unlocked account with exact grants and the protected secret
+name; the protected schema workflow remains the first consumer that proves the
+stored, unreadable URL actually connects. It sends a new URL to `gh secret set`
+only through stdin.
 It never prints the database account, URL, password, grants, snapshot identity,
 or command errors.
+
+Before the first production use of this reviewed version, record that no older
+bootstrap helper or `gh secret set/delete` process is running and that no prior
+unsafe helper invocation removed an account while a remote secret write was in
+flight. This clean-first-use/quiescence proof is required because GitHub does
+not expose a pending secret write. The helper treats any managed account with an
+absent secret as an ambiguity sentinel: it keeps the account, performs no new
+mutation, and returns cleanup-incomplete. No finite secret-absence interval
+authorizes account rotation. Once secret publication may have started, every
+later failure likewise preserves both the account and possible secret so a
+delayed write can never point at an automatically deleted credential. Do not
+manually delete either side; use a separately reviewed recovery.
 
 This one-shot helper requires local `flyctl v0.4.94`, the exact version used to
 review its Machine, volume, and snapshot JSON contract. The later protected
@@ -494,23 +510,26 @@ GitHub token to this command.
 
 Only these fixed output markers are valid:
 
-- `credit_provisioner_ready`: the exact account was created and reverified;
-  `gh secret set` succeeded and the protected secret name is present. GitHub
-  does not expose the stored value, so the protected schema workflow is the
-  first consumer that proves the stored URL parses and connects;
+- `credit_provisioner_ready`: the exact account was created and reverified, or
+  an exact prior publication was reconciled without rotation; the protected
+  secret name is present. GitHub does not expose the stored value, so the
+  protected schema workflow is the first consumer that proves the stored URL
+  parses and connects;
 - `credit_provisioner_bootstrap_failed`: a read-only preflight rejected the
   operation before mutation, or cleanup proved every helper-started mutation
   absent. Pre-existing state can still require review;
 - `credit_provisioner_bootstrap_cleanup_incomplete`: cleanup could not prove
-  both absent, or `gh secret set` did not settle so a delayed remote write
-  remains possible even after immediate absence. Stop and obtain a reviewed
-  recovery before dispatching the schema workflow.
+  a pre-publication mutation absent, a managed orphan was retained, or
+  publication may have started and both sides were deliberately preserved.
+  Stop and obtain a reviewed recovery before dispatching the schema workflow.
 
-A timeout, interrupt, authentication failure, tunnel failure, or ambiguous
-GitHub mutation arms the same bounded cleanup. Do not paste root SQL, account
-names, passwords, grants, or a database URL into a shell, GitHub field, issue,
-log, or chat. Do not create the secret manually and do not dispatch the schema
-workflow after either failure marker.
+A timeout, interrupt, authentication failure, or tunnel failure before secret
+publication may start uses bounded account cleanup. Once publication may have
+started, an ambiguous GitHub mutation preserves the account and possible secret
+and returns cleanup-incomplete. Do not paste root SQL, account names, passwords,
+grants, or a database URL into a shell, GitHub field, issue, log, or chat. Do
+not create the secret manually and do not dispatch the schema workflow after
+either failure marker.
 
 ### Image-gen database migration gate
 

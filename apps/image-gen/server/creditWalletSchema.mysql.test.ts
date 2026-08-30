@@ -462,6 +462,12 @@ suite("0018 credit wallet MySQL 8.4 procedure boundary", () => {
       const provisionerUrl = new URL(databaseUrl);
       provisionerUrl.username = username;
       provisionerUrl.password = password;
+      const deniedTable = `lbcp_denied_${randomUUID()
+        .replaceAll("-", "")
+        .slice(0, 16)}`;
+      await connection.query(
+        `CREATE TABLE \`${deniedTable}\` (\`id\` BIGINT NOT NULL PRIMARY KEY) ENGINE=InnoDB`
+      );
       const provisioner = await mysql.createConnection(provisionerUrl.href);
       try {
         const [[identity]] = await provisioner.query<RowDataPacket[]>(
@@ -471,8 +477,15 @@ suite("0018 credit wallet MySQL 8.4 procedure boundary", () => {
           currentUser: `${username}@%`,
           databaseName,
         });
+        await expect(
+          provisioner.query(`DELETE FROM \`${deniedTable}\` WHERE 1=0`)
+        ).rejects.toThrow();
+        await expect(
+          provisioner.query(`DROP TABLE \`${deniedTable}\``)
+        ).rejects.toThrow();
       } finally {
         await provisioner.end();
+        await connection.query(`DROP TABLE IF EXISTS \`${deniedTable}\``);
       }
     } finally {
       await connection.query(`DROP USER IF EXISTS ${sql.account}`);

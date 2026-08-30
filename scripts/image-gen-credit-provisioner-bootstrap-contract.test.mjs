@@ -14,10 +14,7 @@ import {
   quoteMysqlIdentifier,
   selectReviewedDatabaseTarget,
 } from "./image-gen-credit-provisioner-bootstrap-contract.mjs";
-import {
-  creditWalletMigrationTablePrivileges,
-  productionRuntimeWritableTableNames,
-} from "../apps/image-gen/scripts/production-schema-contract.mjs";
+import { productionRuntimeWritableTableNames } from "../apps/image-gen/scripts/production-schema-contract.mjs";
 
 const BRIDGE_IMAGE =
   "registry.fly.io/leaderbot-fb-image-gen@sha256:" + "b".repeat(64);
@@ -359,6 +356,9 @@ describe("image-gen credit provisioner bootstrap contract", () => {
         createdAt: snapshot.created_at,
         digest: SNAPSHOT_DIGEST,
         id: SNAPSHOT_ID,
+        size: snapshot.size,
+        status: snapshot.status,
+        volumeSize: snapshot.volume_size,
       });
     });
 
@@ -456,27 +456,15 @@ describe("image-gen credit provisioner bootstrap contract", () => {
         password: PASSWORD,
         username: USERNAME,
       });
-      const expectedTablePrivileges = new Map(
-        productionRuntimeWritableTableNames.map((tableName) => [
-          tableName,
-          new Set(["INSERT", "UPDATE", "DELETE"]),
-        ]),
-      );
-      for (const [tableName, privileges] of Object.entries(
-        creditWalletMigrationTablePrivileges,
-      )) {
-        const expected = expectedTablePrivileges.get(tableName) ?? new Set();
-        for (const privilege of privileges) expected.add(privilege);
-        expectedTablePrivileges.set(tableName, expected);
-      }
       const expectedGrants = [
         `GRANT CREATE USER ON *.* TO '${USERNAME}'@'%'`,
         `GRANT SELECT ON \`mysql\`.\`user\` TO '${USERNAME}'@'%'`,
         `GRANT SELECT, EXECUTE ON \`leaderbot\`.* TO '${USERNAME}'@'%' WITH GRANT OPTION`,
-        ...[...expectedTablePrivileges].map(
-          ([tableName, privileges]) =>
-            `GRANT ${[...privileges].sort().join(", ")} ON \`leaderbot\`.\`${tableName}\` TO '${USERNAME}'@'%' WITH GRANT OPTION`,
+        ...productionRuntimeWritableTableNames.map(
+          (tableName) =>
+            `GRANT DELETE, INSERT, UPDATE ON \`leaderbot\`.\`${tableName}\` TO '${USERNAME}'@'%' WITH GRANT OPTION`,
         ),
+        `GRANT CREATE, DELETE ON \`leaderbot\`.\`credit_wallets\` TO '${USERNAME}'@'%' WITH GRANT OPTION`,
       ];
 
       expect(sql).toEqual({
@@ -485,6 +473,15 @@ describe("image-gen credit provisioner bootstrap contract", () => {
         grantStatements: expectedGrants,
       });
       expect(sql.grantStatements).toHaveLength(45);
+      for (const statement of sql.grantStatements.slice(3)) {
+        const privileges = /^GRANT (.+) ON /.exec(statement)?.[1].split(", ");
+        expect(privileges?.length).toBeGreaterThan(0);
+        expect(
+          privileges?.every((privilege) =>
+            new Set(["CREATE", "DELETE", "INSERT", "UPDATE"]).has(privilege),
+          ),
+        ).toBe(true);
+      }
       expect(sql.grantStatements.join("\n")).not.toMatch(
         /GRANT (?:ALL|SUPER)|GRANT (?:INSERT|UPDATE|DELETE) ON `leaderbot`\.\*/,
       );

@@ -3145,12 +3145,54 @@ describe("production deployment contract", () => {
     replaceFixtureText(
       root,
       "scripts/provision-image-gen-credit-provisioner.mjs",
-      "accountMayExist = true;\n    await rootSession.execute(sql.createStatement",
-      "accountMayExist = false;\n    await rootSession.execute(sql.createStatement",
+      "accountMayExist = true;\n      await rootSession.execute(sql.createStatement",
+      "accountMayExist = false;\n      await rootSession.execute(sql.createStatement",
     );
 
     expect(() => validateProductionRepository(root)).toThrow(
       "must arm account cleanup before the first account mutation",
+    );
+  });
+
+  it("requires protected-secret observation under the database lock", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      "scripts/provision-image-gen-credit-provisioner.mjs",
+      "await deps.observeSecretState(signal)",
+      '"absent"',
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must retain an absent-secret orphan without mutation",
+    );
+  });
+
+  it("requires an absent-secret orphan to fail closed without mutation", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      "scripts/provision-image-gen-credit-provisioner.mjs",
+      "if (orphans.length !== 0)",
+      "if (orphans.length < 0)",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must retain an absent-secret orphan without mutation",
+    );
+  });
+
+  it("requires a final absence proof before protected-secret publication", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      "scripts/provision-image-gen-credit-provisioner.mjs",
+      "await deps.assertSecretPresence(false, signal);\n      await rootSession.assertLockHeld(signal);\n\n      secretMayExist = true;",
+      "await rootSession.assertLockHeld(signal);\n\n      secretMayExist = true;",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must reprove secret absence and arm cleanup before publishing the protected secret",
     );
   });
 
@@ -3180,6 +3222,21 @@ describe("production deployment contract", () => {
     );
   });
 
+  it("does not accept a production-contract test path as a substring", () => {
+    const root = createRepositoryFixture();
+    const testPath = "scripts/provision-image-gen-credit-provisioner.test.mjs";
+    replaceFixtureText(
+      root,
+      "package.json",
+      ` ${testPath}`,
+      ` prefixed/${testPath}`,
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      `package.json test:production-contracts must include exact ${testPath}`,
+    );
+  });
+
   it("rejects a loopback port probe that Fly does not own atomically", () => {
     const root = createRepositoryFixture();
     replaceFixtureText(
@@ -3194,17 +3251,17 @@ describe("production deployment contract", () => {
     );
   });
 
-  it("requires the GitHub secret write to settle before success is possible", () => {
+  it("preserves the account after protected-secret publication may start", () => {
     const root = createRepositoryFixture();
     replaceFixtureText(
       root,
       "scripts/provision-image-gen-credit-provisioner.mjs",
-      "secretSetSettled = true",
-      "secretSetSettled = false",
+      "if (secretMayExist) {\n      cleanupComplete = false;",
+      "if (secretMayExist) {\n      cleanupComplete = true;",
     );
 
     expect(() => validateProductionRepository(root)).toThrow(
-      "must distinguish a completed GitHub secret write from an ambiguous publication",
+      "must preserve the account once protected-secret publication may have started",
     );
   });
 

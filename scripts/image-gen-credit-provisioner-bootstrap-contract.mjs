@@ -154,6 +154,9 @@ export function assertRecoverySnapshot(
     createdAt: snapshot.created_at,
     digest: snapshot.digest,
     id: snapshot.id,
+    size: snapshot.size,
+    status: snapshot.status,
+    volumeSize: snapshot.volume_size,
   };
 }
 

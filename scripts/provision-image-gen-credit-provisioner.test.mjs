@@ -1,12 +1,13 @@
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   MANAGED_ACCOUNT_INVENTORY_QUERY,
   PINNED_FLYCTL_VERSION,
   ROOT_MYSQL_REMOTE_COMMAND,
+  RootMysqlSession,
   attachChildStdinFailureHandler,
   bootstrapCreditProvisioner,
   buildFlyProxyArgs,
@@ -14,9 +15,9 @@ import {
   buildSourceCiEnvironment,
   githubAuthTokenArgs,
   normalizeBootstrapMarker,
+  observeStableSecretState,
   parseCliArguments,
   parseFlyProxyPort,
-  reconcileSecretAbsence,
   runCli,
   waitForFlyProxyStartup,
 } from "./provision-image-gen-credit-provisioner.mjs";
@@ -44,6 +45,9 @@ const CONTEXT = Object.freeze({
     createdAt: "2026-08-30T07:55:00.000Z",
     digest: "d".repeat(64),
     id: SNAPSHOT_ID,
+    size: 4096,
+    status: "created",
+    volumeSize: 10 * 1024 ** 3,
   }),
   volume: Object.freeze({ id: "vol_49165px70nx9ylzr" }),
 });
@@ -51,13 +55,21 @@ const CONTEXT = Object.freeze({
 function createHarness({
   failAt,
   abortAt,
-  cleanupFails = false,
+  accountUsable = true,
+  grantsValid = true,
+  initialAccountPresent = false,
+  initialExtraAccountPresent = false,
+  initialSecretPresent = false,
   proxyStopFails = false,
   repositoryChangesAfterSecret = false,
+  secretAppearsAfterObservation = false,
+  secretAppearsBeforePublication = false,
+  secretSetRemainsInvisible = false,
 } = {}) {
   const calls = [];
-  let created = false;
-  let secretPresent = false;
+  let created = initialAccountPresent;
+  let extraCreated = initialExtraAccountPresent;
+  let secretPresent = initialSecretPresent;
   const controller = new AbortController();
   const grants = buildExpectedProvisionerGrants({
     databaseName: CONTEXT.recovery.databaseName,
@@ -68,6 +80,10 @@ function createHarness({
     async accountExists() {
       calls.push("account-exists");
       return created;
+    },
+    async assertAccountUsable() {
+      calls.push("account-usable");
+      if (!created || !accountUsable) throw new Error("synthetic");
     },
     async acquireLock() {
       calls.push("lock-acquire");
@@ -82,9 +98,10 @@ function createHarness({
       calls.push("root-close");
       this.closed = true;
     },
-    async disableAndDrop() {
+    async disableAndDrop(account) {
       calls.push("account-cleanup");
-      created = false;
+      if (account.username === USERNAME) created = false;
+      else extraCreated = false;
     },
     async execute(statement, { signal } = {}) {
       if (signal?.aborted) throw new Error("synthetic");
@@ -100,11 +117,18 @@ function createHarness({
     },
     async listManagedAccounts() {
       calls.push("accounts-list");
-      return created ? [{ hostname: "%", username: USERNAME }] : [];
+      return [
+        ...(created ? [{ hostname: "%", username: USERNAME }] : []),
+        ...(extraCreated
+          ? [{ hostname: "%", username: "lbcp_fedcba9876543210" }]
+          : []),
+      ];
     },
     async showGrants() {
       calls.push("grants-show");
-      return grants;
+      return grantsValid
+        ? grants
+        : [...grants, `GRANT SUPER ON *.* TO \`${USERNAME}\`@\`%\``];
     },
   };
   const deps = {
@@ -116,20 +140,33 @@ function createHarness({
     },
     async assertSecretPresence(expected) {
       calls.push(`secret-${expected ? "present" : "absent"}`);
-      if (secretPresent !== expected || (cleanupFails && !expected)) {
+      if (
+        secretAppearsBeforePublication &&
+        !expected &&
+        !secretPresent &&
+        calls.includes("repository-proof")
+      ) {
+        secretPresent = true;
+      }
+      if (secretPresent !== expected) {
         throw new Error("synthetic");
       }
     },
     createCleanupSignal: () => new AbortController().signal,
     async deleteSecretIfPresent() {
       calls.push("secret-cleanup");
-      if (cleanupFails) throw new Error("synthetic");
       secretPresent = false;
     },
     async inspectProductionContext() {
       calls.push("context-proof");
       if (failAt === "preflight") throw new Error("synthetic");
       return CONTEXT;
+    },
+    async observeSecretState() {
+      calls.push("secret-state");
+      const observed = secretPresent ? "present" : "absent";
+      if (secretAppearsAfterObservation) secretPresent = true;
+      return observed;
     },
     async openRootSession() {
       calls.push("root-open");
@@ -139,12 +176,16 @@ function createHarness({
     randomHex(bytes) {
       return bytes === 8 ? "0123456789abcdef" : "b".repeat(96);
     },
+    async readSecretPresence() {
+      calls.push("secret-read");
+      return secretPresent;
+    },
     async setSecret(value) {
       calls.push("secret-set");
       expect(value).toMatch(
         /^mysql:\/\/lbcp_0123456789abcdef:Aa1!b{96}@127\.0\.0\.1:13306\/leaderbot$/,
       );
-      secretPresent = true;
+      if (!secretSetRemainsInvisible) secretPresent = true;
       if (abortAt === "secret") controller.abort();
       if (failAt === "secret-set") throw new Error("synthetic");
       if (abortAt === "secret") throw new Error("synthetic");
@@ -165,7 +206,15 @@ function createHarness({
       if (failAt === "authentication") throw new Error("synthetic");
     },
   };
-  return { calls, controller, deps };
+  return {
+    calls,
+    controller,
+    deps,
+    makeSecretVisible() {
+      secretPresent = true;
+    },
+    root,
+  };
 }
 
 function createProxyChild() {
@@ -179,6 +228,50 @@ function createProxyChild() {
     return true;
   };
   return child;
+}
+
+function createRootSessionChild() {
+  const child = new EventEmitter();
+  child.exitCode = null;
+  child.killed = false;
+  child.stdinWrites = [];
+  child.stderr = new PassThrough();
+  child.stdout = new PassThrough();
+  child.stdin = new EventEmitter();
+  child.stdin.write = vi.fn((value, callback) => {
+    child.stdinWrites.push(String(value));
+    callback?.();
+    return true;
+  });
+  child.stdin.end = vi.fn();
+  child.kill = vi.fn(() => {
+    child.killed = true;
+    queueMicrotask(() => {
+      child.exitCode ??= 0;
+      child.emit("close", child.exitCode);
+    });
+    return true;
+  });
+  return child;
+}
+
+function rootSessionWithChild() {
+  const child = createRootSessionChild();
+  const spawnChild = vi.fn(() => child);
+  const session = new RootMysqlSession({
+    app: CONTEXT.recovery.app,
+    machineId: CONTEXT.machine.id,
+    signal: new AbortController().signal,
+    spawnChild,
+  });
+  return { child, session, spawnChild };
+}
+
+function writtenMarker(child) {
+  const statement = child.stdinWrites.at(-1);
+  const marker = /SELECT '(__lbcp_[a-f0-9]{32}__)';/.exec(statement)?.[1];
+  expect(marker).toBeTruthy();
+  return marker;
 }
 
 describe("credit provisioner bootstrap runner", () => {
@@ -332,6 +425,53 @@ describe("credit provisioner bootstrap runner", () => {
     ]);
   });
 
+  it("resolves the root MySQL marker protocol", async () => {
+    const { child, session, spawnChild } = rootSessionWithChild();
+    const result = session.execute("SELECT 1");
+    const marker = writtenMarker(child);
+    child.stdout.write(`1\n${marker}\n`);
+    await expect(result).resolves.toEqual(["1"]);
+    expect(spawnChild).toHaveBeenCalledOnce();
+    await session.close({ releaseLock: false });
+  });
+
+  it("frames root MySQL rows and markers split across chunks", async () => {
+    const { child, session } = rootSessionWithChild();
+    const result = session.execute("SELECT 1");
+    const marker = writtenMarker(child);
+    child.stdout.write(`row-one\r\n${marker.slice(0, 12)}`);
+    child.stdout.write(`${marker.slice(12)}\n`);
+    await expect(result).resolves.toEqual(["row-one"]);
+    await session.close({ releaseLock: false });
+  });
+
+  it("terminates root MySQL output that exceeds the fixed limit", async () => {
+    const { child, session } = rootSessionWithChild();
+    const result = session.execute("SELECT 1");
+    child.stdout.write("x".repeat(2 * 1024 * 1024 + 1));
+    await expect(result).rejects.toThrow("database command failed");
+    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    await session.close({ releaseLock: false });
+  });
+
+  it("times out a root MySQL command without a marker", async () => {
+    const { child, session } = rootSessionWithChild();
+    await expect(
+      session.execute("SELECT SLEEP(10)", { timeoutMs: 5 }),
+    ).rejects.toThrow("database command failed");
+    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    await session.close({ releaseLock: false });
+  });
+
+  it("rejects a pending root MySQL command when the child closes early", async () => {
+    const { child, session } = rootSessionWithChild();
+    const result = session.execute("SELECT 1");
+    child.exitCode = 1;
+    child.emit("close", 1);
+    await expect(result).rejects.toThrow("database command failed");
+    await session.close({ releaseLock: false });
+  });
+
   it("passes through only the three fixed result markers", () => {
     expect(normalizeBootstrapMarker(CREDIT_PROVISIONER_SUCCESS_MARKER)).toBe(
       CREDIT_PROVISIONER_SUCCESS_MARKER,
@@ -390,10 +530,120 @@ describe("credit provisioner bootstrap runner", () => {
     expect(calls.filter((call) => call === "repository-proof")).toHaveLength(2);
     expect(calls).not.toContain("account-cleanup");
     expect(calls).not.toContain("secret-cleanup");
+    expect(calls.indexOf("secret-state")).toBeGreaterThan(
+      calls.indexOf("lock-acquire"),
+    );
+    expect(calls.indexOf("secret-state")).toBeLessThan(calls.indexOf("create"));
+    expect(calls.lastIndexOf("secret-absent")).toBeLessThan(
+      calls.indexOf("secret-set"),
+    );
+    expect(calls.lastIndexOf("secret-absent")).toBeGreaterThan(
+      calls.indexOf("repository-proof"),
+    );
   });
 
+  it("fails closed without mutating an account-only crash artifact", async () => {
+    const { calls, deps } = createHarness({ initialAccountPresent: true });
+    await expect(
+      bootstrapCreditProvisioner(
+        {
+          expectedHead: EXPECTED_HEAD,
+          signal: new AbortController().signal,
+          snapshotId: SNAPSHOT_ID,
+        },
+        deps,
+      ),
+    ).resolves.toBe(CREDIT_PROVISIONER_CLEANUP_FAILURE_MARKER);
+    expect(calls).not.toContain("account-cleanup");
+    expect(calls).not.toContain("secret-cleanup");
+    expect(calls).not.toContain("create");
+    expect(calls).not.toContain("secret-set");
+  });
+
+  it("does not overwrite or delete a secret that appears before publication", async () => {
+    const { calls, deps } = createHarness({
+      secretAppearsBeforePublication: true,
+    });
+    await expect(
+      bootstrapCreditProvisioner(
+        {
+          expectedHead: EXPECTED_HEAD,
+          signal: new AbortController().signal,
+          snapshotId: SNAPSHOT_ID,
+        },
+        deps,
+      ),
+    ).resolves.toBe(CREDIT_PROVISIONER_CLEANUP_FAILURE_MARKER);
+    expect(calls).not.toContain("secret-set");
+    expect(calls).not.toContain("secret-cleanup");
+    expect(calls).not.toContain("account-cleanup");
+  });
+
+  it("reconciles an interrupted exact publication without rotating it", async () => {
+    const { calls, deps } = createHarness({
+      initialAccountPresent: true,
+      initialSecretPresent: true,
+    });
+
+    await expect(
+      bootstrapCreditProvisioner(
+        {
+          expectedHead: EXPECTED_HEAD,
+          signal: new AbortController().signal,
+          snapshotId: SNAPSHOT_ID,
+        },
+        deps,
+      ),
+    ).resolves.toBe(CREDIT_PROVISIONER_SUCCESS_MARKER);
+
+    expect(calls.indexOf("secret-state")).toBeGreaterThan(
+      calls.indexOf("lock-acquire"),
+    );
+    expect(calls.filter((call) => call === "context-proof")).toHaveLength(2);
+    expect(calls.filter((call) => call === "account-usable")).toHaveLength(2);
+    expect(calls).toContain("secret-read");
+    expect(calls).not.toContain("account-cleanup");
+    expect(calls).not.toContain("secret-cleanup");
+    expect(calls).not.toContain("create");
+    expect(calls).not.toContain("secret-set");
+  });
+
+  it.each([
+    ["missing account", { initialAccountPresent: false }],
+    [
+      "multiple accounts",
+      { initialAccountPresent: true, initialExtraAccountPresent: true },
+    ],
+    ["locked account", { initialAccountPresent: true, accountUsable: false }],
+    ["wrong grants", { initialAccountPresent: true, grantsValid: false }],
+  ])(
+    "does not mutate inconsistent pre-existing publication state: %s",
+    async (_label, options) => {
+      const { calls, deps } = createHarness({
+        ...options,
+        initialSecretPresent: true,
+      });
+
+      await expect(
+        bootstrapCreditProvisioner(
+          {
+            expectedHead: EXPECTED_HEAD,
+            signal: new AbortController().signal,
+            snapshotId: SNAPSHOT_ID,
+          },
+          deps,
+        ),
+      ).resolves.toBe(CREDIT_PROVISIONER_CLEANUP_FAILURE_MARKER);
+
+      expect(calls).not.toContain("account-cleanup");
+      expect(calls).not.toContain("secret-cleanup");
+      expect(calls).not.toContain("create");
+      expect(calls).not.toContain("secret-set");
+    },
+  );
+
   it.each(["grant", "proxy", "authentication"])(
-    "removes the managed account and protected secret after %s failure",
+    "removes the temporary account after pre-publication %s failure",
     async (failAt) => {
       const { calls, deps } = createHarness({ failAt });
       await expect(
@@ -423,9 +673,8 @@ describe("credit provisioner bootstrap runner", () => {
         deps,
       ),
     ).resolves.toBe(CREDIT_PROVISIONER_CLEANUP_FAILURE_MARKER);
-    expect(calls).toContain("secret-cleanup");
-    expect(calls).toContain("secret-absent");
-    expect(calls).toContain("account-cleanup");
+    expect(calls).not.toContain("secret-cleanup");
+    expect(calls).not.toContain("account-cleanup");
   });
 
   it("does not start cleanup mutations when the read-only preflight fails", async () => {
@@ -443,10 +692,9 @@ describe("credit provisioner bootstrap runner", () => {
     expect(calls).toEqual(["context-proof"]);
   });
 
-  it("returns only the fixed cleanup marker when absence cannot be proved", async () => {
-    const { calls, deps } = createHarness({
-      cleanupFails: true,
-      failAt: "secret-set",
+  it("preserves an invisible delayed publication until it can be reconciled", async () => {
+    const { calls, deps, makeSecretVisible } = createHarness({
+      secretSetRemainsInvisible: true,
     });
     await expect(
       bootstrapCreditProvisioner(
@@ -458,12 +706,64 @@ describe("credit provisioner bootstrap runner", () => {
         deps,
       ),
     ).resolves.toBe(CREDIT_PROVISIONER_CLEANUP_FAILURE_MARKER);
-    expect(calls.indexOf("account-cleanup")).toBeLessThan(
-      calls.indexOf("secret-cleanup"),
-    );
+    const retryStart = calls.length;
+    await expect(
+      bootstrapCreditProvisioner(
+        {
+          expectedHead: EXPECTED_HEAD,
+          signal: new AbortController().signal,
+          snapshotId: SNAPSHOT_ID,
+        },
+        deps,
+      ),
+    ).resolves.toBe(CREDIT_PROVISIONER_CLEANUP_FAILURE_MARKER);
+    const ambiguousRetryCalls = calls.slice(retryStart);
+    expect(ambiguousRetryCalls).not.toContain("account-cleanup");
+    expect(ambiguousRetryCalls).not.toContain("secret-cleanup");
+    expect(ambiguousRetryCalls).not.toContain("create");
+    expect(ambiguousRetryCalls).not.toContain("secret-set");
+
+    makeSecretVisible();
+    const visibleRetryStart = calls.length;
+    await expect(
+      bootstrapCreditProvisioner(
+        {
+          expectedHead: EXPECTED_HEAD,
+          signal: new AbortController().signal,
+          snapshotId: SNAPSHOT_ID,
+        },
+        deps,
+      ),
+    ).resolves.toBe(CREDIT_PROVISIONER_SUCCESS_MARKER);
+    const retryCalls = calls.slice(visibleRetryStart);
+    expect(retryCalls).not.toContain("account-cleanup");
+    expect(retryCalls).not.toContain("secret-cleanup");
+    expect(retryCalls).not.toContain("create");
+    expect(retryCalls).not.toContain("secret-set");
   });
 
-  it("removes the account and secret when proxy shutdown fails after publication", async () => {
+  it("keeps an orphan when a secret appears after the observation window", async () => {
+    const { calls, deps } = createHarness({
+      initialAccountPresent: true,
+      secretAppearsAfterObservation: true,
+    });
+    await expect(
+      bootstrapCreditProvisioner(
+        {
+          expectedHead: EXPECTED_HEAD,
+          signal: new AbortController().signal,
+          snapshotId: SNAPSHOT_ID,
+        },
+        deps,
+      ),
+    ).resolves.toBe(CREDIT_PROVISIONER_CLEANUP_FAILURE_MARKER);
+    expect(calls).not.toContain("account-cleanup");
+    expect(calls).not.toContain("secret-cleanup");
+    expect(calls).not.toContain("create");
+    expect(calls).not.toContain("secret-set");
+  });
+
+  it("preserves the account and secret when proxy shutdown fails after publication", async () => {
     const { calls, deps } = createHarness({ proxyStopFails: true });
     await expect(
       bootstrapCreditProvisioner(
@@ -474,13 +774,12 @@ describe("credit provisioner bootstrap runner", () => {
         },
         deps,
       ),
-    ).resolves.toBe(CREDIT_PROVISIONER_FAILURE_MARKER);
-    expect(calls).toContain("secret-cleanup");
-    expect(calls).toContain("account-cleanup");
-    expect(calls).toContain("secret-absent");
+    ).resolves.toBe(CREDIT_PROVISIONER_CLEANUP_FAILURE_MARKER);
+    expect(calls).not.toContain("secret-cleanup");
+    expect(calls).not.toContain("account-cleanup");
   });
 
-  it("rolls back the account and secret if remote main moves during publication", async () => {
+  it("preserves published state if remote main moves during publication", async () => {
     const { calls, deps } = createHarness({
       repositoryChangesAfterSecret: true,
     });
@@ -493,18 +792,18 @@ describe("credit provisioner bootstrap runner", () => {
         },
         deps,
       ),
-    ).resolves.toBe(CREDIT_PROVISIONER_FAILURE_MARKER);
+    ).resolves.toBe(CREDIT_PROVISIONER_CLEANUP_FAILURE_MARKER);
     expect(calls).toContain("secret-set");
-    expect(calls).toContain("secret-cleanup");
-    expect(calls).toContain("account-cleanup");
+    expect(calls).not.toContain("secret-cleanup");
+    expect(calls).not.toContain("account-cleanup");
   });
 
   it.each([
-    ["account", false, CREDIT_PROVISIONER_FAILURE_MARKER],
-    ["secret", true, CREDIT_PROVISIONER_CLEANUP_FAILURE_MARKER],
+    ["account", true, CREDIT_PROVISIONER_FAILURE_MARKER],
+    ["secret", false, CREDIT_PROVISIONER_CLEANUP_FAILURE_MARKER],
   ])(
-    "cleans all possibly mutated state when interrupted at %s",
-    async (abortAt, secretWasAttempted, expectedMarker) => {
+    "handles an interruption at %s without unsafe remote cleanup",
+    async (abortAt, shouldCleanAccount, expectedMarker) => {
       const { calls, controller, deps } = createHarness({ abortAt });
       await expect(
         bootstrapCreditProvisioner(
@@ -516,26 +815,18 @@ describe("credit provisioner bootstrap runner", () => {
           deps,
         ),
       ).resolves.toBe(expectedMarker);
-      expect(calls).toContain("account-cleanup");
-      expect(calls).toContain("secret-absent");
-      if (secretWasAttempted) expect(calls).toContain("secret-cleanup");
+      expect(calls.includes("account-cleanup")).toBe(shouldCleanAccount);
+      expect(calls).not.toContain("secret-cleanup");
+      if (shouldCleanAccount) expect(calls).toContain("secret-absent");
     },
   );
 
-  it("reconciles a delayed-visible secret and then proves stable absence", async () => {
+  it("observes stable absence without deleting a delayed published secret", async () => {
     let currentTime = 0;
-    let deleted = false;
-    let deleteCalls = 0;
     await expect(
-      reconcileSecretAbsence({
-        deleteSecret: async () => {
-          deleteCalls += 1;
-          deleted = true;
-        },
+      observeStableSecretState({
         listSecretNames: async () =>
-          currentTime >= 2_000 && !deleted
-            ? [CREDIT_PROVISIONER_SECRET_NAME]
-            : [],
+          currentTime >= 2_000 ? [CREDIT_PROVISIONER_SECRET_NAME] : [],
         now: () => currentTime,
         stabilizationWindowMs: 3_000,
         timeoutMs: 10_000,
@@ -543,33 +834,31 @@ describe("credit provisioner bootstrap runner", () => {
           currentTime += milliseconds;
         },
       }),
-    ).resolves.toBeUndefined();
-    expect(deleteCalls).toBe(1);
-    expect(currentTime).toBeGreaterThanOrEqual(5_000);
+    ).resolves.toBe("present");
+    expect(currentTime).toBe(2_000);
   });
 
-  it("rejects when a secret remains visible throughout reconciliation", async () => {
+  it("accepts absence only after the full stabilization window", async () => {
     let currentTime = 0;
     await expect(
-      reconcileSecretAbsence({
-        deleteSecret: async () => undefined,
-        listSecretNames: async () => [CREDIT_PROVISIONER_SECRET_NAME],
+      observeStableSecretState({
+        listSecretNames: async () => [],
         now: () => currentTime,
-        stabilizationWindowMs: 2_000,
-        timeoutMs: 3_000,
+        stabilizationWindowMs: 3_000,
+        timeoutMs: 10_000,
         wait: async (milliseconds) => {
           currentTime += milliseconds;
         },
       }),
-    ).rejects.toThrow();
+    ).resolves.toBe("absent");
+    expect(currentTime).toBe(3_000);
   });
 
-  it("rejects secret reconciliation on abort or duplicate inventory", async () => {
+  it("rejects secret observation on abort or duplicate inventory", async () => {
     const controller = new AbortController();
     controller.abort();
     await expect(
-      reconcileSecretAbsence({
-        deleteSecret: async () => undefined,
+      observeStableSecretState({
         listSecretNames: async () => [],
         signal: controller.signal,
         stabilizationWindowMs: 1,
@@ -577,8 +866,7 @@ describe("credit provisioner bootstrap runner", () => {
       }),
     ).rejects.toThrow();
     await expect(
-      reconcileSecretAbsence({
-        deleteSecret: async () => undefined,
+      observeStableSecretState({
         listSecretNames: async () => [
           CREDIT_PROVISIONER_SECRET_NAME,
           CREDIT_PROVISIONER_SECRET_NAME,

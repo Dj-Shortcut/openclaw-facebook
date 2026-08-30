@@ -4598,7 +4598,10 @@ function validateCreditProvisionerBootstrapHelper(rootDir) {
     packageJson?.scripts?.["test:production-contracts"] ?? "",
   ).split(/\s+/);
   for (const testPath of bootstrapTestPaths) {
-    if (occurrenceCount(productionContractTokens.join("\n"), testPath) !== 1) {
+    if (
+      productionContractTokens.filter((token) => token === testPath).length !==
+      1
+    ) {
       fail(
         `package.json test:production-contracts must include exact ${testPath}`,
       );
@@ -4769,27 +4772,23 @@ function validateCreditProvisionerBootstrapHelper(rootDir) {
     ],
     [
       "secretMayExist = true",
-      "must arm secret cleanup before the GitHub mutation",
+      "must arm ambiguous-publication preservation before the GitHub mutation",
     ],
     [
-      "secretSetSettled = true",
-      "must distinguish a completed GitHub secret write from an ambiguous publication",
+      "observeStableSecretState",
+      "must observe stable secret state without rotating a concurrent valid publication",
     ],
     [
-      "secretPublicationAmbiguous",
-      "must keep an unsettled GitHub write in cleanup-incomplete state",
+      "assertExistingPublishedState",
+      "must reconcile an exact prior publication without remote mutation",
     ],
     [
-      "reconcileSecretAbsence",
-      "must reconcile delayed GitHub secret visibility before claiming absence",
+      "assertAccountUsable",
+      "must reject locked or password-expired provisioner accounts",
     ],
     [
       "SECRET_STABILIZATION_WINDOW_MS",
       "must require stable secret absence over a bounded window",
-    ],
-    [
-      "acceptedExitCodes: [0, 1]",
-      "must treat an already absent GitHub secret delete as idempotent",
     ],
     [
       "GET_LOCK",
@@ -4806,10 +4805,6 @@ function validateCreditProvisionerBootstrapHelper(rootDir) {
     [
       "input: storedProvisionerUrl",
       "must pass the provisioner URL through stdin",
-    ],
-    [
-      '"secret",\n          "delete"',
-      "must delete a possibly published secret during rollback",
     ],
     [
       'process.on("SIGINT"',
@@ -4837,15 +4832,19 @@ function validateCreditProvisionerBootstrapHelper(rootDir) {
       fail(`${CREDIT_PROVISIONER_BOOTSTRAP_RUNNER_PATH} ${message}`);
     }
   }
-  const accountCleanupArm = runner.indexOf(
-    "accountMayExist = true;\n    await rootSession.execute(sql.createStatement",
-  );
   const accountMutation = runner.indexOf(
     "await rootSession.execute(sql.createStatement",
   );
+  const accountSqlBuild = runner.indexOf("const sql = buildProvisionerSql(");
+  const accountCleanupArm = runner.lastIndexOf(
+    "accountMayExist = true;",
+    accountMutation,
+  );
   if (
     accountCleanupArm < 0 ||
+    accountSqlBuild < 0 ||
     accountMutation < 0 ||
+    accountCleanupArm < accountSqlBuild ||
     accountCleanupArm > accountMutation
   ) {
     fail(
@@ -4860,13 +4859,60 @@ function validateCreditProvisionerBootstrapHelper(rootDir) {
   const databaseCleanup = runner.indexOf(
     "const databaseSignal = deps.createCleanupSignal()",
   );
-  const secretCleanup = runner.indexOf(
-    "const secretSignal = deps.createCleanupSignal()",
+  const bootstrapStart = runner.indexOf(
+    "export async function bootstrapCreditProvisioner",
     databaseCleanup,
   );
-  if (databaseCleanup < 0 || secretCleanup <= databaseCleanup) {
+  const cleanupBody = runner.slice(databaseCleanup, bootstrapStart);
+  const ambiguityPreservation = cleanupBody.indexOf(
+    "if (secretMayExist) {\n      cleanupComplete = false;",
+  );
+  const accountCleanup = runner.indexOf(
+    "await cleanupRoot.disableAndDrop(existing, databaseSignal)",
+    databaseCleanup,
+  );
+  if (
+    databaseCleanup < 0 ||
+    bootstrapStart <= databaseCleanup ||
+    ambiguityPreservation < 0 ||
+    accountCleanup <= databaseCleanup ||
+    runner
+      .slice(databaseCleanup, bootstrapStart)
+      .includes("deleteSecretIfPresent")
+  ) {
     fail(
-      `${CREDIT_PROVISIONER_BOOTSTRAP_RUNNER_PATH} must disable and prove the database account before reconciling the GitHub secret`,
+      `${CREDIT_PROVISIONER_BOOTSTRAP_RUNNER_PATH} must preserve the account once protected-secret publication may have started`,
+    );
+  }
+  const bootstrapLock = runner.indexOf(
+    "await rootSession.acquireLock(signal)",
+    bootstrapStart,
+  );
+  const secretObservation = runner.indexOf(
+    "await deps.observeSecretState(signal)",
+    bootstrapLock,
+  );
+  const orphanInventory = runner.indexOf(
+    "await rootSession.listManagedAccounts(signal)",
+    secretObservation,
+  );
+  const orphanGuard = runner.indexOf(
+    "if (orphans.length !== 0)",
+    orphanInventory,
+  );
+  const orphanGuardBody = runner.slice(orphanGuard, accountMutation);
+  if (
+    bootstrapStart < 0 ||
+    bootstrapLock < bootstrapStart ||
+    secretObservation < bootstrapLock ||
+    orphanInventory < secretObservation ||
+    orphanGuard < orphanInventory ||
+    orphanGuard > accountMutation ||
+    !orphanGuardBody.includes("CREDIT_PROVISIONER_CLEANUP_FAILURE_MARKER") ||
+    !orphanGuardBody.includes("fail();")
+  ) {
+    fail(
+      `${CREDIT_PROVISIONER_BOOTSTRAP_RUNNER_PATH} must retain an absent-secret orphan without mutation`,
     );
   }
   if (
@@ -4879,24 +4925,26 @@ function validateCreditProvisionerBootstrapHelper(rootDir) {
       `${CREDIT_PROVISIONER_BOOTSTRAP_RUNNER_PATH} must reprove exact clean remote main immediately before and after secret publication`,
     );
   }
-  const secretCleanupArm = runner.indexOf(
-    "secretMayExist = true;\n    await deps.setSecret(storedProvisionerUrl",
-  );
   const secretMutation = runner.indexOf(
     "await deps.setSecret(storedProvisionerUrl",
   );
-  const secretSettled = runner.indexOf(
-    "secretSetSettled = true",
+  const secretCleanupArm = runner.lastIndexOf(
+    "secretMayExist = true;",
+    secretMutation,
+  );
+  const prePublicationAbsence = runner.lastIndexOf(
+    "await deps.assertSecretPresence(false, signal)",
     secretMutation,
   );
   if (
     secretCleanupArm < 0 ||
     secretMutation < 0 ||
     secretCleanupArm > secretMutation ||
-    secretSettled < secretMutation
+    prePublicationAbsence < orphanInventory ||
+    prePublicationAbsence > secretMutation
   ) {
     fail(
-      `${CREDIT_PROVISIONER_BOOTSTRAP_RUNNER_PATH} must arm secret cleanup before publishing the protected secret`,
+      `${CREDIT_PROVISIONER_BOOTSTRAP_RUNNER_PATH} must reprove secret absence and arm cleanup before publishing the protected secret`,
     );
   }
   if (

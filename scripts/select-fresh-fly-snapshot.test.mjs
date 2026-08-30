@@ -6,20 +6,20 @@ const baseline = [
   {
     id: "vs_01K39M7A7WEXAMPLE1",
     created_at: "2026-08-22T01:00:00Z",
-    digest: "sha256:old-one",
+    digest: "a".repeat(64),
     status: "created",
     retention_days: 5,
     size: 1024,
-    volume_size: 10,
+    volume_size: 10 * 1024 ** 3,
   },
   {
     id: "vs_01K39M7A7WEXAMPLE2",
     created_at: "2026-08-23T01:00:00Z",
-    digest: "sha256:old-two",
+    digest: "b".repeat(64),
     status: "created",
     retention_days: 5,
     size: 2048,
-    volume_size: 10,
+    volume_size: 10 * 1024 ** 3,
   },
 ];
 
@@ -28,11 +28,11 @@ describe("fresh Fly snapshot selection", () => {
     const pending = {
       id: "vs_01K39M7A7WEXAMPLE3",
       created_at: "2026-08-23T14:00:01Z",
-      digest: "sha256:new",
+      digest: "c".repeat(64),
       status: "pending",
       retention_days: 5,
       size: 0,
-      volume_size: 10,
+      volume_size: 10 * 1024 ** 3,
     };
     expect(
       selectFreshFlySnapshot(
