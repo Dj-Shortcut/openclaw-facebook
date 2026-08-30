@@ -91,10 +91,10 @@ varying vec3 vPos;
 uniform float uTime;
 
 void main() {
-  vec3 colorA = vec3(1.0, 0.58, 0.35);
-  vec3 colorB = vec3(1.0, 0.44, 0.62);
-  vec3 colorC = vec3(0.55, 0.36, 0.95);
-  vec3 colorD = vec3(0.0, 0.52, 1.0);
+  vec3 colorA = vec3(0.145, 0.255, 0.788);
+  vec3 colorB = vec3(0.427, 0.647, 0.980);
+  vec3 colorC = vec3(0.545, 0.184, 0.878);
+  vec3 colorD = vec3(0.078, 0.125, 0.239);
 
   float mixer = clamp(vPos.y * 0.5 + 0.5, 0.0, 1.0);
   vec3 base = mix(colorA, colorC, smoothstep(0.0, 0.65, mixer));

@@ -4,10 +4,16 @@ import {
 } from "@shared/publicBusinessDetails";
 
 const legalLinks = [
-  { href: "/privacy", label: "Privacy" },
-  { href: "/terms", label: "Voorwaarden" },
+  { href: "/privacy", label: "Privacybeleid" },
+  { href: "/terms", label: "Algemene voorwaarden" },
+  { href: "/billing-policy", label: "Terugbetalingsbeleid" },
   { href: "/data-deletion", label: "Gegevens verwijderen" },
-  { href: "/billing-policy", label: "Prijs- en betaalinfo" },
+  { href: `mailto:${PUBLIC_BUSINESS_DETAILS.email}`, label: "Contact" },
+  {
+    href: PUBLIC_BUSINESS_DETAILS.messengerUrl,
+    label: "Facebook Messenger",
+    external: true,
+  },
 ];
 
 export default function Footer() {
@@ -47,6 +53,8 @@ export default function Footer() {
               className="transition-colors hover:text-stone-900 hover:underline"
               href={link.href}
               key={link.href}
+              rel={link.external ? "noreferrer" : undefined}
+              target={link.external ? "_blank" : undefined}
             >
               {link.label}
             </a>
