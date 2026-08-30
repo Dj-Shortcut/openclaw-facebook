@@ -48,15 +48,21 @@ Live payment enablement remains gated by the relevant P1 through P4 evidence.
       volume data under an explicit privacy/retention decision. Extract the
       generic OpenClaw channel to its standalone project before removing the
       root package and ClawHub workflows from this repository.
-  - [ ] Merge the reviewed removal of the automatic gateway health probe. The
-        zero-traffic observation window starts only at that exact `main` merge
-        SHA and UTC timestamp, not at PR creation or from earlier bounded logs.
-        Record both values here after merge: merge SHA `pending`; start UTC
-        `pending`.
+  - [x] PR #479 removed the automatic gateway health probe at exact `main`
+        merge `6f48774d9ffdb744441570ed0da619bf08be6fb7` on
+        `2026-08-30T17:37:55Z`. Because the observation duration had not yet
+        been fixed before that merge, this timestamp is not the observation
+        start.
+  - [ ] Merge the reviewed observation contract with a duration fixed in
+        advance at exactly 168 continuous hours (seven 24-hour periods). The
+        clock starts only at that contract's exact `main` merge SHA and UTC
+        timestamp. Record both values in a follow-up evidence commit: merge SHA
+        `pending`; start UTC `pending`.
   - [ ] After that start, collect continuous metadata-only gateway ingress
-        evidence for the approved observation duration. A green health check is
-        not user-traffic evidence. Do not stop, delete, scale, or replace the
-        gateway Machine or its volumes as part of the probe-removal change.
+        evidence for all 168 hours. A green health check is not user-traffic
+        evidence. Any evidence gap, gateway probe, gateway Machine mutation, or
+        direct Page-callback drift resets the clock. Do not stop, delete, scale,
+        or replace the gateway Machine or its volumes during this window.
 
 - [ ] **P2 - User-scoped purchased-credit ledger.** Add an append-only credit
       ledger, wallet projection, and idempotent reservation/commit/release model

@@ -800,15 +800,19 @@ scheduled production uptime workflow must not probe the gateway during the
 zero-traffic observation window; it continues to monitor image-gen and the
 storage proxy.
 
-The observation clock starts only after the probe-removal change is merged to
-`main`. Record the exact merge SHA and UTC timestamp in
-`docs/operations/todo.md`; PR creation time and gateway logs collected before
-that point do not count. Collect metadata-only ingress evidence without calling
-the public gateway endpoint. Keep overlapping captures if the provider exposes
-only a bounded log window, and never record message content or user identifiers.
-The first quiescence change does not stop, scale, redeploy, delete, or otherwise
-mutate any gateway Machine, secret, or volume. Those actions remain separate,
-reviewed retirement steps with their own rollback and retention evidence.
+The observation duration is fixed in advance at exactly 168 continuous hours,
+or seven 24-hour periods. The clock starts only when this duration contract is
+merged to `main`, not at the earlier probe-removal merge. Record that contract's
+exact merge SHA and UTC timestamp in `docs/operations/todo.md`; PR creation time
+and gateway logs collected before that point do not count. Collect metadata-only
+ingress evidence without calling the public gateway endpoint. Keep overlapping
+captures if the provider exposes only a bounded log window, and never record
+message content or user identifiers. Any evidence gap, gateway probe, gateway
+Machine mutation, or drift away from the canonical direct Page callback resets
+the full 168-hour clock. The quiescence changes do not stop, scale, redeploy,
+delete, or otherwise mutate any gateway Machine, secret, or volume. Those
+actions remain separate, reviewed retirement steps with their own rollback and
+retention evidence.
 
 The manifest contract has four stages:
 
