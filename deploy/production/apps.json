@@ -7,7 +7,36 @@
       "workingDirectory": ".",
       "deployScript": "deploy:gateway",
       "deploymentEnabled": false,
-      "deploymentBlockReason": "Bootstrap is blocked until the stateful volume migration is rehearsed and a separate reviewed manifest-bound rebaseline proves the live identity, exact volume and Machine configuration, plus an attested artifact built from fully pinned inputs.",
+      "deploymentBlockReason": "The legacy OpenClaw gateway is intentionally stopped and cordoned as a reversible retirement canary. Its Machine and encrypted volume stay preserved for the exact uncordon-then-start rollback; gateway deploy and generic recovery remain blocked.",
+      "retirementCanary": {
+        "state": "cordoned",
+        "recordedAt": "2026-08-30T18:38:00Z",
+        "machine": {
+          "id": "28621d2c559558",
+          "state": "stopped",
+          "cordoned": true,
+          "stoppedAt": "2026-08-30T18:32:57.629Z",
+          "cordonedAt": "2026-08-30T18:34:04.903Z",
+          "image": "registry.fly.io/leaderbot-openclaw-gateway:codex-codex-disabled-20260803@sha256:b0992d818d6fde9790f010f4866c97d78fd1d8c376492b515d50efa4778c704e",
+          "machineConfigSha256": "0a5a744c8946b4a0c8d1ccf8d39cd31797992fe3d22c50e2febe2d137342c48f",
+          "volumeId": "vol_v8elpyo26xwdmk1v",
+          "mountPath": "/data",
+          "region": "ams"
+        },
+        "directRuntime": {
+          "app": "leaderbot-fb-image-gen",
+          "healthPath": "/healthz",
+          "readinessPath": "/readyz",
+          "verifiedAt": "2026-08-30T18:38:00Z",
+          "healthPassed": true,
+          "readinessPassed": true
+        },
+        "rollback": {
+          "state": "available",
+          "order": ["uncordon", "start"],
+          "volumePreserved": true
+        }
+      },
       "stateRebaseline": {
         "state": "awaiting_rehearsal",
         "enforcementEnabled": false,

@@ -58,14 +58,24 @@ Live payment enablement remains gated by the relevant P1 through P4 evidence.
         `c251a5e34c46bd327ffa5c015ed038f1fced545e` on
         `2026-08-30T17:44:08Z`. That exact SHA and UTC timestamp start the
         observation clock.
-  - [ ] After that start, collect continuous metadata-only gateway ingress
-        evidence for all 168 hours. The scheduled end is
-        `2026-09-06T17:44:08Z` only if the full window remains uninterrupted. A
-        green health check is not user-traffic evidence. Any evidence gap,
-        gateway probe, gateway Machine mutation, or direct Page-callback drift
-        resets the clock and requires a new reviewed start and scheduled end.
-        Do not stop, delete, scale, or replace the gateway Machine or its
-        volumes during this window.
+  - [x] On `2026-08-30`, the owner explicitly replaced the proposed 168-hour
+        zero-ingress proof with a reversible cordon canary. Machine
+        `28621d2c559558` stopped at `2026-08-30T18:32:57.629Z` and was cordoned
+        at `2026-08-30T18:34:04.903Z`; its exact recorded legacy image and
+        encrypted volume `vol_v8elpyo26xwdmk1v` remain attached and were not
+        deleted. Every other gateway Machine was also stopped. The direct
+        image-gen `/healthz` and `/readyz` both passed at
+        `2026-08-30T18:38:00Z`. This is stop/rollback evidence, not a claim that
+        the earlier observation proved zero valid ingress.
+  - [ ] Complete a real post-cordon Messenger smoke through the direct Page
+        callback and record the metadata-only result. Keep the gateway
+        deployment and generic recovery paths blocked. If the direct bot
+        regresses, use only the preserved rollback tuple: uncordon
+        `28621d2c559558`, then start that same Machine. Do not delete its Machine,
+        volume, image, or secrets until retention and standalone-channel gates
+        close. This restores compute only; a Meta callback cutback is a separate
+        reviewed action and both ingress paths must not remain intentionally
+        active.
 
 - [ ] **P2 - User-scoped purchased-credit ledger.** Add an append-only credit
       ledger, wallet projection, and idempotent reservation/commit/release model
@@ -116,10 +126,14 @@ Live payment enablement remains gated by the relevant P1 through P4 evidence.
   168-hour observation contract at
   `c251a5e34c46bd327ffa5c015ed038f1fced545e` on
   `2026-08-30T17:44:08Z`, with conditional end
-  `2026-09-06T17:44:08Z`. P1 remains open until uninterrupted metadata-only
-  zero-ingress evidence, direct Messenger smokes, rollback/retention decisions,
-  the later reviewed gateway stop, and standalone channel publication are
-  complete.
+  `2026-09-06T17:44:08Z`. That pre-instrumentation window did not prove zero
+  valid ingress. On `2026-08-30` the owner chose the documented reversible
+  cordon canary instead: the exact legacy Machine is stopped and cordoned, its
+  encrypted rollback volume remains attached, all other gateway Machines are
+  stopped, and direct image-gen health/readiness passed. P1 remains open until
+  a real post-cordon Messenger smoke passes, rollback and retention remain
+  proven, and the standalone channel publication is complete. No 168-hour
+  zero-ingress claim is made.
 
 - Storage-proxy startup ordering was fixed and merged in PR #445 at reviewed
   source commit `6a7d0431e1e02076a2db7fcf12c8358d7fbf33cd`.

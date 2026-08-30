@@ -857,6 +857,22 @@ function isExactSha256(value) {
   return typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
 }
 
+function sortedJsonValue(value) {
+  if (Array.isArray(value)) return value.map(sortedJsonValue);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.keys(value)
+      .sort()
+      .map((key) => [key, sortedJsonValue(value[key])]),
+  );
+}
+
+export function sha256CanonicalJson(value) {
+  return createHash("sha256")
+    .update(JSON.stringify(sortedJsonValue(value)))
+    .digest("hex");
+}
+
 function isGatewayBaselineImage(app, image) {
   const prefix = `registry.fly.io/${app.app}:`;
   return (
@@ -1092,6 +1108,76 @@ function validateGatewayHistoricalResourcePolicy(contract) {
   }
 }
 
+function validateGatewayRetirementCanary(app) {
+  const canary = app.retirementCanary;
+  const machine = canary?.machine;
+  const directRuntime = canary?.directRuntime;
+  const rollback = canary?.rollback;
+  const baseline = app.stateRebaseline?.baseline;
+  const timestampPattern =
+    /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{3})?Z$/;
+  const validTimestamp = (value) =>
+    timestampPattern.test(value ?? "") && Number.isFinite(Date.parse(value));
+  if (
+    !hasExactObjectKeys(canary, [
+      "state",
+      "recordedAt",
+      "machine",
+      "directRuntime",
+      "rollback",
+    ]) ||
+    canary.state !== "cordoned" ||
+    !validTimestamp(canary.recordedAt) ||
+    !hasExactObjectKeys(machine, [
+      "id",
+      "state",
+      "cordoned",
+      "stoppedAt",
+      "cordonedAt",
+      "image",
+      "machineConfigSha256",
+      "volumeId",
+      "mountPath",
+      "region",
+    ]) ||
+    machine.id !== baseline?.machineId ||
+    machine.state !== "stopped" ||
+    machine.cordoned !== true ||
+    !validTimestamp(machine.stoppedAt) ||
+    !validTimestamp(machine.cordonedAt) ||
+    Date.parse(machine.stoppedAt) > Date.parse(machine.cordonedAt) ||
+    Date.parse(machine.cordonedAt) > Date.parse(canary.recordedAt) ||
+    machine.image !== baseline?.image ||
+    !isExactSha256(machine.machineConfigSha256) ||
+    machine.volumeId !== baseline?.volumeId ||
+    machine.mountPath !== baseline?.mountPath ||
+    machine.region !== baseline?.region ||
+    !hasExactObjectKeys(directRuntime, [
+      "app",
+      "healthPath",
+      "readinessPath",
+      "verifiedAt",
+      "healthPassed",
+      "readinessPassed",
+    ]) ||
+    directRuntime.app !== "leaderbot-fb-image-gen" ||
+    directRuntime.healthPath !== "/healthz" ||
+    directRuntime.readinessPath !== "/readyz" ||
+    !validTimestamp(directRuntime.verifiedAt) ||
+    Date.parse(directRuntime.verifiedAt) < Date.parse(machine.cordonedAt) ||
+    directRuntime.healthPassed !== true ||
+    directRuntime.readinessPassed !== true ||
+    !hasExactObjectKeys(rollback, ["state", "order", "volumePreserved"]) ||
+    rollback.state !== "available" ||
+    JSON.stringify(rollback.order) !== JSON.stringify(["uncordon", "start"]) ||
+    rollback.volumePreserved !== true
+  ) {
+    fail(
+      "gateway retirement canary must bind the exact stopped, cordoned Machine, preserved volume, direct-runtime evidence, and uncordon-then-start rollback",
+    );
+  }
+}
+
 function validateGatewayPreparatoryEnforcement(contract, flyConfig) {
   if (contract.enforcementEnabled !== false) {
     fail(
@@ -1130,6 +1216,7 @@ function validateGatewayStateRebaseline(app, flyConfig) {
   validateGatewayRebaselineTransitions(contract, app, artifact);
   validateGatewayHistoricalResourcePolicy(contract);
   validateGatewayPreparatoryEnforcement(contract, flyConfig);
+  validateGatewayRetirementCanary(app);
 }
 
 function reviewedSourceCommitForImage(app, image) {
@@ -10208,6 +10295,90 @@ export function checkLiveFlyDrift(target, options = {}) {
   };
 }
 
+function checkGatewayRetirementCanaryLive(app, machines) {
+  validateGatewayRetirementCanary(app);
+  const canary = app.retirementCanary;
+  const expected = canary.machine;
+  const blockingErrors = [];
+  if (!Array.isArray(machines)) {
+    fail("gateway retirement canary requires a Fly Machine list");
+  }
+  const matchingMachines = machines.filter(
+    (machine) => machine?.id === expected.id,
+  );
+  if (matchingMachines.length !== 1) {
+    blockingErrors.push(
+      `retirement Machine ${expected.id}: expected exactly one, got ${matchingMachines.length}`,
+    );
+  }
+  const machine = matchingMachines[0];
+  if (machine) {
+    if (machine.state !== "stopped") {
+      blockingErrors.push(`retirement Machine ${expected.id} is not stopped`);
+    }
+    if (machine.cordoned !== true) {
+      blockingErrors.push(`retirement Machine ${expected.id} is not cordoned`);
+    }
+    if (machine.region !== expected.region) {
+      blockingErrors.push(
+        `retirement Machine ${expected.id} moved outside ${expected.region}`,
+      );
+    }
+    if (machine.config?.image !== expected.image) {
+      blockingErrors.push(
+        `retirement Machine ${expected.id} image differs from the preserved rollback image`,
+      );
+    }
+    if (sha256CanonicalJson(machine.config) !== expected.machineConfigSha256) {
+      blockingErrors.push(
+        `retirement Machine ${expected.id} full configuration differs from the preserved rollback configuration`,
+      );
+    }
+    const expectedDigest = expected.image.match(/@(sha256:[a-f0-9]{64})$/)?.[1];
+    if (
+      machine.image_ref?.registry !== "registry.fly.io" ||
+      machine.image_ref?.repository !== app.app ||
+      machine.image_ref?.digest !== expectedDigest
+    ) {
+      blockingErrors.push(
+        `retirement Machine ${expected.id} image reference is not exact`,
+      );
+    }
+    const preservedMounts = (machine.config?.mounts ?? []).filter(
+      (mount) =>
+        mount?.volume === expected.volumeId &&
+        mount?.path === expected.mountPath &&
+        mount?.encrypted === true,
+    );
+    if (
+      preservedMounts.length !== 1 ||
+      (machine.config?.mounts ?? []).length !== 1
+    ) {
+      blockingErrors.push(
+        `retirement Machine ${expected.id} does not preserve the exact encrypted rollback volume`,
+      );
+    }
+  }
+  const activeMachines = machines.filter(
+    (candidate) => candidate?.state !== "stopped",
+  );
+  if (activeMachines.length > 0) {
+    blockingErrors.push(
+      `gateway retirement canary has ${activeMachines.length} non-stopped Machine(s)`,
+    );
+  }
+  return {
+    target: "gateway",
+    app: app.app,
+    identity: "none",
+    expectedImage: expected.image,
+    retirementCanary: true,
+    reconcilableDrift: [],
+    blockingErrors,
+    acceptedBootstrapDrift: [],
+  };
+}
+
 export async function checkSettledLiveFlyDrift(target, options = {}) {
   const rootDir = options.rootDir ?? process.cwd();
   const underlyingRun = options.runFly ?? ((args) => runFly(args, rootDir));
@@ -10228,6 +10399,21 @@ export async function checkSettledLiveFlyDrift(target, options = {}) {
   };
   const app = loadProductionManifest(rootDir).apps[target];
   if (!app) fail(`Unknown production target: ${target}`);
+  if (target === "gateway") {
+    if (
+      options.requireCurrentReviewedImage === true ||
+      options.expectedSourceSha !== undefined
+    ) {
+      fail(
+        "gateway retirement canary forbids successor provenance and generic recovery",
+      );
+    }
+    validateGatewayRetirementCanary(app);
+    const machines = JSON.parse(
+      run(["machine", "list", "--app", app.app, "--json"]),
+    );
+    return checkGatewayRetirementCanaryLive(app, machines);
+  }
   const configArgs = ["config", "show", "--app", app.app];
   const machineArgs = ["machine", "list", "--app", app.app, "--json"];
   const scaleArgs = ["scale", "show", "--app", app.app, "--json"];
@@ -10777,7 +10963,9 @@ if (isMain) {
       process.exitCode = 1;
     } else {
       process.stdout.write(
-        `${result.app} matches settled identity ${result.identity}.\n`,
+        result.retirementCanary === true
+          ? `${result.app} matches the exact stopped and cordoned retirement canary.\n`
+          : `${result.app} matches settled identity ${result.identity}.\n`,
       );
     }
   } else if (liveIndex >= 0) {

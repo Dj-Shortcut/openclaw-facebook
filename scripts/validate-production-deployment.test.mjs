@@ -22,6 +22,7 @@ import {
   materializeSuccessorSourceRoot,
   referencesForbiddenFlyApiUrl,
   resolveImmutableReleaseImage,
+  sha256CanonicalJson,
   validateDeploymentEnabled,
   validateProductionRepository,
   validateRecoveryProtocol,
@@ -2235,7 +2236,7 @@ describe("production deployment contract", () => {
     replaceFixtureText(
       root,
       ".github/workflows/production-uptime.yml",
-      "          body=\"$(mktemp)\"\n",
+      '          body="$(mktemp)"\n',
       '          gateway_host="leaderbot-openclaw-gateway.fly.dev"\n          body="$(mktemp)"\n',
     );
     replaceFixtureText(
@@ -5941,6 +5942,30 @@ describe("production deployment contract", () => {
   });
 
   it.each([
+    ["machine id", (canary) => (canary.machine.id = "11111111111111")],
+    ["cordon state", (canary) => (canary.machine.cordoned = false)],
+    [
+      "machine config hash",
+      (canary) => (canary.machine.machineConfigSha256 = "not-a-hash"),
+    ],
+    ["preserved volume", (canary) => (canary.machine.volumeId = "vol_wrong")],
+    [
+      "rollback order",
+      (canary) => (canary.rollback.order = ["start", "uncordon"]),
+    ],
+  ])("rejects gateway retirement drift in %s", (_label, mutate) => {
+    const root = createRepositoryFixture();
+    const manifestPath = path.join(root, "deploy/production/apps.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    mutate(manifest.apps.gateway.retirementCanary);
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "gateway retirement canary must bind the exact stopped, cordoned Machine",
+    );
+  });
+
+  it.each([
     ["builderWorkflow", ".github/workflows/untrusted.yml"],
     ["predicateType", "https://example.invalid/untrusted"],
     ["sourceCommit", "not-a-git-sha"],
@@ -9081,6 +9106,114 @@ describe("settled production identity", () => {
     token: "test-token",
     sleepImpl: async () => {},
   };
+
+  function gatewayRetirementFlyState(root, mutateMachines = () => {}) {
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(root, "deploy/production/apps.json"), "utf8"),
+    );
+    const app = manifest.apps.gateway;
+    const expected = app.retirementCanary.machine;
+    const digest = expected.image.match(/@(sha256:[a-f0-9]{64})$/)[1];
+    const machines = [
+      {
+        id: expected.id,
+        state: "stopped",
+        cordoned: true,
+        region: expected.region,
+        image_ref: {
+          registry: "registry.fly.io",
+          repository: app.app,
+          digest,
+        },
+        config: {
+          image: expected.image,
+          mounts: [
+            {
+              volume: expected.volumeId,
+              path: expected.mountPath,
+              encrypted: true,
+            },
+          ],
+        },
+      },
+      { id: "2871333b4d3768", state: "stopped" },
+    ];
+    app.retirementCanary.machine.machineConfigSha256 = sha256CanonicalJson(
+      machines[0].config,
+    );
+    fs.writeFileSync(
+      path.join(root, "deploy/production/apps.json"),
+      `${JSON.stringify(manifest, null, 2)}\n`,
+    );
+    mutateMachines(machines);
+    return (args) => {
+      expect(args).toEqual(["machine", "list", "--app", app.app, "--json"]);
+      return JSON.stringify(machines);
+    };
+  }
+
+  it("accepts only the exact stopped and cordoned gateway retirement canary", async () => {
+    const root = createRepositoryFixture();
+    await expect(
+      checkSettledLiveFlyDrift("gateway", {
+        rootDir: root,
+        runFly: gatewayRetirementFlyState(root),
+      }),
+    ).resolves.toMatchObject({
+      identity: "none",
+      blockingErrors: [],
+      reconcilableDrift: [],
+    });
+  });
+
+  it.each([
+    ["uncordoned", (machines) => (machines[0].cordoned = false)],
+    ["restarted", (machines) => (machines[0].state = "started")],
+    ["another active Machine", (machines) => (machines[1].state = "started")],
+    ["missing rollback volume", (machines) => (machines[0].config.mounts = [])],
+    [
+      "an extra mount",
+      (machines) =>
+        machines[0].config.mounts.push({
+          volume: "vol_unreviewed",
+          path: "/other",
+          encrypted: true,
+        }),
+    ],
+    [
+      "different service autostart configuration",
+      (machines) =>
+        (machines[0].config.services = [
+          { autostart: false, internal_port: 8080 },
+        ]),
+    ],
+  ])(
+    "fails closed when the gateway retirement canary is %s",
+    async (_label, mutate) => {
+      const root = createRepositoryFixture();
+      const result = await checkSettledLiveFlyDrift("gateway", {
+        rootDir: root,
+        runFly: gatewayRetirementFlyState(root, mutate),
+      });
+      expect(result.blockingErrors.length).toBeGreaterThan(0);
+    },
+  );
+
+  it.each([
+    { requireCurrentReviewedImage: true },
+    { expectedSourceSha: "1".repeat(40) },
+  ])("never ignores gateway successor provenance options", async (options) => {
+    const root = createRepositoryFixture();
+    await expect(
+      checkSettledLiveFlyDrift("gateway", {
+        rootDir: root,
+        runFly: gatewayRetirementFlyState(root),
+        ...options,
+      }),
+    ).rejects.toThrow(
+      "gateway retirement canary forbids successor provenance and generic recovery",
+    );
+  });
 
   it("accepts the exact reviewed predecessor for a runtime rotation", async () => {
     const root = createRepositoryFixture();
