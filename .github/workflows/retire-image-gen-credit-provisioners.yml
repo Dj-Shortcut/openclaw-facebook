@@ -60,6 +60,7 @@ env:
 concurrency:
   group: production-deploy-image-gen
   cancel-in-progress: false
+  queue: max
 
 jobs:
   preflight:

@@ -5,10 +5,13 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  CREDIT_PROVISIONER_RETIREMENT_ARGUMENTS_FAILURE_STAGE,
   CREDIT_PROVISIONER_RETIREMENT_ATTRIBUTE_KEY,
   CREDIT_PROVISIONER_RETIREMENT_ACTIVE_SESSION_QUERY,
+  CREDIT_PROVISIONER_RETIREMENT_DATABASE_FAILURE_STAGE,
   CREDIT_PROVISIONER_RETIREMENT_DATABASE_TIME_QUERY,
   CREDIT_PROVISIONER_RETIREMENT_DROPPED_MARKER,
+  CREDIT_PROVISIONER_RETIREMENT_EVIDENCE_FAILURE_STAGE,
   CREDIT_PROVISIONER_RETIREMENT_FAILURE_MARKER,
   CREDIT_PROVISIONER_RETIREMENT_INVENTORY_QUERY,
   CREDIT_PROVISIONER_RETIREMENT_LOCKED_MARKER,
@@ -300,6 +303,15 @@ describe("image-gen credit provisioner retirement", () => {
     );
     expect(CREDIT_PROVISIONER_RETIREMENT_MAX_ACCOUNTS).toBe(16);
     expect(CREDIT_PROVISIONER_RETIREMENT_INVENTORY_QUERY).toContain(
+      "LEFT JOIN INFORMATION_SCHEMA.USER_ATTRIBUTES",
+    );
+    expect(CREDIT_PROVISIONER_RETIREMENT_INVENTORY_QUERY).toContain(
+      "CAST(a.ATTRIBUTE AS CHAR)",
+    );
+    expect(CREDIT_PROVISIONER_RETIREMENT_INVENTORY_QUERY).not.toContain(
+      "User_attributes",
+    );
+    expect(CREDIT_PROVISIONER_RETIREMENT_INVENTORY_QUERY).toContain(
       "User LIKE 'lbcp\\\\_%' ESCAPE '\\\\'",
     );
   });
@@ -390,7 +402,7 @@ describe("image-gen credit provisioner retirement", () => {
     ).toThrow();
   });
 
-  it("parses exact accounts, lock state, and MySQL User_attributes", () => {
+  it("parses exact accounts, lock state, and documented user attributes", () => {
     const attribute = retirementAttribute();
     const rows = parseRetirementInventoryRows([
       inventoryLine({
@@ -418,6 +430,22 @@ describe("image-gen credit provisioner retirement", () => {
     expect(() =>
       parseRetirementInventoryRows([inventoryLine(), inventoryLine()]),
     ).toThrow();
+    expect(
+      parseRetirementInventoryRows([
+        inventoryLine({
+          accountLocked: "Y",
+          attributes: {
+            [CREDIT_PROVISIONER_RETIREMENT_ATTRIBUTE_KEY]: {
+              cohortSha256: deriveRetirementCohortSha256(context()),
+              contractVersion: 1,
+              lockedAt: T0,
+              membersSha256: MEMBERS_SHA256,
+              state: "locked",
+            },
+          },
+        }),
+      ])[0].retirement,
+    ).toEqual(retirementAttribute());
     expect(() =>
       parseRetirementInventoryRows(
         Array.from(
@@ -1015,23 +1043,49 @@ describe("image-gen credit provisioner retirement", () => {
     ).toThrow();
   });
 
+  it("rejects an unnormalized lock-evidence path before reading it", async () => {
+    const database = markDatabaseCohortLocked(
+      createDatabase({ times: [DROP_NOW] }),
+    );
+    const baseDependencies = dependencies(database);
+    const readFile = vi.fn(baseDependencies.readFile);
+
+    await expect(
+      retireImageGenCreditProvisioners(
+        operationInput("drop", {
+          lockEvidence: "/tmp/retirement-lock/../retirement-lock/evidence.json",
+        }),
+        { ...baseDependencies, readFile },
+      ),
+    ).rejects.toThrow();
+
+    expect(readFile).toHaveBeenCalledOnce();
+    expect(readFile).toHaveBeenCalledWith(OBSOLETE_EVIDENCE_PATH, "utf8");
+    expect(database.sessions).toHaveLength(0);
+  });
+
   it("emits only fixed CLI markers and writes evidence before success", async () => {
+    const diagnostics = [];
     const output = [];
     const writes = [];
     const evidence = lockEvidence();
     await expect(
       runRetirementCli(cliArguments("lock"), {
+        diagnostic: (value) => diagnostics.push(value),
         output: (value) => output.push(value),
         retire: async () => evidence,
         writeEvidence: async (...args) => writes.push(args),
       }),
     ).resolves.toBe(CREDIT_PROVISIONER_RETIREMENT_LOCKED_MARKER);
     expect(writes).toEqual([[OUTPUT_PATH, evidence]]);
+    expect(diagnostics).toEqual([]);
     expect(output).toEqual([CREDIT_PROVISIONER_RETIREMENT_LOCKED_MARKER]);
 
     const failedOutput = [];
+    const failedDiagnostics = [];
     await expect(
       runRetirementCli(cliArguments("lock"), {
+        diagnostic: (value) => failedDiagnostics.push(value),
         output: (value) => failedOutput.push(value),
         retire: async () => {
           throw new Error("dynamic secret account SQL detail");
@@ -1041,6 +1095,22 @@ describe("image-gen credit provisioner retirement", () => {
     ).resolves.toBe(CREDIT_PROVISIONER_RETIREMENT_FAILURE_MARKER);
     expect(failedOutput).toEqual([
       CREDIT_PROVISIONER_RETIREMENT_FAILURE_MARKER,
+    ]);
+    expect(failedDiagnostics).toEqual([
+      CREDIT_PROVISIONER_RETIREMENT_DATABASE_FAILURE_STAGE,
+    ]);
+
+    const argumentDiagnostics = [];
+    await expect(
+      runRetirementCli([], {
+        diagnostic: (value) => argumentDiagnostics.push(value),
+        output: vi.fn(),
+        retire: vi.fn(),
+        writeEvidence: vi.fn(),
+      }),
+    ).resolves.toBe(CREDIT_PROVISIONER_RETIREMENT_FAILURE_MARKER);
+    expect(argumentDiagnostics).toEqual([
+      CREDIT_PROVISIONER_RETIREMENT_ARGUMENTS_FAILURE_STAGE,
     ]);
     expect(
       new Set([
@@ -1056,6 +1126,7 @@ describe("image-gen credit provisioner retirement", () => {
       createDatabase({ times: [DROP_NOW, DROP_DONE] }),
     );
     const output = [];
+    const diagnostics = [];
     const deps = dependencies(database, {
       [LOCK_EVIDENCE_PATH]: lockEvidence(),
     });
@@ -1063,6 +1134,7 @@ describe("image-gen credit provisioner retirement", () => {
 
     await expect(
       runRetirementCli(cliArguments("drop"), {
+        diagnostic: (value) => diagnostics.push(value),
         output: (value) => output.push(value),
         retire,
         writeEvidence: async () => {
@@ -1071,6 +1143,9 @@ describe("image-gen credit provisioner retirement", () => {
       }),
     ).resolves.toBe(CREDIT_PROVISIONER_RETIREMENT_FAILURE_MARKER);
     expect(database.accounts.size).toBe(0);
+    expect(diagnostics).toEqual([
+      CREDIT_PROVISIONER_RETIREMENT_EVIDENCE_FAILURE_STAGE,
+    ]);
 
     database.times.push(
       "2026-10-30T00:00:00.000000Z",
@@ -1079,6 +1154,7 @@ describe("image-gen credit provisioner retirement", () => {
     const writes = [];
     await expect(
       runRetirementCli(cliArguments("drop"), {
+        diagnostic: (value) => diagnostics.push(value),
         output: (value) => output.push(value),
         retire,
         writeEvidence: async (...args) => writes.push(args),
@@ -1088,6 +1164,9 @@ describe("image-gen credit provisioner retirement", () => {
     expect(output).toEqual([
       CREDIT_PROVISIONER_RETIREMENT_FAILURE_MARKER,
       CREDIT_PROVISIONER_RETIREMENT_DROPPED_MARKER,
+    ]);
+    expect(diagnostics).toEqual([
+      CREDIT_PROVISIONER_RETIREMENT_EVIDENCE_FAILURE_STAGE,
     ]);
     expect(database.mutationCount).toBe(1);
   });
@@ -1101,7 +1180,11 @@ describe("image-gen credit provisioner retirement", () => {
       "utf8",
     );
     expect(source).not.toMatch(
-      /gh secret|flyctl secrets|fly deploy|flyctl deploy|MOLLIE|OPENAI|console\.|process\.stderr|error\.(?:message|stack)/,
+      /gh secret|flyctl secrets|fly deploy|flyctl deploy|MOLLIE|OPENAI|console\.|error\.(?:message|stack)/,
+    );
+    expect(source.match(/process\.stderr\.write/g)).toHaveLength(1);
+    expect(source).toContain(
+      CREDIT_PROVISIONER_RETIREMENT_EVIDENCE_FAILURE_STAGE,
     );
     expect(source).toContain("RootMysqlSession");
   });

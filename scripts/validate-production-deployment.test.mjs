@@ -1451,6 +1451,7 @@ describe("production deployment contract", () => {
     expect(workflow).toContain("environment: production-inspection");
     expect(workflow).toContain("environment: production");
     expect(workflow).toContain("group: production-deploy-image-gen");
+    expect(workflow).toContain("queue: max");
     expect(workflow).toContain(
       "node scripts/retire-image-gen-credit-provisioners.mjs",
     );
@@ -1461,6 +1462,20 @@ describe("production deployment contract", () => {
     expect(workflow).not.toContain("IMAGE_GEN_RETIREMENT_METADATA_READ_TOKEN");
     expect(workflow).not.toContain("gh secret delete");
     expect(workflow).not.toContain("flyctl deploy");
+  });
+
+  it("retains every credit-provisioner retirement run in the shared queue", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/retire-image-gen-credit-provisioners.yml",
+      "  queue: max\n",
+      "",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must retain every protected retirement run in the shared image-gen lock queue",
+    );
   });
 
   it("requires the complete reviewed Machine topology before retirement", () => {
@@ -3444,6 +3459,20 @@ describe("production deployment contract", () => {
 
     expect(() => validateProductionRepository(root)).toThrow(
       "must expose only fixed markers and must not mutate deployments, secrets, billing, or providers",
+    );
+  });
+
+  it("requires the fixed post-transition evidence failure stage", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      "scripts/retire-image-gen-credit-provisioners.mjs",
+      "credit_provisioner_retirement_failed_stage=evidence_write_after_transition",
+      "credit_provisioner_retirement_failed_stage=unknown",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must identify post-transition evidence-write failures without dynamic details",
     );
   });
 

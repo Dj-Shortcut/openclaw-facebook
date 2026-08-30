@@ -244,10 +244,12 @@ suite("credit provisioner retirement on MySQL 8.4", () => {
 
   async function readAccounts(): Promise<RowDataPacket[]> {
     const [rows] = await connection.query<RowDataPacket[]>(
-      `SELECT User, account_locked, User_attributes
-       FROM mysql.user
-       WHERE User IN (?, ?)
-       ORDER BY User`,
+      `SELECT u.User, u.account_locked, a.ATTRIBUTE AS user_attributes
+       FROM mysql.user u
+       LEFT JOIN INFORMATION_SCHEMA.USER_ATTRIBUTES a
+         ON a.USER = u.User AND a.HOST = u.Host
+       WHERE u.User IN (?, ?)
+       ORDER BY u.User`,
       usernames
     );
     return rows;
@@ -307,7 +309,7 @@ suite("credit provisioner retirement on MySQL 8.4", () => {
     for (const account of accounts) {
       expect(account.account_locked).toBe("Y");
       expect(
-        parseUserAttributes(account.User_attributes)[
+        parseUserAttributes(account.user_attributes)[
           CREDIT_PROVISIONER_RETIREMENT_ATTRIBUTE_KEY
         ]
       ).toEqual({
@@ -316,7 +318,6 @@ suite("credit provisioner retirement on MySQL 8.4", () => {
         lockedAt: firstLock.lockedAt,
         membersSha256,
         state: "locked",
-        unlockedAt: null,
       });
     }
 
@@ -332,7 +333,7 @@ suite("credit provisioner retirement on MySQL 8.4", () => {
     expect(
       accounts.map(
         account =>
-          parseUserAttributes(account.User_attributes)[
+          parseUserAttributes(account.user_attributes)[
             CREDIT_PROVISIONER_RETIREMENT_ATTRIBUTE_KEY
           ].state
       )

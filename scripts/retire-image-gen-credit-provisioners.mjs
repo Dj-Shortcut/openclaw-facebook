@@ -33,12 +33,18 @@ export const CREDIT_PROVISIONER_RETIREMENT_DROPPED_MARKER =
   "credit_provisioners_dropped";
 export const CREDIT_PROVISIONER_RETIREMENT_FAILURE_MARKER =
   "credit_provisioner_retirement_failed";
+export const CREDIT_PROVISIONER_RETIREMENT_ARGUMENTS_FAILURE_STAGE =
+  "credit_provisioner_retirement_failed_stage=arguments";
+export const CREDIT_PROVISIONER_RETIREMENT_DATABASE_FAILURE_STAGE =
+  "credit_provisioner_retirement_failed_stage=database_transition";
+export const CREDIT_PROVISIONER_RETIREMENT_EVIDENCE_FAILURE_STAGE =
+  "credit_provisioner_retirement_failed_stage=evidence_write_after_transition";
 export const CREDIT_PROVISIONER_RETIREMENT_ATTRIBUTE_KEY = ATTRIBUTE_KEY;
 export const CREDIT_PROVISIONER_RETIREMENT_MAX_ACCOUNTS = MAX_MANAGED_ACCOUNTS;
 export const CREDIT_PROVISIONER_RETIREMENT_LOCK_NAME =
   CREDIT_PROVISIONER_LOCK_NAME;
 export const CREDIT_PROVISIONER_RETIREMENT_INVENTORY_QUERY =
-  "SELECT CONCAT(User,0x09,Host,0x09,account_locked,0x09,HEX(COALESCE(CAST(User_attributes AS CHAR),''))) FROM mysql.user WHERE User LIKE 'lbcp\\\\_%' ESCAPE '\\\\' ORDER BY User,Host";
+  "SELECT CONCAT(u.User,0x09,u.Host,0x09,u.account_locked,0x09,HEX(COALESCE(CAST(a.ATTRIBUTE AS CHAR),''))) FROM mysql.user u LEFT JOIN INFORMATION_SCHEMA.USER_ATTRIBUTES a ON a.USER=u.User AND a.HOST=u.Host WHERE u.User LIKE 'lbcp\\\\_%' ESCAPE '\\\\' ORDER BY u.User,u.Host";
 export const CREDIT_PROVISIONER_RETIREMENT_DATABASE_TIME_QUERY =
   "SELECT DATE_FORMAT(UTC_TIMESTAMP(6),'%Y-%m-%dT%H:%i:%s.%fZ')";
 export const CREDIT_PROVISIONER_RETIREMENT_ACTIVE_SESSION_QUERY =
@@ -81,6 +87,11 @@ const ATTRIBUTE_STATES = new Set([
   "locked",
   "unlocking",
   "unlocked",
+]);
+const FAILURE_STAGES = new Set([
+  CREDIT_PROVISIONER_RETIREMENT_ARGUMENTS_FAILURE_STAGE,
+  CREDIT_PROVISIONER_RETIREMENT_DATABASE_FAILURE_STAGE,
+  CREDIT_PROVISIONER_RETIREMENT_EVIDENCE_FAILURE_STAGE,
 ]);
 
 function fail() {
@@ -201,31 +212,55 @@ export function deriveRetirementMembersSha256(accounts) {
 
 function parseAttribute(value) {
   if (value === undefined) return undefined;
-  assertExactKeys(value, ATTRIBUTE_KEYS);
+  if (!value || typeof value !== "object" || Array.isArray(value)) fail();
+  const keys = Object.keys(value);
+  const requiredKeys = [
+    "cohortSha256",
+    "contractVersion",
+    "membersSha256",
+    "state",
+  ];
   if (
-    value.contractVersion !== CONTRACT_VERSION ||
-    !ATTRIBUTE_STATES.has(value.state) ||
-    (value.lockedAt !== null &&
-      requireDatabaseTimestamp(value.lockedAt) !== value.lockedAt) ||
-    (value.unlockedAt !== null &&
-      requireDatabaseTimestamp(value.unlockedAt) !== value.unlockedAt)
+    requiredKeys.some((key) => !Object.hasOwn(value, key)) ||
+    keys.some((key) => !ATTRIBUTE_KEYS.includes(key)) ||
+    (Object.hasOwn(value, "lockedAt") && value.lockedAt === undefined) ||
+    (Object.hasOwn(value, "unlockedAt") && value.unlockedAt === undefined)
   ) {
     fail();
   }
-  requireSha256(value.cohortSha256);
-  requireSha256(value.membersSha256);
+  // ALTER USER ... ATTRIBUTE uses JSON_MERGE_PATCH semantics. A null value
+  // removes an existing optional timestamp, so MySQL can return either an
+  // explicit null (first write) or an omitted key (later transition).
+  const normalized = {
+    ...value,
+    lockedAt: Object.hasOwn(value, "lockedAt") ? value.lockedAt : null,
+    unlockedAt: Object.hasOwn(value, "unlockedAt") ? value.unlockedAt : null,
+  };
+  assertExactKeys(normalized, ATTRIBUTE_KEYS);
   if (
-    (new Set(["locking", "locked"]).has(value.state) &&
-      value.unlockedAt !== null) ||
-    (value.state === "locked" && value.lockedAt === null) ||
-    (new Set(["unlocking", "unlocked"]).has(value.state) &&
-      value.lockedAt === null) ||
-    (value.state === "unlocking" && value.unlockedAt !== null) ||
-    (value.state === "unlocked" && value.unlockedAt === null)
+    normalized.contractVersion !== CONTRACT_VERSION ||
+    !ATTRIBUTE_STATES.has(normalized.state) ||
+    (normalized.lockedAt !== null &&
+      requireDatabaseTimestamp(normalized.lockedAt) !== normalized.lockedAt) ||
+    (normalized.unlockedAt !== null &&
+      requireDatabaseTimestamp(normalized.unlockedAt) !== normalized.unlockedAt)
   ) {
     fail();
   }
-  return Object.freeze({ ...value });
+  requireSha256(normalized.cohortSha256);
+  requireSha256(normalized.membersSha256);
+  if (
+    (new Set(["locking", "locked"]).has(normalized.state) &&
+      normalized.unlockedAt !== null) ||
+    (normalized.state === "locked" && normalized.lockedAt === null) ||
+    (new Set(["unlocking", "unlocked"]).has(normalized.state) &&
+      normalized.lockedAt === null) ||
+    (normalized.state === "unlocking" && normalized.unlockedAt !== null) ||
+    (normalized.state === "unlocked" && normalized.unlockedAt === null)
+  ) {
+    fail();
+  }
+  return Object.freeze(normalized);
 }
 
 function decodeUserAttributes(value) {
@@ -825,6 +860,15 @@ export async function retireImageGenCreditProvisioners(
     ...input,
     obsoletePrincipalSha256: obsoleteDropEvidence.obsoletePrincipalSha256,
   });
+  if (input.operation === "drop") {
+    if (
+      requireAbsoluteEvidencePath(input.lockEvidence) !== input.lockEvidence
+    ) {
+      fail();
+    }
+  } else if (input.lockEvidence !== undefined) {
+    fail();
+  }
   const lockEvidence =
     input.operation === "drop"
       ? assertLockEvidence(
@@ -832,13 +876,6 @@ export async function retireImageGenCreditProvisioners(
           context,
         )
       : undefined;
-  if (
-    (input.operation === "drop" &&
-      requireAbsoluteEvidencePath(input.lockEvidence) !== input.lockEvidence) ||
-    (input.operation !== "drop" && input.lockEvidence !== undefined)
-  ) {
-    fail();
-  }
   throwIfAborted(input.signal);
   const rootSession = createRootSession({
     app: context.databaseApp,
@@ -905,25 +942,40 @@ function writeMarker(marker) {
   process.stdout.write(`${marker}\n`);
 }
 
+function writeFailureStage(stage) {
+  if (!FAILURE_STAGES.has(stage)) fail();
+  process.stderr.write(`${stage}\n`);
+}
+
 export async function runRetirementCli(
   argv,
   {
+    diagnostic = writeFailureStage,
     output = writeMarker,
     retire = retireImageGenCreditProvisioners,
     writeEvidence = writeEvidenceFile,
   } = {},
 ) {
   let marker = CREDIT_PROVISIONER_RETIREMENT_FAILURE_MARKER;
+  let failureStage = CREDIT_PROVISIONER_RETIREMENT_ARGUMENTS_FAILURE_STAGE;
   const controller = new AbortController();
   const interrupt = () => controller.abort();
   process.on("SIGINT", interrupt);
   process.on("SIGTERM", interrupt);
   try {
     const input = parseRetirementCliArguments(argv);
+    failureStage = CREDIT_PROVISIONER_RETIREMENT_DATABASE_FAILURE_STAGE;
     const evidence = await retire({ ...input, signal: controller.signal });
+    failureStage = CREDIT_PROVISIONER_RETIREMENT_EVIDENCE_FAILURE_STAGE;
     await writeEvidence(input.evidenceOutput, evidence);
     marker = successMarker(input.operation);
   } catch {
+    try {
+      await diagnostic(failureStage);
+    } catch {
+      // The fixed stdout marker remains the fail-closed contract even when
+      // the metadata-only diagnostic sink itself is unavailable.
+    }
     marker = CREDIT_PROVISIONER_RETIREMENT_FAILURE_MARKER;
   } finally {
     process.removeListener("SIGINT", interrupt);

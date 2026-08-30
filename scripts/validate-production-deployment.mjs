@@ -5315,7 +5315,10 @@ function validateCreditProvisionerRetirementRunner(rootDir) {
       "CREDIT_PROVISIONER_RETIREMENT_INVENTORY_QUERY",
       "must inspect every exact managed database account",
     ],
-    ["User_attributes", "must retain lock state in MySQL itself"],
+    [
+      "INFORMATION_SCHEMA.USER_ATTRIBUTES",
+      "must read the documented MySQL user-attribute surface",
+    ],
     ["account_locked", "must prove account lock state from MySQL"],
     [
       "performance_schema.threads",
@@ -5357,6 +5360,18 @@ function validateCreditProvisionerRetirementRunner(rootDir) {
       "credit_provisioner_retirement_failed",
       "must retain one redacted failure marker",
     ],
+    [
+      "credit_provisioner_retirement_failed_stage=arguments",
+      "must identify argument-validation failures without dynamic details",
+    ],
+    [
+      "credit_provisioner_retirement_failed_stage=database_transition",
+      "must identify database-transition failures without dynamic details",
+    ],
+    [
+      "credit_provisioner_retirement_failed_stage=evidence_write_after_transition",
+      "must identify post-transition evidence-write failures without dynamic details",
+    ],
     ['flag: "wx"', "must never overwrite existing retirement evidence"],
     ["mode: 0o600", "must write retirement evidence owner-only"],
   ]) {
@@ -5365,10 +5380,13 @@ function validateCreditProvisionerRetirementRunner(rootDir) {
     }
   }
   const stdoutWrites = runner.match(/process\.stdout\.write/g) ?? [];
+  const stderrWrites = runner.match(/process\.stderr\.write/g) ?? [];
   if (
     stdoutWrites.length !== 1 ||
+    stderrWrites.length !== 1 ||
     !runner.includes("process.stdout.write(`${marker}\\n`)") ||
-    /console\.|process\.stderr|String\(error|JSON\.stringify\(error/.test(
+    !runner.includes("process.stderr.write(`${stage}\\n`)") ||
+    /console\.|String\(error|JSON\.stringify\(error|error\.(?:message|stack)/.test(
       runner,
     ) ||
     /gh secret delete|flyctl secrets|fly secrets|flyctl deploy|fly deploy|MOLLIE_[A-Z_]+_ENABLED=true/.test(
@@ -5404,6 +5422,10 @@ function validateCreditProvisionerRetirementWorkflow(rootDir) {
       "must serialize with image-gen rollout work",
     ],
     ["cancel-in-progress: false", "must never cancel a retirement transition"],
+    [
+      "queue: max",
+      "must retain every protected retirement run in the shared image-gen lock queue",
+    ],
     ["  preflight:", "must separate read-only proof from mutation"],
     ["  mutate:", "must isolate the protected database operation"],
     ["  postflight:", "must independently reobserve secret absence"],
