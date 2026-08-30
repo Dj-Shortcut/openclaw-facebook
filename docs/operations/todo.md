@@ -67,14 +67,17 @@ Live payment enablement remains gated by the relevant P1 through P4 evidence.
       Mode, pass paid checkout, delayed/replayed webhook, cancellation, failure,
       refund, partially used wallet, provider failure, delivery failure,
       deletion, budget exhaustion, receipt, reconciliation, and rollback.
-  - [ ] Before any Mollie Test Mode checkout, finish restricted-runtime staging
-        and obsolete-principal cleanup, then run a separately reviewed bounded
-        root/admin retirement path for the initial credit provisioner. It must
-        lock and drop every reserved `lbcp_*` account, prove that inventory is
-        empty, delete `IMAGE_GEN_DATABASE_PROVISIONER_URL`, and prove stable
-        secret absence. The bootstrap transition and commercial exposure remain
-        incomplete until that executable cleanup path and metadata-only evidence
-        exist; do not substitute manual SQL or secret-field edits.
+  - [ ] Before any Mollie Test Mode checkout, prove the restricted runtime,
+        settle the manifest at `complete` with the bridge removed from rollback,
+        then use the protected obsolete-principal flow to lock, retain the
+        24-hour unlock window, and drop the old broad runtime principal. Keep
+        `IMAGE_GEN_DATABASE_PROVISIONER_URL` until that drop succeeds. Next run
+        a separately reviewed bounded root/admin retirement path that locks all
+        reserved `lbcp_*` accounts under its own 24-hour recovery window, drops
+        them, proves the inventory empty, deletes the secret, and proves stable
+        secret absence. Commercial exposure remains incomplete until both
+        cleanup paths have metadata-only success evidence; do not substitute
+        manual SQL or secret-field edits.
 
 - [ ] **P5 - Bounded live pilot and legacy removal.** Obtain legal/accounting
       approval, enable one reviewed live offer for a bounded audience, monitor

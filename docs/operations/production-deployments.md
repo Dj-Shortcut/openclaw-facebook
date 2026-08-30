@@ -586,25 +586,34 @@ trusted production artifact` with `image-gen-bridge`. The workflow proves
     through the staged principal on every desired app and worker Machine before
     `/healthz` and `/readyz` may complete the rollout. A failed rollout restores
     the bridge and its captured configuration; the 0018 schema remains in place.
-11. **Retire the bootstrap provisioner.** After the restricted runtime is
-    proven on every desired Machine and the protected obsolete-principal
-    cleanup is complete, use a separate reviewed bounded root/admin retirement
-    path to lock and drop every reserved `lbcp_*` account, prove the managed
-    inventory empty, delete `IMAGE_GEN_DATABASE_PROVISIONER_URL`, and prove the
-    protected secret remains absent over a stabilization window. That retirement
-    path is not part of the bootstrap helper and must be reviewed before use; do
-    not replace it with manual SQL or a secret-field edit. Until it exists and
-    its metadata-only evidence passes, the transition is incomplete and no
-    Mollie Test Mode checkout may be exposed.
-12. **Settle before commercial exposure.** Record a healthy final-schema
-    runtime predecessor and move to `complete` only in a later reviewed
+11. **Settle the final runtime before principal cleanup.** Record a healthy
+    final-schema runtime predecessor and move to `complete` only in a later reviewed
     manifest PR that removes the bridge from the rollback allowlist and retains
     at least one exact 0018 runtime rollback. Do not expose a Mollie checkout
-    while the only rollback is the migration bridge. Obsolete broad database
-    principals may be locked only after every desired Machine reproves the
-    restricted principal under the settled deployment identity. Preserve the
-    protected unlock path for at least 24 hours before a separately approved
-    drop.
+    while the only rollback is the migration bridge. This settled manifest is a
+    prerequisite for the protected obsolete-principal cleanup workflow; moving
+    to `complete` does not itself enable paid credits or checkout.
+12. **Retire the obsolete broad runtime principal.** Only after every desired
+    Machine reproves the restricted principal under the settled deployment
+    identity, run the protected cleanup workflow to lock the exact obsolete
+    broad principal. Preserve its protected unlock path for at least 24 hours,
+    then use that exact lock evidence for a separately approved drop. Keep
+    `IMAGE_GEN_DATABASE_PROVISIONER_URL` present through the successful drop,
+    because the protected cleanup workflow still requires it.
+13. **Retire the bootstrap provisioner.** After the obsolete runtime principal
+    is absent, use a separate reviewed bounded root/admin retirement path to
+    lock every reserved `lbcp_*` account under an explicit recovery path,
+    preserve that recovery window for at least 24 hours, then drop the accounts
+    and prove the managed inventory empty. Only then delete
+    `IMAGE_GEN_DATABASE_PROVISIONER_URL` and prove the protected secret remains
+    absent over a stabilization window. That retirement path is not part of the
+    bootstrap helper and must be reviewed before use; do not replace it with
+    manual SQL or a secret-field edit.
+14. **Keep Test Mode exposure separate.** Until both cleanup paths have
+    metadata-only success evidence, the commercial cutover is incomplete and
+    no Mollie Test Mode checkout may be exposed. Continue only through the
+    separately reviewed Test Mode activation gates; schema state `complete` is
+    not payment-readiness evidence.
 
 Before paid-credit exposure, set the non-secret
 `CREDIT_CHECKOUT_HMAC_ACTIVE_KEY_ID=k1` beside the dedicated Fly secret. A later
