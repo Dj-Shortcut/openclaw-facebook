@@ -684,6 +684,7 @@ function imageGenMachineConfig(
     root = repoRoot,
     configPath = "apps/image-gen/fly.toml",
     identity = "none",
+    releaseVersion = "42",
   } = {},
 ) {
   const command =
@@ -714,7 +715,11 @@ function imageGenMachineConfig(
       PRIMARY_REGION: "ams",
     },
     guest: { cpu_kind: "shared", cpus: 1, memory_mb: 256 },
-    metadata: { fly_platform_version: "v2", fly_process_group: processGroup },
+    metadata: {
+      fly_platform_version: "v2",
+      fly_process_group: processGroup,
+      fly_release_version: releaseVersion,
+    },
     mounts: [],
     services:
       processGroup === "app"
@@ -762,7 +767,11 @@ function storageProxyMachineConfig(image) {
       PRIMARY_REGION: "ams",
     },
     guest: { cpu_kind: "shared", cpus: 1, memory_mb: 256 },
-    metadata: { fly_platform_version: "v2", fly_process_group: "app" },
+    metadata: {
+      fly_platform_version: "v2",
+      fly_process_group: "app",
+      fly_release_version: "42",
+    },
     mounts: [],
     services: [
       httpMachineService({ port: 8787, autoStop: "stop", gracePeriod: "60s" }),
@@ -792,28 +801,28 @@ function imageGenFlyState(image) {
     if (command === "machine list") {
       return JSON.stringify([
         {
-          id: "image-gen-machine",
+          id: "10000000000001",
           state: "started",
           region: "ams",
           image_ref: immutableImageRef(image),
           config: imageGenMachineConfig(image, "app"),
         },
         {
-          id: "image-gen-app-2",
+          id: "10000000000002",
           state: "started",
           region: "ams",
           image_ref: immutableImageRef(image),
           config: imageGenMachineConfig(image, "app"),
         },
         {
-          id: "image-gen-worker-1",
+          id: "10000000000003",
           state: "started",
           region: "ams",
           image_ref: immutableImageRef(image),
           config: imageGenMachineConfig(image, "worker"),
         },
         {
-          id: "image-gen-worker-2",
+          id: "10000000000004",
           state: "started",
           region: "ams",
           image_ref: immutableImageRef(image),
@@ -833,6 +842,16 @@ function imageGenFlyState(image) {
         },
       ]);
     }
+    if (command === "releases --app") {
+      return JSON.stringify([
+        {
+          Version: 42,
+          Status: "complete",
+          InProgress: false,
+          ImageRef: image,
+        },
+      ]);
+    }
     throw new Error(`Unexpected fly command: ${args.join(" ")}`);
   };
 }
@@ -840,10 +859,10 @@ function imageGenFlyState(image) {
 function imageGenSettledFlyState(image, identity, root, configPath) {
   const live = imageGenLiveConfig(identity, { root, configPath });
   const machines = [
-    ["image-gen-app-1", "app"],
-    ["image-gen-app-2", "app"],
-    ["image-gen-worker-1", "worker"],
-    ["image-gen-worker-2", "worker"],
+    ["10000000000001", "app"],
+    ["10000000000002", "app"],
+    ["10000000000003", "worker"],
+    ["10000000000004", "worker"],
   ].map(([id, processGroup]) => ({
     id,
     state: "started",
@@ -870,6 +889,16 @@ function imageGenSettledFlyState(image, identity, root, configPath) {
     if (command === "config show") return JSON.stringify(live);
     if (command === "machine list") return JSON.stringify(machines);
     if (command === "scale show") return JSON.stringify(scale);
+    if (command === "releases --app") {
+      return JSON.stringify([
+        {
+          Version: 42,
+          Status: "complete",
+          InProgress: false,
+          ImageRef: image,
+        },
+      ]);
+    }
     throw new Error(`Unexpected fly command: ${args.join(" ")}`);
   };
 }
@@ -879,34 +908,34 @@ function imageGenLegacyBootstrapFlyState(image, mutate = () => {}) {
   live.http_service.auto_stop_machines = false;
   const machines = [
     {
-      id: "legacy-app-ams",
+      id: "20000000000001",
       state: "started",
       region: "ams",
       image_ref: immutableImageRef(image),
       config: imageGenRollbackMachineConfig(image, "app"),
     },
     {
-      id: "legacy-app-fra",
+      id: "20000000000002",
       state: "started",
       region: "fra",
       image_ref: immutableImageRef(image),
       config: imageGenRollbackMachineConfig(image, "app"),
     },
     {
-      id: "legacy-worker-primary",
+      id: "20000000000003",
       state: "started",
       region: "ams",
       image_ref: immutableImageRef(image),
       config: imageGenRollbackMachineConfig(image, "worker"),
     },
     {
-      id: "legacy-worker-standby",
+      id: "20000000000004",
       state: "stopped",
       region: "ams",
       image_ref: immutableImageRef(image),
       config: {
         ...imageGenRollbackMachineConfig(image, "worker"),
-        standbys: ["legacy-worker-primary"],
+        standbys: ["20000000000003"],
       },
     },
   ];
@@ -931,6 +960,16 @@ function imageGenLegacyBootstrapFlyState(image, mutate = () => {}) {
     if (command === "config show") return JSON.stringify(live);
     if (command === "machine list") return JSON.stringify(machines);
     if (command === "scale show") return JSON.stringify(scale);
+    if (command === "releases --app") {
+      return JSON.stringify([
+        {
+          Version: 42,
+          Status: "complete",
+          InProgress: false,
+          ImageRef: image,
+        },
+      ]);
+    }
     throw new Error(`Unexpected fly command: ${args.join(" ")}`);
   };
 }
@@ -1034,7 +1073,7 @@ function storageProxyFlyState(image) {
     if (command === "machine list") {
       return JSON.stringify([
         {
-          id: "storage-proxy-machine",
+          id: "30000000000001",
           state: "started",
           region: "ams",
           image_ref: immutableImageRef(image),
@@ -1051,6 +1090,16 @@ function storageProxyFlyState(image) {
     if (command === "scale show") {
       return JSON.stringify([
         { Process: "app", Count: 1, CPUKind: "shared", CPUs: 1, Memory: 256 },
+      ]);
+    }
+    if (command === "releases --app") {
+      return JSON.stringify([
+        {
+          Version: 42,
+          Status: "complete",
+          InProgress: false,
+          ImageRef: image,
+        },
       ]);
     }
     throw new Error(`Unexpected fly command: ${args.join(" ")}`);
@@ -1071,7 +1120,7 @@ function storageProxyLegacyBootstrapFlyState(image, mutate = () => {}) {
   };
   const machines = [
     {
-      id: "storage-proxy-legacy-machine",
+      id: "30000000000002",
       state: "started",
       region: "ams",
       image_ref: immutableImageRef(image),
@@ -1097,6 +1146,16 @@ function storageProxyLegacyBootstrapFlyState(image, mutate = () => {}) {
     if (command === "config show") return JSON.stringify(live);
     if (command === "machine list") return JSON.stringify(machines);
     if (command === "scale show") return JSON.stringify(scale);
+    if (command === "releases --app") {
+      return JSON.stringify([
+        {
+          Version: 23,
+          Status: "complete",
+          InProgress: false,
+          ImageRef: image,
+        },
+      ]);
+    }
     throw new Error(`Unexpected fly command: ${args.join(" ")}`);
   };
 }
@@ -3292,17 +3351,87 @@ describe("production deployment contract", () => {
     );
   });
 
-  it("requires a successful settled bridge identity before schema approval and DDL", () => {
+  it("re-proves the successful settled release immediately before schema DDL", () => {
+    const root = createRepositoryFixture();
+    replaceLastFixtureText(
+      root,
+      ".github/workflows/image-gen-schema-transition.yml",
+      "--settled-live image-gen",
+      "--trust-settled-live image-gen",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must prove the exact settled release once before approval and twice around protected recovery work",
+    );
+  });
+
+  it("compares the exact settled release tuple immediately before schema DDL", () => {
     const root = createRepositoryFixture();
     replaceFixtureText(
       root,
       ".github/workflows/image-gen-schema-transition.yml",
-      '--verify-settled-baseline image-gen "$settled_identity"',
-      '--trust-settled-baseline image-gen "$settled_identity"',
+      'test "$current_tuple" = "$settled_tuple"',
+      'test -n "$current_tuple"',
     );
 
     expect(() => validateProductionRepository(root)).toThrow(
-      "must prove the live bridge came from a completed successful canonical deploy",
+      "must refuse a release or Machine change immediately before schema DDL",
+    );
+  });
+
+  it("never derives the schema-transition identity from shadow Fly config", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/image-gen-schema-transition.yml",
+      'settled_state="$(node scripts/validate-production-deployment.mjs \\\n            --settled-live image-gen \\\n            --output-json)"',
+      'settled_state="$(flyctl config show --app leaderbot-fb-image-gen)"',
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must derive the bridge identity only from the release-bound settled-live result",
+    );
+  });
+
+  it("requires the release-bound settled result as structured JSON", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/image-gen-schema-transition.yml",
+      "            --output-json)",
+      ")",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must parse both settled release proofs as structured JSON",
+    );
+  });
+
+  it("requires an exact deploy identity from the release-bound settled result", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/image-gen-schema-transition.yml",
+      '(.identity | type == "string" and test("^deploy-[0-9]+-[0-9]+$"))',
+      ".identity",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must validate the exact deployment identity in both settled release tuples",
+    );
+  });
+
+  it("requires the exact release history in both settled results", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/image-gen-schema-transition.yml",
+      '(.releaseWatermark | type == "string" and test("^[a-f0-9]{64}$"))',
+      ".releaseWatermark",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must validate the exact Fly release history in both settled release tuples",
     );
   });
 
@@ -7319,7 +7448,7 @@ describe("production deployment contract", () => {
 
     expect(result.blockingErrors).toEqual(
       expect.arrayContaining([
-        "Machine storage-proxy-machine in app is not started",
+        "Machine 30000000000001 in app is not started",
         "started Machines for app: expected 1, got 0",
       ]),
     );
@@ -7592,7 +7721,7 @@ describe("production deployment contract", () => {
     });
 
     expect(result.blockingErrors).toContain(
-      "Machine storage-proxy-machine image_ref conflicts with config.image",
+      "Machine 30000000000001 image_ref conflicts with config.image",
     );
   });
 
@@ -7623,7 +7752,7 @@ describe("production deployment contract", () => {
     });
 
     expect(result.blockingErrors).toContain(
-      "Machine storage-proxy-machine deployment identity is outside the exact recovery set",
+      "Machine 30000000000001 deployment identity is outside the exact recovery set",
     );
   });
 
@@ -7638,7 +7767,7 @@ describe("production deployment contract", () => {
     });
 
     expect(result.blockingErrors).toContain(
-      "Machine image-gen-machine image differs from the reviewed production digest",
+      "Machine 10000000000001 image differs from the reviewed production digest",
     );
 
     const predeploy = checkLiveFlyDrift("image-gen", {
@@ -7647,7 +7776,7 @@ describe("production deployment contract", () => {
       allowReviewedRollbackImage: true,
     });
     expect(predeploy.blockingErrors).toContain(
-      "Machine image-gen-machine image is not an approved rollback image",
+      "Machine 10000000000001 image is not an approved rollback image",
     );
   });
 
@@ -7849,11 +7978,11 @@ describe("production deployment contract", () => {
     });
     expect(predeploy.blockingErrors).not.toEqual(
       expect.arrayContaining([
-        expect.stringContaining("Machine image-gen-machine image"),
+        expect.stringContaining("Machine 10000000000001 image"),
       ]),
     );
     expect(predeploy.reconcilableDrift).toContain(
-      "Machine image-gen-machine uses an approved rollback image before deployment",
+      "Machine 10000000000001 uses an approved rollback image before deployment",
     );
 
     const postdeploy = checkLiveFlyDrift("image-gen", {
@@ -7861,7 +7990,7 @@ describe("production deployment contract", () => {
       runFly: imageGenFlyState(previousImage),
     });
     expect(postdeploy.blockingErrors).toContain(
-      "Machine image-gen-machine image differs from the reviewed production digest",
+      "Machine 10000000000001 image differs from the reviewed production digest",
     );
   });
 
@@ -7887,7 +8016,7 @@ describe("production deployment contract", () => {
     });
 
     expect(result.reconcilableDrift).toContain(
-      "Machine storage-proxy-machine uses an approved rollback image before deployment",
+      "Machine 30000000000001 uses an approved rollback image before deployment",
     );
     expect(result.blockingErrors).toContain(
       'primary_region: expected "ams", got "iad"',
@@ -7922,7 +8051,7 @@ describe("production deployment contract", () => {
       configPath,
     });
     expect(drifted.blockingErrors).toContain(
-      "Machine storage-proxy-machine image differs from the captured rollback digest",
+      "Machine 30000000000001 image differs from the captured rollback digest",
     );
   });
 
@@ -8144,7 +8273,7 @@ describe("production deployment contract", () => {
         if (command === "machine list") {
           return JSON.stringify([
             {
-              id: "storage-proxy-machine",
+              id: "30000000000001",
               state: "started",
               region: "ams",
               image_ref: immutableImageRef(legacyImage),
@@ -8814,7 +8943,7 @@ describe("production deployment contract", () => {
     });
     expect(result.blockingErrors).not.toEqual(
       expect.arrayContaining([
-        expect.stringContaining("Machine image-gen-machine image"),
+        expect.stringContaining("Machine 10000000000001 image"),
       ]),
     );
   });
@@ -9196,6 +9325,565 @@ describe("settled production identity", () => {
       blockingErrors: [],
       reconcilableDrift: [],
     });
+  });
+
+  it.each([
+    ["missing", undefined],
+    ["different", "deploy-33331522917-1"],
+  ])(
+    "binds a real Fly config with a %s shadow identity to the uniform active Machines",
+    async (_label, shadowIdentity) => {
+      const root = createRepositoryFixture();
+      const manifest = JSON.parse(
+        fs.readFileSync(path.join(root, "deploy/production/apps.json"), "utf8"),
+      );
+      const app = manifest.apps["image-gen"];
+      const predecessor = app.reviewedSettledPredecessor;
+      const canonical = imageGenSettledFlyState(
+        predecessor.image,
+        predecessor.identity,
+        root,
+        predecessor.path,
+      );
+
+      const result = await checkSettledLiveFlyDrift("image-gen", {
+        rootDir: root,
+        runFly(args) {
+          const command = args.slice(0, 2).join(" ");
+          if (command === "config show") {
+            const config = JSON.parse(canonical(args));
+            if (shadowIdentity === undefined) {
+              delete config.env.LEADERBOT_DEPLOYMENT_IDENTITY;
+            } else {
+              config.env.LEADERBOT_DEPLOYMENT_IDENTITY = shadowIdentity;
+            }
+            delete config.deploy.strategy;
+            config.env.MOLLIE_TEST_COMMAND_ENABLED = "true";
+            return JSON.stringify(config);
+          }
+          if (command === "machine list") {
+            const machines = JSON.parse(canonical(args));
+            for (const machine of machines) {
+              machine.config.metadata.fly_release_version = "374";
+            }
+            return JSON.stringify(machines);
+          }
+          if (command === "releases --app") {
+            return JSON.stringify([
+              {
+                Version: 374,
+                Status: "complete",
+                InProgress: false,
+                ImageRef: predecessor.image,
+              },
+              {
+                Version: 375,
+                Status: "failed",
+                InProgress: false,
+                ImageRef: predecessor.image,
+              },
+              {
+                Version: 376,
+                Status: "failed",
+                InProgress: false,
+                ImageRef: predecessor.image,
+              },
+            ]);
+          }
+          return canonical(args);
+        },
+        ...verificationOptions,
+        fetchImpl: async () =>
+          jsonResponse(canonicalDeploymentRun("image-gen", "33297361675", "1")),
+      });
+
+      expect(result).toMatchObject({
+        identity: predecessor.identity,
+        expectedImage: predecessor.image,
+        blockingErrors: [],
+        reconcilableDrift: [],
+        releaseWatermark: expect.stringMatching(/^[a-f0-9]{64}$/),
+      });
+    },
+  );
+
+  it("changes the settlement watermark when another failed release is observed", async () => {
+    const root = createRepositoryFixture();
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(root, "deploy/production/apps.json"), "utf8"),
+    );
+    const predecessor = manifest.apps["image-gen"].reviewedSettledPredecessor;
+    const canonical = imageGenSettledFlyState(
+      predecessor.image,
+      predecessor.identity,
+      root,
+      predecessor.path,
+    );
+    const inspect = (failedVersions) =>
+      checkSettledLiveFlyDrift("image-gen", {
+        rootDir: root,
+        runFly(args) {
+          if (args.slice(0, 2).join(" ") === "releases --app") {
+            return JSON.stringify([
+              {
+                Version: 42,
+                Status: "complete",
+                InProgress: false,
+                ImageRef: predecessor.image,
+              },
+              ...failedVersions.map((Version) => ({
+                Version,
+                Status: "failed",
+                InProgress: false,
+                ImageRef: predecessor.image,
+              })),
+            ]);
+          }
+          return canonical(args);
+        },
+        ...verificationOptions,
+        fetchImpl: async () =>
+          jsonResponse(canonicalDeploymentRun("image-gen", "33297361675", "1")),
+      });
+
+    const first = await inspect([43]);
+    const second = await inspect([43, 44]);
+
+    expect(first.releaseVersion).toBe(42);
+    expect(second.releaseVersion).toBe(42);
+    expect(second.releaseWatermark).not.toBe(first.releaseWatermark);
+  });
+
+  it("rejects a failed shadow release that Fly still marks in progress", async () => {
+    const root = createRepositoryFixture();
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(root, "deploy/production/apps.json"), "utf8"),
+    );
+    const predecessor = manifest.apps["image-gen"].reviewedSettledPredecessor;
+    const canonical = imageGenSettledFlyState(
+      predecessor.image,
+      predecessor.identity,
+      root,
+      predecessor.path,
+    );
+
+    await expect(
+      checkSettledLiveFlyDrift("image-gen", {
+        rootDir: root,
+        runFly(args) {
+          if (args.slice(0, 2).join(" ") === "releases --app") {
+            return JSON.stringify([
+              {
+                Version: 42,
+                Status: "complete",
+                InProgress: false,
+                ImageRef: predecessor.image,
+              },
+              {
+                Version: 43,
+                Status: "failed",
+                InProgress: true,
+                ImageRef: predecessor.image,
+              },
+            ]);
+          }
+          return canonical(args);
+        },
+      }),
+    ).rejects.toThrow("found an in-progress Fly release");
+  });
+
+  it("rejects an active Fly release that is still marked in progress", async () => {
+    const root = createRepositoryFixture();
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(root, "deploy/production/apps.json"), "utf8"),
+    );
+    const predecessor = manifest.apps["image-gen"].reviewedSettledPredecessor;
+    const canonical = imageGenSettledFlyState(
+      predecessor.image,
+      predecessor.identity,
+      root,
+      predecessor.path,
+    );
+
+    await expect(
+      checkSettledLiveFlyDrift("image-gen", {
+        rootDir: root,
+        runFly(args) {
+          if (args.slice(0, 2).join(" ") === "releases --app") {
+            return JSON.stringify([
+              {
+                Version: 42,
+                Status: "complete",
+                InProgress: true,
+                ImageRef: predecessor.image,
+              },
+            ]);
+          }
+          return canonical(args);
+        },
+      }),
+    ).rejects.toThrow("found an in-progress Fly release");
+  });
+
+  it("rejects malformed and duplicate Fly release metadata", async () => {
+    const root = createRepositoryFixture();
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(root, "deploy/production/apps.json"), "utf8"),
+    );
+    const predecessor = manifest.apps["image-gen"].reviewedSettledPredecessor;
+    const canonical = imageGenSettledFlyState(
+      predecessor.image,
+      predecessor.identity,
+      root,
+      predecessor.path,
+    );
+
+    await expect(
+      checkSettledLiveFlyDrift("image-gen", {
+        rootDir: root,
+        runFly(args) {
+          if (args.slice(0, 2).join(" ") === "releases --app") {
+            return JSON.stringify([
+              {
+                Version: 42,
+                Status: "complete",
+                InProgress: "false",
+                ImageRef: predecessor.image,
+              },
+            ]);
+          }
+          return canonical(args);
+        },
+      }),
+    ).rejects.toThrow("contains invalid Fly release progress");
+
+    await expect(
+      checkSettledLiveFlyDrift("image-gen", {
+        rootDir: root,
+        runFly(args) {
+          if (args.slice(0, 2).join(" ") === "releases --app") {
+            return JSON.stringify([
+              {
+                Version: 42,
+                Status: "complete",
+                InProgress: false,
+                ImageRef: predecessor.image,
+              },
+              {
+                Version: 42,
+                Status: "failed",
+                InProgress: false,
+                ImageRef: predecessor.image,
+              },
+            ]);
+          }
+          return canonical(args);
+        },
+      }),
+    ).rejects.toThrow("contains duplicate Fly release versions");
+
+    for (const malformedVersion of [true, ["42"], " 42 "]) {
+      await expect(
+        checkSettledLiveFlyDrift("image-gen", {
+          rootDir: root,
+          runFly(args) {
+            if (args.slice(0, 2).join(" ") === "releases --app") {
+              return JSON.stringify([
+                {
+                  Version: malformedVersion,
+                  Status: "complete",
+                  InProgress: false,
+                  ImageRef: predecessor.image,
+                },
+              ]);
+            }
+            return canonical(args);
+          },
+        }),
+      ).rejects.toThrow("contains an invalid Fly release version");
+    }
+
+    await expect(
+      checkSettledLiveFlyDrift("image-gen", {
+        rootDir: root,
+        runFly(args) {
+          if (args.slice(0, 2).join(" ") === "releases --app") {
+            return JSON.stringify([
+              {
+                Version: 42,
+                Status: "complete",
+                ImageRef: predecessor.image,
+              },
+            ]);
+          }
+          return canonical(args);
+        },
+      }),
+    ).rejects.toThrow("contains invalid Fly release progress");
+  });
+
+  it("rejects invalid and duplicate Machine identities before counting scale", async () => {
+    const root = createRepositoryFixture();
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(root, "deploy/production/apps.json"), "utf8"),
+    );
+    const predecessor = manifest.apps["image-gen"].reviewedSettledPredecessor;
+    const canonical = imageGenSettledFlyState(
+      predecessor.image,
+      predecessor.identity,
+      root,
+      predecessor.path,
+    );
+
+    await expect(
+      checkSettledLiveFlyDrift("image-gen", {
+        rootDir: root,
+        runFly(args) {
+          if (args.slice(0, 2).join(" ") === "machine list") {
+            const machines = JSON.parse(canonical(args));
+            machines[0].id = true;
+            return JSON.stringify(machines);
+          }
+          return canonical(args);
+        },
+      }),
+    ).rejects.toThrow("contains an invalid Fly Machine id");
+
+    await expect(
+      checkSettledLiveFlyDrift("image-gen", {
+        rootDir: root,
+        runFly(args) {
+          if (args.slice(0, 2).join(" ") === "machine list") {
+            const machines = JSON.parse(canonical(args));
+            machines[1].id = machines[0].id;
+            return JSON.stringify(machines);
+          }
+          return canonical(args);
+        },
+      }),
+    ).rejects.toThrow("contains duplicate Fly Machine ids");
+  });
+
+  it("does not synthesize a missing active config identity without a failed release shadow", async () => {
+    const root = createRepositoryFixture();
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(root, "deploy/production/apps.json"), "utf8"),
+    );
+    const predecessor = manifest.apps["image-gen"].reviewedSettledPredecessor;
+    const canonical = imageGenSettledFlyState(
+      predecessor.image,
+      predecessor.identity,
+      root,
+      predecessor.path,
+    );
+
+    const result = await checkSettledLiveFlyDrift("image-gen", {
+      rootDir: root,
+      runFly(args) {
+        if (args.slice(0, 2).join(" ") === "config show") {
+          const config = JSON.parse(canonical(args));
+          delete config.env.LEADERBOT_DEPLOYMENT_IDENTITY;
+          return JSON.stringify(config);
+        }
+        return canonical(args);
+      },
+    });
+
+    expect(result.blockingErrors).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("deployment identity: expected"),
+      ]),
+    );
+  });
+
+  it("rejects a config identity that disagrees with the uniform active Machines", async () => {
+    const root = createRepositoryFixture();
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(root, "deploy/production/apps.json"), "utf8"),
+    );
+    const predecessor = manifest.apps["image-gen"].reviewedSettledPredecessor;
+    const canonical = imageGenSettledFlyState(
+      predecessor.image,
+      predecessor.identity,
+      root,
+      predecessor.path,
+    );
+
+    await expect(
+      checkSettledLiveFlyDrift("image-gen", {
+        rootDir: root,
+        runFly(args) {
+          const value = JSON.parse(canonical(args));
+          if (args.slice(0, 2).join(" ") === "config show") {
+            value.env.LEADERBOT_DEPLOYMENT_IDENTITY = "deploy-999-1";
+          }
+          return JSON.stringify(value);
+        },
+      }),
+    ).rejects.toThrow(
+      "live config deployment identity differs from the settled Machines",
+    );
+  });
+
+  it("rejects nonuniform deployment identities across active Machines", async () => {
+    const root = createRepositoryFixture();
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(root, "deploy/production/apps.json"), "utf8"),
+    );
+    const predecessor = manifest.apps["image-gen"].reviewedSettledPredecessor;
+    const canonical = imageGenSettledFlyState(
+      predecessor.image,
+      predecessor.identity,
+      root,
+      predecessor.path,
+    );
+
+    await expect(
+      checkSettledLiveFlyDrift("image-gen", {
+        rootDir: root,
+        runFly(args) {
+          const value = JSON.parse(canonical(args));
+          if (args.slice(0, 2).join(" ") === "machine list") {
+            value[1].config.env.LEADERBOT_DEPLOYMENT_IDENTITY = "deploy-999-1";
+          }
+          return JSON.stringify(value);
+        },
+      }),
+    ).rejects.toThrow(
+      "settled-live preflight requires one uniform Machine deployment identity",
+    );
+  });
+
+  it("keeps the Mollie test command flag blocking on an active Machine", async () => {
+    const root = createRepositoryFixture();
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(root, "deploy/production/apps.json"), "utf8"),
+    );
+    const predecessor = manifest.apps["image-gen"].reviewedSettledPredecessor;
+    const canonical = imageGenSettledFlyState(
+      predecessor.image,
+      predecessor.identity,
+      root,
+      predecessor.path,
+    );
+
+    const result = await checkSettledLiveFlyDrift("image-gen", {
+      rootDir: root,
+      runFly(args) {
+        const value = JSON.parse(canonical(args));
+        if (args.slice(0, 2).join(" ") === "machine list") {
+          value[0].config.env.MOLLIE_TEST_COMMAND_ENABLED = "true";
+        }
+        return JSON.stringify(value);
+      },
+    });
+
+    expect(result.blockingErrors).toEqual(
+      expect.arrayContaining([expect.stringContaining("environment differs")]),
+    );
+  });
+
+  it("keeps the Mollie test command flag blocking in the active Fly config", async () => {
+    const root = createRepositoryFixture();
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(root, "deploy/production/apps.json"), "utf8"),
+    );
+    const predecessor = manifest.apps["image-gen"].reviewedSettledPredecessor;
+    const canonical = imageGenSettledFlyState(
+      predecessor.image,
+      predecessor.identity,
+      root,
+      predecessor.path,
+    );
+
+    const result = await checkSettledLiveFlyDrift("image-gen", {
+      rootDir: root,
+      runFly(args) {
+        const value = JSON.parse(canonical(args));
+        if (args.slice(0, 2).join(" ") === "config show") {
+          value.env.MOLLIE_TEST_COMMAND_ENABLED = "true";
+        }
+        return JSON.stringify(value);
+      },
+    });
+
+    expect(result.blockingErrors).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("env.MOLLIE_TEST_COMMAND_ENABLED"),
+      ]),
+    );
+  });
+
+  it("rejects a successful newer release until every active Machine is bound to it", async () => {
+    const root = createRepositoryFixture();
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(root, "deploy/production/apps.json"), "utf8"),
+    );
+    const predecessor = manifest.apps["image-gen"].reviewedSettledPredecessor;
+    const canonical = imageGenSettledFlyState(
+      predecessor.image,
+      predecessor.identity,
+      root,
+      predecessor.path,
+    );
+
+    await expect(
+      checkSettledLiveFlyDrift("image-gen", {
+        rootDir: root,
+        runFly(args) {
+          if (args.slice(0, 2).join(" ") === "releases --app") {
+            return JSON.stringify([
+              {
+                Version: 42,
+                Status: "complete",
+                InProgress: false,
+                ImageRef: predecessor.image,
+              },
+              {
+                Version: 43,
+                Status: "complete",
+                InProgress: false,
+                ImageRef: predecessor.image,
+              },
+            ]);
+          }
+          return canonical(args);
+        },
+      }),
+    ).rejects.toThrow("is not bound to the active Fly release");
+  });
+
+  it("rejects arbitrary deploy drift when Fly omits only the transient strategy", async () => {
+    const root = createRepositoryFixture();
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(root, "deploy/production/apps.json"), "utf8"),
+    );
+    const predecessor = manifest.apps["image-gen"].reviewedSettledPredecessor;
+    const canonical = imageGenSettledFlyState(
+      predecessor.image,
+      predecessor.identity,
+      root,
+      predecessor.path,
+    );
+
+    const result = await checkSettledLiveFlyDrift("image-gen", {
+      rootDir: root,
+      runFly(args) {
+        const value = JSON.parse(canonical(args));
+        if (args.slice(0, 2).join(" ") === "config show") {
+          delete value.deploy.strategy;
+          value.deploy.release_command = "node unreviewed.cjs";
+        }
+        return JSON.stringify(value);
+      },
+    });
+
+    expect(result.blockingErrors).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("deploy.release_command"),
+      ]),
+    );
   });
 
   it("rejects a changed reviewed predecessor before checking live drift", async () => {
@@ -9959,7 +10647,7 @@ describe("settled production identity", () => {
       "an extra Machine",
       ({ machines }) => {
         machines.push(structuredClone(machines[0]));
-        machines[1].id = "storage-proxy-extra-machine";
+        machines[1].id = "eeeeeeeeeeeeee";
       },
       "one exact started app Machine",
     ],

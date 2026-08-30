@@ -3977,7 +3977,6 @@ function validateSchemaTransitionWorkflow(rootDir) {
       "--format json",
       "must request JSON before querying the bridge attestation predicate",
     ],
-    ["--live image-gen", "must prove all app and worker Machines"],
     [
       "FLY_PRODUCTION_READONLY_TOKEN",
       "must inspect only production metadata before environment approval",
@@ -3987,16 +3986,32 @@ function validateSchemaTransitionWorkflow(rootDir) {
       "must refuse unresolved image deployment state before schema approval",
     ],
     [
+      "--output-json",
+      "must return the release-bound settled identity without reading shadow config",
+    ],
+    [
+      '(.identity | type == "string" and test("^deploy-[0-9]+-[0-9]+$"))',
+      "must parse only an exact release-bound deployment identity",
+    ],
+    [
+      '(.releaseVersion | type == "number")',
+      "must bind the pre-DDL proof to an exact Fly release version",
+    ],
+    [
+      '(.releaseWatermark | type == "string" and test("^[a-f0-9]{64}$"))',
+      "must bind the pre-DDL proof to the exact observed Fly release history",
+    ],
+    [
       '[[ "$settled_identity" =~ ^deploy-[0-9]+-[0-9]+$ ]]',
       "must refuse bootstrap, rollback, and malformed identities before schema DDL",
     ],
     [
-      '--expected-deployment-identity "$settled_identity"',
-      "must bind bridge drift to the exact live deployment identity",
+      "settled-live.json",
+      "must retain the exact first settled release tuple until the DDL boundary",
     ],
     [
-      '--verify-settled-baseline image-gen "$settled_identity"',
-      "must prove the live bridge came from a completed successful canonical deploy",
+      'test "$current_tuple" = "$settled_tuple"',
+      "must refuse a release or Machine change immediately before schema DDL",
     ],
     [
       '--verify-source-ci "$GITHUB_SHA"',
@@ -4269,8 +4284,59 @@ function validateSchemaTransitionWorkflow(rootDir) {
       `${SCHEMA_TRANSITION_WORKFLOW_PATH} must use pinned flyctl config-show JSON output without unsupported --json`,
     );
   }
+  if (
+    workflow.includes("flyctl config show --app leaderbot-fb-image-gen") ||
+    workflow.includes("--live image-gen")
+  ) {
+    fail(
+      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must derive the bridge identity only from the release-bound settled-live result`,
+    );
+  }
+  if ((workflow.match(/--output-json/g) ?? []).length !== 2) {
+    fail(
+      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must parse both settled release proofs as structured JSON`,
+    );
+  }
+  if (
+    (
+      workflow.match(
+        /\(\.identity \| type == "string" and test\("\^deploy-\[0-9\]\+-\[0-9\]\+\$"\)\)/g,
+      ) ?? []
+    ).length !== 2
+  ) {
+    fail(
+      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must validate the exact deployment identity in both settled release tuples`,
+    );
+  }
+  if (
+    (workflow.match(/\(\.releaseVersion \| type == "number"\)/g) ?? [])
+      .length !== 2
+  ) {
+    fail(
+      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must validate the exact Fly release version in both settled release tuples`,
+    );
+  }
+  if (
+    (
+      workflow.match(
+        /\(\.releaseWatermark \| type == "string" and test\("\^\[a-f0-9\]\{64\}\$"\)\)/g,
+      ) ?? []
+    ).length !== 2
+  ) {
+    fail(
+      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must validate the exact Fly release history in both settled release tuples`,
+    );
+  }
   const preflightJob = namedWorkflowJobBody(workflow, "preflight");
   const expandJob = namedWorkflowJobBody(workflow, "expand");
+  if (
+    (preflightJob?.match(/--settled-live image-gen/g) ?? []).length !== 1 ||
+    (expandJob?.match(/--settled-live image-gen/g) ?? []).length !== 2
+  ) {
+    fail(
+      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must prove the exact settled release once before approval and twice around protected recovery work`,
+    );
+  }
   const [preflightStep] = namedWorkflowStepBodies(
     workflow,
     "Preflight settled image-gen baseline before approval",
@@ -4421,15 +4487,22 @@ function validateSchemaTransitionWorkflow(rootDir) {
   const applyExpandIndex = workflow.indexOf(
     "LEADERBOT_PRODUCTION_MIGRATION_MODE=apply-credit-wallet-expand",
   );
-  const strictBridgeIndex = workflow.indexOf(
-    '--expected-deployment-identity "$settled_identity"',
+  const releaseBoundBridgeIndex = workflow.indexOf(
+    'settled_state="$(node scripts/validate-production-deployment.mjs',
   );
-  const settledBridgeIndex = workflow.indexOf(
-    '--verify-settled-baseline image-gen "$settled_identity"',
+  const settledTupleWriteIndex = workflow.indexOf(
+    '> "$evidence_dir/settled-live.json"',
+  );
+  const preDdlReleaseBoundBridgeIndex = workflow.indexOf(
+    "--settled-live image-gen",
+    recoveryUploadIndex,
+  );
+  const settledTupleComparisonIndex = workflow.indexOf(
+    'test "$current_tuple" = "$settled_tuple"',
   );
   if (
-    strictBridgeIndex < 0 ||
-    settledBridgeIndex <= strictBridgeIndex ||
+    releaseBoundBridgeIndex < 0 ||
+    settledTupleWriteIndex <= releaseBoundBridgeIndex ||
     recoveryUploadIndex < 0 ||
     definerGrantIndex < 0 ||
     schemaInspectionIndex < 0 ||
@@ -4438,10 +4511,14 @@ function validateSchemaTransitionWorkflow(rootDir) {
     schemaInspectionIndex <= migrationPrincipalRepairIndex ||
     schemaInspectionIndex >= snapshotCreateIndex ||
     definerGrantIndex <= recoveryUploadIndex ||
+    preDdlReleaseBoundBridgeIndex <= recoveryUploadIndex ||
+    preDdlReleaseBoundBridgeIndex >= definerGrantIndex ||
+    settledTupleComparisonIndex <= preDdlReleaseBoundBridgeIndex ||
+    settledTupleComparisonIndex >= definerGrantIndex ||
     applyExpandIndex < 0 ||
     applyExpandIndex <= definerGrantIndex ||
     recoveryUploadIndex > applyExpandIndex ||
-    settledBridgeIndex > applyExpandIndex
+    settledTupleWriteIndex > recoveryUploadIndex
   ) {
     fail(
       `${SCHEMA_TRANSITION_WORKFLOW_PATH} must snapshot and repair the exact migration role, inspect the schema, and durably upload recovery evidence before definer grants or credit DDL`,
@@ -9733,9 +9810,20 @@ export function checkLiveFlyDrift(target, options = {}) {
       strategy: expectedDeploy.strategy ?? app.strategy,
       ...expectedDeploy,
     };
-    compareExactObject(live.deploy, canonicalDeploy, "deploy", blockingErrors, [
-      "release_command_timeout",
-    ]);
+    const normalizedLiveDeploy =
+      liveDeployIsObject &&
+      !Object.hasOwn(live.deploy, "strategy") &&
+      canonicalDeploy.strategy === "rolling" &&
+      app.strategy === "rolling"
+        ? { strategy: "rolling", ...live.deploy }
+        : live.deploy;
+    compareExactObject(
+      normalizedLiveDeploy,
+      canonicalDeploy,
+      "deploy",
+      blockingErrors,
+      ["release_command_timeout"],
+    );
   }
   compareObject(liveEnv, canonicalEnv, "env", blockingErrors);
   for (const liveKey of Object.keys(liveEnv)) {
@@ -10435,15 +10523,135 @@ export async function checkSettledLiveFlyDrift(target, options = {}) {
   const configArgs = ["config", "show", "--app", app.app];
   const machineArgs = ["machine", "list", "--app", app.app, "--json"];
   const scaleArgs = ["scale", "show", "--app", app.app, "--json"];
+  const releasesArgs = ["releases", "--app", app.app, "--image", "--json"];
   const cachedOutputs = new Map();
-  for (const args of [configArgs, machineArgs, scaleArgs]) {
+  for (const args of [configArgs, machineArgs, scaleArgs, releasesArgs]) {
     cachedOutputs.set(args.join("\0"), run(args));
   }
   const live = JSON.parse(cachedOutputs.get(configArgs.join("\0")));
   const machines = JSON.parse(cachedOutputs.get(machineArgs.join("\0")));
-  const identity = live?.env?.LEADERBOT_DEPLOYMENT_IDENTITY ?? "none";
-  if (!/^(?:none|deploy-[0-9]+-[0-9]+)$/.test(identity)) {
-    fail("live deployment identity is not a trusted settled baseline");
+  const releases = JSON.parse(cachedOutputs.get(releasesArgs.join("\0")));
+  if (!Array.isArray(machines)) {
+    fail("settled-live preflight requires a Fly Machine list");
+  }
+  const machineIds = machines.map((machine) => machine?.id);
+  if (
+    machineIds.some(
+      (machineId) =>
+        typeof machineId !== "string" || !/^[a-f0-9]{14}$/.test(machineId),
+    )
+  ) {
+    fail("settled-live preflight contains an invalid Fly Machine id");
+  }
+  if (new Set(machineIds).size !== machineIds.length) {
+    fail("settled-live preflight contains duplicate Fly Machine ids");
+  }
+  const runtimeMachines = machines.filter(
+    (machine) => !hasReleaseCommandMarker(machine),
+  );
+  if (runtimeMachines.length === 0) {
+    fail("settled-live preflight found no production runtime Machine");
+  }
+  const machineIdentities = new Set(
+    runtimeMachines.map((machine) => {
+      const env = machine?.config?.env ?? {};
+      const value = Object.hasOwn(env, "LEADERBOT_DEPLOYMENT_IDENTITY")
+        ? env.LEADERBOT_DEPLOYMENT_IDENTITY
+        : "none";
+      if (
+        typeof value !== "string" ||
+        !/^(?:none|deploy-[0-9]+-[0-9]+)$/.test(value)
+      ) {
+        fail(
+          `settled-live preflight Machine ${machine.id} deployment identity is invalid`,
+        );
+      }
+      return value;
+    }),
+  );
+  if (machineIdentities.size !== 1) {
+    fail(
+      "settled-live preflight requires one uniform Machine deployment identity",
+    );
+  }
+  const identity = [...machineIdentities][0];
+  const liveEnv = live?.env ?? {};
+  if (!Array.isArray(releases)) {
+    fail("settled-live preflight requires a Fly release list");
+  }
+  const normalizedReleases = releases.map((release) => {
+    if (
+      typeof release?.Version !== "number" ||
+      !Number.isSafeInteger(release.Version) ||
+      release.Version <= 0
+    ) {
+      fail("settled-live preflight contains an invalid Fly release version");
+    }
+    if (typeof release.InProgress !== "boolean") {
+      fail("settled-live preflight contains invalid Fly release progress");
+    }
+    return { ...release, normalizedVersion: release.Version };
+  });
+  if (
+    new Set(normalizedReleases.map((release) => release.normalizedVersion))
+      .size !== normalizedReleases.length
+  ) {
+    fail("settled-live preflight contains duplicate Fly release versions");
+  }
+  if (normalizedReleases.some((release) => release.InProgress === true)) {
+    fail("settled-live preflight found an in-progress Fly release");
+  }
+  const activeRelease = normalizedReleases
+    .filter(
+      (release) =>
+        (release?.Status === "complete" || release?.Status === "running") &&
+        typeof release?.ImageRef === "string",
+    )
+    .sort((left, right) => right.normalizedVersion - left.normalizedVersion)[0];
+  if (!activeRelease) {
+    fail("settled-live preflight could not bind the active Fly release");
+  }
+  const newerReleases = normalizedReleases.filter(
+    (release) => release.normalizedVersion > activeRelease.normalizedVersion,
+  );
+  if (newerReleases.some((release) => release.Status !== "failed")) {
+    fail("settled-live preflight found a newer non-terminal Fly release");
+  }
+  if (
+    newerReleases.length === 0 &&
+    Object.hasOwn(liveEnv, "LEADERBOT_DEPLOYMENT_IDENTITY") &&
+    (typeof liveEnv.LEADERBOT_DEPLOYMENT_IDENTITY !== "string" ||
+      liveEnv.LEADERBOT_DEPLOYMENT_IDENTITY !== identity)
+  ) {
+    fail("live config deployment identity differs from the settled Machines");
+  }
+  const releaseWatermark = createHash("sha256")
+    .update(
+      JSON.stringify(
+        [...normalizedReleases]
+          .sort(
+            (left, right) => left.normalizedVersion - right.normalizedVersion,
+          )
+          .map((release) => [
+            release.normalizedVersion,
+            release.Status,
+            release.InProgress,
+            release.ImageRef ?? null,
+          ]),
+      ),
+    )
+    .digest("hex");
+  const activeReleaseVersion = String(activeRelease.normalizedVersion);
+  for (const machine of runtimeMachines) {
+    const releaseVersion = machine?.config?.metadata?.fly_release_version;
+    if (
+      typeof releaseVersion !== "string" ||
+      releaseVersion !== activeReleaseVersion
+    ) {
+      fail(
+        `settled-live preflight Machine ${machine.id} is not bound to the active Fly release`,
+      );
+    }
   }
   const rawMachineImages = new Set(
     machines.map((machine) => machine?.config?.image).filter(Boolean),
@@ -10455,26 +10663,15 @@ export async function checkSettledLiveFlyDrift(target, options = {}) {
     fail("settled-live preflight found no production Machine image");
   }
   let imageRecords = [];
-  let releaseImage;
-  if ([...rawMachineImages].some((image) => !isImmutableAppImage(app, image))) {
+  const releaseImage = activeRelease.ImageRef;
+  if (
+    [...rawMachineImages, releaseImage].some(
+      (image) => !isImmutableAppImage(app, image),
+    )
+  ) {
     imageRecords = JSON.parse(
       run(["image", "show", "--app", app.app, "--json"]),
     );
-    const releases = JSON.parse(
-      run(["releases", "--app", app.app, "--image", "--json"]),
-    );
-    releaseImage = releases
-      .filter(
-        (release) =>
-          (release?.Status === "complete" || release?.Status === "running") &&
-          typeof release?.ImageRef === "string",
-      )
-      .sort(
-        (left, right) => Number(right.Version) - Number(left.Version),
-      )[0]?.ImageRef;
-    if (!releaseImage) {
-      fail("settled-live preflight could not bind the current release image");
-    }
   }
   const resolvedImages = new Map(
     [...rawMachineImages].map((image) => [
@@ -10511,20 +10708,13 @@ export async function checkSettledLiveFlyDrift(target, options = {}) {
     fail("settled-live preflight requires one uniform immutable Machine image");
   }
   const expectedImage = [...immutableImages][0];
-  if (releaseImage) {
-    const resolvedReleaseImage = isImmutableAppImage(app, releaseImage)
-      ? releaseImage
-      : resolveImmutableReleaseImage(
-          target,
-          releaseImage,
-          imageRecords,
-          rootDir,
-        );
-    if (resolvedReleaseImage !== expectedImage) {
-      fail(
-        "settled-live preflight Machine image does not match the current release",
-      );
-    }
+  const resolvedReleaseImage = isImmutableAppImage(app, releaseImage)
+    ? releaseImage
+    : resolveImmutableReleaseImage(target, releaseImage, imageRecords, rootDir);
+  if (resolvedReleaseImage !== expectedImage) {
+    fail(
+      "settled-live preflight Machine image does not match the current release",
+    );
   }
   if (!reviewedProductionImages(app).has(expectedImage)) {
     fail("settled-live preflight image is outside the reviewed allowlist");
@@ -10564,6 +10754,20 @@ export async function checkSettledLiveFlyDrift(target, options = {}) {
       fail(`Unexpected uncached Fly read: ${args.join(" ")}`);
     return cachedOutputs.get(key);
   };
+  const effectiveLive = structuredClone(live);
+  if (newerReleases.length > 0) {
+    const activeMachineEnv = { ...(runtimeMachines[0]?.config?.env ?? {}) };
+    delete activeMachineEnv.FLY_PROCESS_GROUP;
+    delete activeMachineEnv.PRIMARY_REGION;
+    delete activeMachineEnv.LEADERBOT_DEPLOYMENT_IDENTITY;
+    effectiveLive.env = {
+      ...activeMachineEnv,
+      ...(identity === "none"
+        ? {}
+        : { LEADERBOT_DEPLOYMENT_IDENTITY: identity }),
+    };
+  }
+  cachedOutputs.set(configArgs.join("\0"), JSON.stringify(effectiveLive));
   const reviewedLegacyConfig =
     identity === "none" &&
     allowsFirstTrustedBootstrap(target, app, expectedImage)
@@ -10596,13 +10800,28 @@ export async function checkSettledLiveFlyDrift(target, options = {}) {
         candidate.reconcilableDrift.length === 0,
     ) ?? results[0];
   const errors = [...result.blockingErrors, ...result.reconcilableDrift];
-  if (errors.length) return { ...result, identity, expectedImage };
+  const releaseVersion = activeRelease.normalizedVersion;
+  if (errors.length) {
+    return {
+      ...result,
+      identity,
+      expectedImage,
+      releaseVersion,
+      releaseWatermark,
+    };
+  }
   await verifySettledBaseline(target, identity, {
     ...options,
     rootDir,
     expectedImage,
   });
-  return { ...result, identity, expectedImage };
+  return {
+    ...result,
+    identity,
+    expectedImage,
+    releaseVersion,
+    releaseWatermark,
+  };
 }
 
 const isMain =
@@ -10979,6 +11198,17 @@ if (isMain) {
         `${result.app} unsettled production drift:\n- ${errors.join("\n- ")}\n`,
       );
       process.exitCode = 1;
+    } else if (process.argv.includes("--output-json")) {
+      process.stdout.write(
+        `${JSON.stringify({
+          target: result.target,
+          app: result.app,
+          identity: result.identity,
+          expectedImage: result.expectedImage,
+          releaseVersion: result.releaseVersion,
+          releaseWatermark: result.releaseWatermark,
+        })}\n`,
+      );
     } else {
       process.stdout.write(
         `${result.app} matches settled identity ${result.identity}.\n`,
