@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   CREDIT_PROVISIONER_RETIREMENT_ATTRIBUTE_KEY,
+  CREDIT_PROVISIONER_RETIREMENT_ACTIVE_SESSION_QUERY,
   CREDIT_PROVISIONER_RETIREMENT_DATABASE_TIME_QUERY,
   CREDIT_PROVISIONER_RETIREMENT_DROPPED_MARKER,
   CREDIT_PROVISIONER_RETIREMENT_FAILURE_MARKER,
@@ -19,6 +20,7 @@ import {
   assertRetirementEvidence,
   buildRetirementAttributeSql,
   deriveRetirementCohortSha256,
+  deriveRetirementMembersSha256,
   parseRetirementCliArguments,
   parseRetirementInventoryRows,
   retireImageGenCreditProvisioners,
@@ -41,6 +43,11 @@ const T1 = "2026-08-30T01:00:00.000000Z";
 const T2 = "2026-08-30T02:00:00.000000Z";
 const DROP_NOW = "2026-08-31T02:00:00.000000Z";
 const DROP_DONE = "2026-08-31T02:00:00.000001Z";
+const MANAGED_ACCOUNTS = [
+  { hostname: "%", username: "lbcp_0123456789abcdef" },
+  { hostname: "%", username: "lbcp_fedcba9876543210" },
+];
+const MEMBERS_SHA256 = deriveRetirementMembersSha256(MANAGED_ACCOUNTS);
 
 function context(overrides = {}) {
   return {
@@ -70,6 +77,7 @@ function obsoleteDropEvidence(overrides = {}) {
 function retirementAttribute({
   cohortSha256 = deriveRetirementCohortSha256(context()),
   lockedAt = T0,
+  membersSha256 = MEMBERS_SHA256,
   state = "locked",
   unlockedAt = null,
 } = {}) {
@@ -77,6 +85,7 @@ function retirementAttribute({
     cohortSha256,
     contractVersion: 1,
     lockedAt,
+    membersSha256,
     state,
     unlockedAt,
   };
@@ -90,6 +99,7 @@ function lockEvidence(overrides = {}) {
     lockedAt: T0,
     managedAccountCountAfter: 2,
     managedAccountCountBefore: 2,
+    membersSha256: MEMBERS_SHA256,
     mutationAt: T0,
     obsoletePrincipalSha256: OBSOLETE_SHA256,
     operation: "lock",
@@ -115,9 +125,11 @@ function inventoryLine({
 
 function createDatabase({
   accounts = ["lbcp_0123456789abcdef", "lbcp_fedcba9876543210"],
+  activeSessions = [],
   times = [T0],
 } = {}) {
   return {
+    activeSessions: [...activeSessions],
     accounts: new Map(
       accounts.map((username) => [
         username,
@@ -125,11 +137,21 @@ function createDatabase({
       ]),
     ),
     calls: [],
+    failAfterMutation: undefined,
     failOnMutation: undefined,
     mutationCount: 0,
     sessions: [],
     times: [...times],
   };
+}
+
+function markDatabaseCohortLocked(database) {
+  for (const account of database.accounts.values()) {
+    account.accountLocked = "Y";
+    account.attributes[CREDIT_PROVISIONER_RETIREMENT_ATTRIBUTE_KEY] =
+      retirementAttribute();
+  }
+  return database;
 }
 
 function accountFromPrincipal(value) {
@@ -170,6 +192,9 @@ class FakeRootSession {
             `${username}\t%\t${value.accountLocked}\t${hexAttributes(value.attributes)}`,
         );
     }
+    if (sql === CREDIT_PROVISIONER_RETIREMENT_ACTIVE_SESSION_QUERY) {
+      return [...this.database.activeSessions];
+    }
     if (sql === CREDIT_PROVISIONER_RETIREMENT_DATABASE_TIME_QUERY) {
       const value = this.database.times.shift();
       if (!value) throw new Error("synthetic missing database time");
@@ -180,6 +205,11 @@ class FakeRootSession {
     if (this.database.mutationCount === this.database.failOnMutation) {
       throw new Error("synthetic mutation failure");
     }
+    const failAfterAppliedMutation = () => {
+      if (this.database.mutationCount === this.database.failAfterMutation) {
+        throw new Error("synthetic committed mutation response loss");
+      }
+    };
     const attributeMatch =
       /^ALTER USER ('lbcp_[a-f0-9]{16}'@'%') ATTRIBUTE '(.+)'$/.exec(sql);
     if (attributeMatch) {
@@ -190,6 +220,7 @@ class FakeRootSession {
         ...account.attributes,
         ...JSON.parse(attributeMatch[2]),
       };
+      failAfterAppliedMutation();
       return [];
     }
     const stateMatch =
@@ -200,6 +231,7 @@ class FakeRootSession {
       );
       if (!account) throw new Error("synthetic missing account");
       account.accountLocked = stateMatch[2] === "LOCK" ? "Y" : "N";
+      failAfterAppliedMutation();
       return [];
     }
     if (sql.startsWith("DROP USER ")) {
@@ -209,6 +241,7 @@ class FakeRootSession {
       if (principals.length === 0) throw new Error("synthetic empty drop");
       for (const username of principals)
         this.database.accounts.delete(username);
+      failAfterAppliedMutation();
       return [];
     }
     throw new Error("unexpected test SQL");
@@ -285,6 +318,18 @@ describe("image-gen credit provisioner retirement", () => {
         context({ obsoletePrincipalSha256: RUNTIME_SHA256 }),
       ),
     ).toThrow("credit provisioner retirement rejected");
+    expect(deriveRetirementMembersSha256(MANAGED_ACCOUNTS)).toBe(
+      MEMBERS_SHA256,
+    );
+    expect(deriveRetirementMembersSha256([...MANAGED_ACCOUNTS].reverse())).toBe(
+      MEMBERS_SHA256,
+    );
+    expect(
+      deriveRetirementMembersSha256([
+        MANAGED_ACCOUNTS[0],
+        { hostname: "%", username: "lbcp_1111111111111111" },
+      ]),
+    ).not.toBe(MEMBERS_SHA256);
   });
 
   it("accepts only the exact operation-specific CLI", () => {
@@ -490,6 +535,49 @@ describe("image-gen credit provisioner retirement", () => {
     expect(evidence.lockedAt).toBe(T1);
   });
 
+  it("converges when ACCOUNT LOCK commits before its response is lost", async () => {
+    const database = createDatabase({ times: [T1] });
+    database.failAfterMutation = 2;
+    await expect(
+      retireImageGenCreditProvisioners(
+        operationInput("lock"),
+        dependencies(database),
+      ),
+    ).rejects.toThrow();
+    expect(database.accounts.get("lbcp_0123456789abcdef").accountLocked).toBe(
+      "Y",
+    );
+
+    database.failAfterMutation = undefined;
+    database.mutationCount = 0;
+    await expect(
+      retireImageGenCreditProvisioners(
+        operationInput("lock"),
+        dependencies(database),
+      ),
+    ).resolves.toMatchObject({ lockedAt: T1, operation: "lock" });
+  });
+
+  it("converges when final lock metadata commits before response loss", async () => {
+    const database = createDatabase({ times: [T0, T1] });
+    database.failAfterMutation = 5;
+    await expect(
+      retireImageGenCreditProvisioners(
+        operationInput("lock"),
+        dependencies(database),
+      ),
+    ).rejects.toThrow();
+
+    database.failAfterMutation = undefined;
+    database.mutationCount = 0;
+    await expect(
+      retireImageGenCreditProvisioners(
+        operationInput("lock"),
+        dependencies(database),
+      ),
+    ).resolves.toMatchObject({ lockedAt: T1, operation: "lock" });
+  });
+
   it("rejects a foreign cohort before any account mutation", async () => {
     const database = createDatabase({ times: [T0] });
     database.accounts.get("lbcp_0123456789abcdef").attributes[
@@ -570,6 +658,34 @@ describe("image-gen credit provisioner retirement", () => {
     ).toBe(true);
   });
 
+  it("converges when ACCOUNT UNLOCK commits before response loss", async () => {
+    const database = createDatabase({ times: [T0, T1] });
+    await retireImageGenCreditProvisioners(
+      operationInput("lock"),
+      dependencies(database),
+    );
+    database.mutationCount = 0;
+    database.failAfterMutation = 2;
+    await expect(
+      retireImageGenCreditProvisioners(
+        operationInput("unlock"),
+        dependencies(database),
+      ),
+    ).rejects.toThrow();
+    expect(database.accounts.get("lbcp_0123456789abcdef").accountLocked).toBe(
+      "N",
+    );
+
+    database.failAfterMutation = undefined;
+    database.mutationCount = 0;
+    await expect(
+      retireImageGenCreditProvisioners(
+        operationInput("unlock"),
+        dependencies(database),
+      ),
+    ).resolves.toMatchObject({ mutationAt: T1, operation: "unlock" });
+  });
+
   it("refuses empty first-use lock and unattributed unlock", async () => {
     await expect(
       retireImageGenCreditProvisioners(
@@ -583,6 +699,27 @@ describe("image-gen credit provisioner retirement", () => {
         dependencies(createDatabase()),
       ),
     ).rejects.toThrow();
+  });
+
+  it("refuses to mutate while a managed provisioner session is active", async () => {
+    const database = createDatabase({
+      activeSessions: ["lbcp_0123456789abcdef"],
+    });
+    await expect(
+      retireImageGenCreditProvisioners(
+        operationInput("lock"),
+        dependencies(database),
+      ),
+    ).rejects.toThrow();
+    expect(database.mutationCount).toBe(0);
+
+    database.activeSessions = [];
+    await expect(
+      retireImageGenCreditProvisioners(
+        operationInput("lock"),
+        dependencies(database),
+      ),
+    ).resolves.toMatchObject({ operation: "lock" });
   });
 
   it("invalidates old lock evidence after unlock and relock", async () => {
@@ -668,6 +805,34 @@ describe("image-gen credit provisioner retirement", () => {
     );
   });
 
+  it("converges when DROP USER commits before its response is lost", async () => {
+    const database = markDatabaseCohortLocked(
+      createDatabase({ times: [DROP_NOW, DROP_DONE, DROP_DONE] }),
+    );
+    database.failAfterMutation = 1;
+    await expect(
+      retireImageGenCreditProvisioners(
+        operationInput("drop"),
+        dependencies(database, {
+          [LOCK_EVIDENCE_PATH]: lockEvidence(),
+        }),
+      ),
+    ).rejects.toThrow();
+    expect(database.accounts.size).toBe(0);
+
+    database.failAfterMutation = undefined;
+    database.mutationCount = 0;
+    await expect(
+      retireImageGenCreditProvisioners(
+        operationInput("drop"),
+        dependencies(database, {
+          [LOCK_EVIDENCE_PATH]: lockEvidence(),
+        }),
+      ),
+    ).resolves.toMatchObject({ operation: "drop" });
+    expect(database.mutationCount).toBe(0);
+  });
+
   it("accepts only the inclusive 24-hour through 30-day drop window", async () => {
     const scenarios = [
       ["2026-08-30T23:59:59.999999Z", false],
@@ -676,7 +841,9 @@ describe("image-gen credit provisioner retirement", () => {
       ["2026-09-29T00:00:00.001000Z", false],
     ];
     for (const [databaseNow, accepted] of scenarios) {
-      const database = createDatabase({ accounts: [], times: [databaseNow] });
+      const database = markDatabaseCohortLocked(
+        createDatabase({ times: [databaseNow] }),
+      );
       if (accepted) database.times.push(databaseNow);
       const run = retireImageGenCreditProvisioners(
         operationInput("drop"),
@@ -709,6 +876,58 @@ describe("image-gen credit provisioner retirement", () => {
     expect(
       database.calls.some((call) => String(call).startsWith("DROP USER")),
     ).toBe(false);
+  });
+
+  it("recovers completed drop evidence even after the new-drop window", async () => {
+    const database = createDatabase({
+      accounts: [],
+      times: ["2026-10-30T00:00:00.000000Z", "2026-10-30T00:00:00.000001Z"],
+    });
+    await expect(
+      retireImageGenCreditProvisioners(
+        operationInput("drop"),
+        dependencies(database, {
+          [LOCK_EVIDENCE_PATH]: lockEvidence(),
+        }),
+      ),
+    ).resolves.toMatchObject({
+      managedAccountCountAfter: 0,
+      managedAccountCountBefore: 2,
+      operation: "drop",
+    });
+    expect(database.mutationCount).toBe(0);
+  });
+
+  it("does not certify an empty replay before the minimum lock window", async () => {
+    const database = createDatabase({
+      accounts: [],
+      times: ["2026-08-30T23:59:59.999999Z"],
+    });
+    await expect(
+      retireImageGenCreditProvisioners(
+        operationInput("drop"),
+        dependencies(database, {
+          [LOCK_EVIDENCE_PATH]: lockEvidence(),
+        }),
+      ),
+    ).rejects.toThrow();
+    expect(database.mutationCount).toBe(0);
+  });
+
+  it("keeps a new drop blocked after the maximum window", async () => {
+    const database = markDatabaseCohortLocked(
+      createDatabase({ times: ["2026-10-30T00:00:00.000000Z"] }),
+    );
+    await expect(
+      retireImageGenCreditProvisioners(
+        operationInput("drop"),
+        dependencies(database, {
+          [LOCK_EVIDENCE_PATH]: lockEvidence(),
+        }),
+      ),
+    ).rejects.toThrow();
+    expect(database.accounts.size).toBe(2);
+    expect(database.mutationCount).toBe(0);
   });
 
   it("rejects changed membership, unlocked accounts, and stale evidence", async () => {
@@ -750,6 +969,30 @@ describe("image-gen credit provisioner retirement", () => {
         database.calls.some((call) => String(call).startsWith("DROP USER")),
       ).toBe(false);
     }
+  });
+
+  it("rejects a same-count replacement carrying copied cohort metadata", async () => {
+    const database = markDatabaseCohortLocked(
+      createDatabase({ times: [DROP_NOW] }),
+    );
+    database.accounts.delete("lbcp_fedcba9876543210");
+    database.accounts.set("lbcp_1111111111111111", {
+      accountLocked: "Y",
+      attributes: {
+        [CREDIT_PROVISIONER_RETIREMENT_ATTRIBUTE_KEY]: retirementAttribute(),
+      },
+    });
+
+    await expect(
+      retireImageGenCreditProvisioners(
+        operationInput("drop"),
+        dependencies(database, {
+          [LOCK_EVIDENCE_PATH]: lockEvidence(),
+        }),
+      ),
+    ).rejects.toThrow();
+    expect(database.accounts.size).toBe(2);
+    expect(database.mutationCount).toBe(0);
   });
 
   it("requires exact metadata-only lock and operation evidence", () => {
@@ -806,6 +1049,47 @@ describe("image-gen credit provisioner retirement", () => {
         CREDIT_PROVISIONER_RETIREMENT_DROPPED_MARKER,
       ]).size,
     ).toBe(3);
+  });
+
+  it("reconciles a dropped cohort after the first evidence write fails", async () => {
+    const database = markDatabaseCohortLocked(
+      createDatabase({ times: [DROP_NOW, DROP_DONE] }),
+    );
+    const output = [];
+    const deps = dependencies(database, {
+      [LOCK_EVIDENCE_PATH]: lockEvidence(),
+    });
+    const retire = (input) => retireImageGenCreditProvisioners(input, deps);
+
+    await expect(
+      runRetirementCli(cliArguments("drop"), {
+        output: (value) => output.push(value),
+        retire,
+        writeEvidence: async () => {
+          throw new Error("synthetic evidence storage failure");
+        },
+      }),
+    ).resolves.toBe(CREDIT_PROVISIONER_RETIREMENT_FAILURE_MARKER);
+    expect(database.accounts.size).toBe(0);
+
+    database.times.push(
+      "2026-10-30T00:00:00.000000Z",
+      "2026-10-30T00:00:00.000001Z",
+    );
+    const writes = [];
+    await expect(
+      runRetirementCli(cliArguments("drop"), {
+        output: (value) => output.push(value),
+        retire,
+        writeEvidence: async (...args) => writes.push(args),
+      }),
+    ).resolves.toBe(CREDIT_PROVISIONER_RETIREMENT_DROPPED_MARKER);
+    expect(writes).toHaveLength(1);
+    expect(output).toEqual([
+      CREDIT_PROVISIONER_RETIREMENT_FAILURE_MARKER,
+      CREDIT_PROVISIONER_RETIREMENT_DROPPED_MARKER,
+    ]);
+    expect(database.mutationCount).toBe(1);
   });
 
   it("contains no secret, deployment, provider, or dynamic-error mutation path", () => {

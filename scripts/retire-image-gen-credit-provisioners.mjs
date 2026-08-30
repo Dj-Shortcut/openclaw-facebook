@@ -41,6 +41,8 @@ export const CREDIT_PROVISIONER_RETIREMENT_INVENTORY_QUERY =
   "SELECT CONCAT(User,0x09,Host,0x09,account_locked,0x09,HEX(COALESCE(CAST(User_attributes AS CHAR),''))) FROM mysql.user WHERE User LIKE 'lbcp\\\\_%' ESCAPE '\\\\' ORDER BY User,Host";
 export const CREDIT_PROVISIONER_RETIREMENT_DATABASE_TIME_QUERY =
   "SELECT DATE_FORMAT(UTC_TIMESTAMP(6),'%Y-%m-%dT%H:%i:%s.%fZ')";
+export const CREDIT_PROVISIONER_RETIREMENT_ACTIVE_SESSION_QUERY =
+  "SELECT PROCESSLIST_USER FROM performance_schema.threads WHERE TYPE='FOREGROUND' AND PROCESSLIST_USER LIKE 'lbcp\\\\_%' ESCAPE '\\\\' ORDER BY PROCESSLIST_USER,PROCESSLIST_ID";
 
 const EVIDENCE_KEYS = Object.freeze([
   "cohortSha256",
@@ -49,6 +51,7 @@ const EVIDENCE_KEYS = Object.freeze([
   "lockedAt",
   "managedAccountCountAfter",
   "managedAccountCountBefore",
+  "membersSha256",
   "mutationAt",
   "obsoletePrincipalSha256",
   "operation",
@@ -60,6 +63,7 @@ const ATTRIBUTE_KEYS = Object.freeze([
   "cohortSha256",
   "contractVersion",
   "lockedAt",
+  "membersSha256",
   "state",
   "unlockedAt",
 ]);
@@ -174,6 +178,27 @@ export function deriveRetirementCohortSha256({
     .digest("hex");
 }
 
+export function deriveRetirementMembersSha256(accounts) {
+  if (
+    !Array.isArray(accounts) ||
+    accounts.length < 1 ||
+    accounts.length > MAX_MANAGED_ACCOUNTS
+  ) {
+    fail();
+  }
+  const identities = accounts
+    .map((account) => {
+      quoteManagedAccount(account);
+      return `${account.username}\0${account.hostname}`;
+    })
+    .sort();
+  if (new Set(identities).size !== identities.length) fail();
+  return createHash("sha256")
+    .update(`${CONTRACT_DOMAIN}-members\0`)
+    .update(identities.join("\0"))
+    .digest("hex");
+}
+
 function parseAttribute(value) {
   if (value === undefined) return undefined;
   assertExactKeys(value, ATTRIBUTE_KEYS);
@@ -188,6 +213,7 @@ function parseAttribute(value) {
     fail();
   }
   requireSha256(value.cohortSha256);
+  requireSha256(value.membersSha256);
   if (
     (new Set(["locking", "locked"]).has(value.state) &&
       value.unlockedAt !== null) ||
@@ -261,6 +287,7 @@ export function parseRetirementInventoryRows(lines) {
 function buildRetirementAttribute({
   cohortSha256,
   lockedAt = null,
+  membersSha256,
   state,
   unlockedAt = null,
 }) {
@@ -268,6 +295,7 @@ function buildRetirementAttribute({
     cohortSha256: requireSha256(cohortSha256),
     contractVersion: CONTRACT_VERSION,
     lockedAt,
+    membersSha256: requireSha256(membersSha256),
     state,
     unlockedAt,
   };
@@ -289,6 +317,7 @@ function buildEvidence({
   lockedAt,
   managedAccountCountAfter,
   managedAccountCountBefore,
+  membersSha256,
   mutationAt,
   operation,
 }) {
@@ -299,6 +328,7 @@ function buildEvidence({
     lockedAt,
     managedAccountCountAfter: requireCount(managedAccountCountAfter),
     managedAccountCountBefore: requireCount(managedAccountCountBefore),
+    membersSha256: requireSha256(membersSha256),
     mutationAt: requireDatabaseTimestamp(mutationAt),
     obsoletePrincipalSha256: context.obsoletePrincipalSha256,
     operation,
@@ -322,6 +352,7 @@ export function assertRetirementEvidence(value) {
   if (value.cohortSha256 !== context.cohortSha256) fail();
   requireCount(value.managedAccountCountBefore, { allowZero: false });
   requireCount(value.managedAccountCountAfter);
+  requireSha256(value.membersSha256);
   requireDatabaseTimestamp(value.mutationAt);
   if (value.operation === "lock") {
     requireDatabaseTimestamp(value.lockedAt);
@@ -509,6 +540,14 @@ async function readDatabaseTime(rootSession, signal) {
   return requireDatabaseTimestamp(lines[0]);
 }
 
+async function assertNoActiveManagedSessions(rootSession, signal) {
+  const lines = await rootSession.execute(
+    CREDIT_PROVISIONER_RETIREMENT_ACTIVE_SESSION_QUERY,
+    { signal },
+  );
+  if (!Array.isArray(lines) || lines.length !== 0) fail();
+}
+
 async function executeMutation(rootSession, sql, signal) {
   throwIfAborted(signal);
   await rootSession.assertLockHeld(signal);
@@ -518,20 +557,32 @@ async function executeMutation(rootSession, sql, signal) {
 function assertInventoryCohort(
   inventory,
   context,
-  { allowMissing = false } = {},
+  { allowMissing = false, membersSha256 } = {},
 ) {
+  requireSha256(membersSha256);
   for (const row of inventory) {
     if (!row.retirement) {
       if (allowMissing && row.accountLocked === "N") continue;
       fail();
     }
-    if (row.retirement.cohortSha256 !== context.cohortSha256) fail();
+    if (
+      row.retirement.cohortSha256 !== context.cohortSha256 ||
+      row.retirement.membersSha256 !== membersSha256
+    ) {
+      fail();
+    }
   }
 }
 
 async function lockAccounts({ context, inventory, rootSession, signal }) {
   if (inventory.length === 0) fail();
-  assertInventoryCohort(inventory, context, { allowMissing: true });
+  const membersSha256 = deriveRetirementMembersSha256(
+    inventory.map((row) => row.account),
+  );
+  assertInventoryCohort(inventory, context, {
+    allowMissing: true,
+    membersSha256,
+  });
   const priorLockedAtValues = inventory
     .map((row) => row.retirement?.lockedAt)
     .filter(Boolean);
@@ -539,6 +590,7 @@ async function lockAccounts({ context, inventory, rootSession, signal }) {
     const locking = buildRetirementAttribute({
       cohortSha256: context.cohortSha256,
       lockedAt: row.retirement?.lockedAt ?? null,
+      membersSha256,
       state: "locking",
     });
     const account = quoteManagedAccount(row.account);
@@ -564,6 +616,7 @@ async function lockAccounts({ context, inventory, rootSession, signal }) {
   const locked = buildRetirementAttribute({
     cohortSha256: context.cohortSha256,
     lockedAt,
+    membersSha256,
     state: "locked",
   });
   for (const row of inventory) {
@@ -580,17 +633,20 @@ async function lockAccounts({ context, inventory, rootSession, signal }) {
       (row) =>
         row.accountLocked !== "Y" ||
         row.retirement?.cohortSha256 !== context.cohortSha256 ||
+        row.retirement?.membersSha256 !== membersSha256 ||
         row.retirement?.state !== "locked" ||
         row.retirement?.lockedAt !== lockedAt,
     )
   ) {
     fail();
   }
+  await assertNoActiveManagedSessions(rootSession, signal);
   return buildEvidence({
     context,
     lockedAt,
     managedAccountCountAfter: remaining.length,
     managedAccountCountBefore: inventory.length,
+    membersSha256,
     mutationAt: lockedAt,
     operation: "lock",
   });
@@ -598,7 +654,10 @@ async function lockAccounts({ context, inventory, rootSession, signal }) {
 
 async function unlockAccounts({ context, inventory, rootSession, signal }) {
   if (inventory.length === 0) fail();
-  assertInventoryCohort(inventory, context);
+  const membersSha256 = deriveRetirementMembersSha256(
+    inventory.map((row) => row.account),
+  );
+  assertInventoryCohort(inventory, context, { membersSha256 });
   const lockedAtValues = new Set(
     inventory.map((row) => row.retirement?.lockedAt).filter(Boolean),
   );
@@ -607,6 +666,7 @@ async function unlockAccounts({ context, inventory, rootSession, signal }) {
   const unlocking = buildRetirementAttribute({
     cohortSha256: context.cohortSha256,
     lockedAt,
+    membersSha256,
     state: "unlocking",
   });
   for (const row of inventory) {
@@ -625,6 +685,7 @@ async function unlockAccounts({ context, inventory, rootSession, signal }) {
   const unlocked = buildRetirementAttribute({
     cohortSha256: context.cohortSha256,
     lockedAt,
+    membersSha256,
     state: "unlocked",
     unlockedAt,
   });
@@ -642,6 +703,7 @@ async function unlockAccounts({ context, inventory, rootSession, signal }) {
       (row) =>
         row.accountLocked !== "N" ||
         row.retirement?.cohortSha256 !== context.cohortSha256 ||
+        row.retirement?.membersSha256 !== membersSha256 ||
         row.retirement?.state !== "unlocked" ||
         row.retirement?.unlockedAt !== unlockedAt,
     )
@@ -653,14 +715,21 @@ async function unlockAccounts({ context, inventory, rootSession, signal }) {
     lockedAt: null,
     managedAccountCountAfter: remaining.length,
     managedAccountCountBefore: inventory.length,
+    membersSha256,
     mutationAt: unlockedAt,
     operation: "unlock",
   });
 }
 
-function assertDropWindow(lockedAt, databaseNow) {
+function assertDropWindow(lockedAt, databaseNow, { enforceMaximum }) {
   const age = Date.parse(databaseNow) - Date.parse(lockedAt);
-  if (age < MIN_DROP_AGE_MS || age > MAX_DROP_AGE_MS) fail();
+  if (
+    !Number.isFinite(age) ||
+    age < MIN_DROP_AGE_MS ||
+    (enforceMaximum && age > MAX_DROP_AGE_MS)
+  ) {
+    fail();
+  }
 }
 
 async function dropAccounts({
@@ -671,10 +740,16 @@ async function dropAccounts({
   signal,
 }) {
   const databaseNow = await readDatabaseTime(rootSession, signal);
-  assertDropWindow(lockEvidence.lockedAt, databaseNow);
+  assertDropWindow(lockEvidence.lockedAt, databaseNow, {
+    enforceMaximum: inventory.length !== 0,
+  });
   if (inventory.length !== 0) {
     if (inventory.length !== lockEvidence.managedAccountCountAfter) fail();
-    assertInventoryCohort(inventory, context);
+    const membersSha256 = deriveRetirementMembersSha256(
+      inventory.map((row) => row.account),
+    );
+    if (membersSha256 !== lockEvidence.membersSha256) fail();
+    assertInventoryCohort(inventory, context, { membersSha256 });
     if (
       inventory.some(
         (row) =>
@@ -692,12 +767,14 @@ async function dropAccounts({
   }
   const remaining = await readInventory(rootSession, signal);
   if (remaining.length !== 0) fail();
+  await assertNoActiveManagedSessions(rootSession, signal);
   const mutationAt = await readDatabaseTime(rootSession, signal);
   return buildEvidence({
     context,
     lockedAt: lockEvidence.lockedAt,
     managedAccountCountAfter: 0,
     managedAccountCountBefore: lockEvidence.managedAccountCountAfter,
+    membersSha256: lockEvidence.membersSha256,
     mutationAt,
     operation: "drop",
   });
@@ -772,6 +849,7 @@ export async function retireImageGenCreditProvisioners(
     await rootSession.initialize(input.signal);
     await rootSession.acquireLock(input.signal);
     await rootSession.assertLockHeld(input.signal);
+    await assertNoActiveManagedSessions(rootSession, input.signal);
     const inventory = await readInventory(rootSession, input.signal);
     let evidence;
     if (input.operation === "lock") {

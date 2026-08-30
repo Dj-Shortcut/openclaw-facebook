@@ -36,6 +36,9 @@ describe("image-gen migration smoke workflow", () => {
     );
     expect(workflow).toContain('RUN_MYSQL_INTEGRATION: "1"');
     expect(workflow).toContain(
+      "CREDIT_PROVISIONER_RETIREMENT_DESTRUCTIVE_TEST: credit-provisioner-retirement-disposable-mysql-v1",
+    );
+    expect(workflow).toContain(
       "pnpm exec vitest run server/creditProvisionerRetirement.mysql.test.ts",
     );
     expect(workflow).toContain(

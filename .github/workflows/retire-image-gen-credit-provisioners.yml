@@ -334,7 +334,7 @@ jobs:
             assertContext(lock);
             if (lock.operation !== "lock" || lock.sourceHead !== process.env.LOCK_EVIDENCE_SOURCE_HEAD) fail();
             const age = Date.now() - Date.parse(lock.lockedAt);
-            if (!Number.isFinite(age) || age < 86_400_000 || age > 30 * 86_400_000) fail();
+            if (!Number.isFinite(age) || age < 86_400_000) fail();
           }
           if (process.env.RETIREMENT_OPERATION === "verify_secret_absent") {
             let drop;
@@ -642,6 +642,7 @@ jobs:
             cohortSha256,
             contractVersion: 1,
             deploymentIdentity: obsolete.deploymentIdentity,
+            membersSha256: drop.membersSha256,
             observedAt: new Date().toISOString(),
             obsoletePrincipalSha256: obsolete.obsoletePrincipalSha256,
             operation: "verify_secret_absent_resolution",
@@ -730,7 +731,7 @@ jobs:
           const resolved = read(resolvedPath);
           assertExactKeys(resolved, [
             "cohortSha256", "contractVersion", "deploymentIdentity", "observedAt",
-            "obsoletePrincipalSha256", "operation", "resolvedSecretEmpty",
+            "membersSha256", "obsoletePrincipalSha256", "operation", "resolvedSecretEmpty",
             "runtimePrincipalSha256", "schemaPhase", "sourceHead",
           ]);
           const drop = assertRetirementEvidence(read(`${root}/drop/evidence.json`));
@@ -749,6 +750,7 @@ jobs:
             resolved.operation !== "verify_secret_absent_resolution" ||
             resolved.cohortSha256 !== cohortSha256 ||
             resolved.deploymentIdentity !== drop.deploymentIdentity ||
+            resolved.membersSha256 !== drop.membersSha256 ||
             resolved.obsoletePrincipalSha256 !== drop.obsoletePrincipalSha256 ||
             resolved.runtimePrincipalSha256 !== drop.runtimePrincipalSha256 ||
             resolved.schemaPhase !== "0018_credit_checkout_reservation" ||
@@ -773,6 +775,7 @@ jobs:
             deploymentIdentity: drop.deploymentIdentity,
             dropMutationAt: drop.mutationAt,
             firstObservedAt: resolved.observedAt,
+            membersSha256: drop.membersSha256,
             obsoletePrincipalSha256: drop.obsoletePrincipalSha256,
             observationCount: 2,
             operation: "verify_secret_absent",

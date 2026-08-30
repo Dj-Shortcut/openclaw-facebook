@@ -5304,11 +5304,27 @@ function validateCreditProvisionerRetirementRunner(rootDir) {
       "must domain-separate the cohort fingerprint",
     ],
     [
+      "deriveRetirementMembersSha256",
+      "must fingerprint the exact managed-account membership",
+    ],
+    [
+      "membersSha256",
+      "must bind account membership into attributes and evidence",
+    ],
+    [
       "CREDIT_PROVISIONER_RETIREMENT_INVENTORY_QUERY",
       "must inspect every exact managed database account",
     ],
     ["User_attributes", "must retain lock state in MySQL itself"],
     ["account_locked", "must prove account lock state from MySQL"],
+    [
+      "performance_schema.threads",
+      "must prove no managed provisioner session survives retirement",
+    ],
+    [
+      "assertNoActiveManagedSessions",
+      "must gate account mutation and completion on zero active sessions",
+    ],
     ["ALTER USER", "must mutate only through reviewed account statements"],
     ["ACCOUNT LOCK", "must provide the recoverable first phase"],
     ["ACCOUNT UNLOCK", "must provide protected recovery"],
@@ -5319,6 +5335,10 @@ function validateCreditProvisionerRetirementRunner(rootDir) {
     ],
     ["assertLockEvidence", "must bind drop to the exact lock artifact"],
     ["assertDropWindow", "must enforce the lock evidence time window"],
+    [
+      "enforceMaximum: inventory.length !== 0",
+      "must enforce maximum evidence age only for a new irreversible drop",
+    ],
     ["acquireLock", "must serialize with provisioner bootstrap"],
     ["assertLockHeld", "must reprove the shared database lock around mutation"],
     [
@@ -5428,8 +5448,32 @@ function validateCreditProvisionerRetirementWorkflow(rootDir) {
       "must bind cleanup to the settled deployment",
     ],
     [
-      '.apps["image-gen"].desiredScale | to_entries | map(.value.count) | add',
+      '.apps["image-gen"].desiredScale | {app:.app.count,worker:.worker.count}',
       "must derive the exact successor count from reviewed desiredScale",
+    ],
+    [
+      "length == ($expected.app + $expected.worker)",
+      "must reject extra or missing settled Machines",
+    ],
+    [
+      "([.[].id] | length == (unique | length))",
+      "must require unique settled Machine identities",
+    ],
+    [
+      ".config.env.LEADERBOT_DEPLOYMENT_IDENTITY == $identity",
+      "must bind every settled Machine to the reviewed deployment identity",
+    ],
+    [
+      ".image_ref.digest == $digest",
+      "must bind every settled Machine to the reviewed image digest",
+    ],
+    [
+      '([.[] | select(.config.metadata.fly_process_group == "app")] | length) == $expected.app',
+      "must require the exact reviewed app Machine count",
+    ],
+    [
+      '([.[] | select(.config.metadata.fly_process_group == "worker")] | length) == $expected.worker',
+      "must require the exact reviewed worker Machine count",
     ],
     [
       "EXPECTED_RUNTIME_PRINCIPAL_SHA256=$EXPECTED_RUNTIME_PRINCIPAL_SHA256 node /app/dist/billing-trigger-runtime-preflight.cjs",
@@ -5456,8 +5500,8 @@ function validateCreditProvisionerRetirementWorkflow(rootDir) {
       "must bind irreversible drop to exact lock evidence",
     ],
     [
-      "age < 86_400_000 || age > 30 * 86_400_000",
-      "must preserve the 24-hour to 30-day reviewed drop window",
+      "if (!Number.isFinite(age) || age < 86_400_000) fail();",
+      "must preserve the 24-hour minimum before drop or reconciliation",
     ],
     [
       "node scripts/retire-image-gen-credit-provisioners.mjs",
@@ -5480,29 +5524,32 @@ function validateCreditProvisionerRetirementWorkflow(rootDir) {
       "must pass lock evidence only for drop",
     ],
     [
-      "github-environments-and-secrets-read-only-v1",
-      "must require the narrow secret-metadata token boundary",
+      "/contents/${encodedWorkflowPath}?ref=${run.head_sha}",
+      "must load every evidence workflow from its exact historical source",
     ],
     [
-      "IMAGE_GEN_RETIREMENT_METADATA_READ_TOKEN",
-      "must isolate secret-name inspection from workflow mutation credentials",
+      'source.encoding !== "base64"',
+      "must require byte-addressable historical workflow source",
+    ],
+    [
+      'createHash("sha1")',
+      "must independently derive the historical workflow Git blob identity",
+    ],
+    [
+      ".update(`blob ${remoteWorkflow.length}\\0`)",
+      "must hash the historical source as an exact Git blob",
+    ],
+    [
+      "blobSha !== source.sha",
+      "must compare historical source bytes with the Git blob identity",
+    ],
+    [
+      "!remoteWorkflow.equals(currentWorkflow)",
+      "must reject evidence produced by a different workflow implementation",
     ],
     [
       "secrets.IMAGE_GEN_DATABASE_PROVISIONER_URL != ''",
       "must prove effective protected-secret resolution is empty",
-    ],
-    [
-      "/environments/production/secrets",
-      "must inspect the complete protected environment inventory",
-    ],
-    ["/actions/secrets", "must inspect the complete repository inventory"],
-    [
-      "/actions/organization-secrets",
-      "must inspect organization scope when applicable",
-    ],
-    [
-      "targetSecretOccurrences !== 0",
-      "must reject any remaining secret-name occurrence",
     ],
     [
       "currentAge < 15_000",
@@ -5522,6 +5569,24 @@ function validateCreditProvisionerRetirementWorkflow(rootDir) {
       fail(`${CREDIT_PROVISIONER_RETIREMENT_WORKFLOW_PATH} ${message}`);
     }
   }
+  const productionEnvironments =
+    workflow.match(/^\s{4}environment: production$/gmu) ?? [];
+  const inspectionEnvironments =
+    workflow.match(/^\s{4}environment: production-inspection$/gmu) ?? [];
+  if (
+    productionEnvironments.length !== 2 ||
+    inspectionEnvironments.length !== 1 ||
+    occurrenceCount(
+      workflow,
+      "secrets.IMAGE_GEN_DATABASE_PROVISIONER_URL != ''",
+    ) !== 3 ||
+    occurrenceCount(workflow, "TARGET_SECRET_RESOLVED:") !== 2 ||
+    occurrenceCount(workflow, 'test "$TARGET_SECRET_RESOLVED" = "false"') !== 2
+  ) {
+    fail(
+      `${CREDIT_PROVISIONER_RETIREMENT_WORKFLOW_PATH} must use one inspection gate, two protected production observations, and exact secret-resolution boundaries`,
+    );
+  }
   if (
     occurrenceCount(
       workflow,
@@ -5532,8 +5597,85 @@ function validateCreditProvisionerRetirementWorkflow(rootDir) {
       `${CREDIT_PROVISIONER_RETIREMENT_WORKFLOW_PATH} must wait for a completed schema cutover in both protected phases`,
     );
   }
+  const jobNames = workflowJobNames(workflow);
+  const preflightJob = namedWorkflowJobBody(workflow, "preflight");
+  const mutateJob = namedWorkflowJobBody(workflow, "mutate");
+  const postflightJob = namedWorkflowJobBody(workflow, "postflight");
+  if (
+    JSON.stringify(jobNames) !==
+      JSON.stringify(["preflight", "mutate", "postflight"]) ||
+    !preflightJob?.includes("environment: production-inspection") ||
+    preflightJob.includes("environment: production\n") ||
+    !mutateJob?.includes("environment: production") ||
+    !mutateJob.includes("needs: preflight") ||
+    occurrenceCount(mutateJob, "PROVISIONER_SECRET_RESOLVED:") !== 1 ||
+    occurrenceCount(mutateJob, "TARGET_SECRET_RESOLVED:") !== 1 ||
+    !postflightJob?.includes("environment: production") ||
+    !postflightJob.includes("needs: mutate") ||
+    occurrenceCount(postflightJob, "TARGET_SECRET_RESOLVED:") !== 1
+  ) {
+    fail(
+      `${CREDIT_PROVISIONER_RETIREMENT_WORKFLOW_PATH} must bind preflight, mutation, and both secret observations to their exact protected jobs`,
+    );
+  }
+  const [sourceEvidenceStep] = namedWorkflowStepBodies(
+    workflow,
+    "Validate protected source runs and exact artifacts",
+  );
+  for (const required of [
+    'run?.event !== "workflow_dispatch"',
+    'run.head_branch !== "main"',
+    "run.head_repository?.full_name !== process.env.GITHUB_REPOSITORY",
+    "run.path !== workflowPath",
+    'run.status !== "completed"',
+    'run.conclusion !== "success"',
+    "run.run_attempt !== Number(attempt)",
+    "/contents/${encodedWorkflowPath}?ref=${run.head_sha}",
+    "blobSha !== source.sha",
+    "!remoteWorkflow.equals(currentWorkflow)",
+  ]) {
+    if (!sourceEvidenceStep?.includes(required)) {
+      fail(
+        `${CREDIT_PROVISIONER_RETIREMENT_WORKFLOW_PATH} must bind every evidence artifact to the exact successful protected workflow source`,
+      );
+    }
+  }
+  const [topologyStep] = namedWorkflowStepBodies(
+    workflow,
+    "Reprove every settled runtime Machine before database access",
+  );
+  const loopStart = topologyStep?.indexOf(
+    'for machine_id in "${machine_ids[@]}"; do',
+  );
+  const preflightCommand = topologyStep?.indexOf(
+    "EXPECTED_RUNTIME_PRINCIPAL_SHA256=$EXPECTED_RUNTIME_PRINCIPAL_SHA256 node /app/dist/billing-trigger-runtime-preflight.cjs",
+  );
+  const loopEnd = topologyStep?.indexOf("          done", loopStart ?? -1);
+  if (
+    !topologyStep?.includes('.state == "started"') ||
+    !topologyStep.includes('test("^[a-f0-9]{14}$")') ||
+    !topologyStep.includes("mapfile -t machine_ids") ||
+    !topologyStep.includes(
+      'test "${#machine_ids[@]}" = "$expected_machine_count"',
+    ) ||
+    loopStart === undefined ||
+    loopStart < 0 ||
+    preflightCommand === undefined ||
+    preflightCommand <= loopStart ||
+    loopEnd === undefined ||
+    loopEnd <= preflightCommand
+  ) {
+    fail(
+      `${CREDIT_PROVISIONER_RETIREMENT_WORKFLOW_PATH} must reprove every exact started Machine inside the bounded topology loop`,
+    );
+  }
   if (
     workflow.includes("IMAGE_GEN_DATABASE_MIGRATION_URL") ||
+    workflow.includes("IMAGE_GEN_RETIREMENT_METADATA_READ_TOKEN") ||
+    workflow.includes("github-environments-and-secrets-read-only-v1") ||
+    workflow.includes("/environments/production/secrets") ||
+    workflow.includes("/actions/organization-secrets") ||
+    workflow.includes("/actions/secrets") ||
     workflow.includes("gh secret delete") ||
     /method:\s*["']DELETE["']/.test(workflow) ||
     /flyctl secrets|fly secrets|flyctl deploy|fly deploy/.test(workflow) ||
@@ -5546,7 +5688,7 @@ function validateCreditProvisionerRetirementWorkflow(rootDir) {
     )
   ) {
     fail(
-      `${CREDIT_PROVISIONER_RETIREMENT_WORKFLOW_PATH} must not reuse migration credentials, remove secrets, deploy, mutate Machines or volumes, enable billing, or call product providers`,
+      `${CREDIT_PROVISIONER_RETIREMENT_WORKFLOW_PATH} must not use secret-inventory credentials, reuse migration credentials, remove secrets, deploy, mutate Machines or volumes, enable billing, or call product providers`,
     );
   }
 }
