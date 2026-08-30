@@ -448,6 +448,8 @@ suite("0018 credit wallet MySQL 8.4 procedure boundary", () => {
     const username = `lbcp_${randomUUID().replaceAll("-", "").slice(0, 16)}`;
     const password = `Aa1!${hash(randomUUID())}${hash(randomUUID()).slice(0, 32)}`;
     const sql = buildProvisionerSql({ databaseName, password, username });
+    let deniedTable: string | undefined;
+    let provisioner: Connection | undefined;
     try {
       await connection.query(sql.createStatement);
       for (const statement of sql.grantStatements) {
@@ -462,33 +464,38 @@ suite("0018 credit wallet MySQL 8.4 procedure boundary", () => {
       const provisionerUrl = new URL(databaseUrl);
       provisionerUrl.username = username;
       provisionerUrl.password = password;
-      const deniedTable = `lbcp_denied_${randomUUID()
+      const candidateDeniedTable = `lbcp_denied_${randomUUID()
         .replaceAll("-", "")
         .slice(0, 16)}`;
       await connection.query(
-        `CREATE TABLE \`${deniedTable}\` (\`id\` BIGINT NOT NULL PRIMARY KEY) ENGINE=InnoDB`
+        `CREATE TABLE \`${candidateDeniedTable}\` (\`id\` BIGINT NOT NULL PRIMARY KEY) ENGINE=InnoDB`
       );
-      const provisioner = await mysql.createConnection(provisionerUrl.href);
-      try {
-        const [[identity]] = await provisioner.query<RowDataPacket[]>(
-          "SELECT CURRENT_USER() AS currentUser,DATABASE() AS databaseName"
-        );
-        expect(identity).toMatchObject({
-          currentUser: `${username}@%`,
-          databaseName,
-        });
-        await expect(
-          provisioner.query(`DELETE FROM \`${deniedTable}\` WHERE 1=0`)
-        ).rejects.toThrow();
-        await expect(
-          provisioner.query(`DROP TABLE \`${deniedTable}\``)
-        ).rejects.toThrow();
-      } finally {
-        await provisioner.end();
-        await connection.query(`DROP TABLE IF EXISTS \`${deniedTable}\``);
-      }
+      deniedTable = candidateDeniedTable;
+      provisioner = await mysql.createConnection(provisionerUrl.href);
+      const [[identity]] = await provisioner.query<RowDataPacket[]>(
+        "SELECT CURRENT_USER() AS currentUser,DATABASE() AS databaseName"
+      );
+      expect(identity).toMatchObject({
+        currentUser: `${username}@%`,
+        databaseName,
+      });
+      await expect(
+        provisioner.query(`DELETE FROM \`${deniedTable}\` WHERE 1=0`)
+      ).rejects.toThrow();
+      await expect(
+        provisioner.query(`DROP TABLE \`${deniedTable}\``)
+      ).rejects.toThrow();
     } finally {
-      await connection.query(`DROP USER IF EXISTS ${sql.account}`);
+      if (provisioner) {
+        await provisioner.end().catch(() => undefined);
+      }
+      try {
+        if (deniedTable) {
+          await connection.query(`DROP TABLE IF EXISTS \`${deniedTable}\``);
+        }
+      } finally {
+        await connection.query(`DROP USER IF EXISTS ${sql.account}`);
+      }
     }
   });
 
