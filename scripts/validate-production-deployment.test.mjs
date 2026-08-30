@@ -86,6 +86,9 @@ function createRepositoryFixture() {
     ".github/workflows/recover-completed-production-deployment.yml",
     ".github/workflows/reconcile-production-deployment.yml",
     "scripts/select-fresh-fly-snapshot.mjs",
+    "scripts/image-gen-credit-migration-principal-repair-contract.mjs",
+    "scripts/image-gen-credit-migration-principal-repair-contract.test.mjs",
+    "scripts/repair-image-gen-credit-migration-principal.mjs",
     "scripts/image-gen-credit-provisioner-bootstrap-contract.mjs",
     "scripts/image-gen-credit-provisioner-bootstrap-contract.test.mjs",
     "scripts/provision-image-gen-credit-provisioner.mjs",
@@ -2235,7 +2238,7 @@ describe("production deployment contract", () => {
     replaceFixtureText(
       root,
       ".github/workflows/production-uptime.yml",
-      "          body=\"$(mktemp)\"\n",
+      '          body="$(mktemp)"\n',
       '          gateway_host="leaderbot-openclaw-gateway.fly.dev"\n          body="$(mktemp)"\n',
     );
     replaceFixtureText(
@@ -3330,7 +3333,7 @@ describe("production deployment contract", () => {
     );
 
     expect(() => validateProductionRepository(root)).toThrow(
-      "must create a fresh database snapshot",
+      "must capture each old snapshot inventory before selecting each fresh result",
     );
   });
 
@@ -3633,7 +3636,7 @@ describe("production deployment contract", () => {
     );
 
     expect(() => validateProductionRepository(root)).toThrow(
-      "must inspect first and durably upload verified snapshot evidence before grant mutation or credit DDL",
+      "must snapshot and repair the exact migration role, inspect the schema, and durably upload recovery evidence before definer grants or credit DDL",
     );
   });
 
@@ -3660,7 +3663,63 @@ describe("production deployment contract", () => {
     );
 
     expect(() => validateProductionRepository(root)).toThrow(
-      "must inspect first and durably upload verified snapshot evidence before grant mutation or credit DDL",
+      "must snapshot and repair the exact migration role, inspect the schema, and durably upload recovery evidence before definer grants or credit DDL",
+    );
+  });
+
+  it("requires a fresh credential snapshot before the bounded migration-role repair", () => {
+    const root = createRepositoryFixture();
+    const relativePath = ".github/workflows/image-gen-schema-transition.yml";
+    const workflowPath = path.join(root, relativePath);
+    const workflow = fs.readFileSync(workflowPath, "utf8");
+    const snapshotStart = workflow.indexOf(
+      "      - name: Snapshot the exact pre-repair credential boundary",
+    );
+    const repairStart = workflow.indexOf(
+      "      - name: Repair and verify only the approved migration-principal rights",
+    );
+    const inspectionStart = workflow.indexOf(
+      "      - name: Inspect the exact live schema phase without changing it",
+    );
+    expect(snapshotStart).toBeGreaterThan(-1);
+    expect(repairStart).toBeGreaterThan(snapshotStart);
+    expect(inspectionStart).toBeGreaterThan(repairStart);
+    const repairStep = workflow.slice(repairStart, inspectionStart);
+    fs.writeFileSync(
+      workflowPath,
+      `${workflow.slice(0, snapshotStart)}${repairStep}${workflow.slice(snapshotStart, repairStart)}${workflow.slice(inspectionStart)}`,
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must snapshot and repair the exact migration role, inspect the schema, and durably upload recovery evidence before definer grants or credit DDL",
+    );
+  });
+
+  it("requires the migration-role repair to verify only a fixed success marker", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/image-gen-schema-transition.yml",
+      'test "$output" = "credit_migration_principal_ready"',
+      'test -n "$output"',
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must accept only the fixed successful repair marker",
+    );
+  });
+
+  it("uploads the pre-repair recovery reference before root mutation", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/image-gen-schema-transition.yml",
+      "${{ runner.temp }}/leaderbot-schema-transition/credential-boundary-snapshot.json",
+      "${{ runner.temp }}/leaderbot-schema-transition/missing.json",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must durably upload the pre-repair recovery reference before root mutation",
     );
   });
 
@@ -3674,7 +3733,7 @@ describe("production deployment contract", () => {
     );
 
     expect(() => validateProductionRepository(root)).toThrow(
-      "must select exactly one new snapshot created after this run scheduled it",
+      "must capture each old snapshot inventory before selecting each fresh result",
     );
   });
 
