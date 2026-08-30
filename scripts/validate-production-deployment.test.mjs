@@ -2595,6 +2595,20 @@ describe("production deployment contract", () => {
     );
   });
 
+  it("allows the pre-deploy billing-trigger probe gate to run only after final schema completion", () => {
+    const root = createRepositoryFixture();
+    const workflow = fs.readFileSync(
+      path.join(root, ".github/workflows/deploy-production.yml"),
+      "utf8",
+    );
+    const probeStep = workflow
+      .split("- name: Probe production billing triggers before rollout")[1]
+      ?.split("- name: Deploy reviewed image-gen config")[0];
+    expect(probeStep).toContain(
+      'if [[ "$transition_target" = "0018_credit_checkout_reservation" && "$transition_state" != "complete" ]]; then',
+    );
+  });
+
   it("requires exact cleanup of the uploaded billing-trigger probe", () => {
     const root = createRepositoryFixture();
     replaceFixtureText(

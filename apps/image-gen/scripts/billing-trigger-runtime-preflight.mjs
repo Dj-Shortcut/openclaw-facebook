@@ -2,10 +2,12 @@ import { createHash, randomUUID } from "node:crypto";
 
 import {
   assertCreditWalletRuntimeGrantScope,
+  assertProductionRuntimeGrantScope,
   creditWalletTableNames,
 } from "./production-schema-contract.mjs";
 
 const billingModes = new Set(["test", "live"]);
+const grantProfiles = new Set(["runtime", "credit-runtime"]);
 
 export class BillingTriggerRuntimePreflightError extends Error {
   constructor(stage, cause) {
@@ -42,6 +44,11 @@ export async function assertBillingTriggerRuntimePreflight(
     throw new BillingTriggerRuntimePreflightError("configuration");
   }
 
+  const grantProfile = options.grantProfile ?? "credit-runtime";
+  if (!grantProfiles.has(grantProfile)) {
+    throw new BillingTriggerRuntimePreflightError("configuration");
+  }
+
   if (options.expectedPrincipalSha256 !== undefined) {
     const expectedPrincipalSha256 = options.expectedPrincipalSha256;
     if (!/^[a-f0-9]{64}$/.test(expectedPrincipalSha256)) {
@@ -70,7 +77,11 @@ export async function assertBillingTriggerRuntimePreflight(
     }
     const [rows] = await connection.query("SHOW GRANTS FOR CURRENT_USER()");
     const grants = rows.flatMap(row => Object.values(row)).map(String);
-    assertCreditWalletRuntimeGrantScope(grants, database.databaseName);
+    if (grantProfile === "runtime") {
+      assertProductionRuntimeGrantScope(grants, database.databaseName);
+    } else {
+      assertCreditWalletRuntimeGrantScope(grants, database.databaseName);
+    }
   });
 
   await runStage("session", async () => {
@@ -245,7 +256,9 @@ export async function assertBillingTriggerRuntimePreflight(
   }
   if (operationError) throw operationError;
 
-  await assertCreditProcedureExecuteBoundary(connection);
+  if (grantProfile === "credit-runtime") {
+    await assertCreditProcedureExecuteBoundary(connection);
+  }
 }
 
 async function assertCreditTableDmlDenied(connection) {
