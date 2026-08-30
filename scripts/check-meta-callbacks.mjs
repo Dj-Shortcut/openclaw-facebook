@@ -20,11 +20,14 @@ export async function checkMetaCallbacks(options = {}) {
   const rootDir = options.rootDir ?? process.cwd();
   const appId = options.appId ?? process.env.META_APP_ID;
   const appSecret = options.appSecret ?? process.env.META_APP_SECRET;
+  const pageId = options.pageId ?? process.env.MESSENGER_PAGE_ID;
+  const pageAccessToken =
+    options.pageAccessToken ?? process.env.MESSENGER_PAGE_ACCESS_TOKEN;
   const graphVersion = options.graphVersion ?? process.env.META_GRAPH_VERSION ?? "v21.0";
   const fetchImpl = options.fetchImpl ?? fetch;
-  if (!appId || !appSecret) {
+  if (!appId || !appSecret || !pageId || !pageAccessToken) {
     throw new Error(
-      "META_APP_ID and META_APP_SECRET are required for Meta callback drift checks",
+      "META_APP_ID, META_APP_SECRET, MESSENGER_PAGE_ID, and MESSENGER_PAGE_ACCESS_TOKEN are required for Meta callback drift checks",
     );
   }
   if (!/^v\d+\.\d+$/.test(graphVersion)) {
@@ -56,10 +59,41 @@ export async function checkMetaCallbacks(options = {}) {
     );
   }
 
+  const pageBindingResponse = await fetchImpl(
+    `https://graph.facebook.com/${graphVersion}/${encodeURIComponent(pageId)}/subscribed_apps?fields=id&limit=100`,
+    {
+      headers: { Authorization: `Bearer ${pageAccessToken}` },
+      signal: options.signal ?? AbortSignal.timeout(options.timeoutMs ?? 15_000),
+    },
+  );
+  if (!pageBindingResponse.ok) {
+    const errorPayload = await pageBindingResponse.json().catch(() => undefined);
+    const code = errorPayload?.error?.code;
+    throw new Error(
+      `Meta Page binding query failed (${pageBindingResponse.status}${code ? `, code ${code}` : ""})`,
+    );
+  }
+  const pageBindingPayload = await pageBindingResponse
+    .json()
+    .catch(() => undefined);
+  if (!Array.isArray(pageBindingPayload?.data)) {
+    const code = pageBindingPayload?.error?.code;
+    throw new Error(
+      `Meta Page binding query failed (${pageBindingResponse.status}${code ? `, code ${code}` : ""})`,
+    );
+  }
+
   const subscriptions = new Map(payload.data.map((item) => [item.object, item]));
   const errors = [];
   const warnings = [];
   const callbacks = [];
+  if (
+    !pageBindingPayload.data.some(
+      (subscription) => String(subscription?.id ?? "") === String(appId),
+    )
+  ) {
+    errors.push("Page is not subscribed to the reviewed Meta app");
+  }
   for (const object of subscriptions.keys()) {
     if (!(object in manifest.meta)) {
       errors.push(`Unreviewed Meta subscription object ${object}`);

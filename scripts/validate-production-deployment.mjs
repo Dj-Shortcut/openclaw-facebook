@@ -685,10 +685,18 @@ function validateGatewayRetirementMonitor(rootDir) {
     ) ||
     !checkStep.includes("META_APP_ID: ${{ secrets.META_APP_ID }}") ||
     !checkStep.includes("META_APP_SECRET: ${{ secrets.META_APP_SECRET }}") ||
+    !checkStep.includes(
+      "MESSENGER_PAGE_ID: ${{ secrets.MESSENGER_PAGE_ID }}",
+    ) ||
+    !checkStep.includes(
+      "MESSENGER_PAGE_ACCESS_TOKEN: ${{ secrets.MESSENGER_PAGE_ACCESS_TOKEN }}",
+    ) ||
     !checkStep.includes("npm run production:drift:gateway") ||
     occurrenceCount(workflow, "FLY_PRODUCTION_READONLY_TOKEN") !== 1 ||
     occurrenceCount(workflow, "META_APP_ID") !== 3 ||
     occurrenceCount(workflow, "META_APP_SECRET") !== 3 ||
+    occurrenceCount(workflow, "MESSENGER_PAGE_ID") !== 3 ||
+    occurrenceCount(workflow, "MESSENGER_PAGE_ACCESS_TOKEN") !== 3 ||
     !workflow.includes('cron: "*/15 * * * *"')
   ) {
     fail(

@@ -75,11 +75,15 @@ jobs:
           FLY_API_TOKEN: ${{ secrets.FLY_PRODUCTION_READONLY_TOKEN }}
           META_APP_ID: ${{ secrets.META_APP_ID }}
           META_APP_SECRET: ${{ secrets.META_APP_SECRET }}
+          MESSENGER_PAGE_ID: ${{ secrets.MESSENGER_PAGE_ID }}
+          MESSENGER_PAGE_ACCESS_TOKEN: ${{ secrets.MESSENGER_PAGE_ACCESS_TOKEN }}
         run: |
           set -euo pipefail
           test -n "$FLY_API_TOKEN"
           test -n "$META_APP_ID"
           test -n "$META_APP_SECRET"
+          test -n "$MESSENGER_PAGE_ID"
+          test -n "$MESSENGER_PAGE_ACCESS_TOKEN"
           npm run production:drift:gateway
 
   healthz:

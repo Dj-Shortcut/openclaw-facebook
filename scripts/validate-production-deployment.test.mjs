@@ -429,6 +429,23 @@ function metaResponse(pageCallback, transform = (data) => data) {
   };
 }
 
+function metaCallbackFetch(
+  pageCallback,
+  transform = (data) => data,
+  pageApps = [{ id: "test-app" }],
+) {
+  return async (url) =>
+    url.includes("/subscribed_apps?")
+      ? {
+          ok: true,
+          status: 200,
+          async json() {
+            return { data: pageApps };
+          },
+        }
+      : metaResponse(pageCallback, transform);
+}
+
 function canonicalDeploymentRun(
   target,
   runId = "123",
@@ -10388,8 +10405,11 @@ describe("Meta callback contract", () => {
       rootDir: repoRoot,
       appId: "test-app",
       appSecret: "test-secret",
-      fetchImpl: async () =>
-        metaResponse("https://leaderbot-fb-image-gen.fly.dev/facebook/webhook"),
+      pageId: "test-page",
+      pageAccessToken: "test-page-token",
+      fetchImpl: metaCallbackFetch(
+        "https://leaderbot-fb-image-gen.fly.dev/facebook/webhook",
+      ),
     });
 
     expect(result.errors).toEqual([]);
@@ -10401,10 +10421,11 @@ describe("Meta callback contract", () => {
       rootDir: repoRoot,
       appId: "test-app",
       appSecret: "test-secret",
-      fetchImpl: async () =>
-        metaResponse(
-          "https://leaderbot-openclaw-gateway.fly.dev/facebook/webhook",
-        ),
+      pageId: "test-page",
+      pageAccessToken: "test-page-token",
+      fetchImpl: metaCallbackFetch(
+        "https://leaderbot-openclaw-gateway.fly.dev/facebook/webhook",
+      ),
     });
 
     expect(result.errors).toContain("page uses an unreviewed callback");
@@ -10416,10 +10437,63 @@ describe("Meta callback contract", () => {
       rootDir: repoRoot,
       appId: "test-app",
       appSecret: "test-secret",
-      fetchImpl: async () => metaResponse("https://unexpected.example/webhook"),
+      pageId: "test-page",
+      pageAccessToken: "test-page-token",
+      fetchImpl: metaCallbackFetch("https://unexpected.example/webhook"),
     });
 
     expect(result.errors).toContain("page uses an unreviewed callback");
+  });
+
+  it("fails closed when the production Page is not subscribed to the reviewed app", async () => {
+    const result = await checkMetaCallbacks({
+      rootDir: repoRoot,
+      appId: "test-app",
+      appSecret: "test-secret",
+      pageId: "test-page",
+      pageAccessToken: "test-page-token",
+      fetchImpl: metaCallbackFetch(
+        "https://leaderbot-fb-image-gen.fly.dev/facebook/webhook",
+        (data) => data,
+        [],
+      ),
+    });
+
+    expect(result.errors).toContain(
+      "Page is not subscribed to the reviewed Meta app",
+    );
+  });
+
+  it("reads both app callbacks and the Page-to-app subscription without putting tokens in URLs", async () => {
+    const requests = [];
+    const fetchMeta = metaCallbackFetch(
+      "https://leaderbot-fb-image-gen.fly.dev/facebook/webhook",
+    );
+    await checkMetaCallbacks({
+      rootDir: repoRoot,
+      appId: "test-app",
+      appSecret: "test-secret",
+      pageId: "test-page",
+      pageAccessToken: "test-page-token",
+      fetchImpl: async (url, init) => {
+        requests.push({ url, authorization: init.headers.Authorization });
+        return fetchMeta(url);
+      },
+    });
+
+    expect(requests).toEqual([
+      {
+        url: "https://graph.facebook.com/v21.0/test-app/subscriptions",
+        authorization: "Bearer test-app|test-secret",
+      },
+      {
+        url: "https://graph.facebook.com/v21.0/test-page/subscribed_apps?fields=id&limit=100",
+        authorization: "Bearer test-page-token",
+      },
+    ]);
+    expect(requests.map(({ url }) => url).join("\n")).not.toContain(
+      "test-page-token",
+    );
   });
 
   it("rejects an unreviewed subscription object", async () => {
@@ -10427,18 +10501,19 @@ describe("Meta callback contract", () => {
       rootDir: repoRoot,
       appId: "test-app",
       appSecret: "test-secret",
-      fetchImpl: async () =>
-        metaResponse(
-          "https://leaderbot-fb-image-gen.fly.dev/facebook/webhook",
-          (data) => [
-            ...data,
-            {
-              object: "instagram",
-              active: true,
-              callback_url: "https://unexpected.example/instagram",
-              fields: ["messages"],
-            },
-          ],
+      pageId: "test-page",
+      pageAccessToken: "test-page-token",
+      fetchImpl: metaCallbackFetch(
+        "https://leaderbot-fb-image-gen.fly.dev/facebook/webhook",
+        (data) => [
+          ...data,
+          {
+            object: "instagram",
+            active: true,
+            callback_url: "https://unexpected.example/instagram",
+            fields: ["messages"],
+          },
+        ],
         ),
     });
 
@@ -10452,16 +10527,17 @@ describe("Meta callback contract", () => {
       rootDir: repoRoot,
       appId: "test-app",
       appSecret: "test-secret",
-      fetchImpl: async () =>
-        metaResponse(
-          "https://leaderbot-fb-image-gen.fly.dev/facebook/webhook",
-          (data) =>
-            data.map((subscription) =>
-              subscription.object === "page"
-                ? { ...subscription, fields: [...subscription.fields, "feed"] }
-                : subscription,
-            ),
-        ),
+      pageId: "test-page",
+      pageAccessToken: "test-page-token",
+      fetchImpl: metaCallbackFetch(
+        "https://leaderbot-fb-image-gen.fly.dev/facebook/webhook",
+        (data) =>
+          data.map((subscription) =>
+            subscription.object === "page"
+              ? { ...subscription, fields: [...subscription.fields, "feed"] }
+              : subscription,
+          ),
+      ),
     });
 
     expect(result.errors).toContain("page uses unreviewed field feed");
@@ -10473,11 +10549,13 @@ describe("Meta callback contract", () => {
       rootDir: repoRoot,
       appId: "test-app",
       appSecret: "test-secret",
-      fetchImpl: async (_url, init) => {
+      pageId: "test-page",
+      pageAccessToken: "test-page-token",
+      fetchImpl: async (url, init) => {
         requestInit = init;
-        return metaResponse(
+        return metaCallbackFetch(
           "https://leaderbot-fb-image-gen.fly.dev/facebook/webhook",
-        );
+        )(url);
       },
     });
 
@@ -10490,6 +10568,8 @@ describe("Meta callback contract", () => {
         rootDir: repoRoot,
         appId: "test-app",
         appSecret: "test-secret",
+        pageId: "test-page",
+        pageAccessToken: "test-page-token",
         fetchImpl: async () => ({
           ok: false,
           status: 503,

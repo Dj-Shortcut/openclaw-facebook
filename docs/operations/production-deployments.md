@@ -96,14 +96,19 @@ these environment secrets:
 - `IMAGE_GEN_DATABASE_PROVISIONER_URL`: `127.0.0.1:13306` URL for the separate
   protected database provisioner that alone creates, grants, locks, unlocks,
   and drops reviewed MySQL principals;
-- `META_APP_ID` and `META_APP_SECRET`: used only to read and verify webhook
-  subscriptions; values are never printed.
+- `META_APP_ID` and `META_APP_SECRET`: used only to read and verify app-level
+  webhook subscriptions; values are never printed;
+- `MESSENGER_PAGE_ID` and `MESSENGER_PAGE_ACCESS_TOKEN`: used only to verify
+  that the production Page remains subscribed to the reviewed Meta app through
+  `/{page-id}/subscribed_apps`; neither values nor returned identifiers are
+  printed.
 
 Create a second environment named `production-inspection`, limited to protected
 `main`, with no reviewer or wait timer and with administrator bypass disabled.
 It contains `FLY_PRODUCTION_READONLY_TOKEN`, an expiring Fly organization
-read-only token, plus `META_APP_ID` and `META_APP_SECRET` for the scheduled
-callback inspection. The early safety gate may use Fly access only for
+read-only token, plus `META_APP_ID`, `META_APP_SECRET`, `MESSENGER_PAGE_ID`,
+and `MESSENGER_PAGE_ACCESS_TOKEN` for the scheduled callback inspection. The
+early safety gate may use Fly access only for
 metadata-only config, release, image, Machine, and scale reads, plus
 retirement-volume inventory and secret-name/status reads. It never prints secret values or
 digests and must never use logs, SSH, volume contents, secret mutation, or
