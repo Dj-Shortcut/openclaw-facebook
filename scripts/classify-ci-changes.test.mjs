@@ -17,15 +17,17 @@ describe("CI change classification", () => {
   });
 
   it("skips expensive suites for image-gen documentation-only changes", () => {
-    expect(
-      classifyCiChanges(["apps/image-gen/README.md"]),
-    ).toEqual({ imageGen: false, migration: false });
+    expect(classifyCiChanges(["apps/image-gen/README.md"])).toEqual({
+      imageGen: false,
+      migration: false,
+    });
   });
 
   it("fails safe for unclassified Markdown inside the runtime tree", () => {
-    expect(
-      classifyCiChanges(["apps/image-gen/runtime-prompt.md"]),
-    ).toEqual({ imageGen: true, migration: true });
+    expect(classifyCiChanges(["apps/image-gen/runtime-prompt.md"])).toEqual({
+      imageGen: true,
+      migration: true,
+    });
   });
 
   it("runs image checks but not database migration smoke for storage-only changes", () => {
@@ -41,6 +43,18 @@ describe("CI change classification", () => {
     expect(
       classifyCiChanges(["apps/image-gen/server/_core/messengerWebhook.ts"]),
     ).toEqual({ imageGen: true, migration: true });
+  });
+
+  it.each([
+    "scripts/image-gen-credit-provisioner-bootstrap-contract.mjs",
+    "scripts/image-gen-credit-provisioner-bootstrap-contract.test.mjs",
+    "scripts/provision-image-gen-credit-provisioner.mjs",
+    "scripts/provision-image-gen-credit-provisioner.test.mjs",
+  ])("runs image-gen and migration checks for %s", (file) => {
+    expect(classifyCiChanges([file])).toEqual({
+      imageGen: true,
+      migration: true,
+    });
   });
 
   it("fails safe when the classifier itself changes", () => {
