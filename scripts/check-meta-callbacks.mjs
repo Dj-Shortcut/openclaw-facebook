@@ -60,7 +60,7 @@ export async function checkMetaCallbacks(options = {}) {
   }
 
   const pageBindingResponse = await fetchImpl(
-    `https://graph.facebook.com/${graphVersion}/${encodeURIComponent(pageId)}/subscribed_apps?fields=id&limit=100`,
+    `https://graph.facebook.com/${graphVersion}/${encodeURIComponent(pageId)}/subscribed_apps?fields=id%2Csubscribed_fields&limit=100`,
     {
       headers: { Authorization: `Bearer ${pageAccessToken}` },
       signal: options.signal ?? AbortSignal.timeout(options.timeoutMs ?? 15_000),
@@ -87,12 +87,28 @@ export async function checkMetaCallbacks(options = {}) {
   const errors = [];
   const warnings = [];
   const callbacks = [];
-  if (
-    !pageBindingPayload.data.some(
-      (subscription) => String(subscription?.id ?? "") === String(appId),
-    )
-  ) {
+  const pageBinding = pageBindingPayload.data.find(
+    (subscription) => String(subscription?.id ?? "") === String(appId),
+  );
+  if (!pageBinding) {
     errors.push("Page is not subscribed to the reviewed Meta app");
+  } else {
+    const expectedPageFields = new Set(manifest.meta.page?.allowedFields ?? []);
+    const actualPageFields = new Set(
+      (pageBinding.subscribed_fields ?? []).map((field) =>
+        typeof field === "string" ? field : field?.name,
+      ),
+    );
+    for (const field of expectedPageFields) {
+      if (!actualPageFields.has(field)) {
+        errors.push(`Page subscription is missing required field ${field}`);
+      }
+    }
+    for (const field of actualPageFields) {
+      if (!expectedPageFields.has(field)) {
+        errors.push(`Page subscription uses unreviewed field ${field}`);
+      }
+    }
   }
   for (const object of subscriptions.keys()) {
     if (!(object in manifest.meta)) {

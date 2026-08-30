@@ -2555,6 +2555,14 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
       "must run strict exact-attempt storage-proxy post-deploy drift checks",
     ],
     ["scripts/check-meta-callbacks.mjs", "must verify Meta callbacks"],
+    [
+      "MESSENGER_PAGE_ID: ${{ secrets.MESSENGER_PAGE_ID }}",
+      "must pass the exact owner Page to Meta callback checks",
+    ],
+    [
+      "MESSENGER_PAGE_ACCESS_TOKEN: ${{ secrets.MESSENGER_PAGE_ACCESS_TOKEN }}",
+      "must pass the Page token to Meta callback checks",
+    ],
     ["rollback-image.txt", "must preserve rollback image metadata"],
     [
       "rollback-schema-phase.txt",
@@ -2792,7 +2800,25 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
       );
     }
   }
-  if (/^ {6}(?:FLY_API_TOKEN|META_APP_ID|META_APP_SECRET):/m.test(workflow)) {
+  if (
+    occurrenceCount(
+      workflow,
+      "MESSENGER_PAGE_ID: ${{ secrets.MESSENGER_PAGE_ID }}",
+    ) !== 2 ||
+    occurrenceCount(
+      workflow,
+      "MESSENGER_PAGE_ACCESS_TOKEN: ${{ secrets.MESSENGER_PAGE_ACCESS_TOKEN }}",
+    ) !== 2
+  ) {
+    fail(
+      `${PRODUCTION_WORKFLOW_PATH} must pass Page credentials to both Meta callback checks`,
+    );
+  }
+  if (
+    /^ {6}(?:FLY_API_TOKEN|META_APP_ID|META_APP_SECRET|MESSENGER_PAGE_ID|MESSENGER_PAGE_ACCESS_TOKEN):/m.test(
+      workflow,
+    )
+  ) {
     fail(
       `${PRODUCTION_WORKFLOW_PATH} must scope production secrets to only the steps that use them`,
     );

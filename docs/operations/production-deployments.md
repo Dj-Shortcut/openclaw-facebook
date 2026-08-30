@@ -100,8 +100,8 @@ these environment secrets:
   webhook subscriptions; values are never printed;
 - `MESSENGER_PAGE_ID` and `MESSENGER_PAGE_ACCESS_TOKEN`: used only to verify
   that the production Page remains subscribed to the reviewed Meta app through
-  `/{page-id}/subscribed_apps`; neither values nor returned identifiers are
-  printed.
+  `/{page-id}/subscribed_apps` with the exact reviewed Page-level fields;
+  neither values nor returned identifiers are printed.
 
 Create a second environment named `production-inspection`, limited to protected
 `main`, with no reviewer or wait timer and with administrator bypass disabled.

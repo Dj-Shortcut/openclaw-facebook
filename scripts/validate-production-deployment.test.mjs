@@ -432,7 +432,17 @@ function metaResponse(pageCallback, transform = (data) => data) {
 function metaCallbackFetch(
   pageCallback,
   transform = (data) => data,
-  pageApps = [{ id: "test-app" }],
+  pageApps = [
+    {
+      id: "test-app",
+      subscribed_fields: [
+        "messages",
+        "messaging_postbacks",
+        "message_deliveries",
+        "message_reads",
+      ],
+    },
+  ],
 ) {
   return async (url) =>
     url.includes("/subscribed_apps?")
@@ -10464,6 +10474,64 @@ describe("Meta callback contract", () => {
     );
   });
 
+  it("fails closed when the Page subscription is missing a required field", async () => {
+    const result = await checkMetaCallbacks({
+      rootDir: repoRoot,
+      appId: "test-app",
+      appSecret: "test-secret",
+      pageId: "test-page",
+      pageAccessToken: "test-page-token",
+      fetchImpl: metaCallbackFetch(
+        "https://leaderbot-fb-image-gen.fly.dev/facebook/webhook",
+        (data) => data,
+        [
+          {
+            id: "test-app",
+            subscribed_fields: [
+              "messages",
+              "messaging_postbacks",
+              "message_deliveries",
+            ],
+          },
+        ],
+      ),
+    });
+
+    expect(result.errors).toContain(
+      "Page subscription is missing required field message_reads",
+    );
+  });
+
+  it("fails closed when the Page subscription contains an unreviewed field", async () => {
+    const result = await checkMetaCallbacks({
+      rootDir: repoRoot,
+      appId: "test-app",
+      appSecret: "test-secret",
+      pageId: "test-page",
+      pageAccessToken: "test-page-token",
+      fetchImpl: metaCallbackFetch(
+        "https://leaderbot-fb-image-gen.fly.dev/facebook/webhook",
+        (data) => data,
+        [
+          {
+            id: "test-app",
+            subscribed_fields: [
+              "messages",
+              "messaging_postbacks",
+              "message_deliveries",
+              "message_reads",
+              "feed",
+            ],
+          },
+        ],
+      ),
+    });
+
+    expect(result.errors).toContain(
+      "Page subscription uses unreviewed field feed",
+    );
+  });
+
   it("reads both app callbacks and the Page-to-app subscription without putting tokens in URLs", async () => {
     const requests = [];
     const fetchMeta = metaCallbackFetch(
@@ -10487,7 +10555,7 @@ describe("Meta callback contract", () => {
         authorization: "Bearer test-app|test-secret",
       },
       {
-        url: "https://graph.facebook.com/v21.0/test-page/subscribed_apps?fields=id&limit=100",
+        url: "https://graph.facebook.com/v21.0/test-page/subscribed_apps?fields=id%2Csubscribed_fields&limit=100",
         authorization: "Bearer test-page-token",
       },
     ]);
