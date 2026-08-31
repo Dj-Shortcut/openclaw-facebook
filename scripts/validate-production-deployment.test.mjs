@@ -3838,6 +3838,34 @@ describe("production deployment contract", () => {
     );
   });
 
+  it("requires the migration-role repair to select the explicit prepare operation", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/image-gen-schema-transition.yml",
+      "--operation prepare",
+      "--operation revoke-super",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must explicitly select the bounded migration-role preparation",
+    );
+  });
+
+  it("requires fail-closed temporary SUPER cleanup after migration", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/image-gen-schema-transition.yml",
+      "credit_migration_principal_super_revoked",
+      "credit_migration_principal_ready",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must accept only the fixed successful SUPER cleanup marker",
+    );
+  });
+
   it("keeps database snapshot authority out of the private root session", () => {
     const root = createRepositoryFixture();
     replaceFixtureText(

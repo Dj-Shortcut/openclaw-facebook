@@ -755,6 +755,7 @@ export const productionDatabasePrivilegeProfiles = Object.freeze([
   "expand",
   "credit-expand-pregrant",
   "credit-expand",
+  "credit-expand-postddl",
   "bootstrap",
   "credit-bootstrap",
   "phase-bound-runtime",

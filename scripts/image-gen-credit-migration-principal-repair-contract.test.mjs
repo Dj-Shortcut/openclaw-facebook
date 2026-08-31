@@ -4,15 +4,20 @@ import {
   CREDIT_MIGRATION_PRINCIPAL_CLEANUP_FAILURE_MARKER,
   CREDIT_MIGRATION_PRINCIPAL_FAILURE_MARKER,
   CREDIT_MIGRATION_PRINCIPAL_READY_MARKER,
+  CREDIT_MIGRATION_PRINCIPAL_SUPER_REVOKED_MARKER,
   CreditMigrationPrincipalCleanupError,
   buildCreditMigrationPrivilegeStatement,
+  buildCreditMigrationPrivilegeStatements,
   detectMissingCreditMigrationPrivileges,
+  hasCreditMigrationGlobalSuper,
   parseCreditMigrationAccount,
   repairCreditMigrationPrincipal,
+  revokeTemporaryCreditMigrationSuper,
 } from "./image-gen-credit-migration-principal-repair-contract.mjs";
 import {
   classifyCreditMigrationHistory,
   executeRepair,
+  executeSuperCleanup,
   parseCliArguments,
   runCli,
 } from "./repair-image-gen-credit-migration-principal.mjs";
@@ -26,18 +31,28 @@ const BASE_GRANTS = Object.freeze([
   "GRANT CREATE, DELETE ON `leaderbot`.`credit_wallets` TO `credit_migrator`@`%`",
 ]);
 
-function migrationState(grants = BASE_GRANTS) {
+const COMPLETE_SCHEMA_GRANT =
+  "GRANT CREATE, TRIGGER, CREATE ROUTINE, ALTER ROUTINE ON `leaderbot`.* TO `credit_migrator`@`%`";
+const SUPER_GRANT = "GRANT SUPER ON *.* TO `credit_migrator`@`%`";
+
+function migrationState(grants = BASE_GRANTS, requireSuper = false) {
   return {
     account: ACCOUNT,
     databaseName: DATABASE,
     grants: [...grants],
-    requireSuper: false,
+    requireSuper,
   };
 }
 
-function rootHarness({ failGrantAfterApply = false, failRevoke = false } = {}) {
+function rootHarness({
+  failGrantAfterApply = false,
+  failGrantAfterApplyAt,
+  failRevoke = false,
+  requireSuper = false,
+} = {}) {
   const statements = [];
-  let state = migrationState();
+  let state = migrationState(BASE_GRANTS, requireSuper);
+  let appliedGrantCount = 0;
   const root = {
     execute: vi.fn(async (statement) => {
       statements.push(statement);
@@ -46,16 +61,31 @@ function rootHarness({ failGrantAfterApply = false, failRevoke = false } = {}) {
       if (statement.startsWith("SELECT IS_USED_LOCK")) return ["1"];
       if (statement.startsWith("SELECT RELEASE_LOCK")) return ["1"];
       if (statement.startsWith("GRANT ")) {
-        state = migrationState([
-          ...BASE_GRANTS,
-          "GRANT CREATE, TRIGGER, CREATE ROUTINE, ALTER ROUTINE ON `leaderbot`.* TO `credit_migrator`@`%`",
-        ]);
-        if (failGrantAfterApply) throw new Error("synthetic transport loss");
+        const grants = [...state.grants];
+        if (statement.includes(" ON *.* ")) grants.push(SUPER_GRANT);
+        else grants.push(COMPLETE_SCHEMA_GRANT);
+        state = migrationState([...new Set(grants)], requireSuper);
+        appliedGrantCount += 1;
+        if (
+          (failGrantAfterApply && appliedGrantCount === 1) ||
+          appliedGrantCount === failGrantAfterApplyAt
+        ) {
+          throw new Error("synthetic transport loss");
+        }
       }
       if (statement.startsWith("REVOKE") && failRevoke) {
         throw new Error("synthetic");
       }
-      if (statement.startsWith("REVOKE")) state = migrationState();
+      if (statement.startsWith("REVOKE")) {
+        state = migrationState(
+          state.grants.filter((grant) =>
+            statement.includes(" ON *.* ")
+              ? grant !== SUPER_GRANT
+              : grant !== COMPLETE_SCHEMA_GRANT,
+          ),
+          requireSuper,
+        );
+      }
       return [];
     }),
     initialize: vi.fn(async () => undefined),
@@ -95,6 +125,33 @@ describe("credit migration principal repair contract", () => {
     ).toThrow();
   });
 
+  it("detects conditional global SUPER only when binary logging requires it", () => {
+    expect(
+      detectMissingCreditMigrationPrivileges({
+        databaseName: DATABASE,
+        grants: BASE_GRANTS,
+        requireSuper: true,
+      }),
+    ).toEqual([
+      "CREATE",
+      "TRIGGER",
+      "CREATE ROUTINE",
+      "ALTER ROUTINE",
+      "SUPER",
+    ]);
+    expect(
+      detectMissingCreditMigrationPrivileges({
+        databaseName: DATABASE,
+        grants: [...BASE_GRANTS, COMPLETE_SCHEMA_GRANT, SUPER_GRANT],
+        requireSuper: true,
+      }),
+    ).toEqual([]);
+    expect(hasCreditMigrationGlobalSuper([...BASE_GRANTS, SUPER_GRANT])).toBe(
+      true,
+    );
+    expect(hasCreditMigrationGlobalSuper(BASE_GRANTS)).toBe(false);
+  });
+
   it("treats an already complete exact boundary as idempotent", () => {
     expect(
       detectMissingCreditMigrationPrivileges({
@@ -130,6 +187,95 @@ describe("credit migration principal repair contract", () => {
     ).toBe(
       "REVOKE TRIGGER, ALTER ROUTINE ON `leaderbot`.* FROM 'credit_migrator'@'%'",
     );
+    expect(
+      buildCreditMigrationPrivilegeStatements({
+        account: ACCOUNT,
+        databaseName: DATABASE,
+        operation: "grant",
+        privileges: [...privileges, "SUPER"],
+      }),
+    ).toEqual([
+      "GRANT CREATE, TRIGGER, CREATE ROUTINE, ALTER ROUTINE ON `leaderbot`.* TO 'credit_migrator'@'%'",
+      "GRANT SUPER ON *.* TO 'credit_migrator'@'%'",
+    ]);
+    expect(
+      buildCreditMigrationPrivilegeStatements({
+        account: ACCOUNT,
+        databaseName: DATABASE,
+        operation: "revoke",
+        privileges: [...privileges, "SUPER"],
+      }),
+    ).toEqual([
+      "REVOKE SUPER ON *.* FROM 'credit_migrator'@'%'",
+      "REVOKE CREATE, TRIGGER, CREATE ROUTINE, ALTER ROUTINE ON `leaderbot`.* FROM 'credit_migrator'@'%'",
+    ]);
+  });
+
+  it("grants conditional SUPER last and revokes it after failed verification", async () => {
+    const { readState, root, statements } = rootHarness({
+      requireSuper: true,
+    });
+    const verifyRollback = vi.fn(async () => undefined);
+    await expect(
+      repairCreditMigrationPrincipal({
+        account: ACCOUNT,
+        databaseName: DATABASE,
+        requireSuper: true,
+        readState,
+        recoverRoot: vi.fn(async () => root),
+        root,
+        verify: async () => {
+          throw new Error("synthetic verification failure");
+        },
+        verifyRollback,
+      }),
+    ).rejects.toThrow("synthetic verification failure");
+    expect(statements).toContain("GRANT SUPER ON *.* TO 'credit_migrator'@'%'");
+    expect(statements).toContain(
+      "REVOKE SUPER ON *.* FROM 'credit_migrator'@'%'",
+    );
+    expect(verifyRollback).toHaveBeenCalledWith([
+      "CREATE",
+      "TRIGGER",
+      "CREATE ROUTINE",
+      "ALTER ROUTINE",
+      "SUPER",
+    ]);
+  });
+
+  it("revokes both deltas when SUPER commits before its transport fails", async () => {
+    const { readState, root, statements } = rootHarness({
+      failGrantAfterApplyAt: 2,
+      requireSuper: true,
+    });
+    const verifyRollback = vi.fn(async () => undefined);
+    await expect(
+      repairCreditMigrationPrincipal({
+        account: ACCOUNT,
+        databaseName: DATABASE,
+        requireSuper: true,
+        readState,
+        recoverRoot: vi.fn(async () => root),
+        root,
+        verify: vi.fn(),
+        verifyRollback,
+      }),
+    ).rejects.toThrow("synthetic transport loss");
+    const superRevoke = statements.indexOf(
+      "REVOKE SUPER ON *.* FROM 'credit_migrator'@'%'",
+    );
+    const schemaRevoke = statements.indexOf(
+      "REVOKE CREATE, TRIGGER, CREATE ROUTINE, ALTER ROUTINE ON `leaderbot`.* FROM 'credit_migrator'@'%'",
+    );
+    expect(superRevoke).toBeGreaterThan(-1);
+    expect(schemaRevoke).toBeGreaterThan(superRevoke);
+    expect(verifyRollback).toHaveBeenCalledWith([
+      "CREATE",
+      "TRIGGER",
+      "CREATE ROUTINE",
+      "ALTER ROUTINE",
+      "SUPER",
+    ]);
   });
 
   it("grants, verifies, and releases the private lock", async () => {
@@ -306,7 +452,88 @@ describe("credit migration principal repair contract", () => {
   });
 });
 
+describe("temporary migration SUPER cleanup", () => {
+  it("revokes SUPER under the private lock and verifies it is absent", async () => {
+    const { readState, root, statements } = rootHarness({ requireSuper: true });
+    await root.execute(
+      "GRANT CREATE, TRIGGER, CREATE ROUTINE, ALTER ROUTINE ON `leaderbot`.* TO 'credit_migrator'@'%'",
+    );
+    await root.execute("GRANT SUPER ON *.* TO 'credit_migrator'@'%'");
+    statements.length = 0;
+    const verify = vi.fn(async () => undefined);
+    await expect(
+      revokeTemporaryCreditMigrationSuper({
+        account: ACCOUNT,
+        databaseName: DATABASE,
+        readState,
+        recoverRoot: vi.fn(async () => root),
+        root,
+        verify,
+      }),
+    ).resolves.toBe("revoked");
+    expect(statements).toContain(
+      "REVOKE SUPER ON *.* FROM 'credit_migrator'@'%'",
+    );
+    expect(verify).toHaveBeenCalledOnce();
+    expect(hasCreditMigrationGlobalSuper((await readState()).grants)).toBe(
+      false,
+    );
+  });
+
+  it("is idempotent when SUPER is already absent", async () => {
+    const { readState, root, statements } = rootHarness({ requireSuper: true });
+    const verify = vi.fn(async () => undefined);
+    await expect(
+      revokeTemporaryCreditMigrationSuper({
+        account: ACCOUNT,
+        databaseName: DATABASE,
+        readState,
+        recoverRoot: vi.fn(async () => root),
+        root,
+        verify,
+      }),
+    ).resolves.toBe("already_revoked");
+    expect(statements.some((statement) => statement.startsWith("REVOKE"))).toBe(
+      false,
+    );
+    expect(verify).toHaveBeenCalledOnce();
+  });
+});
+
 describe("credit migration principal repair resumability", () => {
+  it("revokes temporary SUPER through the isolated cleanup command", async () => {
+    const connection = { end: vi.fn(async () => undefined) };
+    const { readState, root } = rootHarness({ requireSuper: true });
+    await root.execute(
+      "GRANT CREATE, TRIGGER, CREATE ROUTINE, ALTER ROUTINE ON `leaderbot`.* TO 'credit_migrator'@'%'",
+    );
+    await root.execute("GRANT SUPER ON *.* TO 'credit_migrator'@'%'");
+    await expect(
+      executeSuperCleanup(
+        {
+          app: "leaderbot-portal-mysql",
+          machineId: "080d3ddb5099e8",
+          operation: "revoke-super",
+        },
+        {
+          migrationUrl:
+            "mysql://credit_migrator:secret@127.0.0.1:13306/leaderbot",
+          mysql: {
+            createConnection: vi.fn(async () => connection),
+          },
+          openRoot: vi.fn(async () => root),
+          readPhase: vi.fn(async () => "0018_credit_checkout_reservation"),
+          readState,
+          signal: new AbortController().signal,
+        },
+      ),
+    ).resolves.toBe("revoked");
+    expect(hasCreditMigrationGlobalSuper((await readState()).grants)).toBe(
+      false,
+    );
+    expect(connection.end).toHaveBeenCalledOnce();
+  });
+
   it("preserves cleanup-incomplete when closing the migration connection also fails", async () => {
     const connection = {
       end: vi.fn(async () => {
@@ -372,7 +599,10 @@ describe("credit migration principal repair resumability", () => {
         ),
       ).resolves.toBe("already_ready");
       expect(openRoot).not.toHaveBeenCalled();
-      expect(verifyRuntime).toHaveBeenCalledWith(connection, "credit-expand");
+      expect(verifyRuntime).toHaveBeenCalledWith(
+        connection,
+        "credit-expand-postddl",
+      );
       expect(connection.end).toHaveBeenCalledOnce();
     },
   );
@@ -401,10 +631,13 @@ describe("credit migration principal repair CLI", () => {
         "leaderbot-portal-mysql",
         "--database-machine-id",
         "080d3ddb5099e8",
+        "--operation",
+        "prepare",
       ]),
     ).toEqual({
       app: "leaderbot-portal-mysql",
       machineId: "080d3ddb5099e8",
+      operation: "prepare",
     });
     expect(() =>
       parseCliArguments([
@@ -412,6 +645,8 @@ describe("credit migration principal repair CLI", () => {
         "other",
         "--database-machine-id",
         "080d3ddb5099e8",
+        "--operation",
+        "prepare",
       ]),
     ).toThrow();
   });
@@ -425,6 +660,8 @@ describe("credit migration principal repair CLI", () => {
           "leaderbot-portal-mysql",
           "--database-machine-id",
           "080d3ddb5099e8",
+          "--operation",
+          "prepare",
         ],
         { execute: vi.fn(async () => "repaired") },
       ),
@@ -451,6 +688,8 @@ describe("credit migration principal repair CLI", () => {
           "leaderbot-portal-mysql",
           "--database-machine-id",
           "080d3ddb5099e8",
+          "--operation",
+          "prepare",
         ],
         {
           execute: vi.fn(async () => {
@@ -461,6 +700,27 @@ describe("credit migration principal repair CLI", () => {
     ).resolves.toBe(CREDIT_MIGRATION_PRINCIPAL_CLEANUP_FAILURE_MARKER);
     expect(output).toHaveBeenLastCalledWith(
       `${CREDIT_MIGRATION_PRINCIPAL_CLEANUP_FAILURE_MARKER}\n`,
+    );
+    output.mockRestore();
+  });
+
+  it("prints the fixed marker after temporary SUPER cleanup", async () => {
+    const output = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+    await expect(
+      runCli(
+        [
+          "--database-app",
+          "leaderbot-portal-mysql",
+          "--database-machine-id",
+          "080d3ddb5099e8",
+          "--operation",
+          "revoke-super",
+        ],
+        { cleanup: vi.fn(async () => "revoked") },
+      ),
+    ).resolves.toBe(CREDIT_MIGRATION_PRINCIPAL_SUPER_REVOKED_MARKER);
+    expect(output).toHaveBeenLastCalledWith(
+      `${CREDIT_MIGRATION_PRINCIPAL_SUPER_REVOKED_MARKER}\n`,
     );
     output.mockRestore();
   });

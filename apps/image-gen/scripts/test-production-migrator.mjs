@@ -2141,6 +2141,10 @@ function testStagedRolloutContracts() {
     productionDatabasePrivilegeProfiles.includes("credit-expand-pregrant"),
     "credit pregrant inspection is an executable migration privilege profile"
   );
+  assert(
+    productionDatabasePrivilegeProfiles.includes("credit-expand-postddl"),
+    "credit post-DDL inspection rejects retained temporary SUPER"
+  );
   for (const phase of [
     "0016_expand",
     "0017_credit_wallet_expand",

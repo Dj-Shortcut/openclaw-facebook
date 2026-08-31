@@ -325,6 +325,7 @@ jobs:
             sleep 1
           done
           node -e 'const n=require("node:net");const s=n.createConnection(13306,"127.0.0.1",()=>{s.destroy();process.exit(0)});s.setTimeout(1000,()=>{s.destroy();process.exit(1)});s.on("error",()=>process.exit(1))'
+          echo "DATABASE_MIGRATION_TUNNEL_STARTED=true" >> "$GITHUB_ENV"
 
       - name: Snapshot the exact pre-repair credential boundary
         timeout-minutes: 15
@@ -396,7 +397,8 @@ jobs:
           set +e
           output="$(node scripts/repair-image-gen-credit-migration-principal.mjs \
             --database-app "$db_app" \
-            --database-machine-id "$DATABASE_MACHINE_ID")"
+            --database-machine-id "$DATABASE_MACHINE_ID" \
+            --operation prepare)"
           repair_status="$?"
           set -e
           if [[ "$repair_status" -eq 0 && "$output" = "credit_migration_principal_ready" ]]; then
@@ -790,6 +792,35 @@ jobs:
             --env "DATABASE_URL=$DATABASE_MIGRATION_URL" \
             --env LEADERBOT_PRODUCTION_MIGRATION_MODE=verify-credit-wallet-transition \
             "$BRIDGE_IMAGE" node dist/migrate-production.cjs
+
+      - name: Revoke temporary migration SUPER privilege
+        if: always() && env.DATABASE_MIGRATION_TUNNEL_STARTED == 'true'
+        timeout-minutes: 8
+        env:
+          DATABASE_MIGRATION_URL: ${{ secrets.IMAGE_GEN_DATABASE_MIGRATION_URL }}
+          FLY_API_TOKEN: ${{ secrets.FLY_DATABASE_REPAIR_EXEC_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$DATABASE_MIGRATION_URL"
+          test -n "$FLY_API_TOKEN"
+          echo "::add-mask::$DATABASE_MIGRATION_URL"
+          proxy_pid="$(cat "$RUNNER_TEMP/leaderbot-schema-transition/proxy.pid")"
+          [[ "$proxy_pid" =~ ^[0-9]+$ ]]
+          kill -0 "$proxy_pid"
+          node -e 'const n=require("node:net");const s=n.createConnection(13306,"127.0.0.1",()=>{s.destroy();process.exit(0)});s.setTimeout(1000,()=>{s.destroy();process.exit(1)});s.on("error",()=>process.exit(1))'
+          db_app="$(jq -er '.apps["image-gen"].databaseRecovery.app' deploy/production/apps.json)"
+          set +e
+          output="$(node scripts/repair-image-gen-credit-migration-principal.mjs \
+            --database-app "$db_app" \
+            --database-machine-id "$DATABASE_MACHINE_ID" \
+            --operation revoke-super)"
+          cleanup_status="$?"
+          set -e
+          if [[ "$cleanup_status" -eq 0 && "$output" = "credit_migration_principal_super_revoked" ]]; then
+            exit 0
+          fi
+          printf '%s\n' "credit_migration_principal_repair_cleanup_incomplete"
+          exit 1
 
       - name: Record metadata-only successful transition
         run: |

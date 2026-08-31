@@ -228,20 +228,28 @@ Before that first inspection, the protected transition creates a fresh
 encrypted volume snapshot and uploads its metadata before any repair. This is
 a recovery reference, not restore proof; the later independently restored and
 verified snapshot remains the DDL rollback gate. It then runs the fixed-output
-migration-role repair. That repair accepts only an otherwise exact migration role missing a
-subset of `CREATE`, `TRIGGER`, `CREATE ROUTINE`, and `ALTER ROUTINE`; it uses the
-root credential only inside the exact reviewed database Machine, never exports
-the credential or account identity, and grants only the missing subset. It
-immediately runs the strict `credit-expand` inspection. A failed verification
-re-reads the effective grants even when transport failed after MySQL may have
-committed, reconnects under a fresh repair lock when the root transport was
-lost, revokes only rights proven to have been added by that attempt, and
-verifies the rollback; an incomplete rollback stops with a distinct fixed
-marker. The mutation decision is made only after the repair lock is held. An
+migration-role repair. That repair accepts only an otherwise exact migration
+role missing a subset of `CREATE`, `TRIGGER`, `CREATE ROUTINE`, and `ALTER
+ROUTINE`, plus conditional global `SUPER` only when the inspected binary-log
+settings require it. It uses the root credential only inside the exact reviewed
+database Machine, never exports the credential or account identity, grants the
+schema subset first, and grants `SUPER` last. It immediately runs the strict
+`credit-expand` inspection. A failed verification re-reads the effective grants
+even when transport failed after MySQL may have committed, reconnects under a
+fresh repair lock when the root transport was lost, revokes `SUPER` before any
+schema rights proven to have been added by that attempt, and verifies the
+rollback; an incomplete rollback stops with a distinct fixed marker. The
+mutation decision is made only after the repair lock is held. An
 already-correct role is a no-op. A resumed exact 0017 or 0018 history is
-verification-only and never opens the root mutation path. The normal schema
-transition remains reviewer-gated and no credit DDL runs before this repair and
-inspection succeed.
+verification-only and never opens the root preparation path; its post-DDL
+inspection requires the exact migration grants but explicitly rejects retained
+`SUPER`. After either a successful or failed DDL attempt, an `always` cleanup
+reopens only the same reviewed root command, revokes `SUPER`, and verifies that
+it is absent before success evidence is recorded or the isolated tunnel is
+stopped. Cleanup failure is terminal and emits only the fixed
+cleanup-incomplete marker. The normal
+schema transition remains reviewer-gated and no credit DDL runs before this
+repair and inspection succeed.
 
 The protected workflow then performs the non-mutating migration-principal and
 schema-phase inspection, creates, restores, validates, and durably uploads the

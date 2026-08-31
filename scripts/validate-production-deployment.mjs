@@ -4559,6 +4559,10 @@ function validateSchemaTransitionWorkflow(rootDir) {
       "must call the reviewed fixed-output repair runner",
     ],
     [
+      "--operation prepare",
+      "must explicitly select the bounded migration-role preparation",
+    ],
+    [
       '[[ "$repair_status" -eq 0 && "$output" = "credit_migration_principal_ready" ]]',
       "must accept only the fixed successful repair marker",
     ],
@@ -4588,6 +4592,68 @@ function validateSchemaTransitionWorkflow(rootDir) {
         `${SCHEMA_TRANSITION_WORKFLOW_PATH} must verify the live tunnel and surface only fixed migration-repair outcomes`,
       );
     }
+  }
+  const [migrationSuperCleanupStep] = namedWorkflowStepBodies(
+    workflow,
+    "Revoke temporary migration SUPER privilege",
+  );
+  for (const [required, message] of [
+    [
+      "if: always() && env.DATABASE_MIGRATION_TUNNEL_STARTED == 'true'",
+      "must revoke temporary SUPER after both successful and failed migration attempts",
+    ],
+    [
+      "secrets.FLY_DATABASE_REPAIR_EXEC_TOKEN",
+      "must use only the short-lived Machine-exec token for SUPER cleanup",
+    ],
+    [
+      "--operation revoke-super",
+      "must invoke the reviewed SUPER cleanup operation",
+    ],
+    [
+      '[[ "$cleanup_status" -eq 0 && "$output" = "credit_migration_principal_super_revoked" ]]',
+      "must accept only the fixed successful SUPER cleanup marker",
+    ],
+    [
+      "credit_migration_principal_repair_cleanup_incomplete",
+      "must fail closed with the fixed cleanup-incomplete marker",
+    ],
+    ['kill -0 "$proxy_pid"', "must revalidate the isolated tunnel before cleanup"],
+  ]) {
+    if (!migrationSuperCleanupStep?.includes(required)) {
+      fail(`${SCHEMA_TRANSITION_WORKFLOW_PATH} ${message}`);
+    }
+  }
+  if (
+    migrationSuperCleanupStep?.includes(
+      "secrets.FLY_DATABASE_MIGRATION_TOKEN",
+    )
+  ) {
+    fail(
+      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must not expose snapshot authority to SUPER cleanup`,
+    );
+  }
+  const exactCreditVerificationIndex = workflow.indexOf(
+    "Verify the exact 0018 credit schema",
+  );
+  const migrationSuperCleanupIndex = workflow.indexOf(
+    "Revoke temporary migration SUPER privilege",
+  );
+  const transitionResultIndex = workflow.indexOf(
+    "Record metadata-only successful transition",
+  );
+  const tunnelStopIndex = workflow.indexOf(
+    "Stop isolated database migration tunnel",
+  );
+  if (
+    exactCreditVerificationIndex < 0 ||
+    migrationSuperCleanupIndex <= exactCreditVerificationIndex ||
+    transitionResultIndex <= migrationSuperCleanupIndex ||
+    tunnelStopIndex <= migrationSuperCleanupIndex
+  ) {
+    fail(
+      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must revoke temporary SUPER after schema verification and before success evidence or tunnel shutdown`,
+    );
   }
   const probeStepIndex = workflow.indexOf(
     "Prove the restored MySQL copy and remote command exit status",
@@ -5188,8 +5254,8 @@ function validateCreditMigrationPrincipalRepair(rootDir) {
   );
   for (const [required, message] of [
     [
-      '"CREATE",\n  "TRIGGER",\n  "CREATE ROUTINE",\n  "ALTER ROUTINE"',
-      "must limit repair to the exact four reviewed schema privileges",
+      '"CREATE",\n  "TRIGGER",\n  "CREATE ROUTINE",\n  "ALTER ROUTINE",\n  "SUPER"',
+      "must limit repair to the exact four reviewed schema privileges plus conditional SUPER",
     ],
     [
       "detectMissingCreditMigrationPrivileges",
@@ -5223,6 +5289,14 @@ function validateCreditMigrationPrincipalRepair(rootDir) {
       "CreditMigrationPrincipalCleanupError",
       "must distinguish an incomplete rollback from a clean refusal",
     ],
+    [
+      "revokeTemporaryCreditMigrationSuper",
+      "must provide an idempotent fail-closed temporary SUPER cleanup",
+    ],
+    [
+      'privileges: ["SUPER"]',
+      "must revoke only temporary global SUPER during terminal cleanup",
+    ],
   ]) {
     if (!contract.includes(required)) {
       fail(`${CREDIT_MIGRATION_PRINCIPAL_REPAIR_CONTRACT_PATH} ${message}`);
@@ -5247,8 +5321,8 @@ function validateCreditMigrationPrincipalRepair(rootDir) {
       "must keep completed 0017 and 0018 histories verification-only",
     ],
     [
-      'verifyRuntime(connection, "credit-expand")',
-      "must strictly verify the complete migration boundary after repair",
+      'postDdl ? "credit-expand-postddl" : "credit-expand"',
+      "must strictly verify the complete migration boundary without retaining post-DDL SUPER",
     ],
     [
       "new RootMysqlSession",
@@ -5261,6 +5335,10 @@ function validateCreditMigrationPrincipalRepair(rootDir) {
     [
       "CREDIT_MIGRATION_PRINCIPAL_CLEANUP_FAILURE_MARKER",
       "must preserve the fixed cleanup-incomplete result",
+    ],
+    [
+      "executeSuperCleanup",
+      "must expose only the reviewed temporary SUPER cleanup operation",
     ],
   ]) {
     if (!runner.includes(required)) {
