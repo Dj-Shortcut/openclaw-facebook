@@ -3894,6 +3894,32 @@ describe("production deployment contract", () => {
     );
   });
 
+  it("requires a live TCP database probe immediately before migration-role repair", () => {
+    const root = createRepositoryFixture();
+    const relativePath = ".github/workflows/image-gen-schema-transition.yml";
+    const workflowPath = path.join(root, relativePath);
+    const workflow = fs.readFileSync(workflowPath, "utf8");
+    const repairStart = workflow.indexOf(
+      "      - name: Repair and verify only the approved migration-principal rights",
+    );
+    const repairEnd = workflow.indexOf(
+      "      - name: Inspect the exact live schema phase without changing it",
+      repairStart,
+    );
+    const repairStep = workflow.slice(repairStart, repairEnd).replace(
+      'n.createConnection(13306,"127.0.0.1"',
+      'n.createConnection(13307,"127.0.0.1"',
+    );
+    fs.writeFileSync(
+      workflowPath,
+      `${workflow.slice(0, repairStart)}${repairStep}${workflow.slice(repairEnd)}`,
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must verify the live tunnel and surface only fixed migration-repair outcomes",
+    );
+  });
+
   it("uploads the pre-repair recovery reference before root mutation", () => {
     const root = createRepositoryFixture();
     replaceFixtureText(

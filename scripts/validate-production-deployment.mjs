@@ -4582,6 +4582,7 @@ function validateSchemaTransitionWorkflow(rootDir) {
   }
   for (const required of [
     'kill -0 "$proxy_pid"',
+    'n.createConnection(13306,"127.0.0.1"',
     'repair_status="$?"',
     "credit_migration_principal_repair_failed",
     "credit_migration_principal_repair_cleanup_incomplete",
@@ -4619,6 +4620,10 @@ function validateSchemaTransitionWorkflow(rootDir) {
       "must fail closed with the fixed cleanup-incomplete marker",
     ],
     ['kill -0 "$proxy_pid"', "must revalidate the isolated tunnel before cleanup"],
+    [
+      'n.createConnection(13306,"127.0.0.1"',
+      "must revalidate database connectivity before cleanup",
+    ],
   ]) {
     if (!migrationSuperCleanupStep?.includes(required)) {
       fail(`${SCHEMA_TRANSITION_WORKFLOW_PATH} ${message}`);
