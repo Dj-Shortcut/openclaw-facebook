@@ -3829,12 +3829,40 @@ describe("production deployment contract", () => {
     replaceFixtureText(
       root,
       ".github/workflows/image-gen-schema-transition.yml",
-      'test "$output" = "credit_migration_principal_ready"',
-      'test -n "$output"',
+      '[[ "$repair_status" -eq 0 && "$output" = "credit_migration_principal_ready" ]]',
+      '[[ "$repair_status" -eq 0 && -n "$output" ]]',
     );
 
     expect(() => validateProductionRepository(root)).toThrow(
       "must accept only the fixed successful repair marker",
+    );
+  });
+
+  it("keeps database snapshot authority out of the private root session", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/image-gen-schema-transition.yml",
+      "secrets.FLY_DATABASE_REPAIR_EXEC_TOKEN",
+      "secrets.FLY_DATABASE_MIGRATION_TOKEN",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      /short-lived Machine-exec token|must not expose the snapshot and tunnel token/,
+    );
+  });
+
+  it("requires fixed-output failure handling for migration-role repair", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/image-gen-schema-transition.yml",
+      "credit_migration_principal_repair_cleanup_incomplete",
+      "credit_migration_principal_repair_failed_again",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must verify the live tunnel and surface only fixed migration-repair outcomes",
     );
   });
 

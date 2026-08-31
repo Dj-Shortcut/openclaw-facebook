@@ -86,11 +86,14 @@ these environment secrets:
 - `FLY_IMAGE_GEN_DEPLOY_TOKEN`: limited to `leaderbot-fb-image-gen`;
 - `FLY_STORAGE_PROXY_DEPLOY_TOKEN`: limited to `leaderbot-storage-proxy`;
 - `FLY_DATABASE_MIGRATION_TOKEN`: limited to snapshot, temporary restore-volume,
-  restore-probe, reviewer-approved orphan cleanup, and the fixed-output
-  migration-principal repair inside the exact reviewed
-  `leaderbot-portal-mysql` Machine. The repair child receives only this Fly
-  token and basic process-runtime variables; the database URL is not passed to
-  `flyctl`;
+  restore-probe, reviewer-approved orphan cleanup, and the isolated database
+  tunnel for `leaderbot-portal-mysql`; it has no SSH or Machine-exec authority;
+- `FLY_DATABASE_REPAIR_EXEC_TOKEN`: a short-lived Machine-exec token limited to
+  `leaderbot-portal-mysql` and the exact reviewed root-MySQL command used by the
+  fixed-output migration-principal repair. It exists only for the reviewed
+  schema transition and is revoked after the transition. The repair child
+  receives only this token and basic process-runtime variables; the database
+  URL is not passed to `flyctl`;
 - `IMAGE_GEN_DATABASE_MIGRATION_URL`: `127.0.0.1:13306` URL for the dedicated
   expand principal;
 - `IMAGE_GEN_DATABASE_PROVISIONER_URL`: `127.0.0.1:13306` URL for the separate

@@ -382,17 +382,32 @@ jobs:
         timeout-minutes: 8
         env:
           DATABASE_MIGRATION_URL: ${{ secrets.IMAGE_GEN_DATABASE_MIGRATION_URL }}
-          FLY_API_TOKEN: ${{ secrets.FLY_DATABASE_MIGRATION_TOKEN }}
+          FLY_API_TOKEN: ${{ secrets.FLY_DATABASE_REPAIR_EXEC_TOKEN }}
         run: |
           set -euo pipefail
           test -n "$DATABASE_MIGRATION_URL"
           test -n "$FLY_API_TOKEN"
           echo "::add-mask::$DATABASE_MIGRATION_URL"
+          proxy_pid="$(cat "$RUNNER_TEMP/leaderbot-schema-transition/proxy.pid")"
+          [[ "$proxy_pid" =~ ^[0-9]+$ ]]
+          kill -0 "$proxy_pid"
+          node -e 'const n=require("node:net");const s=n.createConnection(13306,"127.0.0.1",()=>{s.destroy();process.exit(0)});s.setTimeout(1000,()=>{s.destroy();process.exit(1)});s.on("error",()=>process.exit(1))'
           db_app="$(jq -er '.apps["image-gen"].databaseRecovery.app' deploy/production/apps.json)"
+          set +e
           output="$(node scripts/repair-image-gen-credit-migration-principal.mjs \
             --database-app "$db_app" \
             --database-machine-id "$DATABASE_MACHINE_ID")"
-          test "$output" = "credit_migration_principal_ready"
+          repair_status="$?"
+          set -e
+          if [[ "$repair_status" -eq 0 && "$output" = "credit_migration_principal_ready" ]]; then
+            exit 0
+          fi
+          if [[ "$repair_status" -ne 0 && ( "$output" = "credit_migration_principal_repair_failed" || "$output" = "credit_migration_principal_repair_cleanup_incomplete" ) ]]; then
+            printf '%s\n' "$output"
+          else
+            printf '%s\n' "credit_migration_principal_repair_output_invalid"
+          fi
+          exit 1
 
       - name: Inspect the exact live schema phase without changing it
         timeout-minutes: 5

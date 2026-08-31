@@ -4551,20 +4551,42 @@ function validateSchemaTransitionWorkflow(rootDir) {
       "must use only the protected migration URL for migration-role verification",
     ],
     [
-      "secrets.FLY_DATABASE_MIGRATION_TOKEN",
-      "must use only the reviewed database token for the private root session",
+      "secrets.FLY_DATABASE_REPAIR_EXEC_TOKEN",
+      "must use only the short-lived Machine-exec token for the private root session",
     ],
     [
       "repair-image-gen-credit-migration-principal.mjs",
       "must call the reviewed fixed-output repair runner",
     ],
     [
-      'test "$output" = "credit_migration_principal_ready"',
+      '[[ "$repair_status" -eq 0 && "$output" = "credit_migration_principal_ready" ]]',
       "must accept only the fixed successful repair marker",
     ],
   ]) {
     if (!migrationPrincipalRepairStep?.includes(required)) {
       fail(`${SCHEMA_TRANSITION_WORKFLOW_PATH} ${message}`);
+    }
+  }
+  if (
+    migrationPrincipalRepairStep?.includes(
+      "secrets.FLY_DATABASE_MIGRATION_TOKEN",
+    )
+  ) {
+    fail(
+      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must not expose the snapshot and tunnel token to the private root session`,
+    );
+  }
+  for (const required of [
+    'kill -0 "$proxy_pid"',
+    'repair_status="$?"',
+    "credit_migration_principal_repair_failed",
+    "credit_migration_principal_repair_cleanup_incomplete",
+    "credit_migration_principal_repair_output_invalid",
+  ]) {
+    if (!migrationPrincipalRepairStep?.includes(required)) {
+      fail(
+        `${SCHEMA_TRANSITION_WORKFLOW_PATH} must verify the live tunnel and surface only fixed migration-repair outcomes`,
+      );
     }
   }
   const probeStepIndex = workflow.indexOf(
