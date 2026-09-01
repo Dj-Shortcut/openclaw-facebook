@@ -92,7 +92,7 @@
   },
   "dependencies": {
     "ioredis": "^6.0.0",
-    "zod": "^4.4.3"
+    "zod": "^4.5.2"
   },
   "peerDependencies": {
     "openclaw": ">=2026.6.11 || 2026.7.2-beta.7"
