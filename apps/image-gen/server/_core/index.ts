@@ -97,13 +97,18 @@ import {
   withCreditCheckoutHmacKeyring,
 } from "./billing/creditCheckoutConfig";
 import { startCreditReservationExpiryWorker } from "./billing/creditReservationExpiryWorker";
+import { startCreditPaymentReconciliationWorker } from "./billing/creditPaymentReconciliationWorker";
 import { assertCreditCheckoutDatabaseReadiness } from "./billing/creditCheckoutReadiness";
 import { startBillingOutboxWorker } from "./billing/outboxWorker";
 import { startAiAnswerFinalizationWorker } from "./billing/aiAnswerFinalizationWorker";
 import { startBillingProfileExpiryWorker } from "./billing/billingProfileExpiryWorker";
 import { startBillingNotificationReceiverWorker } from "./billing/billingNotificationReceiverWorker";
-import { assertMollieBillingDrainLifecycle } from "./billing/billingDrainLifecycle";
+import {
+  assertMollieBillingDrainLifecycle,
+  assertOwnerMessengerBillingRuntimeCompatible,
+} from "./billing/billingDrainLifecycle";
 import { getMollieRuntimePolicy } from "./billing/billingRuntimePolicy";
+import { assertFacebookPageTokenConfig } from "./facebookPageToken";
 import {
   getMollieAccountingImportConfig,
   isMollieAccountingImportEnabled,
@@ -211,6 +216,7 @@ async function startServer() {
   safeLog("generator_startup_config", generatorStartupConfig);
   assertProductionImageStorageConfig();
   assertProductionMessengerVideoConfig();
+  assertFacebookPageTokenConfig();
   const mollieBillingEnabled = isMollieBillingEnabled();
   const mollieBillingDrainEnabled = isMollieBillingDrainEnabled();
   const mollieBillingPreflightEnabled = isMollieBillingPreflightEnabled();
@@ -240,6 +246,7 @@ async function startServer() {
   });
   if (!generationWorkerOnly) {
     await assertMollieBillingDrainLifecycle();
+    await assertOwnerMessengerBillingRuntimeCompatible();
   }
   if (notificationPlaneEnabled && !generationWorkerOnly) {
     assertBillingNotificationConfig();
@@ -393,6 +400,9 @@ async function startServer() {
   }
   if (mollieRuntimePolicy.startSafetyOutbox) {
     startBillingOutboxWorker();
+  }
+  if (mollieRuntimePolicy.startReconciliation) {
+    startCreditPaymentReconciliationWorker();
   }
   if (mollieBillingDrainEnabled) {
     startCreditReservationExpiryWorker();

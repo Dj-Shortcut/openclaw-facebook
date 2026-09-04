@@ -24,7 +24,10 @@ import {
   isMollieBillingEnabled,
   isMollieEntitlementEnforcementEnabled,
 } from "./billing/config";
-import { assertMollieBillingDrainLifecycle } from "./billing/billingDrainLifecycle";
+import {
+  assertMollieBillingDrainLifecycle,
+  assertOwnerMessengerBillingRuntimeCompatible,
+} from "./billing/billingDrainLifecycle";
 import {
   assertBillingNotificationConfig,
   isBillingNotificationPlaneEnabled,
@@ -43,6 +46,7 @@ import {
   withCreditCheckoutHmacKeyring,
 } from "./billing/creditCheckoutConfig";
 import { assertCreditCheckoutDatabaseReadiness } from "./billing/creditCheckoutReadiness";
+import { assertFacebookPageTokenConfig } from "./facebookPageToken";
 
 export type ReadinessCheck = {
   name: string;
@@ -125,6 +129,10 @@ export function buildRuntimeReadinessChecks(): ReadinessCheck[] {
       },
     },
     {
+      name: "messenger_page_credential_config",
+      check: assertFacebookPageTokenConfig,
+    },
+    {
       name: "state_store",
       check: ensureStateStoreReady,
     },
@@ -147,6 +155,10 @@ export function buildRuntimeReadinessChecks(): ReadinessCheck[] {
     {
       name: "mollie_billing_drain_lifecycle",
       check: assertMollieBillingDrainLifecycle,
+    },
+    {
+      name: "owner_messenger_billing_runtime",
+      check: assertOwnerMessengerBillingRuntimeCompatible,
     },
     {
       name: "credit_checkout",

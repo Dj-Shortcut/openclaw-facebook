@@ -14,12 +14,7 @@ import {
   type BillingSubscription,
 } from "../../../drizzle/schema";
 import { getDatabaseOrThrow } from "../../db";
-import {
-  advanceBillingHandoffDeliveryFence,
-  beginBillingHandoffDelivery,
-} from "../../db";
 import { safeLog } from "../logger";
-import { sendPortalHandoffLink } from "../portalHandoffDelivery";
 import {
   getConfiguredBillingMode,
   getMollieConfig,
@@ -2466,103 +2461,23 @@ async function rearmFailedEnsureJobsWaitingForCancellation(
   }
 }
 
-export async function sendPaymentHandoff(
+export function sendPaymentHandoff(
   job: ClaimedBillingOutboxItem
-): Promise<void> {
-  const target = readPortalHandoffTarget(job.payload);
-  const fence = await beginBillingHandoffDelivery({
-    outboxId: job.id,
+): Promise<never> {
+  // The customer portal and /handoff route are retired. A queued legacy job
+  // discovered after startup must become terminal without emitting a broken
+  // URL or recreating customer-SaaS behavior.
+  safeLog("legacy_portal_handoff_delivery_contained", {
+    level: "error",
     workspaceId: job.workspaceId,
     mode: job.mode,
-    leaseToken: job.leaseToken,
-    intentId: target.intentId,
-    messengerSenderUserKey: target.messengerSenderUserKey,
-    messengerPageId: target.messengerPageId,
-    messengerChannelConnectionId: target.messengerChannelConnectionId,
-    messengerPrivacyEpoch: target.messengerPrivacyEpoch,
+    outboxId: job.id,
+    deliveryId: job.deliveryId,
+    errorCode: "portal_handoff_route_retired",
   });
-  let result;
-  let transportStarted = false;
-  try {
-    result = await sendPortalHandoffLink({
-      workspaceId: job.workspaceId,
-      messengerSenderUserKey: target.messengerSenderUserKey,
-      expectedFacebookPageId: target.messengerPageId,
-      expectedChannelConnectionId: target.messengerChannelConnectionId,
-      expectedPrivacyEpoch: target.messengerPrivacyEpoch,
-      createdByUserId: null,
-      deliveryIdempotencyKey: target.intentId,
-      beforeCapabilityCreate: () =>
-        advanceBillingHandoffDeliveryFence(fence, "preparing"),
-      beforeTransport: async () => {
-        const started = await advanceBillingHandoffDeliveryFence(
-          fence,
-          "transport_started"
-        );
-        transportStarted = started;
-        return started;
-      },
-    });
-  } catch (error) {
-    await advanceBillingHandoffDeliveryFence(
-      fence,
-      transportStarted ? "ambiguous" : "idle"
-    );
-    if (transportStarted) {
-      throw new PermanentOutboxError("portal_handoff_transport_ambiguous");
-    }
-    throw error;
-  }
-
-  if (result.ok) {
-    await advanceBillingHandoffDeliveryFence(fence, "transport_succeeded");
-    return;
-  }
-  await advanceBillingHandoffDeliveryFence(fence, "idle");
-  if (result.reason === "send_failed") {
-    throw new RetryableOutboxError("portal_handoff_send_failed");
-  }
-  throw new PermanentOutboxError(`portal_handoff_${result.reason}`);
-}
-
-function readPortalHandoffTarget(payload: unknown): {
-  intentId: string;
-  messengerSenderUserKey: string;
-  messengerPageId: string;
-  messengerChannelConnectionId: number;
-  messengerPrivacyEpoch: number;
-} {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    throw new PermanentOutboxError("invalid_portal_handoff_target");
-  }
-  const record = payload as Record<string, unknown>;
-  const messengerSenderUserKey = record.messengerSenderUserKey;
-  const messengerPageId = record.messengerPageId;
-  const intentId = record.intentId;
-  const messengerChannelConnectionId = record.messengerChannelConnectionId;
-  const messengerPrivacyEpoch = record.messengerPrivacyEpoch;
-  if (
-    typeof intentId !== "string" ||
-    !/^[0-9a-f-]{36}$/i.test(intentId) ||
-    typeof messengerSenderUserKey !== "string" ||
-    !/^[a-f0-9]{64}$/.test(messengerSenderUserKey) ||
-    typeof messengerPageId !== "string" ||
-    messengerPageId.trim().length === 0 ||
-    messengerPageId.length > 160 ||
-    !Number.isSafeInteger(messengerChannelConnectionId) ||
-    Number(messengerChannelConnectionId) <= 0 ||
-    !Number.isSafeInteger(messengerPrivacyEpoch) ||
-    Number(messengerPrivacyEpoch) <= 0
-  ) {
-    throw new PermanentOutboxError("invalid_portal_handoff_target");
-  }
-  return {
-    intentId,
-    messengerSenderUserKey,
-    messengerPageId: messengerPageId.trim(),
-    messengerChannelConnectionId: Number(messengerChannelConnectionId),
-    messengerPrivacyEpoch: Number(messengerPrivacyEpoch),
-  };
+  return Promise.reject(
+    new PermanentOutboxError("portal_handoff_route_retired")
+  );
 }
 
 async function hasExactSubscriptionCancellationBinding(
