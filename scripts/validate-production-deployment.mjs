@@ -49,6 +49,13 @@ const PRODUCTION_RECONCILIATION_WORKFLOW_PATH =
 const PRODUCTION_COMPLETION_RECOVERY_WORKFLOW_PATH =
   ".github/workflows/recover-completed-production-deployment.yml";
 const FRESH_SNAPSHOT_SELECTOR_PATH = "scripts/select-fresh-fly-snapshot.mjs";
+const FLY_RESTORE_PROBE_STATUS_PATH = "scripts/fly-restore-probe-status.mjs";
+const FLY_RESTORE_PROBE_STATUS_TEST_PATH =
+  "scripts/fly-restore-probe-status.test.mjs";
+const REPAIR_EXEC_TOKEN_RETIREMENT_PATH =
+  "scripts/retire-image-gen-repair-exec-token.mjs";
+const REPAIR_EXEC_TOKEN_RETIREMENT_TEST_PATH =
+  "scripts/retire-image-gen-repair-exec-token.test.mjs";
 const PINNED_NODE_BASE_IMAGE =
   "node:24-alpine@sha256:d32cdf619f63fe0471182d08996dd516c6275bb5fd31ae06e55a570bd9e1ad43";
 const PINNED_GATEWAY_NODE_BASE_IMAGE =
@@ -3936,6 +3943,34 @@ function validateTrustedArtifactWorkflow(rootDir) {
 }
 
 function validateSchemaTransitionWorkflow(rootDir) {
+  for (const requiredPath of [
+    FLY_RESTORE_PROBE_STATUS_PATH,
+    FLY_RESTORE_PROBE_STATUS_TEST_PATH,
+  ]) {
+    if (!fs.existsSync(path.join(rootDir, requiredPath))) {
+      fail(`Missing ${requiredPath}`);
+    }
+  }
+  let packageJson;
+  try {
+    packageJson = JSON.parse(
+      fs.readFileSync(path.join(rootDir, "package.json"), "utf8"),
+    );
+  } catch {
+    fail("package.json must contain the reviewed production-contract command");
+  }
+  const productionContractTokens = String(
+    packageJson?.scripts?.["test:production-contracts"] ?? "",
+  ).split(/\s+/);
+  if (
+    productionContractTokens.filter(
+      (token) => token === FLY_RESTORE_PROBE_STATUS_TEST_PATH,
+    ).length !== 1
+  ) {
+    fail(
+      `package.json test:production-contracts must include exact ${FLY_RESTORE_PROBE_STATUS_TEST_PATH}`,
+    );
+  }
   const workflowPath = path.join(rootDir, SCHEMA_TRANSITION_WORKFLOW_PATH);
   if (!fs.existsSync(workflowPath)) {
     fail(`Missing ${SCHEMA_TRANSITION_WORKFLOW_PATH}`);
@@ -4116,7 +4151,6 @@ function validateSchemaTransitionWorkflow(rootDir) {
       "must verify the restored volume is isolated before probing",
     ],
     ["--restart no", "must disable restart of the isolated probe"],
-    ["--rm", "must request automatic removal of the isolated probe"],
     ["--detach", "must start the isolated probe without blocking the job"],
     [
       '--metadata "leaderbot_restore_probe=$GITHUB_RUN_ID"',
@@ -4147,8 +4181,8 @@ function validateSchemaTransitionWorkflow(rootDir) {
       "must cap probe Machine cleanup before any destroy operation",
     ],
     [
-      "timeout --signal=TERM 8m flyctl ssh console",
-      "must bound the remote restore verification and propagate its exit status",
+      "node scripts/fly-restore-probe-status.mjs",
+      "must verify structured exit evidence instead of accepting a stopped Machine",
     ],
     [
       "mysql-restore-check.sql",
@@ -4163,7 +4197,7 @@ function validateSchemaTransitionWorkflow(rootDir) {
       "must run restore cleanup after failures and cancellation",
     ],
     [
-      '.state|IN("started","stopped","suspended","created","failed")',
+      '.state|IN("starting","started","stopping","stopped","suspended","created","failed")',
       "must allow exact restore-probe cleanup in every known removable state",
     ],
     ["machine destroy", "must remove the isolated restore Machine"],
@@ -4252,7 +4286,7 @@ function validateSchemaTransitionWorkflow(rootDir) {
   if (
     occurrenceCount(
       workflow,
-      '.state|IN("started","stopped","suspended","created","failed")',
+      '.state|IN("starting","started","stopping","stopped","suspended","created","failed")',
     ) !== 2
   ) {
     fail(
@@ -4369,40 +4403,89 @@ function validateSchemaTransitionWorkflow(rootDir) {
   }
   const [restoreProbeStep] = namedWorkflowStepBodies(
     workflow,
-    "Prove the restored MySQL copy and remote command exit status",
+    "Prove the restored MySQL copy from the isolated Machine exit status",
   );
+  if (/flyctl\s+(?:ssh|machine\s+exec)\b/.test(workflow)) {
+    fail(
+      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must not use SSH or Machine-exec with the migration token`,
+    );
+  }
+  if (restoreProbeStep?.includes("--rm")) {
+    fail(
+      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must retain the probe until its exact exit evidence is verified`,
+    );
+  }
   for (const [required, message] of [
     ["flyctl machine run", "must create one isolated restore probe"],
     ["--restart no", "must disable restart of the isolated probe"],
-    ["--rm", "must request automatic removal of the isolated probe"],
     ["--detach", "must start the isolated probe without blocking the job"],
     [
-      "timeout --signal=TERM 8m flyctl ssh console",
-      "must bound the remote restore verification and propagate its exit status",
+      '-- -c "$probe" || probe_launch_status=$?',
+      "must run the fixed restore probe as the Machine entrypoint",
     ],
     [
-      'probe_b64="$(printf \'%s\' "$probe" | base64 --wrap=0)"',
-      "must encode the fixed restore probe without shell-quoting ambiguity",
+      '.state|IN("started","stopped")',
+      "must capture probes that already exited",
     ],
     [
-      'probe_command="/bin/sh -lc',
-      "must execute the restore probe through an explicit remote shell",
+      "probe_deadline=$((SECONDS + 480))",
+      "must bound the restore-probe status poll",
     ],
     [
-      "decoded=\\$(printf %s $probe_b64 | base64 -d) || exit 70; exec /bin/sh -c",
-      "must fail closed on decode errors and propagate the probe exit status",
+      'while test "$SECONDS" -lt "$probe_deadline"',
+      "must enforce the restore-probe status deadline",
     ],
     [
-      '--command "$probe_command"',
-      "must pass only the explicit shell command to flyctl SSH",
+      '--app "$db_app"',
+      "must bind the restore-probe API read to the reviewed database app",
     ],
     [
-      'printf "%s\\n" mysql_restore_probe_failed',
-      "must emit a metadata-only failure marker for a failed restore probe",
+      "node scripts/fly-restore-probe-status.mjs",
+      "must verify structured exit evidence instead of accepting a stopped Machine",
     ],
     [
-      "tail -n 120 /tmp/mysql-restore-probe.log",
-      "must emit a bounded MySQL startup diagnostic before failing closed",
+      '--machine-id "$probe_machine_id"',
+      "must bind probe results to the exact Machine",
+    ],
+    [
+      '--volume-id "$RESTORE_VOLUME_ID"',
+      "must bind probe results to the restored volume",
+    ],
+    [
+      "probe_sha256=\"$(printf '%s' \"$probe\" | sha256sum | cut -d' ' -f1)\"",
+      "must hash the runner-owned restore command before launch",
+    ],
+    [
+      '--expected-image "$mysql_image"',
+      "must bind probe results to the reviewed immutable MySQL image",
+    ],
+    [
+      '--expected-probe-sha256 "$probe_sha256"',
+      "must bind probe results to the exact runner-owned restore command",
+    ],
+    [
+      '--run-id "$GITHUB_RUN_ID"',
+      "must bind probe results to this workflow run",
+    ],
+    [
+      '--run-attempt "$GITHUB_RUN_ATTEMPT" || result=$?',
+      "must bind and propagate the probe verification result",
+    ],
+    [
+      'if test "$result" = 0; then',
+      "must require a successful probe verification",
+    ],
+    [
+      'if test "$result" != 2; then',
+      "must retry only pending probe verification",
+    ],
+    [
+      'if test "$probe_verified" != true; then',
+      "must fail closed when exit evidence never arrives",
+    ],
+    [
+      "printf '%s\\n' mysql_restore_probe_failed",
+      "must emit a metadata-only runner failure marker when restore exit evidence never arrives",
     ],
     [
       "chown mysql:root /var/lib/mysql",
@@ -4422,14 +4505,19 @@ function validateSchemaTransitionWorkflow(rootDir) {
       `${SCHEMA_TRANSITION_WORKFLOW_PATH} must not recursively rewrite restored snapshot ownership`,
     );
   }
+  if (restoreProbeStep?.includes("tail -n")) {
+    fail(
+      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must not emit raw restored database diagnostics`,
+    );
+  }
   if (
     namedWorkflowStepTimeout(
       workflow,
-      "Prove the restored MySQL copy and remote command exit status",
+      "Prove the restored MySQL copy from the isolated Machine exit status",
     ) < 22
   ) {
     fail(
-      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must give the bounded Machine start, start poll, and 8m SSH probe enough outer time`,
+      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must give the bounded Machine start and exit poll enough outer time`,
     );
   }
   const credentialSnapshotBaselineIndex = workflow.indexOf(
@@ -4484,6 +4572,12 @@ function validateSchemaTransitionWorkflow(rootDir) {
   const credentialRecoveryUploadIndex = workflow.indexOf(
     "Upload pre-repair credential-boundary recovery reference",
   );
+  const preSnapshotSuperCleanupIndex = workflow.indexOf(
+    "Verify temporary SUPER is absent before the recovery snapshot",
+  );
+  const postRecoveryRepairIndex = workflow.indexOf(
+    "Restore approved migration rights only after recovery proof",
+  );
   const applyExpandIndex = workflow.indexOf(
     "LEADERBOT_PRODUCTION_MIGRATION_MODE=apply-credit-wallet-expand",
   );
@@ -4509,7 +4603,10 @@ function validateSchemaTransitionWorkflow(rootDir) {
     credentialRecoveryUploadIndex <= credentialSnapshotSelectorIndex ||
     migrationPrincipalRepairIndex <= credentialRecoveryUploadIndex ||
     schemaInspectionIndex <= migrationPrincipalRepairIndex ||
-    schemaInspectionIndex >= snapshotCreateIndex ||
+    preSnapshotSuperCleanupIndex <= schemaInspectionIndex ||
+    preSnapshotSuperCleanupIndex >= snapshotCreateIndex ||
+    postRecoveryRepairIndex <= settledTupleComparisonIndex ||
+    postRecoveryRepairIndex >= definerGrantIndex ||
     definerGrantIndex <= recoveryUploadIndex ||
     preDdlReleaseBoundBridgeIndex <= recoveryUploadIndex ||
     preDdlReleaseBoundBridgeIndex >= definerGrantIndex ||
@@ -4522,6 +4619,80 @@ function validateSchemaTransitionWorkflow(rootDir) {
   ) {
     fail(
       `${SCHEMA_TRANSITION_WORKFLOW_PATH} must snapshot and repair the exact migration role, inspect the schema, and durably upload recovery evidence before definer grants or credit DDL`,
+    );
+  }
+  const [preSnapshotSuperCleanupStep] = namedWorkflowStepBodies(
+    workflow,
+    "Verify temporary SUPER is absent before the recovery snapshot",
+  );
+  const [postRecoveryRepairStep] = namedWorkflowStepBodies(
+    workflow,
+    "Restore approved migration rights only after recovery proof",
+  );
+  for (const [step, operation, marker] of [
+    [
+      preSnapshotSuperCleanupStep,
+      "revoke-super",
+      "credit_migration_principal_super_revoked",
+    ],
+    [postRecoveryRepairStep, "prepare", "credit_migration_principal_ready"],
+  ]) {
+    for (const required of [
+      "secrets.IMAGE_GEN_DATABASE_MIGRATION_URL",
+      "secrets.FLY_DATABASE_REPAIR_EXEC_TOKEN",
+      "node scripts/repair-image-gen-credit-migration-principal.mjs",
+      '--database-machine-id "$DATABASE_MACHINE_ID"',
+      'kill -0 "$proxy_pid"',
+      'n.createConnection(13306,"127.0.0.1"',
+      `--operation ${operation}`,
+      `test "$output" = "${marker}"`,
+    ]) {
+      if (!step?.includes(required)) {
+        fail(
+          `${SCHEMA_TRANSITION_WORKFLOW_PATH} must verify exact temporary rights on both sides of recovery proof`,
+        );
+      }
+    }
+    if (step.includes("secrets.FLY_DATABASE_MIGRATION_TOKEN")) {
+      fail(
+        `${SCHEMA_TRANSITION_WORKFLOW_PATH} must not expose snapshot authority to temporary-rights changes`,
+      );
+    }
+  }
+  const [freshRecoverySnapshotStep] = namedWorkflowStepBodies(
+    workflow,
+    "Create fresh snapshot from the exact 0016 base",
+  );
+  const [recoveryRecordStep] = namedWorkflowStepBodies(
+    workflow,
+    "Record exact pre-credit recovery point",
+  );
+  const [loadRecoveryStep] = namedWorkflowStepBodies(
+    workflow,
+    "Load exact prior 0016 recovery point for a resume",
+  );
+  const [validateRecoveryStep] = namedWorkflowStepBodies(
+    workflow,
+    "Validate exact 0016 recovery evidence before DDL",
+  );
+  if (
+    !preSnapshotSuperCleanupStep.includes(
+      'echo "RECOVERY_TEMPORARY_SUPER_ABSENT=true" >> "$GITHUB_ENV"',
+    ) ||
+    !freshRecoverySnapshotStep?.includes(
+      'test "$RECOVERY_TEMPORARY_SUPER_ABSENT" = true',
+    ) ||
+    !recoveryRecordStep?.includes(
+      'test "$RECOVERY_TEMPORARY_SUPER_ABSENT" = true',
+    ) ||
+    !recoveryRecordStep.includes(
+      "restoreVerified:true,temporarySuperAbsent:true",
+    ) ||
+    !loadRecoveryStep?.includes(".snapshot.temporarySuperAbsent==true") ||
+    !validateRecoveryStep?.includes(".snapshot.temporarySuperAbsent==true")
+  ) {
+    fail(
+      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must prove and retain temporary SUPER absence in recovery evidence`,
     );
   }
   const [credentialRecoveryUploadStep] = namedWorkflowStepBodies(
@@ -4551,15 +4722,19 @@ function validateSchemaTransitionWorkflow(rootDir) {
       "must use only the protected migration URL for migration-role verification",
     ],
     [
-      "secrets.FLY_DATABASE_MIGRATION_TOKEN",
-      "must use only the reviewed database token for the private root session",
+      "secrets.FLY_DATABASE_REPAIR_EXEC_TOKEN",
+      "must use only the short-lived Machine-exec token for the private root session",
     ],
     [
       "repair-image-gen-credit-migration-principal.mjs",
       "must call the reviewed fixed-output repair runner",
     ],
     [
-      'test "$output" = "credit_migration_principal_ready"',
+      "--operation prepare",
+      "must explicitly select the bounded migration-role preparation",
+    ],
+    [
+      '[[ "$repair_status" -eq 0 && "$output" = "credit_migration_principal_ready" ]]',
       "must accept only the fixed successful repair marker",
     ],
   ]) {
@@ -4567,8 +4742,98 @@ function validateSchemaTransitionWorkflow(rootDir) {
       fail(`${SCHEMA_TRANSITION_WORKFLOW_PATH} ${message}`);
     }
   }
+  if (
+    migrationPrincipalRepairStep?.includes(
+      "secrets.FLY_DATABASE_MIGRATION_TOKEN",
+    )
+  ) {
+    fail(
+      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must not expose the snapshot and tunnel token to the private root session`,
+    );
+  }
+  for (const required of [
+    'kill -0 "$proxy_pid"',
+    'n.createConnection(13306,"127.0.0.1"',
+    'repair_status="$?"',
+    "credit_migration_principal_repair_failed",
+    "credit_migration_principal_repair_cleanup_incomplete",
+    "credit_migration_principal_repair_output_invalid",
+  ]) {
+    if (!migrationPrincipalRepairStep?.includes(required)) {
+      fail(
+        `${SCHEMA_TRANSITION_WORKFLOW_PATH} must verify the live tunnel and surface only fixed migration-repair outcomes`,
+      );
+    }
+  }
+  const [migrationSuperCleanupStep] = namedWorkflowStepBodies(
+    workflow,
+    "Revoke temporary migration SUPER privilege",
+  );
+  for (const [required, message] of [
+    [
+      "if: always() && env.DATABASE_MIGRATION_TUNNEL_STARTED == 'true'",
+      "must revoke temporary SUPER after both successful and failed migration attempts",
+    ],
+    [
+      "secrets.FLY_DATABASE_REPAIR_EXEC_TOKEN",
+      "must use only the short-lived Machine-exec token for SUPER cleanup",
+    ],
+    [
+      "--operation revoke-super",
+      "must invoke the reviewed SUPER cleanup operation",
+    ],
+    [
+      '[[ "$cleanup_status" -eq 0 && "$output" = "credit_migration_principal_super_revoked" ]]',
+      "must accept only the fixed successful SUPER cleanup marker",
+    ],
+    [
+      "credit_migration_principal_repair_cleanup_incomplete",
+      "must fail closed with the fixed cleanup-incomplete marker",
+    ],
+    [
+      'kill -0 "$proxy_pid"',
+      "must revalidate the isolated tunnel before cleanup",
+    ],
+    [
+      'n.createConnection(13306,"127.0.0.1"',
+      "must revalidate database connectivity before cleanup",
+    ],
+  ]) {
+    if (!migrationSuperCleanupStep?.includes(required)) {
+      fail(`${SCHEMA_TRANSITION_WORKFLOW_PATH} ${message}`);
+    }
+  }
+  if (
+    migrationSuperCleanupStep?.includes("secrets.FLY_DATABASE_MIGRATION_TOKEN")
+  ) {
+    fail(
+      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must not expose snapshot authority to SUPER cleanup`,
+    );
+  }
+  const exactCreditVerificationIndex = workflow.indexOf(
+    "Verify the exact 0018 credit schema",
+  );
+  const migrationSuperCleanupIndex = workflow.indexOf(
+    "Revoke temporary migration SUPER privilege",
+  );
+  const transitionResultIndex = workflow.indexOf(
+    "Record metadata-only successful transition",
+  );
+  const tunnelStopIndex = workflow.indexOf(
+    "Stop isolated database migration tunnel",
+  );
+  if (
+    exactCreditVerificationIndex < 0 ||
+    migrationSuperCleanupIndex <= exactCreditVerificationIndex ||
+    transitionResultIndex <= migrationSuperCleanupIndex ||
+    tunnelStopIndex <= migrationSuperCleanupIndex
+  ) {
+    fail(
+      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must revoke temporary SUPER after schema verification and before success evidence or tunnel shutdown`,
+    );
+  }
   const probeStepIndex = workflow.indexOf(
-    "Prove the restored MySQL copy and remote command exit status",
+    "Prove the restored MySQL copy from the isolated Machine exit status",
   );
   const [databaseBindingStep] = namedWorkflowStepBodies(
     workflow,
@@ -5155,6 +5420,8 @@ function validateCreditMigrationPrincipalRepair(rootDir) {
     CREDIT_MIGRATION_PRINCIPAL_REPAIR_CONTRACT_PATH,
     CREDIT_MIGRATION_PRINCIPAL_REPAIR_RUNNER_PATH,
     CREDIT_MIGRATION_PRINCIPAL_REPAIR_TEST_PATH,
+    REPAIR_EXEC_TOKEN_RETIREMENT_PATH,
+    REPAIR_EXEC_TOKEN_RETIREMENT_TEST_PATH,
   ]) {
     if (!fs.existsSync(path.join(rootDir, relativePath))) {
       fail(`Missing ${relativePath}`);
@@ -5166,12 +5433,20 @@ function validateCreditMigrationPrincipalRepair(rootDir) {
   );
   for (const [required, message] of [
     [
-      '"CREATE",\n  "TRIGGER",\n  "CREATE ROUTINE",\n  "ALTER ROUTINE"',
-      "must limit repair to the exact four reviewed schema privileges",
+      '"CREATE",\n  "TRIGGER",\n  "CREATE ROUTINE",\n  "ALTER ROUTINE",\n  "SUPER"',
+      "must limit repair to the exact four reviewed schema privileges plus conditional SUPER",
     ],
     [
       "detectMissingCreditMigrationPrivileges",
       "must prove the existing boundary is otherwise exact before mutation",
+    ],
+    [
+      'superOnly && missing.some((privilege) => privilege !== "SUPER")',
+      "must reject schema-rights mutation when resuming completed credit history",
+    ],
+    [
+      "assertCreditMigrationSuperCleanupBoundary(state)",
+      "must revalidate the exact grant boundary before every cleanup mutation",
     ],
     [
       'operation: "revoke"',
@@ -5201,6 +5476,14 @@ function validateCreditMigrationPrincipalRepair(rootDir) {
       "CreditMigrationPrincipalCleanupError",
       "must distinguish an incomplete rollback from a clean refusal",
     ],
+    [
+      "revokeTemporaryCreditMigrationSuper",
+      "must provide an idempotent fail-closed temporary SUPER cleanup",
+    ],
+    [
+      'privileges: ["SUPER"]',
+      "must revoke only temporary global SUPER during terminal cleanup",
+    ],
   ]) {
     if (!contract.includes(required)) {
       fail(`${CREDIT_MIGRATION_PRINCIPAL_REPAIR_CONTRACT_PATH} ${message}`);
@@ -5221,12 +5504,12 @@ function validateCreditMigrationPrincipalRepair(rootDir) {
       "must bind repair and resume verification to exact credit histories",
     ],
     [
-      'if (initialPhase !== "0016_expand")',
-      "must keep completed 0017 and 0018 histories verification-only",
+      "superOnly: postDdl",
+      "must restrict completed 0017 and 0018 preparation to conditional SUPER only",
     ],
     [
-      'verifyRuntime(connection, "credit-expand")',
-      "must strictly verify the complete migration boundary after repair",
+      'postDdl && !requireSuper ? "credit-expand-postddl" : "credit-expand"',
+      "must strictly verify both unprivileged resume and conditional inspection grants",
     ],
     [
       "new RootMysqlSession",
@@ -5239,6 +5522,10 @@ function validateCreditMigrationPrincipalRepair(rootDir) {
     [
       "CREDIT_MIGRATION_PRINCIPAL_CLEANUP_FAILURE_MARKER",
       "must preserve the fixed cleanup-incomplete result",
+    ],
+    [
+      "executeSuperCleanup",
+      "must expose only the reviewed temporary SUPER cleanup operation",
     ],
   ]) {
     if (!runner.includes(required)) {
@@ -5261,14 +5548,15 @@ function validateCreditMigrationPrincipalRepair(rootDir) {
   const tokens = String(
     packageJson?.scripts?.["test:production-contracts"] ?? "",
   ).split(/\s+/);
-  if (
-    tokens.filter(
-      (token) => token === CREDIT_MIGRATION_PRINCIPAL_REPAIR_TEST_PATH,
-    ).length !== 1
-  ) {
-    fail(
-      `package.json test:production-contracts must include exact ${CREDIT_MIGRATION_PRINCIPAL_REPAIR_TEST_PATH}`,
-    );
+  for (const testPath of [
+    CREDIT_MIGRATION_PRINCIPAL_REPAIR_TEST_PATH,
+    REPAIR_EXEC_TOKEN_RETIREMENT_TEST_PATH,
+  ]) {
+    if (tokens.filter((token) => token === testPath).length !== 1) {
+      fail(
+        `package.json test:production-contracts must include exact ${testPath}`,
+      );
+    }
   }
 }
 

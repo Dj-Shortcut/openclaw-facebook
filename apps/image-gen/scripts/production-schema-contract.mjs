@@ -110,6 +110,7 @@ export async function assertProductionMigrationRuntime(
       "expand",
       "credit-expand-pregrant",
       "credit-expand",
+      "credit-expand-postddl",
       "bootstrap",
       "credit-bootstrap",
     ]).has(privilegeProfile)
@@ -136,12 +137,14 @@ export async function assertProductionMigrationRuntime(
     await assertCheckConstraintsEnforced(connection);
   } else if (
     privilegeProfile === "credit-expand" ||
-    privilegeProfile === "credit-expand-pregrant"
+    privilegeProfile === "credit-expand-pregrant" ||
+    privilegeProfile === "credit-expand-postddl"
   ) {
     assertCreditWalletMigrationGrantScope(
       grants,
       runtime.databaseName,
-      Number(runtime.logBin) === 1 &&
+      privilegeProfile !== "credit-expand-postddl" &&
+        Number(runtime.logBin) === 1 &&
         Number(runtime.logBinTrustFunctionCreators) !== 1,
       privilegeProfile === "credit-expand-pregrant"
     );

@@ -86,9 +86,13 @@ function createRepositoryFixture() {
     ".github/workflows/recover-completed-production-deployment.yml",
     ".github/workflows/reconcile-production-deployment.yml",
     "scripts/select-fresh-fly-snapshot.mjs",
+    "scripts/fly-restore-probe-status.mjs",
+    "scripts/fly-restore-probe-status.test.mjs",
     "scripts/image-gen-credit-migration-principal-repair-contract.mjs",
     "scripts/image-gen-credit-migration-principal-repair-contract.test.mjs",
     "scripts/repair-image-gen-credit-migration-principal.mjs",
+    "scripts/retire-image-gen-repair-exec-token.mjs",
+    "scripts/retire-image-gen-repair-exec-token.test.mjs",
     "scripts/image-gen-credit-provisioner-bootstrap-contract.mjs",
     "scripts/image-gen-credit-provisioner-bootstrap-contract.test.mjs",
     "scripts/provision-image-gen-credit-provisioner.mjs",
@@ -3829,12 +3833,169 @@ describe("production deployment contract", () => {
     replaceFixtureText(
       root,
       ".github/workflows/image-gen-schema-transition.yml",
-      'test "$output" = "credit_migration_principal_ready"',
-      'test -n "$output"',
+      '[[ "$repair_status" -eq 0 && "$output" = "credit_migration_principal_ready" ]]',
+      '[[ "$repair_status" -eq 0 && -n "$output" ]]',
     );
 
     expect(() => validateProductionRepository(root)).toThrow(
       "must accept only the fixed successful repair marker",
+    );
+  });
+
+  it.each([
+    [
+      "scripts/repair-image-gen-credit-migration-principal.mjs",
+      "superOnly: postDdl",
+      "superOnly: false",
+      "must restrict completed 0017 and 0018 preparation to conditional SUPER only",
+    ],
+    [
+      "scripts/image-gen-credit-migration-principal-repair-contract.mjs",
+      'superOnly && missing.some((privilege) => privilege !== "SUPER")',
+      "superOnly && false",
+      "must reject schema-rights mutation when resuming completed credit history",
+    ],
+  ])(
+    "preserves bounded SUPER-only resume in %s",
+    (file, before, after, message) => {
+      const root = createRepositoryFixture();
+      replaceFixtureText(root, file, before, after);
+      expect(() => validateProductionRepository(root)).toThrow(message);
+    },
+  );
+
+  it.each([
+    [
+      "Verify temporary SUPER is absent before the recovery snapshot",
+      "Record exact pre-credit recovery point",
+    ],
+    [
+      "Restore approved migration rights only after recovery proof",
+      "Create fresh snapshot from the exact 0016 base",
+    ],
+  ])("rejects misplaced recovery-rights step %s", (stepName, targetName) => {
+    const root = createRepositoryFixture();
+    const file = path.join(
+      root,
+      ".github/workflows/image-gen-schema-transition.yml",
+    );
+    const workflow = fs.readFileSync(file, "utf8");
+    const start = workflow.indexOf(`      - name: ${stepName}\n`);
+    const end = workflow.indexOf("      - name: ", start + 1);
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const step = workflow.slice(start, end);
+    const removed = workflow.slice(0, start) + workflow.slice(end);
+    const target = removed.indexOf(`      - name: ${targetName}\n`);
+    expect(target).toBeGreaterThan(-1);
+    fs.writeFileSync(
+      file,
+      removed.slice(0, target) + step + removed.slice(target),
+    );
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must snapshot and repair the exact migration role",
+    );
+  });
+
+  it.each([
+    ['test "$RECOVERY_TEMPORARY_SUPER_ABSENT" = true', "true"],
+    ["temporarySuperAbsent:true", "temporarySuperAbsent:false"],
+    [".snapshot.temporarySuperAbsent==true", ".snapshot.restoreVerified==true"],
+  ])("requires privilege-clean recovery evidence: %s", (before, after) => {
+    const root = createRepositoryFixture();
+    const file = path.join(
+      root,
+      ".github/workflows/image-gen-schema-transition.yml",
+    );
+    const workflow = fs.readFileSync(file, "utf8");
+    expect(workflow).toContain(before);
+    fs.writeFileSync(file, workflow.replaceAll(before, after));
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must prove and retain temporary SUPER absence in recovery evidence",
+    );
+  });
+
+  it("requires the migration-role repair to select the explicit prepare operation", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/image-gen-schema-transition.yml",
+      "--operation prepare",
+      "--operation revoke-super",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must explicitly select the bounded migration-role preparation",
+    );
+  });
+
+  it("requires fail-closed temporary SUPER cleanup after migration", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/image-gen-schema-transition.yml",
+      '[[ "$cleanup_status" -eq 0 && "$output" = "credit_migration_principal_super_revoked" ]]',
+      '[[ "$cleanup_status" -eq 0 && "$output" = "credit_migration_principal_ready" ]]',
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must accept only the fixed successful SUPER cleanup marker",
+    );
+  });
+
+  it("keeps database snapshot authority out of the private root session", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/image-gen-schema-transition.yml",
+      "secrets.FLY_DATABASE_REPAIR_EXEC_TOKEN",
+      "secrets.FLY_DATABASE_MIGRATION_TOKEN",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      /short-lived Machine-exec token|must not expose the snapshot and tunnel token/,
+    );
+  });
+
+  it("requires fixed-output failure handling for migration-role repair", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/image-gen-schema-transition.yml",
+      "credit_migration_principal_repair_cleanup_incomplete",
+      "credit_migration_principal_repair_failed_again",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must verify the live tunnel and surface only fixed migration-repair outcomes",
+    );
+  });
+
+  it("requires a live TCP database probe immediately before migration-role repair", () => {
+    const root = createRepositoryFixture();
+    const relativePath = ".github/workflows/image-gen-schema-transition.yml";
+    const workflowPath = path.join(root, relativePath);
+    const workflow = fs.readFileSync(workflowPath, "utf8");
+    const repairStart = workflow.indexOf(
+      "      - name: Repair and verify only the approved migration-principal rights",
+    );
+    const repairEnd = workflow.indexOf(
+      "      - name: Inspect the exact live schema phase without changing it",
+      repairStart,
+    );
+    const repairStep = workflow
+      .slice(repairStart, repairEnd)
+      .replace(
+        'n.createConnection(13306,"127.0.0.1"',
+        'n.createConnection(13307,"127.0.0.1"',
+      );
+    fs.writeFileSync(
+      workflowPath,
+      `${workflow.slice(0, repairStart)}${repairStep}${workflow.slice(repairEnd)}`,
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must verify the live tunnel and surface only fixed migration-repair outcomes",
     );
   });
 
@@ -3922,86 +4083,248 @@ describe("production deployment contract", () => {
     );
   });
 
-  it("requires a bounded disposable restore-probe Machine", () => {
+  it("retains the restore-probe until its exit evidence is verified", () => {
     const root = createRepositoryFixture();
     replaceFixtureText(
       root,
       ".github/workflows/image-gen-schema-transition.yml",
-      "            --rm \\\n",
-      "",
+      "--restart no",
+      "--restart no --rm",
     );
-
     expect(() => validateProductionRepository(root)).toThrow(
-      "must request automatic removal of the isolated probe",
+      "must retain the probe until its exact exit evidence is verified",
     );
   });
 
-  it("propagates the bounded remote restore-probe exit status", () => {
+  it.each([
+    "scripts/fly-restore-probe-status.mjs",
+    "scripts/fly-restore-probe-status.test.mjs",
+    "scripts/retire-image-gen-repair-exec-token.mjs",
+    "scripts/retire-image-gen-repair-exec-token.test.mjs",
+  ])("requires recovery safety file %s", (relativePath) => {
+    const root = createRepositoryFixture();
+    fs.unlinkSync(path.join(root, relativePath));
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      `Missing ${relativePath}`,
+    );
+  });
+
+  it.each(["missing", "substring", "duplicate"])(
+    "rejects %s repair-token retirement test registration",
+    (kind) => {
+      const root = createRepositoryFixture();
+      const testPath = "scripts/retire-image-gen-repair-exec-token.test.mjs";
+      const replacement =
+        kind === "missing"
+          ? ""
+          : kind === "substring"
+            ? ` prefixed/${testPath}`
+            : ` ${testPath} ${testPath}`;
+      replaceFixtureText(root, "package.json", ` ${testPath}`, replacement);
+      expect(() => validateProductionRepository(root)).toThrow(
+        `package.json test:production-contracts must include exact ${testPath}`,
+      );
+    },
+  );
+
+  it.each([
+    ["missing", ""],
+    ["substring", " prefixed/scripts/fly-restore-probe-status.test.mjs"],
+    [
+      "duplicate",
+      " scripts/fly-restore-probe-status.test.mjs scripts/fly-restore-probe-status.test.mjs",
+    ],
+  ])(
+    "rejects %s restore-probe production test registration",
+    (_label, replacement) => {
+      const root = createRepositoryFixture();
+      const testPath = "scripts/fly-restore-probe-status.test.mjs";
+      replaceFixtureText(root, "package.json", ` ${testPath}`, replacement);
+
+      expect(() => validateProductionRepository(root)).toThrow(
+        `package.json test:production-contracts must include exact ${testPath}`,
+      );
+    },
+  );
+
+  it("does not require automatic probe removal through an unrelated Docker flag", () => {
+    const root = createRepositoryFixture();
+    const workflowPath = path.join(
+      root,
+      ".github/workflows/image-gen-schema-transition.yml",
+    );
+    const workflow = fs.readFileSync(workflowPath, "utf8");
+    expect(workflow).toContain("docker run --rm");
+    fs.writeFileSync(
+      workflowPath,
+      workflow.replaceAll("docker run --rm", "docker run"),
+    );
+
+    expect(() => validateProductionRepository(root)).not.toThrow();
+  });
+
+  it("keeps the restore probe free of SSH authority", () => {
     const root = createRepositoryFixture();
     replaceFixtureText(
       root,
       ".github/workflows/image-gen-schema-transition.yml",
-      "timeout --signal=TERM 8m flyctl ssh console",
-      "flyctl ssh console",
+      '-- -c "$probe"',
+      '-- -c "$probe"\n          flyctl ssh console --app "$db_app"',
     );
-
     expect(() => validateProductionRepository(root)).toThrow(
-      "must bound the remote restore verification and propagate its exit status",
+      "must not use SSH or Machine-exec with the migration token",
     );
   });
 
-  it("runs the fixed restore probe through an explicit remote shell", () => {
+  it("runs the fixed restore probe as the Machine entrypoint", () => {
     const root = createRepositoryFixture();
     replaceFixtureText(
       root,
       ".github/workflows/image-gen-schema-transition.yml",
-      '--command "$probe_command"',
-      '--command "$probe"',
+      '-- -c "$probe"',
+      '-- -c "sleep 1200"',
     );
-
     expect(() => validateProductionRepository(root)).toThrow(
-      "must pass only the explicit shell command to flyctl SSH",
+      "must run the fixed restore probe as the Machine entrypoint",
     );
   });
 
-  it("rejects restore-probe shell decoys outside the exact probe step", () => {
+  it("bounds the restore-probe status poll", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/image-gen-schema-transition.yml",
+      "probe_deadline=$((SECONDS + 480))",
+      "probe_deadline=$((SECONDS + 48000))",
+    );
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must bound the restore-probe status poll",
+    );
+  });
+
+  it("handles a fast probe exit even if flyctl missed started state", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/image-gen-schema-transition.yml",
+      '-- -c "$probe" || probe_launch_status=$?',
+      '-- -c "$probe"',
+    );
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must run the fixed restore probe as the Machine entrypoint",
+    );
+  });
+
+  it("requires verified exit evidence, not only stopped state", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/image-gen-schema-transition.yml",
+      "node scripts/fly-restore-probe-status.mjs",
+      "node scripts/accept-stopped.mjs",
+    );
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must verify structured exit evidence instead of accepting a stopped Machine",
+    );
+  });
+
+  it.each([
+    [
+      "probe_sha256=\"$(printf '%s' \"$probe\" | sha256sum | cut -d' ' -f1)\"",
+      'probe_sha256="unchecked"',
+      "must hash the runner-owned restore command",
+    ],
+    [
+      '--expected-image "$mysql_image"',
+      '--expected-image "$observed_image"',
+      "must bind probe results to the reviewed immutable MySQL image",
+    ],
+    [
+      '--expected-probe-sha256 "$probe_sha256"',
+      '--expected-probe-sha256 "$observed_hash"',
+      "must bind probe results to the exact runner-owned restore command",
+    ],
+  ])("pins restore execution evidence: %s", (before, after, message) => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/image-gen-schema-transition.yml",
+      before,
+      after,
+    );
+    expect(() => validateProductionRepository(root)).toThrow(message);
+  });
+
+  it("does not retry failed exit verification", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/image-gen-schema-transition.yml",
+      'if test "$result" != 2; then',
+      "if false; then",
+    );
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must retry only pending probe verification",
+    );
+  });
+
+  it("fails when no exit proof arrives", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/image-gen-schema-transition.yml",
+      'if test "$probe_verified" != true; then',
+      "if false; then",
+    );
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must fail closed when exit evidence never arrives",
+    );
+  });
+
+  it("requires the runner-side timeout marker even when the inner probe marker remains", () => {
     const root = createRepositoryFixture();
     const relativePath = ".github/workflows/image-gen-schema-transition.yml";
     replaceFixtureText(
       root,
       relativePath,
-      'probe_b64="$(printf \'%s\' "$probe" | base64 --wrap=0)"',
-      'probe_b64="unsafe"',
+      "printf '%s\\n' mysql_restore_probe_failed",
+      ":",
     );
-    fs.appendFileSync(
-      path.join(root, relativePath),
-      [
-        "",
-        "# Decoys outside the named restore-probe step must not satisfy it:",
-        '# probe_b64="$(printf \'%s\' "$probe" | base64 --wrap=0)"',
-        '# probe_command="/bin/sh -lc',
-        "# decoded=\\$(printf %s $probe_b64 | base64 -d) || exit 70; exec /bin/sh -c",
-        '# --command "$probe_command"',
-        "",
-      ].join("\n"),
+    expect(fs.readFileSync(path.join(root, relativePath), "utf8")).toContain(
+      'printf "%s\\n" mysql_restore_probe_failed',
     );
 
     expect(() => validateProductionRepository(root)).toThrow(
-      "must encode the fixed restore probe without shell-quoting ambiguity",
+      "must emit a metadata-only runner failure marker when restore exit evidence never arrives",
     );
   });
 
-  it("requires bounded restore-probe startup diagnostics", () => {
+  it("does not expose raw database diagnostics", () => {
     const root = createRepositoryFixture();
     replaceFixtureText(
       root,
       ".github/workflows/image-gen-schema-transition.yml",
-      "tail -n 120 /tmp/mysql-restore-probe.log",
-      "true",
+      'printf "%s\\n" mysql_restore_probe_failed',
+      'printf "%s\\n" mysql_restore_probe_failed; tail -n 120 /tmp/mysql-restore-probe.log',
     );
-
     expect(() => validateProductionRepository(root)).toThrow(
-      "must emit a bounded MySQL startup diagnostic before failing closed",
+      "must not emit raw restored database diagnostics",
+    );
+  });
+
+  it("rejects restore-probe verification decoys outside the exact step", () => {
+    const root = createRepositoryFixture();
+    const relativePath = ".github/workflows/image-gen-schema-transition.yml";
+    replaceFixtureText(
+      root,
+      relativePath,
+      '-- -c "$probe"',
+      '-- -c "sleep 1200"',
+    );
+    fs.appendFileSync(path.join(root, relativePath), '\n# -- -c "$probe"\n');
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must run the fixed restore probe as the Machine entrypoint",
     );
   });
 
@@ -4043,7 +4366,7 @@ describe("production deployment contract", () => {
     );
 
     expect(() => validateProductionRepository(root)).toThrow(
-      "must give the bounded Machine start, start poll, and 8m SSH probe enough outer time",
+      "must give the bounded Machine start and exit poll enough outer time",
     );
   });
 
@@ -4052,7 +4375,7 @@ describe("production deployment contract", () => {
     replaceFixtureText(
       root,
       ".github/workflows/image-gen-schema-transition.yml",
-      '.state|IN("started","stopped","suspended","created","failed")',
+      '.state|IN("starting","started","stopping","stopped","suspended","created","failed")',
       '.state|IN("started","stopped","suspended","created","failed","destroying")',
     );
 

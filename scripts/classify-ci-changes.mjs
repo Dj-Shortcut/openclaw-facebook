@@ -7,6 +7,16 @@ import { fileURLToPath } from "node:url";
 const SHA_PATTERN = /^[a-f0-9]{40}$/;
 const IMAGE_GEN_CREDIT_DATABASE_CONTROL_PATHS = new Set([
   ".github/workflows/retire-image-gen-credit-provisioners.yml",
+  ".github/workflows/image-gen-schema-transition.yml",
+  "scripts/fly-restore-probe-status.mjs",
+  "scripts/fly-restore-probe-status.test.mjs",
+  "scripts/image-gen-credit-migration-principal-repair-contract.mjs",
+  "scripts/image-gen-credit-migration-principal-repair-contract.test.mjs",
+  "scripts/repair-image-gen-credit-migration-principal.mjs",
+  "scripts/retire-image-gen-repair-exec-token.mjs",
+  "scripts/retire-image-gen-repair-exec-token.test.mjs",
+  "scripts/validate-production-deployment.mjs",
+  "scripts/validate-production-deployment.test.mjs",
   "scripts/image-gen-credit-provisioner-bootstrap-contract.mjs",
   "scripts/image-gen-credit-provisioner-bootstrap-contract.test.mjs",
   "scripts/provision-image-gen-credit-provisioner.mjs",

@@ -5,6 +5,12 @@ dispatched `Deploy production` GitHub Actions workflow. `fly deploy` may replace
 or update Machines. Operators never use `fly machine run` as a deployment or
 migration shortcut. Only the protected schema workflow may create its one
 temporary, no-DNS Machine to prove that a fresh database snapshot restores.
+The fixed integrity check runs as that isolated Machine's entrypoint with
+networking disabled in MySQL and automatic restart disabled. The workflow reads
+structured exit evidence from the exact Machines API endpoint; a stopped
+Machine alone is not success. It retains the Machine until verification, then
+the existing unconditional cleanup removes the Machine and restored volume.
+This restore test uses no SSH or Machine-exec credential.
 
 ## Ownership model
 
@@ -86,11 +92,14 @@ these environment secrets:
 - `FLY_IMAGE_GEN_DEPLOY_TOKEN`: limited to `leaderbot-fb-image-gen`;
 - `FLY_STORAGE_PROXY_DEPLOY_TOKEN`: limited to `leaderbot-storage-proxy`;
 - `FLY_DATABASE_MIGRATION_TOKEN`: limited to snapshot, temporary restore-volume,
-  restore-probe, reviewer-approved orphan cleanup, and the fixed-output
-  migration-principal repair inside the exact reviewed
-  `leaderbot-portal-mysql` Machine. The repair child receives only this Fly
-  token and basic process-runtime variables; the database URL is not passed to
-  `flyctl`;
+  restore-probe, reviewer-approved orphan cleanup, and the isolated database
+  tunnel for `leaderbot-portal-mysql`; it has no SSH or Machine-exec authority;
+- `FLY_DATABASE_REPAIR_EXEC_TOKEN`: a short-lived Machine-exec token limited to
+  `leaderbot-portal-mysql` and the exact reviewed root-MySQL command used by the
+  fixed-output migration-principal repair. It exists only for the reviewed
+  schema transition and is revoked after the transition. The repair child
+  receives only this token and basic process-runtime variables; the database
+  URL is not passed to `flyctl`;
 - `IMAGE_GEN_DATABASE_MIGRATION_URL`: `127.0.0.1:13306` URL for the dedicated
   expand principal;
 - `IMAGE_GEN_DATABASE_PROVISIONER_URL`: `127.0.0.1:13306` URL for the separate
@@ -98,6 +107,97 @@ these environment secrets:
   and drops reviewed MySQL principals;
 - `META_APP_ID` and `META_APP_SECRET`: used only to read and verify webhook
   subscriptions; values are never printed.
+
+### One-off repair-exec token installation and verified retirement
+
+Use a reviewed checkout and the operator's local `flyctl auth login` and
+`gh auth login` sessions, never workflow credentials. The retirement command
+requires Fly CLI `0.4.94`, the version used by the root-command helper. Pause
+other schema-transition dispatches and secret rotation for this operation;
+Fly token revocation and GitHub secret deletion have no shared atomic lock.
+Do not run these commands from Actions, shell tracing, or a recorded terminal.
+
+Dispatch `image-gen-schema-transition.yml` on protected `main`, but **do not
+approve its `production` job yet**. Record that exact run ID and attempt from
+GitHub. Environment secrets are resolved when the protected job starts, so
+install the token while the job waits for approval. Confirm that the named
+repair-exec secret is absent first; never overwrite a previous transition's
+unretired secret. A previous incomplete cleanup must be resolved before a new
+transition proceeds.
+
+```bash
+set -euo pipefail
+set +x
+unset FLY_API_TOKEN GH_TOKEN GITHUB_TOKEN
+run_id=REPLACE_WITH_EXACT_WAITING_RUN_ID
+run_attempt=1
+[[ "$run_id" =~ ^[1-9][0-9]*$ ]]
+[[ "$run_attempt" =~ ^[1-9][0-9]*$ ]]
+gh run view "$run_id" --repo Dj-Shortcut/openclaw-facebook \
+  --json databaseId,attempt,event,headBranch,status,workflowName,url
+test "$(gh secret list --repo Dj-Shortcut/openclaw-facebook --env production \
+  --json name --jq '[.[] | select(.name == "FLY_DATABASE_REPAIR_EXEC_TOKEN")] | length')" = 0
+root_mysql_command="$(node --input-type=module -e \
+  'import {ROOT_MYSQL_REMOTE_COMMAND} from "./scripts/provision-image-gen-credit-provisioner.mjs"; process.stdout.write(ROOT_MYSQL_REMOTE_COMMAND)')"
+flyctl tokens list --app leaderbot-portal-mysql --scope app | \
+  REPAIR_RUN_ID="$run_id" node --input-type=module -e \
+  'import {parseFlyTokenInventory} from "./scripts/retire-image-gen-repair-exec-token.mjs"; let s=""; for await (const c of process.stdin) s+=c; if (parseFlyTokenInventory(s).some(t=>t.name===`leaderbot-pr486-repair-${process.env.REPAIR_RUN_ID}`)) process.exit(1)'
+repair_token_json="$(flyctl tokens create machine-exec \
+  --app leaderbot-portal-mysql --name "leaderbot-pr486-repair-$run_id" \
+  --expiry 4h --command "$root_mysql_command" --json)"
+repair_token="$(printf '%s' "$repair_token_json" | node --input-type=module -e \
+  'try { let s=""; for await (const c of process.stdin) s+=c; const v=JSON.parse(s).token; if(typeof v!=="string" || !v.trim()) process.exit(1); process.stdout.write(v); } catch { process.exit(1); }')"
+unset repair_token_json root_mysql_command
+printf '%s' "$repair_token" | gh secret set FLY_DATABASE_REPAIR_EXEC_TOKEN \
+  --repo Dj-Shortcut/openclaw-facebook --env production
+unset repair_token
+token_id="$(flyctl tokens list --app leaderbot-portal-mysql --scope app | \
+  REPAIR_RUN_ID="$run_id" node --input-type=module -e \
+  'import {parseFlyTokenInventory} from "./scripts/retire-image-gen-repair-exec-token.mjs"; let s=""; for await (const c of process.stdin) s+=c; const t=parseFlyTokenInventory(s).filter(t=>t.name===`leaderbot-pr486-repair-${process.env.REPAIR_RUN_ID}`); if(t.length!==1 || t[0].revokedAt!==null) process.exit(1); process.stdout.write(t[0].id)')"
+secret_updated_at="$(gh secret list --repo Dj-Shortcut/openclaw-facebook \
+  --env production --json name,updatedAt \
+  --jq '.[] | select(.name == "FLY_DATABASE_REPAIR_EXEC_TOKEN") | .updatedAt')"
+test -n "$token_id"
+test -n "$secret_updated_at"
+```
+
+Record only `run_id`, `run_attempt`, `token_id`, and `secret_updated_at` in the
+operator evidence. Never record the token value. The command is imported from
+the reviewed root helper verbatim: do not substitute `--command-prefix`, omit
+`--command`, use a deploy/migration token, or extend the four-hour expiry. Fly's
+token inventory exposes ID/name/expiry/revocation metadata, not command
+caveats; the exact creation command above establishes the command restriction.
+Only after successful installation and metadata capture may the operator
+approve the protected job. If installation fails or the token expires, do not
+approve the job or treat expiry as proof that temporary MySQL grants vanished.
+
+After the exact run attempt is terminal and its **Revoke temporary migration
+SUPER privilege** step succeeded, run:
+
+```bash
+node scripts/retire-image-gen-repair-exec-token.mjs \
+  --run-id "$run_id" --run-attempt "$run_attempt" --token-id "$token_id" \
+  --secret-updated-at "$secret_updated_at"
+```
+
+Success is only `repair_exec_token_retired` (exit zero). The command verifies
+the exact latest main/dispatch attempt, current protected environment, executed
+workflow matching this reviewed checkout, and the cleanup step's fixed-output
+success gate. It resolves the one-off token by both exact ID and exact name,
+revokes only that token, and requires an authoritative nonempty `Revoked At`
+readback before deleting only `production/FLY_DATABASE_REPAIR_EXEC_TOKEN`.
+It then verifies the secret is absent. It never reads the secret value or adds
+revocation authority to workflow credentials.
+
+On `repair_exec_token_retirement_failed` (exit one), retain these same four
+metadata values and retry only after the evidence or external operation is
+resolved. Repeating the command handles an already revoked token, an already
+absent secret, and uncertain mutation responses. A replacement secret's changed
+`updatedAt` is rejected even on a later retry. Failed/skipped/missing SUPER
+cleanup, a newer run/attempt, missing inventory, or unknown grant state blocks
+retirement; there is no `--no-grant` bypass. Preserve cleanup access and obtain
+a fresh reviewed SUPER-revocation proof before retiring credentials in those
+cases. Do not infer database cleanup from token expiry or cancellation alone.
 
 Create a second environment named `production-inspection`, limited to protected
 `main`, with no reviewer or wait timer and with administrator bypass disabled.
@@ -225,20 +325,34 @@ Before that first inspection, the protected transition creates a fresh
 encrypted volume snapshot and uploads its metadata before any repair. This is
 a recovery reference, not restore proof; the later independently restored and
 verified snapshot remains the DDL rollback gate. It then runs the fixed-output
-migration-role repair. That repair accepts only an otherwise exact migration role missing a
-subset of `CREATE`, `TRIGGER`, `CREATE ROUTINE`, and `ALTER ROUTINE`; it uses the
-root credential only inside the exact reviewed database Machine, never exports
-the credential or account identity, and grants only the missing subset. It
-immediately runs the strict `credit-expand` inspection. A failed verification
-re-reads the effective grants even when transport failed after MySQL may have
-committed, reconnects under a fresh repair lock when the root transport was
-lost, revokes only rights proven to have been added by that attempt, and
-verifies the rollback; an incomplete rollback stops with a distinct fixed
-marker. The mutation decision is made only after the repair lock is held. An
-already-correct role is a no-op. A resumed exact 0017 or 0018 history is
-verification-only and never opens the root mutation path. The normal schema
-transition remains reviewer-gated and no credit DDL runs before this repair and
-inspection succeed.
+migration-role repair. That repair accepts only an otherwise exact migration
+role missing a subset of `CREATE`, `TRIGGER`, `CREATE ROUTINE`, and `ALTER
+ROUTINE`, plus conditional global `SUPER` only when the inspected binary-log
+settings require it. It uses the root credential only inside the exact reviewed
+database Machine, never exports the credential or account identity, grants the
+schema subset first, and grants `SUPER` last. It immediately runs the strict
+`credit-expand` inspection. A failed verification re-reads the effective grants
+even when transport failed after MySQL may have committed, reconnects under a
+fresh repair lock when the root transport was lost, revokes `SUPER` before any
+schema rights proven to have been added by that attempt, and verifies the
+rollback; an incomplete rollback stops with a distinct fixed marker. The
+mutation decision is made only after the repair lock is held. An
+already-correct role is a no-op. A resumed exact 0017 or 0018 history must
+already have every required schema, table, and routine privilege. It may add
+only conditional `SUPER` for the immutable bridge inspection; it never repairs
+missing schema privileges after DDL. Before taking the usable 0016 recovery
+snapshot, the workflow revokes temporary `SUPER` and verifies its absence.
+Only after restoring that snapshot, uploading its evidence, and rechecking the
+settled bridge may it prepare the conditional privilege again for DDL. The
+recovery artifact records `snapshot.temporarySuperAbsent: true`; old artifacts
+without that evidence cannot be used for resume or promoted from the untested
+pre-repair reference. After either a successful or failed DDL attempt, an `always` cleanup
+reopens only the same reviewed root command, revokes `SUPER`, and verifies that
+it is absent before success evidence is recorded or the isolated tunnel is
+stopped. Cleanup failure is terminal and emits only the fixed
+cleanup-incomplete marker. The normal
+schema transition remains reviewer-gated and no credit DDL runs before this
+repair and inspection succeed.
 
 The protected workflow then performs the non-mutating migration-principal and
 schema-phase inspection, creates, restores, validates, and durably uploads the
@@ -594,14 +708,18 @@ trusted production artifact` with `image-gen-bridge`. The workflow proves
    `Apply reviewed image-gen credit schema`. The protected workflow first
    proves every Machine is the attested
    bridge and the live database is the exact 0016 base. It creates a fresh
-   encrypted snapshot, restores it into an isolated encrypted volume, runs
-   MySQL integrity checks, uploads metadata-only recovery evidence, and removes
-   the temporary restore Machine and volume.
+   encrypted snapshot only after verified temporary-SUPER revocation, restores
+   it into an isolated encrypted volume, runs MySQL integrity checks, uploads
+   metadata-only recovery evidence, and removes the temporary restore Machine
+   and volume. The success check binds the actual Machine image digest and
+   shell command to the reviewed image and the runner's exact probe hash;
+   an unrelated command returning zero is not restore proof.
 7. **Apply only 0017 then 0018.** The same protected workflow applies only the
    reviewed credit migrations and verifies the exact final 0018 contract from
    the bridge. A resume must name the exact earlier recovery run and attempt;
    the snapshot, database, migration manifest, schema contract, bridge digest,
-   and bridge source must all still match. Unknown or partial shapes fail
+   and bridge source must all still match, including verified absence of
+   temporary `SUPER` in the recovery snapshot. Unknown or partial shapes fail
    closed.
 8. **Build the final runtime.** In a reviewed manifest PR, record the successful
    schema phase and state `runtime_build_pending`, leaving deploys frozen on the

@@ -15,10 +15,14 @@ import {
   CREDIT_MIGRATION_PRINCIPAL_CLEANUP_FAILURE_MARKER,
   CREDIT_MIGRATION_PRINCIPAL_FAILURE_MARKER,
   CREDIT_MIGRATION_PRINCIPAL_READY_MARKER,
+  CREDIT_MIGRATION_PRINCIPAL_SUPER_REVOKED_MARKER,
   CreditMigrationPrincipalCleanupError,
+  assertCreditMigrationSuperCleanupBoundary,
   detectMissingCreditMigrationPrivileges,
+  hasCreditMigrationGlobalSuper,
   parseCreditMigrationAccount,
   repairCreditMigrationPrincipal,
+  revokeTemporaryCreditMigrationSuper,
 } from "./image-gen-credit-migration-principal-repair-contract.mjs";
 
 const scriptPath = fileURLToPath(import.meta.url);
@@ -33,23 +37,30 @@ function fail() {
 }
 
 export function parseCliArguments(argv) {
-  if (!Array.isArray(argv) || argv.length !== 4) fail();
+  if (!Array.isArray(argv) || argv.length !== 6) fail();
   const appIndex = argv.indexOf("--database-app");
   const machineIndex = argv.indexOf("--database-machine-id");
+  const operationIndex = argv.indexOf("--operation");
   if (
     appIndex < 0 ||
     machineIndex < 0 ||
+    operationIndex < 0 ||
     appIndex % 2 !== 0 ||
     machineIndex % 2 !== 0 ||
+    operationIndex % 2 !== 0 ||
     appIndex === machineIndex ||
+    appIndex === operationIndex ||
+    machineIndex === operationIndex ||
     argv[appIndex + 1] !== "leaderbot-portal-mysql" ||
-    !/^[a-f0-9]{14}$/.test(argv[machineIndex + 1] ?? "")
+    !/^[a-f0-9]{14}$/.test(argv[machineIndex + 1] ?? "") ||
+    !new Set(["prepare", "revoke-super"]).has(argv[operationIndex + 1])
   ) {
     fail();
   }
   return Object.freeze({
     app: argv[appIndex + 1],
     machineId: argv[machineIndex + 1],
+    operation: argv[operationIndex + 1],
   });
 }
 
@@ -142,7 +153,7 @@ async function closeConnection(connection) {
 }
 
 export async function executeRepair(
-  { app, machineId },
+  { app, machineId, operation = "prepare" },
   {
     migrationUrl = process.env.DATABASE_MIGRATION_URL?.trim(),
     mysql = loadMysqlPromiseClient(),
@@ -163,7 +174,7 @@ export async function executeRepair(
     signal,
   } = {},
 ) {
-  if (!signal || signal.aborted) fail();
+  if (!signal || signal.aborted || operation !== "prepare") fail();
   const url = assertMigrationUrl(migrationUrl);
   let connection;
   let operationError;
@@ -180,28 +191,36 @@ export async function executeRepair(
     connection = await mysql.createConnection(url);
     const initialPhase = await readPhase(connection);
     const initial = await readState(connection);
-    const verify = async () => {
+    const postDdl = initialPhase !== "0016_expand";
+    const verify = async (requireSuper = initial.requireSuper) => {
       const current = await readState(connection);
       if (
         current.account.username !== initial.account.username ||
-        current.account.hostname !== initial.account.hostname
+        current.account.hostname !== initial.account.hostname ||
+        current.databaseName !== initial.databaseName ||
+        current.requireSuper !== initial.requireSuper
       ) {
         fail();
       }
       assertCreditWalletMigrationGrantScope(
         current.grants,
         current.databaseName,
-        current.requireSuper,
+        requireSuper,
       );
-      await verifyRuntime(connection, "credit-expand");
+      await verifyRuntime(
+        connection,
+        postDdl && !requireSuper ? "credit-expand-postddl" : "credit-expand",
+      );
       if ((await readPhase(connection)) !== initialPhase) fail();
     };
 
-    // A resumed transition may already have recorded 0017 or 0018. Those
-    // phases are verification-only: never reopen the root mutation path.
-    if (initialPhase !== "0016_expand") {
-      await verify();
-      return "already_ready";
+    // The immutable bridge still requires conditional SUPER for inspection.
+    // A resumed history must already have every schema/table/routine right;
+    // only missing SUPER may be prepared, never post-DDL schema rights.
+    if (postDdl) {
+      const superPresent = hasCreditMigrationGlobalSuper(initial.grants);
+      await verify(initial.requireSuper && superPresent);
+      if (!initial.requireSuper || superPresent) return "already_ready";
     }
 
     root = await createRoot();
@@ -209,8 +228,12 @@ export async function executeRepair(
       account: initial.account,
       databaseName: initial.databaseName,
       requireSuper: initial.requireSuper,
+      superOnly: postDdl,
       root,
-      readState: () => readState(connection),
+      readState: async () => {
+        if (postDdl && (await readPhase(connection)) !== initialPhase) fail();
+        return readState(connection);
+      },
       recoverRoot: async (failedRoot) => {
         await failedRoot.close({ releaseLock: false, signal });
         return createRoot();
@@ -253,9 +276,101 @@ export async function executeRepair(
   }
 }
 
+export async function executeSuperCleanup(
+  { app, machineId, operation = "revoke-super" },
+  {
+    migrationUrl = process.env.DATABASE_MIGRATION_URL?.trim(),
+    mysql = loadMysqlPromiseClient(),
+    openRoot = ({ signal }) =>
+      new RootMysqlSession({
+        app,
+        machineId,
+        signal,
+        env: Object.fromEntries(
+          ["PATH", "FLY_API_TOKEN", "TMPDIR", "NO_COLOR"]
+            .filter((name) => typeof process.env[name] === "string")
+            .map((name) => [name, process.env[name]]),
+        ),
+      }),
+    readPhase = readExactCreditMigrationPhase,
+    readState = readCurrentState,
+    signal,
+  } = {},
+) {
+  if (!signal || signal.aborted || operation !== "revoke-super") fail();
+  const url = assertMigrationUrl(migrationUrl);
+  let connection;
+  let operationError;
+  const roots = [];
+  let root;
+  const createRoot = async () => {
+    const next = await openRoot({ signal });
+    if (!next || typeof next.initialize !== "function") fail();
+    roots.push(next);
+    await next.initialize(signal);
+    return next;
+  };
+  try {
+    connection = await mysql.createConnection(url);
+    const initialPhase = await readPhase(connection);
+    const initial = await readState(connection);
+    assertCreditMigrationSuperCleanupBoundary(initial);
+    const verify = async () => {
+      const current = await readState(connection);
+      if (
+        current.account.username !== initial.account.username ||
+        current.account.hostname !== initial.account.hostname ||
+        current.databaseName !== initial.databaseName
+      ) {
+        fail();
+      }
+      assertCreditMigrationSuperCleanupBoundary(current);
+      if (hasCreditMigrationGlobalSuper(current.grants)) fail();
+      if ((await readPhase(connection)) !== initialPhase) fail();
+    };
+    root = await createRoot();
+    return await revokeTemporaryCreditMigrationSuper({
+      account: initial.account,
+      databaseName: initial.databaseName,
+      root,
+      readState: () => readState(connection),
+      recoverRoot: async (failedRoot) => {
+        await failedRoot.close({ releaseLock: false, signal });
+        return createRoot();
+      },
+      verify,
+    });
+  } catch (error) {
+    operationError = error;
+    throw error;
+  } finally {
+    for (const openedRoot of roots.reverse()) {
+      await openedRoot
+        .close({ releaseLock: false, signal })
+        .catch(() => undefined);
+    }
+    try {
+      await closeConnection(connection);
+    } catch (closeError) {
+      if (operationError instanceof CreditMigrationPrincipalCleanupError) {
+        throw operationError;
+      }
+      if (operationError) {
+        throw new AggregateError(
+          [operationError, closeError],
+          "temporary SUPER revocation and connection cleanup failed",
+          { cause: operationError },
+        );
+      }
+      throw closeError;
+    }
+  }
+}
+
 function normalizeMarker(value) {
   return new Set([
     CREDIT_MIGRATION_PRINCIPAL_READY_MARKER,
+    CREDIT_MIGRATION_PRINCIPAL_SUPER_REVOKED_MARKER,
     CREDIT_MIGRATION_PRINCIPAL_FAILURE_MARKER,
     CREDIT_MIGRATION_PRINCIPAL_CLEANUP_FAILURE_MARKER,
   ]).has(value)
@@ -263,7 +378,10 @@ function normalizeMarker(value) {
     : CREDIT_MIGRATION_PRINCIPAL_FAILURE_MARKER;
 }
 
-export async function runCli(argv, { execute = executeRepair } = {}) {
+export async function runCli(
+  argv,
+  { execute = executeRepair, cleanup = executeSuperCleanup } = {},
+) {
   const controller = new AbortController();
   const interrupt = () => controller.abort();
   process.on("SIGINT", interrupt);
@@ -271,8 +389,13 @@ export async function runCli(argv, { execute = executeRepair } = {}) {
   let marker = CREDIT_MIGRATION_PRINCIPAL_FAILURE_MARKER;
   try {
     const input = parseCliArguments(argv);
-    await execute(input, { signal: controller.signal });
-    marker = CREDIT_MIGRATION_PRINCIPAL_READY_MARKER;
+    if (input.operation === "prepare") {
+      await execute(input, { signal: controller.signal });
+      marker = CREDIT_MIGRATION_PRINCIPAL_READY_MARKER;
+    } else {
+      await cleanup(input, { signal: controller.signal });
+      marker = CREDIT_MIGRATION_PRINCIPAL_SUPER_REVOKED_MARKER;
+    }
   } catch (error) {
     if (error instanceof CreditMigrationPrincipalCleanupError) {
       marker = CREDIT_MIGRATION_PRINCIPAL_CLEANUP_FAILURE_MARKER;
@@ -291,5 +414,10 @@ const isMain =
 
 if (isMain) {
   const marker = await runCli(process.argv.slice(2));
-  process.exitCode = marker === CREDIT_MIGRATION_PRINCIPAL_READY_MARKER ? 0 : 1;
+  process.exitCode = new Set([
+    CREDIT_MIGRATION_PRINCIPAL_READY_MARKER,
+    CREDIT_MIGRATION_PRINCIPAL_SUPER_REVOKED_MARKER,
+  ]).has(marker)
+    ? 0
+    : 1;
 }

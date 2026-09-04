@@ -1090,10 +1090,10 @@ async function testCreditWalletLeastPrivilegeProfiles(migrationPlan) {
   const [[triggerRuntime]] = await admin.query(
     "SELECT @@GLOBAL.log_bin AS logBin, @@GLOBAL.log_bin_trust_function_creators AS trustFunctionCreators"
   );
-  if (
+  const requireMigrationSuper =
     Number(triggerRuntime.logBin) === 1 &&
-    Number(triggerRuntime.trustFunctionCreators) === 0
-  ) {
+    Number(triggerRuntime.trustFunctionCreators) === 0;
+  if (requireMigrationSuper) {
     await admin.query(`GRANT SUPER ON *.* TO \`${creditMigrationUser}\`@'%'`);
   }
   const migrationPrivileges =
@@ -1239,8 +1239,55 @@ async function testCreditWalletLeastPrivilegeProfiles(migrationPlan) {
       bundledGrantVerification,
       "credit-expand"
     );
+    if (requireMigrationSuper) {
+      await admin.query(
+        `REVOKE SUPER ON *.* FROM \`${creditMigrationUser}\`@'%'`
+      );
+    }
+    // Prove the stored grant boundary used before the workflow's snapshot.
+    // Physical snapshot restoration remains a separate workflow check.
+    const [snapshotBoundaryGrants] = await bundledGrantVerification.query(
+      "SHOW GRANTS FOR CURRENT_USER()"
+    );
+    assertCreditWalletMigrationGrantScope(
+      snapshotBoundaryGrants.flatMap(row => Object.values(row).map(String)),
+      creditPrivilegeDatabase,
+      false
+    );
+    await assertProductionMigrationRuntime(
+      bundledGrantVerification,
+      "credit-expand-postddl"
+    );
+    if (requireMigrationSuper) {
+      await expectFailure(
+        assertProductionMigrationRuntime(
+          bundledGrantVerification,
+          "credit-expand-pregrant"
+        ),
+        "immutable inspection requires temporary SUPER when binary logging demands it",
+        "lacks global SUPER"
+      );
+    }
   } finally {
     await bundledGrantVerification.end();
+  }
+  if (requireMigrationSuper) {
+    await admin.query(`GRANT SUPER ON *.* TO \`${creditMigrationUser}\`@'%'`);
+  }
+  const restoredGrantVerification = await mysql.createConnection(
+    databaseUrlForUser(creditPrivilegeDatabase, creditMigrationUser)
+  );
+  try {
+    await assertProductionMigrationRuntime(
+      restoredGrantVerification,
+      "credit-expand-pregrant"
+    );
+    await assertProductionMigrationRuntime(
+      restoredGrantVerification,
+      "credit-expand"
+    );
+  } finally {
+    await restoredGrantVerification.end();
   }
   let bundledFailure;
   try {
@@ -1410,6 +1457,32 @@ async function testCreditWalletLeastPrivilegeProfiles(migrationPlan) {
     applied.appliedCount === migrationPlan.through0018.length,
     "least-privilege credit migration resumes after 0017 helper creation and applies 0018"
   );
+  if (requireMigrationSuper) {
+    await admin.query(
+      `REVOKE SUPER ON *.* FROM \`${creditMigrationUser}\`@'%'`
+    );
+  }
+  const postDdlGrantVerification = await mysql.createConnection(
+    databaseUrlForUser(creditPrivilegeDatabase, creditMigrationUser)
+  );
+  try {
+    await assertProductionMigrationRuntime(
+      postDdlGrantVerification,
+      "credit-expand-postddl"
+    );
+    if (requireMigrationSuper) {
+      await expectFailure(
+        assertProductionMigrationRuntime(
+          postDdlGrantVerification,
+          "credit-expand-pregrant"
+        ),
+        "completed 0018 inspection still requires temporary SUPER when binary logging demands it",
+        "lacks global SUPER"
+      );
+    }
+  } finally {
+    await postDdlGrantVerification.end();
+  }
 
   await admin.query(`CREATE USER \`${creditRuntimeUser}\`@'%'`);
   await admin.query(
@@ -2141,6 +2214,10 @@ function testStagedRolloutContracts() {
     productionDatabasePrivilegeProfiles.includes("credit-expand-pregrant"),
     "credit pregrant inspection is an executable migration privilege profile"
   );
+  assert(
+    productionDatabasePrivilegeProfiles.includes("credit-expand-postddl"),
+    "credit post-DDL inspection is an executable migration privilege profile"
+  );
   for (const phase of [
     "0016_expand",
     "0017_credit_wallet_expand",
@@ -2602,6 +2679,20 @@ function testSchemaDigestContracts() {
     ],
     "leaderbot",
     true
+  );
+  expectSynchronousFailure(
+    () =>
+      assertCreditWalletMigrationGrantScope(
+        [
+          creditMigrationGrant,
+          ...creditMigrationTableGrants,
+          "GRANT SUPER ON *.* TO `credit_migrator`@`%`",
+        ],
+        "leaderbot",
+        false
+      ),
+    "credit post-DDL inspection rejects retained temporary SUPER",
+    "excessive global SUPER"
   );
   expectSynchronousFailure(
     () =>
