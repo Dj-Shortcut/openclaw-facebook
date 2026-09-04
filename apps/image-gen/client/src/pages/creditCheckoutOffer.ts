@@ -14,6 +14,11 @@ export type CreditCheckoutOffer = Readonly<{
 
 export const CREDIT_CHECKOUT_BILLING_POLICY_PATH = "/billing-policy" as const;
 
+export const creditCheckoutErrorCopy = {
+  title: "We kunnen je betaalstatus niet bevestigen",
+  body: "Heb je al een betaling gestart of bevestigd, betaal dan niet opnieuw. Controleer de betaalstatus later.",
+} as const;
+
 export const creditBillingPolicyCopy = {
   title: "Betaling en terugbetaling van premiumcredits",
   intro:

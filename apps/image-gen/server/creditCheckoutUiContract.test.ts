@@ -1,8 +1,10 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import {
   CREDIT_CHECKOUT_BILLING_POLICY_PATH,
   creditBillingPolicyCopy,
+  creditCheckoutErrorCopy,
   creditCheckoutModeDisclosure,
   creditCheckoutRefundPolicyDisclosure,
   parseCreditCheckoutOffer,
@@ -23,6 +25,25 @@ const exactOffer = Object.freeze({
 });
 
 describe("credit checkout UI contract", () => {
+  it("binds the error view to an uncertainty alert without encouraging another payment", () => {
+    expect(creditCheckoutErrorCopy).toEqual({
+      title: "We kunnen je betaalstatus niet bevestigen",
+      body: "Heb je al een betaling gestart of bevestigd, betaal dan niet opnieuw. Controleer de betaalstatus later.",
+    });
+    const source = readFileSync(
+      new URL("../client/src/pages/CreditCheckout.tsx", import.meta.url),
+      "utf8"
+    );
+    const errorView = source.match(
+      /\{state.kind === "error" \? \(([\s\S]*?)\) : null\}/
+    )?.[1];
+    expect(errorView).toBeDefined();
+    expect(errorView).toContain('<div role="alert">');
+    expect(errorView).toContain("{creditCheckoutErrorCopy.title}");
+    expect(errorView).toContain("{creditCheckoutErrorCopy.body}");
+    expect(errorView).not.toMatch(/niets aangerekend|nieuwe\s+link/i);
+  });
+
   it("shows the exact versioned refund consequences before confirmation", () => {
     expect(parseCreditCheckoutOffer(exactOffer)).toBe(exactOffer);
     expect(creditCheckoutRefundPolicyDisclosure(exactOffer)).toContain(

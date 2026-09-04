@@ -3,6 +3,7 @@ import { Link } from "wouter";
 
 import {
   CREDIT_CHECKOUT_BILLING_POLICY_PATH,
+  creditCheckoutErrorCopy,
   creditCheckoutModeDisclosure,
   creditCheckoutRefundPolicyDisclosure,
   parseCreditCheckoutOffer,
@@ -311,15 +312,14 @@ export default function CreditCheckout() {
         ) : null}
 
         {state.kind === "error" ? (
-          <>
+          <div role="alert">
             <h1 className="text-3xl font-semibold text-slate-950">
-              Deze betaallink kan niet worden gebruikt
+              {creditCheckoutErrorCopy.title}
             </h1>
             <p className="mt-4 text-slate-700">
-              Er is niets aangerekend. Ga terug naar Messenger en vraag daar een
-              nieuwe link.
+              {creditCheckoutErrorCopy.body}
             </p>
-          </>
+          </div>
         ) : null}
 
         <Link
