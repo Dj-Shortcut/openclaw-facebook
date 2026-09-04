@@ -55,6 +55,8 @@ describe("CI change classification", () => {
     "scripts/repair-image-gen-credit-migration-principal.mjs",
     "scripts/retire-image-gen-repair-exec-token.mjs",
     "scripts/retire-image-gen-repair-exec-token.test.mjs",
+    "scripts/validate-production-deployment.mjs",
+    "scripts/validate-production-deployment.test.mjs",
     "scripts/image-gen-credit-provisioner-bootstrap-contract.mjs",
     "scripts/image-gen-credit-provisioner-bootstrap-contract.test.mjs",
     "scripts/provision-image-gen-credit-provisioner.mjs",

@@ -35,6 +35,11 @@ const BASE_GRANTS = Object.freeze([
 const COMPLETE_SCHEMA_GRANT =
   "GRANT CREATE, TRIGGER, CREATE ROUTINE, ALTER ROUTINE ON `leaderbot`.* TO `credit_migrator`@`%`";
 const SUPER_GRANT = "GRANT SUPER ON *.* TO `credit_migrator`@`%`";
+const SUPER_REVOKE = "REVOKE SUPER ON *.* FROM `credit_migrator`@`%`";
+const REVOKED_SUPER_ORDERS = [
+  ["GRANT then REVOKE", [SUPER_GRANT, SUPER_REVOKE]],
+  ["REVOKE then GRANT", [SUPER_REVOKE, SUPER_GRANT]],
+];
 const POST_DDL_GRANTS = Object.freeze([
   ...BASE_GRANTS,
   COMPLETE_SCHEMA_GRANT,
@@ -225,6 +230,20 @@ describe("credit migration principal repair contract", () => {
     );
     expect(hasCreditMigrationGlobalSuper(BASE_GRANTS)).toBe(false);
   });
+
+  it.each(REVOKED_SUPER_ORDERS)(
+    "lets a global SUPER revoke dominate %s",
+    (_order, superGrants) => {
+      const grants = [...POST_DDL_GRANTS, ...superGrants];
+      expect(hasCreditMigrationGlobalSuper(grants)).toBe(false);
+      expect(
+        detectMissingCreditMigrationPrivileges(migrationState(grants)),
+      ).toEqual([]);
+      expect(() =>
+        detectMissingCreditMigrationPrivileges(migrationState(grants, true)),
+      ).toThrow();
+    },
+  );
 
   it("treats an already complete exact boundary as idempotent", () => {
     expect(
@@ -527,6 +546,71 @@ describe("credit migration principal repair contract", () => {
 });
 
 describe("temporary migration SUPER cleanup", () => {
+  it.each(REVOKED_SUPER_ORDERS)(
+    "accepts the cleanup boundary and remains a no-op for %s",
+    async (_order, superGrants) => {
+      const grants = [...POST_DDL_GRANTS, ...superGrants];
+      expect(() =>
+        assertCreditMigrationSuperCleanupBoundary(migrationState(grants, true)),
+      ).not.toThrow();
+      const { root, readState, statements } = rootHarness({
+        initialGrants: grants,
+        requireSuper: true,
+      });
+      const recoverRoot = vi.fn();
+      const verify = vi.fn();
+      await expect(
+        revokeTemporaryCreditMigrationSuper({
+          account: ACCOUNT,
+          databaseName: DATABASE,
+          root,
+          readState,
+          recoverRoot,
+          verify,
+        }),
+      ).resolves.toBe("already_revoked");
+      expect(
+        statements.some((statement) => /^(GRANT|REVOKE) /.test(statement)),
+      ).toBe(false);
+      expect(recoverRoot).not.toHaveBeenCalled();
+      expect(verify).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(
+    INVALID_CLEANUP_GRANTS.flatMap(([label, grants]) =>
+      REVOKED_SUPER_ORDERS.map(([order, superGrants]) => [
+        `${label} with ${order}`,
+        [...grants, ...superGrants],
+      ]),
+    ),
+  )(
+    "keeps %s fail-closed despite an effective SUPER revoke",
+    async (_label, grants) => {
+      expect(() =>
+        assertCreditMigrationSuperCleanupBoundary(migrationState(grants)),
+      ).toThrow();
+      const { root, readState, statements } = rootHarness({
+        initialGrants: grants,
+      });
+      const verify = vi.fn();
+      await expect(
+        revokeTemporaryCreditMigrationSuper({
+          account: ACCOUNT,
+          databaseName: DATABASE,
+          root,
+          readState,
+          recoverRoot: vi.fn(),
+          verify,
+        }),
+      ).rejects.toBeInstanceOf(CreditMigrationPrincipalCleanupError);
+      expect(
+        statements.some((statement) => /^(GRANT|REVOKE) /.test(statement)),
+      ).toBe(false);
+      expect(verify).not.toHaveBeenCalled();
+    },
+  );
+
   it("accepts every approved four-right repair subset with or without SUPER", () => {
     const repairRights = [
       "CREATE",

@@ -135,6 +135,7 @@ export function hasCreditMigrationGlobalSuper(grants) {
     fail();
   }
   let hasSuper = false;
+  let revokedSuper = false;
   for (const grant of grants) {
     const parsed = /^(GRANT|REVOKE) (.+) ON \*\.\* (?:TO|FROM) /i.exec(grant);
     const privileges = parsed?.[2]
@@ -142,9 +143,10 @@ export function hasCreditMigrationGlobalSuper(grants) {
       .map((privilege) => privilege.trim().toUpperCase());
     if (!privileges?.includes("SUPER")) continue;
     if (/\bWITH GRANT OPTION\b/i.test(grant)) fail();
-    hasSuper = parsed[1].toUpperCase() === "GRANT";
+    if (parsed[1].toUpperCase() === "REVOKE") revokedSuper = true;
+    else hasSuper = true;
   }
-  return hasSuper;
+  return hasSuper && !revokedSuper;
 }
 
 export function assertCreditMigrationSuperCleanupBoundary(state) {
