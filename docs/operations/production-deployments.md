@@ -277,7 +277,8 @@ Settings UI that `production` still requires its reviewer and has no
 administrator bypass, while
 `production-inspection` and `production-recovery` have protected-main access,
 no reviewer, no wait timer, and no administrator bypass. Also verify that the
-inspection environment contains only its read-only Fly token. Verify that
+inspection environment contains only its read-only Fly token plus the four
+Meta callback variables named above. Verify that
 `production-schema-cleanup` also has protected-main access, no reviewer, no wait
 timer, no administrator bypass, and only its narrowly scoped database migration
 token. Treat any drift as a release blocker.
