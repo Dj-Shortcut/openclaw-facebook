@@ -85,6 +85,7 @@ describe("Startpilot finite entitlement usage", () => {
         bindingEpoch: 3,
         mode: "test",
         idempotencyKey: "image-request-key-total-limit",
+        now: new Date("2026-08-01T12:00:00.000Z"),
       })
     ).resolves.toEqual({ allowed: false, reason: "total_exhausted" });
     expect(total.updateSet).not.toHaveBeenCalled();
@@ -197,6 +198,7 @@ describe("Startpilot finite entitlement usage", () => {
         bindingEpoch: 3,
         mode: "test",
         idempotencyKey: existing.idempotencyKey,
+        now: new Date("2026-08-01T12:00:00.000Z"),
       })
     ).rejects.toThrow("Startpilot image usage idempotency scope mismatch");
     expect(flow.insertValues).not.toHaveBeenCalled();
