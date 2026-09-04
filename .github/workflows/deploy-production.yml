@@ -248,6 +248,8 @@ jobs:
         env:
           META_APP_ID: ${{ secrets.META_APP_ID }}
           META_APP_SECRET: ${{ secrets.META_APP_SECRET }}
+          MESSENGER_PAGE_ID: ${{ secrets.MESSENGER_PAGE_ID }}
+          MESSENGER_PAGE_ACCESS_TOKEN: ${{ secrets.MESSENGER_PAGE_ACCESS_TOKEN }}
         run: node scripts/check-meta-callbacks.mjs
 
       - name: Record rollback release
@@ -490,6 +492,8 @@ jobs:
         env:
           META_APP_ID: ${{ secrets.META_APP_ID }}
           META_APP_SECRET: ${{ secrets.META_APP_SECRET }}
+          MESSENGER_PAGE_ID: ${{ secrets.MESSENGER_PAGE_ID }}
+          MESSENGER_PAGE_ACCESS_TOKEN: ${{ secrets.MESSENGER_PAGE_ACCESS_TOKEN }}
         run: node scripts/check-meta-callbacks.mjs
 
       - name: Record rollback release
