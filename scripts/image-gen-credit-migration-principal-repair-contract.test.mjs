@@ -6,6 +6,7 @@ import {
   CREDIT_MIGRATION_PRINCIPAL_READY_MARKER,
   CREDIT_MIGRATION_PRINCIPAL_SUPER_REVOKED_MARKER,
   CreditMigrationPrincipalCleanupError,
+  assertCreditMigrationSuperCleanupBoundary,
   buildCreditMigrationPrivilegeStatement,
   buildCreditMigrationPrivilegeStatements,
   detectMissingCreditMigrationPrivileges,
@@ -34,6 +35,50 @@ const BASE_GRANTS = Object.freeze([
 const COMPLETE_SCHEMA_GRANT =
   "GRANT CREATE, TRIGGER, CREATE ROUTINE, ALTER ROUTINE ON `leaderbot`.* TO `credit_migrator`@`%`";
 const SUPER_GRANT = "GRANT SUPER ON *.* TO `credit_migrator`@`%`";
+const POST_DDL_GRANTS = Object.freeze([
+  ...BASE_GRANTS,
+  COMPLETE_SCHEMA_GRANT,
+  "GRANT EXECUTE ON PROCEDURE `leaderbot`.`credit_create_wallet` TO `credit_migrator`@`%`",
+]);
+const INVALID_CLEANUP_GRANTS = [
+  ["a different SUPER-only account", [SUPER_GRANT]],
+  [
+    "global administration",
+    ["GRANT ALL PRIVILEGES ON *.* TO `credit_migrator`@`%`"],
+  ],
+  [
+    "excess global rights",
+    [
+      ...BASE_GRANTS,
+      SUPER_GRANT,
+      "GRANT PROCESS ON *.* TO `credit_migrator`@`%`",
+    ],
+  ],
+  [
+    "excess schema rights",
+    [
+      ...BASE_GRANTS,
+      SUPER_GRANT,
+      "GRANT DELETE ON `leaderbot`.* TO `credit_migrator`@`%`",
+    ],
+  ],
+  ["grant delegation", [...BASE_GRANTS, `${SUPER_GRANT} WITH GRANT OPTION`]],
+  [
+    "a missing non-repairable base right",
+    [
+      ...BASE_GRANTS.map((grant) => grant.replace("REFERENCES, ", "")),
+      SUPER_GRANT,
+    ],
+  ],
+  [
+    "an unreviewed routine",
+    [
+      ...BASE_GRANTS,
+      SUPER_GRANT,
+      "GRANT EXECUTE ON PROCEDURE `leaderbot`.`other_helper` TO `credit_migrator`@`%`",
+    ],
+  ],
+];
 
 function migrationState(grants = BASE_GRANTS, requireSuper = false) {
   return {
@@ -48,10 +93,11 @@ function rootHarness({
   failGrantAfterApply = false,
   failGrantAfterApplyAt,
   failRevoke = false,
+  initialGrants = BASE_GRANTS,
   requireSuper = false,
 } = {}) {
   const statements = [];
-  let state = migrationState(BASE_GRANTS, requireSuper);
+  let state = migrationState(initialGrants, requireSuper);
   let appliedGrantCount = 0;
   const root = {
     execute: vi.fn(async (statement) => {
@@ -95,6 +141,34 @@ function rootHarness({
     readState: vi.fn(async () => state),
     root,
     statements,
+  };
+}
+
+function postDdlPrepareHarness(phase, rootOptions = {}) {
+  const harness = rootHarness({
+    initialGrants: POST_DDL_GRANTS,
+    requireSuper: true,
+    ...rootOptions,
+  });
+  const connection = { end: vi.fn(async () => undefined) };
+  const options = {
+    migrationUrl: "mysql://credit_migrator:secret@127.0.0.1:13306/leaderbot",
+    mysql: { createConnection: vi.fn(async () => connection) },
+    openRoot: vi.fn(async () => harness.root),
+    readPhase: vi.fn(async () => phase),
+    readState: harness.readState,
+    signal: new AbortController().signal,
+    verifyRuntime: vi.fn(async () => undefined),
+  };
+  return {
+    ...harness,
+    connection,
+    options,
+    prepare: () =>
+      executeRepair(
+        { app: "leaderbot-portal-mysql", machineId: "080d3ddb5099e8" },
+        options,
+      ),
   };
 }
 
@@ -453,6 +527,93 @@ describe("credit migration principal repair contract", () => {
 });
 
 describe("temporary migration SUPER cleanup", () => {
+  it("accepts every approved four-right repair subset with or without SUPER", () => {
+    const repairRights = [
+      "CREATE",
+      "TRIGGER",
+      "CREATE ROUTINE",
+      "ALTER ROUTINE",
+    ];
+    for (let subset = 0; subset < 16; subset += 1) {
+      const privileges = repairRights.filter(
+        (_, index) => subset & (1 << index),
+      );
+      for (const superPresent of [false, true]) {
+        const grants = [
+          ...BASE_GRANTS,
+          ...(privileges.length
+            ? [
+                `GRANT ${privileges.join(", ")} ON \`leaderbot\`.* TO \`credit_migrator\`@\`%\``,
+              ]
+            : []),
+          ...(superPresent ? [SUPER_GRANT] : []),
+        ];
+        expect(() =>
+          assertCreditMigrationSuperCleanupBoundary(
+            migrationState(grants, !superPresent),
+          ),
+        ).not.toThrow();
+      }
+    }
+  });
+
+  it.each(INVALID_CLEANUP_GRANTS)(
+    "refuses %s under the lock before revoking anything",
+    async (_label, grants) => {
+      const { root, statements } = rootHarness();
+      const verify = vi.fn();
+      await expect(
+        revokeTemporaryCreditMigrationSuper({
+          account: ACCOUNT,
+          databaseName: DATABASE,
+          root,
+          readState: async () => migrationState(grants),
+          recoverRoot: vi.fn(),
+          verify,
+        }),
+      ).rejects.toBeInstanceOf(CreditMigrationPrincipalCleanupError);
+      expect(
+        statements.some((statement) => statement.startsWith("REVOKE")),
+      ).toBe(false);
+      expect(verify).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["recovered", "revoked"])(
+    "refuses a changed grant boundary after the root was %s",
+    async (stage) => {
+      const { root, readState, statements } = rootHarness({
+        failRevoke: stage === "recovered",
+      });
+      await root.execute("GRANT SUPER ON *.* TO 'credit_migrator'@'%'");
+      const initial = await readState();
+      readState
+        .mockResolvedValueOnce(initial)
+        .mockResolvedValue(
+          migrationState([
+            ...BASE_GRANTS,
+            ...(stage === "recovered" ? [SUPER_GRANT] : []),
+            "GRANT PROCESS ON *.* TO `credit_migrator`@`%`",
+          ]),
+        );
+      const verify = vi.fn();
+      await expect(
+        revokeTemporaryCreditMigrationSuper({
+          account: ACCOUNT,
+          databaseName: DATABASE,
+          root,
+          readState,
+          recoverRoot: vi.fn(async () => root),
+          verify,
+        }),
+      ).rejects.toBeInstanceOf(CreditMigrationPrincipalCleanupError);
+      expect(
+        statements.filter((statement) => statement.startsWith("REVOKE")),
+      ).toHaveLength(1);
+      expect(verify).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     [false, false],
     [true, false],
@@ -637,6 +798,41 @@ describe("temporary migration SUPER cleanup", () => {
 });
 
 describe("credit migration principal repair resumability", () => {
+  it.each(INVALID_CLEANUP_GRANTS)(
+    "rejects a misconfigured cleanup secret with %s before opening root",
+    async (_label, grants) => {
+      const connection = { end: vi.fn(async () => undefined) };
+      const openRoot = vi.fn();
+      await expect(
+        executeSuperCleanup(
+          {
+            app: "leaderbot-portal-mysql",
+            machineId: "080d3ddb5099e8",
+            operation: "revoke-super",
+          },
+          {
+            migrationUrl:
+              "mysql://other_admin:synthetic@127.0.0.1:13306/leaderbot",
+            mysql: { createConnection: vi.fn(async () => connection) },
+            openRoot,
+            readPhase: vi.fn(async () => "0016_expand"),
+            readState: vi.fn(async () => ({
+              ...migrationState(
+                grants.map((grant) =>
+                  grant.replaceAll("credit_migrator", "other_admin"),
+                ),
+              ),
+              account: { username: "other_admin", hostname: "%" },
+            })),
+            signal: new AbortController().signal,
+          },
+        ),
+      ).rejects.toThrow();
+      expect(openRoot).not.toHaveBeenCalled();
+      expect(connection.end).toHaveBeenCalledOnce();
+    },
+  );
+
   it("revokes temporary SUPER through the isolated cleanup command", async () => {
     const connection = { end: vi.fn(async () => undefined) };
     const { readState, root } = rootHarness({ requireSuper: true });
@@ -704,7 +900,7 @@ describe("credit migration principal repair resumability", () => {
   });
 
   it.each(["0017_credit_wallet_expand", "0018_credit_checkout_reservation"])(
-    "keeps %s verification-only and never opens root",
+    "keeps %s verification-only without a conditional SUPER requirement",
     async (phase) => {
       const connection = { end: vi.fn(async () => undefined) };
       const openRoot = vi.fn();
@@ -742,6 +938,199 @@ describe("credit migration principal repair resumability", () => {
       expect(connection.end).toHaveBeenCalledOnce();
     },
   );
+
+  describe.each([
+    "0017_credit_wallet_expand",
+    "0018_credit_checkout_reservation",
+  ])("conditional SUPER preparation at %s", (phase) => {
+    it("grants only SUPER after full boundary verification and rechecks the same history", async () => {
+      const { prepare, options, statements, readState, connection } =
+        postDdlPrepareHarness(phase);
+      await expect(prepare()).resolves.toBe("repaired");
+      expect(statements.filter((sql) => /^(GRANT|REVOKE) /.test(sql))).toEqual([
+        "GRANT SUPER ON *.* TO 'credit_migrator'@'%'",
+      ]);
+      expect(options.verifyRuntime.mock.calls).toEqual([
+        [connection, "credit-expand-postddl"],
+        [connection, "credit-expand"],
+      ]);
+      expect(options.verifyRuntime.mock.invocationCallOrder[0]).toBeLessThan(
+        options.openRoot.mock.invocationCallOrder[0],
+      );
+      expect(options.readPhase).toHaveBeenCalledTimes(4);
+      expect((await readState()).grants).toEqual([
+        ...POST_DDL_GRANTS,
+        SUPER_GRANT,
+      ]);
+      expect(connection.end).toHaveBeenCalledOnce();
+    });
+
+    it("accepts required SUPER already present without opening root", async () => {
+      const { prepare, options, connection } = postDdlPrepareHarness(phase, {
+        initialGrants: [...POST_DDL_GRANTS, SUPER_GRANT],
+      });
+      await expect(prepare()).resolves.toBe("already_ready");
+      expect(options.openRoot).not.toHaveBeenCalled();
+      expect(options.verifyRuntime).toHaveBeenCalledExactlyOnceWith(
+        connection,
+        "credit-expand",
+      );
+    });
+
+    it.each([
+      ["missing schema rights", BASE_GRANTS],
+      [
+        "missing table rights",
+        POST_DDL_GRANTS.filter((grant) => !grant.includes("`billing_intents`")),
+      ],
+      [
+        "excess table rights",
+        [
+          ...POST_DDL_GRANTS,
+          "GRANT UPDATE ON `leaderbot`.`credit_wallets` TO `credit_migrator`@`%`",
+        ],
+      ],
+      [
+        "an unreviewed role",
+        [
+          ...POST_DDL_GRANTS,
+          "GRANT `administrator`@`%` TO `credit_migrator`@`%`",
+        ],
+      ],
+      [
+        "an unreviewed routine",
+        [
+          ...POST_DDL_GRANTS,
+          "GRANT EXECUTE ON PROCEDURE `leaderbot`.`other_helper` TO `credit_migrator`@`%`",
+        ],
+      ],
+    ])("rejects %s before opening root", async (_label, initialGrants) => {
+      const { prepare, options } = postDdlPrepareHarness(phase, {
+        initialGrants,
+      });
+      await expect(prepare()).rejects.toThrow();
+      expect(options.openRoot).not.toHaveBeenCalled();
+    });
+
+    it("rejects runtime or routine-ownership failure before opening root", async () => {
+      const { prepare, options } = postDdlPrepareHarness(phase);
+      options.verifyRuntime.mockRejectedValue(
+        new Error("synthetic runtime failure"),
+      );
+      await expect(prepare()).rejects.toThrow("synthetic runtime failure");
+      expect(options.openRoot).not.toHaveBeenCalled();
+    });
+
+    it("rejects unnecessary retained SUPER before opening root", async () => {
+      const { prepare, options } = postDdlPrepareHarness(phase, {
+        initialGrants: [...POST_DDL_GRANTS, SUPER_GRANT],
+        requireSuper: false,
+      });
+      await expect(prepare()).rejects.toThrow("excessive global SUPER");
+      expect(options.openRoot).not.toHaveBeenCalled();
+    });
+
+    it("never repairs schema rights that disappear before the root lock", async () => {
+      const { prepare, options, statements } = postDdlPrepareHarness(phase);
+      options.readState
+        .mockResolvedValueOnce(migrationState(POST_DDL_GRANTS, true))
+        .mockResolvedValueOnce(migrationState(POST_DDL_GRANTS, true))
+        .mockResolvedValue(migrationState(BASE_GRANTS, true));
+      await expect(prepare()).rejects.toThrow();
+      expect(statements.some((sql) => /^(GRANT|REVOKE) /.test(sql))).toBe(
+        false,
+      );
+    });
+
+    it("rejects history changes before the locked grant", async () => {
+      const { prepare, options, statements } = postDdlPrepareHarness(phase);
+      options.readPhase
+        .mockResolvedValueOnce(phase)
+        .mockResolvedValueOnce(phase)
+        .mockResolvedValue("synthetic changed history");
+      await expect(prepare()).rejects.toThrow();
+      expect(statements.some((sql) => /^(GRANT|REVOKE) /.test(sql))).toBe(
+        false,
+      );
+    });
+
+    it.each([false, true])(
+      "reconnects and rolls back only SUPER when grant transport fails (applied=%s)",
+      async (applied) => {
+        const { prepare, options, root, statements, readState } =
+          postDdlPrepareHarness(phase);
+        let disconnected = false;
+        const failedRoot = {
+          initialize: vi.fn(async () => undefined),
+          close: vi.fn(async () => undefined),
+          execute: vi.fn(async (sql) => {
+            if (disconnected) throw new Error("synthetic disconnected root");
+            if (sql.startsWith("GRANT ")) {
+              if (applied) await root.execute(sql);
+              disconnected = true;
+              throw new Error("synthetic grant transport loss");
+            }
+            return root.execute(sql);
+          }),
+        };
+        options.openRoot
+          .mockResolvedValueOnce(failedRoot)
+          .mockResolvedValueOnce(root);
+        await expect(prepare()).rejects.toThrow(
+          "synthetic grant transport loss",
+        );
+        expect(options.openRoot).toHaveBeenCalledTimes(2);
+        expect(
+          statements.filter((sql) => /^(GRANT|REVOKE) /.test(sql)),
+        ).toEqual(
+          applied
+            ? [
+                "GRANT SUPER ON *.* TO 'credit_migrator'@'%'",
+                "REVOKE SUPER ON *.* FROM 'credit_migrator'@'%'",
+              ]
+            : [],
+        );
+        expect((await readState()).grants).toEqual(POST_DDL_GRANTS);
+        expect(root.close).toHaveBeenCalledOnce();
+      },
+    );
+
+    it("fails closed when an applied SUPER grant cannot be rolled back", async () => {
+      const { prepare, options, root, readState, statements } =
+        postDdlPrepareHarness(phase, {
+          failGrantAfterApply: true,
+          failRevoke: true,
+        });
+      await expect(prepare()).rejects.toBeInstanceOf(
+        CreditMigrationPrincipalCleanupError,
+      );
+      expect(options.openRoot).toHaveBeenCalledOnce();
+      expect(root.close).toHaveBeenCalledOnce();
+      expect(hasCreditMigrationGlobalSuper((await readState()).grants)).toBe(
+        true,
+      );
+      expect(statements.filter((sql) => sql.startsWith("REVOKE "))).toEqual([
+        "REVOKE SUPER ON *.* FROM 'credit_migrator'@'%'",
+      ]);
+    });
+
+    it("rolls back only SUPER if the post-grant runtime recheck fails", async () => {
+      const { prepare, options, readState, statements } =
+        postDdlPrepareHarness(phase);
+      options.verifyRuntime
+        .mockResolvedValueOnce(undefined)
+        .mockRejectedValueOnce(
+          new Error("synthetic post-grant runtime failure"),
+        );
+      await expect(prepare()).rejects.toThrow(
+        "synthetic post-grant runtime failure",
+      );
+      expect((await readState()).grants).toEqual(POST_DDL_GRANTS);
+      expect(statements.filter((sql) => sql.startsWith("REVOKE "))).toEqual([
+        "REVOKE SUPER ON *.* FROM 'credit_migrator'@'%'",
+      ]);
+    });
+  });
 
   it("classifies only exact reviewed credit migration histories", () => {
     const contract = {

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 
 const MAX_INPUT_BYTES = 1024 * 1024;
@@ -16,6 +17,59 @@ function isFalseOrOmitted(value) {
   return value === undefined || value === false;
 }
 
+function isEmptyOrOmitted(value) {
+  return value == null || (Array.isArray(value) && value.length === 0);
+}
+
+function immutableMySqlImage(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  // flyctl resolves image references before creating the Machine. Normalize
+  // only Docker Hub's official MySQL aliases. The explicitly reviewed Fly
+  // mirror remains a distinct repository identity, even at the same digest.
+  const mirror =
+    /^docker-hub-mirror\.fly\.io\/library\/mysql(?::[A-Za-z0-9_][A-Za-z0-9_.-]*)?@(sha256:[a-f0-9]{64})$/.exec(
+      value,
+    );
+  if (mirror) {
+    return `docker-hub-mirror.fly.io/library/mysql@${mirror[1]}`;
+  }
+  const match =
+    /^(?:(?:docker\.io|registry-1\.docker\.io)\/)?(?:library\/)?mysql(?::[A-Za-z0-9_][A-Za-z0-9_.-]*)?@(sha256:[a-f0-9]{64})$/.exec(
+      value,
+    );
+  return match ? `docker.io/library/mysql@${match[1]}` : null;
+}
+
+function hasExpectedProbeConfig(config, expected) {
+  const init = config.init;
+  // flyctl v0.4.85 run.go maps --entrypoint with shlex.Split and remaining
+  // positional arguments directly to init.cmd. init.exec/processes/containers
+  // or injected files could bypass that otherwise-matching image and command.
+  // https://github.com/superfly/flyctl/blob/v0.4.85/internal/command/machine/run.go
+  return (
+    immutableMySqlImage(config.image) === immutableMySqlImage(expected.image) &&
+    isObject(init) &&
+    Array.isArray(init.entrypoint) &&
+    init.entrypoint.length === 1 &&
+    init.entrypoint[0] === "/bin/sh" &&
+    Array.isArray(init.cmd) &&
+    init.cmd.length === 2 &&
+    init.cmd[0] === "-c" &&
+    typeof init.cmd[1] === "string" &&
+    Buffer.byteLength(init.cmd[1], "utf8") > 0 &&
+    Buffer.byteLength(init.cmd[1], "utf8") <= 64 * 1024 &&
+    createHash("sha256").update(init.cmd[1], "utf8").digest("hex") ===
+      expected.probeSha256 &&
+    isEmptyOrOmitted(init.exec) &&
+    isEmptyOrOmitted(init.kernel_args) &&
+    isEmptyOrOmitted(config.processes) &&
+    isEmptyOrOmitted(config.containers) &&
+    isEmptyOrOmitted(config.files)
+  );
+}
+
 function validExpected(expected) {
   return (
     isObject(expected) &&
@@ -26,7 +80,10 @@ function validExpected(expected) {
     typeof expected.runId === "string" &&
     /^[1-9][0-9]{0,19}$/.test(expected.runId) &&
     typeof expected.runAttempt === "string" &&
-    /^[1-9][0-9]{0,19}$/.test(expected.runAttempt)
+    /^[1-9][0-9]{0,19}$/.test(expected.runAttempt) &&
+    immutableMySqlImage(expected.image) !== null &&
+    typeof expected.probeSha256 === "string" &&
+    /^[a-f0-9]{64}$/.test(expected.probeSha256)
   );
 }
 
@@ -40,6 +97,7 @@ export function classifyFlyRestoreProbe(machine, expected) {
     machine.id !== expected.machineId ||
     machine.name !== name ||
     !isObject(machine.config) ||
+    !hasExpectedProbeConfig(machine.config, expected) ||
     machine.config.metadata?.leaderbot_restore_probe !== expected.runId ||
     machine.config.metadata?.leaderbot_restore_probe_attempt !==
       expected.runAttempt ||
@@ -196,9 +254,11 @@ async function runCli(argv) {
     ["--volume-id", "volumeId"],
     ["--run-id", "runId"],
     ["--run-attempt", "runAttempt"],
+    ["--expected-image", "image"],
+    ["--expected-probe-sha256", "probeSha256"],
     ["--app", "app"],
   ]);
-  if (argv.length !== 8 && argv.length !== 10) {
+  if (argv.length !== 12 && argv.length !== 14) {
     return "failure";
   }
   const expected = {};

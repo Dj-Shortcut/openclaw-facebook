@@ -91,6 +91,8 @@ function createRepositoryFixture() {
     "scripts/image-gen-credit-migration-principal-repair-contract.mjs",
     "scripts/image-gen-credit-migration-principal-repair-contract.test.mjs",
     "scripts/repair-image-gen-credit-migration-principal.mjs",
+    "scripts/retire-image-gen-repair-exec-token.mjs",
+    "scripts/retire-image-gen-repair-exec-token.test.mjs",
     "scripts/image-gen-credit-provisioner-bootstrap-contract.mjs",
     "scripts/image-gen-credit-provisioner-bootstrap-contract.test.mjs",
     "scripts/provision-image-gen-credit-provisioner.mjs",
@@ -3840,6 +3842,79 @@ describe("production deployment contract", () => {
     );
   });
 
+  it.each([
+    [
+      "scripts/repair-image-gen-credit-migration-principal.mjs",
+      "superOnly: postDdl",
+      "superOnly: false",
+      "must restrict completed 0017 and 0018 preparation to conditional SUPER only",
+    ],
+    [
+      "scripts/image-gen-credit-migration-principal-repair-contract.mjs",
+      'superOnly && missing.some((privilege) => privilege !== "SUPER")',
+      "superOnly && false",
+      "must reject schema-rights mutation when resuming completed credit history",
+    ],
+  ])(
+    "preserves bounded SUPER-only resume in %s",
+    (file, before, after, message) => {
+      const root = createRepositoryFixture();
+      replaceFixtureText(root, file, before, after);
+      expect(() => validateProductionRepository(root)).toThrow(message);
+    },
+  );
+
+  it.each([
+    [
+      "Verify temporary SUPER is absent before the recovery snapshot",
+      "Record exact pre-credit recovery point",
+    ],
+    [
+      "Restore approved migration rights only after recovery proof",
+      "Create fresh snapshot from the exact 0016 base",
+    ],
+  ])("rejects misplaced recovery-rights step %s", (stepName, targetName) => {
+    const root = createRepositoryFixture();
+    const file = path.join(
+      root,
+      ".github/workflows/image-gen-schema-transition.yml",
+    );
+    const workflow = fs.readFileSync(file, "utf8");
+    const start = workflow.indexOf(`      - name: ${stepName}\n`);
+    const end = workflow.indexOf("      - name: ", start + 1);
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const step = workflow.slice(start, end);
+    const removed = workflow.slice(0, start) + workflow.slice(end);
+    const target = removed.indexOf(`      - name: ${targetName}\n`);
+    expect(target).toBeGreaterThan(-1);
+    fs.writeFileSync(
+      file,
+      removed.slice(0, target) + step + removed.slice(target),
+    );
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must snapshot and repair the exact migration role",
+    );
+  });
+
+  it.each([
+    ['test "$RECOVERY_TEMPORARY_SUPER_ABSENT" = true', "true"],
+    ["temporarySuperAbsent:true", "temporarySuperAbsent:false"],
+    [".snapshot.temporarySuperAbsent==true", ".snapshot.restoreVerified==true"],
+  ])("requires privilege-clean recovery evidence: %s", (before, after) => {
+    const root = createRepositoryFixture();
+    const file = path.join(
+      root,
+      ".github/workflows/image-gen-schema-transition.yml",
+    );
+    const workflow = fs.readFileSync(file, "utf8");
+    expect(workflow).toContain(before);
+    fs.writeFileSync(file, workflow.replaceAll(before, after));
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must prove and retain temporary SUPER absence in recovery evidence",
+    );
+  });
+
   it("requires the migration-role repair to select the explicit prepare operation", () => {
     const root = createRepositoryFixture();
     replaceFixtureText(
@@ -3859,8 +3934,8 @@ describe("production deployment contract", () => {
     replaceFixtureText(
       root,
       ".github/workflows/image-gen-schema-transition.yml",
-      "credit_migration_principal_super_revoked",
-      "credit_migration_principal_ready",
+      '[[ "$cleanup_status" -eq 0 && "$output" = "credit_migration_principal_super_revoked" ]]',
+      '[[ "$cleanup_status" -eq 0 && "$output" = "credit_migration_principal_ready" ]]',
     );
 
     expect(() => validateProductionRepository(root)).toThrow(
@@ -4024,7 +4099,9 @@ describe("production deployment contract", () => {
   it.each([
     "scripts/fly-restore-probe-status.mjs",
     "scripts/fly-restore-probe-status.test.mjs",
-  ])("requires restore-probe file %s", (relativePath) => {
+    "scripts/retire-image-gen-repair-exec-token.mjs",
+    "scripts/retire-image-gen-repair-exec-token.test.mjs",
+  ])("requires recovery safety file %s", (relativePath) => {
     const root = createRepositoryFixture();
     fs.unlinkSync(path.join(root, relativePath));
 
@@ -4032,6 +4109,24 @@ describe("production deployment contract", () => {
       `Missing ${relativePath}`,
     );
   });
+
+  it.each(["missing", "substring", "duplicate"])(
+    "rejects %s repair-token retirement test registration",
+    (kind) => {
+      const root = createRepositoryFixture();
+      const testPath = "scripts/retire-image-gen-repair-exec-token.test.mjs";
+      const replacement =
+        kind === "missing"
+          ? ""
+          : kind === "substring"
+            ? ` prefixed/${testPath}`
+            : ` ${testPath} ${testPath}`;
+      replaceFixtureText(root, "package.json", ` ${testPath}`, replacement);
+      expect(() => validateProductionRepository(root)).toThrow(
+        `package.json test:production-contracts must include exact ${testPath}`,
+      );
+    },
+  );
 
   it.each([
     ["missing", ""],
@@ -4132,6 +4227,33 @@ describe("production deployment contract", () => {
     expect(() => validateProductionRepository(root)).toThrow(
       "must verify structured exit evidence instead of accepting a stopped Machine",
     );
+  });
+
+  it.each([
+    [
+      "probe_sha256=\"$(printf '%s' \"$probe\" | sha256sum | cut -d' ' -f1)\"",
+      'probe_sha256="unchecked"',
+      "must hash the runner-owned restore command",
+    ],
+    [
+      '--expected-image "$mysql_image"',
+      '--expected-image "$observed_image"',
+      "must bind probe results to the reviewed immutable MySQL image",
+    ],
+    [
+      '--expected-probe-sha256 "$probe_sha256"',
+      '--expected-probe-sha256 "$observed_hash"',
+      "must bind probe results to the exact runner-owned restore command",
+    ],
+  ])("pins restore execution evidence: %s", (before, after, message) => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/image-gen-schema-transition.yml",
+      before,
+      after,
+    );
+    expect(() => validateProductionRepository(root)).toThrow(message);
   });
 
   it("does not retry failed exit verification", () => {

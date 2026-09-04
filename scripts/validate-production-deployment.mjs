@@ -52,6 +52,10 @@ const FRESH_SNAPSHOT_SELECTOR_PATH = "scripts/select-fresh-fly-snapshot.mjs";
 const FLY_RESTORE_PROBE_STATUS_PATH = "scripts/fly-restore-probe-status.mjs";
 const FLY_RESTORE_PROBE_STATUS_TEST_PATH =
   "scripts/fly-restore-probe-status.test.mjs";
+const REPAIR_EXEC_TOKEN_RETIREMENT_PATH =
+  "scripts/retire-image-gen-repair-exec-token.mjs";
+const REPAIR_EXEC_TOKEN_RETIREMENT_TEST_PATH =
+  "scripts/retire-image-gen-repair-exec-token.test.mjs";
 const PINNED_NODE_BASE_IMAGE =
   "node:24-alpine@sha256:d32cdf619f63fe0471182d08996dd516c6275bb5fd31ae06e55a570bd9e1ad43";
 const PINNED_GATEWAY_NODE_BASE_IMAGE =
@@ -4448,6 +4452,18 @@ function validateSchemaTransitionWorkflow(rootDir) {
       "must bind probe results to the restored volume",
     ],
     [
+      "probe_sha256=\"$(printf '%s' \"$probe\" | sha256sum | cut -d' ' -f1)\"",
+      "must hash the runner-owned restore command before launch",
+    ],
+    [
+      '--expected-image "$mysql_image"',
+      "must bind probe results to the reviewed immutable MySQL image",
+    ],
+    [
+      '--expected-probe-sha256 "$probe_sha256"',
+      "must bind probe results to the exact runner-owned restore command",
+    ],
+    [
       '--run-id "$GITHUB_RUN_ID"',
       "must bind probe results to this workflow run",
     ],
@@ -4556,6 +4572,12 @@ function validateSchemaTransitionWorkflow(rootDir) {
   const credentialRecoveryUploadIndex = workflow.indexOf(
     "Upload pre-repair credential-boundary recovery reference",
   );
+  const preSnapshotSuperCleanupIndex = workflow.indexOf(
+    "Verify temporary SUPER is absent before the recovery snapshot",
+  );
+  const postRecoveryRepairIndex = workflow.indexOf(
+    "Restore approved migration rights only after recovery proof",
+  );
   const applyExpandIndex = workflow.indexOf(
     "LEADERBOT_PRODUCTION_MIGRATION_MODE=apply-credit-wallet-expand",
   );
@@ -4581,7 +4603,10 @@ function validateSchemaTransitionWorkflow(rootDir) {
     credentialRecoveryUploadIndex <= credentialSnapshotSelectorIndex ||
     migrationPrincipalRepairIndex <= credentialRecoveryUploadIndex ||
     schemaInspectionIndex <= migrationPrincipalRepairIndex ||
-    schemaInspectionIndex >= snapshotCreateIndex ||
+    preSnapshotSuperCleanupIndex <= schemaInspectionIndex ||
+    preSnapshotSuperCleanupIndex >= snapshotCreateIndex ||
+    postRecoveryRepairIndex <= settledTupleComparisonIndex ||
+    postRecoveryRepairIndex >= definerGrantIndex ||
     definerGrantIndex <= recoveryUploadIndex ||
     preDdlReleaseBoundBridgeIndex <= recoveryUploadIndex ||
     preDdlReleaseBoundBridgeIndex >= definerGrantIndex ||
@@ -4594,6 +4619,80 @@ function validateSchemaTransitionWorkflow(rootDir) {
   ) {
     fail(
       `${SCHEMA_TRANSITION_WORKFLOW_PATH} must snapshot and repair the exact migration role, inspect the schema, and durably upload recovery evidence before definer grants or credit DDL`,
+    );
+  }
+  const [preSnapshotSuperCleanupStep] = namedWorkflowStepBodies(
+    workflow,
+    "Verify temporary SUPER is absent before the recovery snapshot",
+  );
+  const [postRecoveryRepairStep] = namedWorkflowStepBodies(
+    workflow,
+    "Restore approved migration rights only after recovery proof",
+  );
+  for (const [step, operation, marker] of [
+    [
+      preSnapshotSuperCleanupStep,
+      "revoke-super",
+      "credit_migration_principal_super_revoked",
+    ],
+    [postRecoveryRepairStep, "prepare", "credit_migration_principal_ready"],
+  ]) {
+    for (const required of [
+      "secrets.IMAGE_GEN_DATABASE_MIGRATION_URL",
+      "secrets.FLY_DATABASE_REPAIR_EXEC_TOKEN",
+      "node scripts/repair-image-gen-credit-migration-principal.mjs",
+      '--database-machine-id "$DATABASE_MACHINE_ID"',
+      'kill -0 "$proxy_pid"',
+      'n.createConnection(13306,"127.0.0.1"',
+      `--operation ${operation}`,
+      `test "$output" = "${marker}"`,
+    ]) {
+      if (!step?.includes(required)) {
+        fail(
+          `${SCHEMA_TRANSITION_WORKFLOW_PATH} must verify exact temporary rights on both sides of recovery proof`,
+        );
+      }
+    }
+    if (step.includes("secrets.FLY_DATABASE_MIGRATION_TOKEN")) {
+      fail(
+        `${SCHEMA_TRANSITION_WORKFLOW_PATH} must not expose snapshot authority to temporary-rights changes`,
+      );
+    }
+  }
+  const [freshRecoverySnapshotStep] = namedWorkflowStepBodies(
+    workflow,
+    "Create fresh snapshot from the exact 0016 base",
+  );
+  const [recoveryRecordStep] = namedWorkflowStepBodies(
+    workflow,
+    "Record exact pre-credit recovery point",
+  );
+  const [loadRecoveryStep] = namedWorkflowStepBodies(
+    workflow,
+    "Load exact prior 0016 recovery point for a resume",
+  );
+  const [validateRecoveryStep] = namedWorkflowStepBodies(
+    workflow,
+    "Validate exact 0016 recovery evidence before DDL",
+  );
+  if (
+    !preSnapshotSuperCleanupStep.includes(
+      'echo "RECOVERY_TEMPORARY_SUPER_ABSENT=true" >> "$GITHUB_ENV"',
+    ) ||
+    !freshRecoverySnapshotStep?.includes(
+      'test "$RECOVERY_TEMPORARY_SUPER_ABSENT" = true',
+    ) ||
+    !recoveryRecordStep?.includes(
+      'test "$RECOVERY_TEMPORARY_SUPER_ABSENT" = true',
+    ) ||
+    !recoveryRecordStep.includes(
+      "restoreVerified:true,temporarySuperAbsent:true",
+    ) ||
+    !loadRecoveryStep?.includes(".snapshot.temporarySuperAbsent==true") ||
+    !validateRecoveryStep?.includes(".snapshot.temporarySuperAbsent==true")
+  ) {
+    fail(
+      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must prove and retain temporary SUPER absence in recovery evidence`,
     );
   }
   const [credentialRecoveryUploadStep] = namedWorkflowStepBodies(
@@ -5321,6 +5420,8 @@ function validateCreditMigrationPrincipalRepair(rootDir) {
     CREDIT_MIGRATION_PRINCIPAL_REPAIR_CONTRACT_PATH,
     CREDIT_MIGRATION_PRINCIPAL_REPAIR_RUNNER_PATH,
     CREDIT_MIGRATION_PRINCIPAL_REPAIR_TEST_PATH,
+    REPAIR_EXEC_TOKEN_RETIREMENT_PATH,
+    REPAIR_EXEC_TOKEN_RETIREMENT_TEST_PATH,
   ]) {
     if (!fs.existsSync(path.join(rootDir, relativePath))) {
       fail(`Missing ${relativePath}`);
@@ -5338,6 +5439,14 @@ function validateCreditMigrationPrincipalRepair(rootDir) {
     [
       "detectMissingCreditMigrationPrivileges",
       "must prove the existing boundary is otherwise exact before mutation",
+    ],
+    [
+      'superOnly && missing.some((privilege) => privilege !== "SUPER")',
+      "must reject schema-rights mutation when resuming completed credit history",
+    ],
+    [
+      "assertCreditMigrationSuperCleanupBoundary(state)",
+      "must revalidate the exact grant boundary before every cleanup mutation",
     ],
     [
       'operation: "revoke"',
@@ -5395,12 +5504,12 @@ function validateCreditMigrationPrincipalRepair(rootDir) {
       "must bind repair and resume verification to exact credit histories",
     ],
     [
-      'if (initialPhase !== "0016_expand")',
-      "must keep completed 0017 and 0018 histories verification-only",
+      "superOnly: postDdl",
+      "must restrict completed 0017 and 0018 preparation to conditional SUPER only",
     ],
     [
-      'postDdl ? "credit-expand-postddl" : "credit-expand"',
-      "must strictly verify the complete migration boundary without retaining post-DDL SUPER",
+      'postDdl && !requireSuper ? "credit-expand-postddl" : "credit-expand"',
+      "must strictly verify both unprivileged resume and conditional inspection grants",
     ],
     [
       "new RootMysqlSession",
@@ -5439,14 +5548,15 @@ function validateCreditMigrationPrincipalRepair(rootDir) {
   const tokens = String(
     packageJson?.scripts?.["test:production-contracts"] ?? "",
   ).split(/\s+/);
-  if (
-    tokens.filter(
-      (token) => token === CREDIT_MIGRATION_PRINCIPAL_REPAIR_TEST_PATH,
-    ).length !== 1
-  ) {
-    fail(
-      `package.json test:production-contracts must include exact ${CREDIT_MIGRATION_PRINCIPAL_REPAIR_TEST_PATH}`,
-    );
+  for (const testPath of [
+    CREDIT_MIGRATION_PRINCIPAL_REPAIR_TEST_PATH,
+    REPAIR_EXEC_TOKEN_RETIREMENT_TEST_PATH,
+  ]) {
+    if (tokens.filter((token) => token === testPath).length !== 1) {
+      fail(
+        `package.json test:production-contracts must include exact ${testPath}`,
+      );
+    }
   }
 }
 

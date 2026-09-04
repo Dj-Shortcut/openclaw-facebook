@@ -92,9 +92,12 @@ Live payment enablement remains gated by the relevant P1 through P4 evidence.
         the missing subset through the fixed-output repair, prove the strict
         migration boundary, and then run the existing `0016 -> 0018` transition
         once. The repair must decide its exact delta under lock, recover an
-        uncertain `GRANT`, and keep exact 0017/0018 resumes verification-only.
+        uncertain `GRANT`, and never repair schema rights on exact 0017/0018
+        resumes (only conditional temporary `SUPER` for the bridge inspector).
         Its pre-repair snapshot is a recorded recovery reference; the separate
-        restore-tested snapshot remains mandatory before DDL. Do not deploy a
+        restore-tested snapshot must be taken after verified temporary-SUPER
+        revocation and remains mandatory before DDL. Its probe must match the
+        actual reviewed image and command, not merely an exit code. Do not deploy a
         `0019` runtime or start Mollie Test Mode before the exact `0018` runtime
         and rollback evidence are settled; `0019` requires its own later
         reviewed transition.

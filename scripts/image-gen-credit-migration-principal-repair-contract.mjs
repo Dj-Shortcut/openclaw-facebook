@@ -147,6 +147,17 @@ export function hasCreditMigrationGlobalSuper(grants) {
   return hasSuper;
 }
 
+export function assertCreditMigrationSuperCleanupBoundary(state) {
+  quoteAccount(state?.account);
+  // Permit only the exact migration role or its approved four-right repair
+  // subset. SUPER's presence, not the current binlog policy, defines cleanup.
+  detectMissingCreditMigrationPrivileges({
+    databaseName: state?.databaseName,
+    grants: state?.grants,
+    requireSuper: hasCreditMigrationGlobalSuper(state?.grants),
+  });
+}
+
 export function buildCreditMigrationPrivilegeStatement({
   account,
   databaseName,
@@ -220,6 +231,7 @@ export async function repairCreditMigrationPrincipal({
   account,
   databaseName,
   requireSuper,
+  superOnly = false,
   root,
   readState,
   recoverRoot,
@@ -227,6 +239,7 @@ export async function repairCreditMigrationPrincipal({
   verifyRollback,
 }) {
   if (
+    typeof superOnly !== "boolean" ||
     !root ||
     typeof root.execute !== "function" ||
     typeof readState !== "function" ||
@@ -285,6 +298,9 @@ export async function repairCreditMigrationPrincipal({
       fail();
     }
     const missing = detectMissingCreditMigrationPrivileges(lockedState);
+    if (superOnly && missing.some((privilege) => privilege !== "SUPER")) {
+      fail();
+    }
     if (missing.length === 0) {
       await verify();
       return "already_ready";
@@ -396,8 +412,8 @@ export async function revokeTemporaryCreditMigrationSuper({
     );
     if (currentLock.length !== 1 || currentLock[0] !== "1") fail();
   };
-  // Cleanup targets the granted account, independently of later binlog policy changes.
-  const assertIdentity = (state) => {
+  // Revalidate the migration boundary under every root lock, not only identity.
+  const assertCleanupBoundary = (state) => {
     if (
       state?.account?.username !== account.username ||
       state?.account?.hostname !== account.hostname ||
@@ -405,11 +421,12 @@ export async function revokeTemporaryCreditMigrationSuper({
     ) {
       fail();
     }
+    assertCreditMigrationSuperCleanupBoundary(state);
   };
   try {
     await acquireAndValidateLock();
     const current = await readState();
-    assertIdentity(current);
+    assertCleanupBoundary(current);
     if (!hasCreditMigrationGlobalSuper(current.grants)) {
       await verify();
       return "already_revoked";
@@ -432,7 +449,7 @@ export async function revokeTemporaryCreditMigrationSuper({
       activeRoot = recovered;
       await acquireAndValidateLock();
       const resumed = await readState();
-      assertIdentity(resumed);
+      assertCleanupBoundary(resumed);
       if (hasCreditMigrationGlobalSuper(resumed.grants)) {
         await activeRoot.execute(
           buildCreditMigrationPrivilegeStatement({
@@ -445,7 +462,7 @@ export async function revokeTemporaryCreditMigrationSuper({
       }
     }
     const observed = await readState();
-    assertIdentity(observed);
+    assertCleanupBoundary(observed);
     if (hasCreditMigrationGlobalSuper(observed.grants)) {
       throw new CreditMigrationPrincipalCleanupError();
     }

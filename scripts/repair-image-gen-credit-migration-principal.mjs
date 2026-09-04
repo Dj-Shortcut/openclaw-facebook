@@ -17,6 +17,7 @@ import {
   CREDIT_MIGRATION_PRINCIPAL_READY_MARKER,
   CREDIT_MIGRATION_PRINCIPAL_SUPER_REVOKED_MARKER,
   CreditMigrationPrincipalCleanupError,
+  assertCreditMigrationSuperCleanupBoundary,
   detectMissingCreditMigrationPrivileges,
   hasCreditMigrationGlobalSuper,
   parseCreditMigrationAccount,
@@ -191,31 +192,35 @@ export async function executeRepair(
     const initialPhase = await readPhase(connection);
     const initial = await readState(connection);
     const postDdl = initialPhase !== "0016_expand";
-    const verify = async () => {
+    const verify = async (requireSuper = initial.requireSuper) => {
       const current = await readState(connection);
       if (
         current.account.username !== initial.account.username ||
-        current.account.hostname !== initial.account.hostname
+        current.account.hostname !== initial.account.hostname ||
+        current.databaseName !== initial.databaseName ||
+        current.requireSuper !== initial.requireSuper
       ) {
         fail();
       }
       assertCreditWalletMigrationGrantScope(
         current.grants,
         current.databaseName,
-        postDdl ? false : current.requireSuper,
+        requireSuper,
       );
       await verifyRuntime(
         connection,
-        postDdl ? "credit-expand-postddl" : "credit-expand",
+        postDdl && !requireSuper ? "credit-expand-postddl" : "credit-expand",
       );
       if ((await readPhase(connection)) !== initialPhase) fail();
     };
 
-    // A resumed transition may already have recorded 0017 or 0018. Those
-    // phases are verification-only: never reopen the root mutation path.
-    if (initialPhase !== "0016_expand") {
-      await verify();
-      return "already_ready";
+    // The immutable bridge still requires conditional SUPER for inspection.
+    // A resumed history must already have every schema/table/routine right;
+    // only missing SUPER may be prepared, never post-DDL schema rights.
+    if (postDdl) {
+      const superPresent = hasCreditMigrationGlobalSuper(initial.grants);
+      await verify(initial.requireSuper && superPresent);
+      if (!initial.requireSuper || superPresent) return "already_ready";
     }
 
     root = await createRoot();
@@ -223,8 +228,12 @@ export async function executeRepair(
       account: initial.account,
       databaseName: initial.databaseName,
       requireSuper: initial.requireSuper,
+      superOnly: postDdl,
       root,
-      readState: () => readState(connection),
+      readState: async () => {
+        if (postDdl && (await readPhase(connection)) !== initialPhase) fail();
+        return readState(connection);
+      },
       recoverRoot: async (failedRoot) => {
         await failedRoot.close({ releaseLock: false, signal });
         return createRoot();
@@ -305,6 +314,7 @@ export async function executeSuperCleanup(
     connection = await mysql.createConnection(url);
     const initialPhase = await readPhase(connection);
     const initial = await readState(connection);
+    assertCreditMigrationSuperCleanupBoundary(initial);
     const verify = async () => {
       const current = await readState(connection);
       if (
@@ -314,6 +324,7 @@ export async function executeSuperCleanup(
       ) {
         fail();
       }
+      assertCreditMigrationSuperCleanupBoundary(current);
       if (hasCreditMigrationGlobalSuper(current.grants)) fail();
       if ((await readPhase(connection)) !== initialPhase) fail();
     };

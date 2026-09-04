@@ -425,6 +425,29 @@ jobs:
           [[ "$phase" =~ ^(0016_expand|0017_credit_wallet_expand|0018_credit_checkout_reservation|0017_partial_[0-9]+|0018_partial_[0-9]+)$ ]]
           echo "OBSERVED_SCHEMA_PHASE=$phase" >> "$GITHUB_ENV"
 
+      - name: Verify temporary SUPER is absent before the recovery snapshot
+        if: env.OBSERVED_SCHEMA_PHASE == '0016_expand'
+        timeout-minutes: 8
+        env:
+          DATABASE_MIGRATION_URL: ${{ secrets.IMAGE_GEN_DATABASE_MIGRATION_URL }}
+          FLY_API_TOKEN: ${{ secrets.FLY_DATABASE_REPAIR_EXEC_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$DATABASE_MIGRATION_URL"
+          test -n "$FLY_API_TOKEN"
+          echo "::add-mask::$DATABASE_MIGRATION_URL"
+          proxy_pid="$(cat "$RUNNER_TEMP/leaderbot-schema-transition/proxy.pid")"
+          [[ "$proxy_pid" =~ ^[0-9]+$ ]]
+          kill -0 "$proxy_pid"
+          node -e 'const n=require("node:net");const s=n.createConnection(13306,"127.0.0.1",()=>{s.destroy();process.exit(0)});s.setTimeout(1000,()=>{s.destroy();process.exit(1)});s.on("error",()=>process.exit(1))'
+          db_app="$(jq -er '.apps["image-gen"].databaseRecovery.app' deploy/production/apps.json)"
+          output="$(node scripts/repair-image-gen-credit-migration-principal.mjs \
+            --database-app "$db_app" \
+            --database-machine-id "$DATABASE_MACHINE_ID" \
+            --operation revoke-super)"
+          test "$output" = "credit_migration_principal_super_revoked"
+          echo "RECOVERY_TEMPORARY_SUPER_ABSENT=true" >> "$GITHUB_ENV"
+
       - name: Create fresh snapshot from the exact 0016 base
         if: env.OBSERVED_SCHEMA_PHASE == '0016_expand'
         timeout-minutes: 15
@@ -435,6 +458,7 @@ jobs:
         run: |
           test -z "$RECOVERY_RUN_ID"
           test -z "$RECOVERY_RUN_ATTEMPT"
+          test "$RECOVERY_TEMPORARY_SUPER_ABSENT" = true
           db_app="$(jq -er '.apps["image-gen"].databaseRecovery.app' deploy/production/apps.json)"
           volume_id="$(jq -er '.apps["image-gen"].databaseRecovery.volumeId' deploy/production/apps.json)"
           volume="$(flyctl volumes list --app "$db_app" --json | jq -cer --arg id "$volume_id" '[.[] | select(.id==$id)] | if length==1 then .[0] else error("database volume mismatch") end')"
@@ -512,7 +536,7 @@ jobs:
             --arg databaseName "$database_name" \
             --arg migrationManifestSha "$migration_manifest_sha" \
             --arg schemaContractSha "$schema_contract_sha" \
-            '.sourceCommit==$priorSha and .sourceRef=="refs/heads/main" and .workflowPath==".github/workflows/image-gen-schema-transition.yml" and .runId==$runId and .runAttempt==$runAttempt and .bridgeImage==$bridge and .bridgeSource==$bridgeSource and .migrationManifestSha256==$migrationManifestSha and .schemaContractSha256==$schemaContractSha and .from=="0016_expand" and .database.app==$app and .database.volumeId==$volume and .database.name==$databaseName and (.database.machineId|type)=="string" and .snapshot.phase=="0016_expand" and .snapshot.restoreVerified==true and (.snapshot.id|type)=="string" and (.snapshot.digest|type)=="string" and (.snapshot.createdAt|type)=="string"' \
+            '.sourceCommit==$priorSha and .sourceRef=="refs/heads/main" and .workflowPath==".github/workflows/image-gen-schema-transition.yml" and .runId==$runId and .runAttempt==$runAttempt and .bridgeImage==$bridge and .bridgeSource==$bridgeSource and .migrationManifestSha256==$migrationManifestSha and .schemaContractSha256==$schemaContractSha and .from=="0016_expand" and .database.app==$app and .database.volumeId==$volume and .database.name==$databaseName and (.database.machineId|type)=="string" and .snapshot.phase=="0016_expand" and .snapshot.restoreVerified==true and .snapshot.temporarySuperAbsent==true and (.snapshot.id|type)=="string" and (.snapshot.digest|type)=="string" and (.snapshot.createdAt|type)=="string"' \
             "$prior/snapshot.json" > /dev/null
           snapshot_id="$(jq -er '.snapshot.id' "$prior/snapshot.json")"
           snapshot_digest="$(jq -er '.snapshot.digest' "$prior/snapshot.json")"
@@ -579,6 +603,7 @@ jobs:
           # Expanded only inside the isolated copy; never read production rows.
           # shellcheck disable=SC2016
           probe='set -eu; chown mysql:root /var/lib/mysql; mkdir -p /var/run/mysqld; chown mysql:mysql /var/run/mysqld; mysqld --user=mysql --skip-networking --skip-grant-tables --socket=/var/run/mysqld/mysqld.sock --pid-file=/var/run/mysqld/mysqld.pid --log-error=/tmp/mysql-restore-probe.log & pid=$!; cleanup(){ kill -TERM "$pid" >/dev/null 2>&1 || true; wait "$pid" >/dev/null 2>&1 || true; }; finish(){ status=$?; if test "$status" -ne 0; then printf "%s\n" mysql_restore_probe_failed; fi; cleanup; exit "$status"; }; trap finish EXIT; ready=0; for i in $(seq 1 60); do if mysqladmin --protocol=socket --socket=/var/run/mysqld/mysqld.sock -uroot ping --silent >/dev/null 2>&1; then ready=1; break; fi; sleep 2; done; test "$ready" = 1; mysql --protocol=socket --socket=/var/run/mysqld/mysqld.sock -uroot -Nse "SELECT CONCAT(0x434845434b205441424c452060,REPLACE(TABLE_SCHEMA,0x60,0x6060),0x602e60,REPLACE(TABLE_NAME,0x60,0x6060),0x603b) FROM information_schema.TABLES WHERE TABLE_TYPE=0x42415345205441424c45 AND TABLE_SCHEMA NOT IN (0x696e666f726d6174696f6e5f736368656d61,0x706572666f726d616e63655f736368656d61,0x737973) ORDER BY TABLE_SCHEMA,TABLE_NAME" > /tmp/mysql-restore-check.sql; test -s /tmp/mysql-restore-check.sql; mysql --protocol=socket --socket=/var/run/mysqld/mysqld.sock -uroot --batch --raw --skip-column-names < /tmp/mysql-restore-check.sql > /tmp/mysql-restore-check.out; test -s /tmp/mysql-restore-check.out; invalid=0; while IFS="$(printf "\t")" read -r table_name operation message_type message_text; do if test "$operation" != check || test "$message_type" != status || test "$message_text" != OK; then invalid=1; fi; done < /tmp/mysql-restore-check.out; test "$invalid" = 0; mysql --protocol=socket --socket=/var/run/mysqld/mysqld.sock -uroot -Nse "SELECT COUNT(*)>=1 FROM leaderbot.__drizzle_migrations" | grep -Fx 1 >/dev/null'
+          probe_sha256="$(printf '%s' "$probe" | sha256sum | cut -d' ' -f1)"
           probe_launch_status=0
           flyctl machine run "$mysql_image" \
             --app "$db_app" \
@@ -623,6 +648,8 @@ jobs:
               --machine-id "$probe_machine_id" \
               --volume-id "$RESTORE_VOLUME_ID" \
               --run-id "$GITHUB_RUN_ID" \
+              --expected-image "$mysql_image" \
+              --expected-probe-sha256 "$probe_sha256" \
               --run-attempt "$GITHUB_RUN_ATTEMPT" || result=$?
             if test "$result" = 0; then
               probe_verified=true
@@ -688,6 +715,7 @@ jobs:
       - name: Record exact pre-credit recovery point
         if: env.OBSERVED_SCHEMA_PHASE == '0016_expand'
         run: |
+          test "$RECOVERY_TEMPORARY_SUPER_ABSENT" = true
           db_app="$(jq -er '.apps["image-gen"].databaseRecovery.app' deploy/production/apps.json)"
           volume_id="$(jq -er '.apps["image-gen"].databaseRecovery.volumeId' deploy/production/apps.json)"
           database_name="$(jq -er '.apps["image-gen"].databaseRecovery.databaseName' deploy/production/apps.json)"
@@ -711,7 +739,7 @@ jobs:
             --arg snapshotDigest "$RECOVERY_SNAPSHOT_DIGEST" \
             --arg snapshotCreatedAt "$RECOVERY_SNAPSHOT_CREATED_AT" \
             --arg recordedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            '{sourceCommit:$sourceCommit,sourceRef:$sourceRef,workflowPath:$workflowPath,runId:$runId,runAttempt:$runAttempt,bridgeImage:$bridgeImage,bridgeSource:$bridgeSource,migrationManifestSha256:$migrationManifestSha,schemaContractSha256:$schemaContractSha,from:"0016_expand",database:{app:$databaseApp,volumeId:$databaseVolume,name:$databaseName,machineId:$databaseMachine},snapshot:{phase:"0016_expand",id:$snapshotId,digest:$snapshotDigest,createdAt:$snapshotCreatedAt,restoreVerified:true},recordedAt:$recordedAt}' \
+            '{sourceCommit:$sourceCommit,sourceRef:$sourceRef,workflowPath:$workflowPath,runId:$runId,runAttempt:$runAttempt,bridgeImage:$bridgeImage,bridgeSource:$bridgeSource,migrationManifestSha256:$migrationManifestSha,schemaContractSha256:$schemaContractSha,from:"0016_expand",database:{app:$databaseApp,volumeId:$databaseVolume,name:$databaseName,machineId:$databaseMachine},snapshot:{phase:"0016_expand",id:$snapshotId,digest:$snapshotDigest,createdAt:$snapshotCreatedAt,restoreVerified:true,temporarySuperAbsent:true},recordedAt:$recordedAt}' \
             > "$RUNNER_TEMP/leaderbot-schema-transition/snapshot.json"
 
       - name: Validate exact 0016 recovery evidence before DDL
@@ -734,7 +762,7 @@ jobs:
             --arg observedPhase "$OBSERVED_SCHEMA_PHASE" \
             --arg migrationManifestSha "$migration_manifest_sha" \
             --arg schemaContractSha "$schema_contract_sha" \
-            '(.sourceCommit|test("^[a-f0-9]{40}$")) and .sourceRef=="refs/heads/main" and .workflowPath==".github/workflows/image-gen-schema-transition.yml" and .bridgeImage==$bridge and .bridgeSource==$bridgeSource and .migrationManifestSha256==$migrationManifestSha and .schemaContractSha256==$schemaContractSha and .from=="0016_expand" and .database.name==$databaseName and .database.app==$databaseApp and .database.volumeId==$databaseVolume and (($observedPhase=="0016_expand" and .sourceCommit==$sha and .database.machineId==$databaseMachine) or ($observedPhase!="0016_expand" and (.database.machineId|type)=="string")) and .snapshot.phase=="0016_expand" and .snapshot.restoreVerified==true' \
+            '(.sourceCommit|test("^[a-f0-9]{40}$")) and .sourceRef=="refs/heads/main" and .workflowPath==".github/workflows/image-gen-schema-transition.yml" and .bridgeImage==$bridge and .bridgeSource==$bridgeSource and .migrationManifestSha256==$migrationManifestSha and .schemaContractSha256==$schemaContractSha and .from=="0016_expand" and .database.name==$databaseName and .database.app==$databaseApp and .database.volumeId==$databaseVolume and (($observedPhase=="0016_expand" and .sourceCommit==$sha and .database.machineId==$databaseMachine) or ($observedPhase!="0016_expand" and (.database.machineId|type)=="string")) and .snapshot.phase=="0016_expand" and .snapshot.restoreVerified==true and .snapshot.temporarySuperAbsent==true' \
             "$evidence" > /dev/null
 
       - name: Upload immutable pre-credit recovery evidence before DDL
@@ -769,6 +797,27 @@ jobs:
             (.releaseWatermark | type == "string" and test("^[a-f0-9]{64}$"))
           )' <<<"$current_state")"
           test "$current_tuple" = "$settled_tuple"
+
+      - name: Restore approved migration rights only after recovery proof
+        timeout-minutes: 8
+        env:
+          DATABASE_MIGRATION_URL: ${{ secrets.IMAGE_GEN_DATABASE_MIGRATION_URL }}
+          FLY_API_TOKEN: ${{ secrets.FLY_DATABASE_REPAIR_EXEC_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$DATABASE_MIGRATION_URL"
+          test -n "$FLY_API_TOKEN"
+          echo "::add-mask::$DATABASE_MIGRATION_URL"
+          proxy_pid="$(cat "$RUNNER_TEMP/leaderbot-schema-transition/proxy.pid")"
+          [[ "$proxy_pid" =~ ^[0-9]+$ ]]
+          kill -0 "$proxy_pid"
+          node -e 'const n=require("node:net");const s=n.createConnection(13306,"127.0.0.1",()=>{s.destroy();process.exit(0)});s.setTimeout(1000,()=>{s.destroy();process.exit(1)});s.on("error",()=>process.exit(1))'
+          db_app="$(jq -er '.apps["image-gen"].databaseRecovery.app' deploy/production/apps.json)"
+          output="$(node scripts/repair-image-gen-credit-migration-principal.mjs \
+            --database-app "$db_app" \
+            --database-machine-id "$DATABASE_MACHINE_ID" \
+            --operation prepare)"
+          test "$output" = "credit_migration_principal_ready"
 
       - name: Grant the exact credit procedure definer table privileges
         timeout-minutes: 5
