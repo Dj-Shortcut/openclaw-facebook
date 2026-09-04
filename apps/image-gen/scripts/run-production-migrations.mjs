@@ -20,6 +20,7 @@ const legacyArtifactBoundMode =
 const artifactBoundMode =
   legacyArtifactBoundMode ||
   migrationMode === "apply-credit-wallet-expand" ||
+  migrationMode === "apply-credit-offer" ||
   migrationMode === "verify-credit-wallet-transition";
 if (artifactBoundMode) {
   try {

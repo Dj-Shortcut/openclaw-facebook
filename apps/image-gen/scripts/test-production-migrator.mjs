@@ -44,6 +44,8 @@ import {
   assertTriggerGrantScope,
   canonicalRoutineTuple,
   canonicalTriggerTuple,
+  captureMigrationHistory,
+  captureProductionSchemaState,
   configureProductionSchemaSession,
   creditWalletRoutineNames,
   creditWalletTableNames,
@@ -1361,6 +1363,31 @@ async function testCreditWalletLeastPrivilegeProfiles(migrationPlan) {
   } finally {
     await restoredGrantVerification.end();
   }
+  const beforeCreditOfferRefusal = await withDatabaseResult(
+    creditPrivilegeDatabase,
+    captureSchemaFingerprint
+  );
+  await expectFailure(
+    runProductionMigrationStage({
+      ...productionMigrationOptionsForMode(
+        "apply-credit-offer",
+        "migration-bridge"
+      ),
+      databaseUrl: databaseUrlForUser(
+        creditPrivilegeDatabase,
+        creditMigrationUser
+      ),
+    }),
+    "credit-offer mode refuses the earlier 0016 phase",
+    "credit-offer transition requires exact 0018"
+  );
+  assert(
+    (await withDatabaseResult(
+      creditPrivilegeDatabase,
+      captureSchemaFingerprint
+    )) === beforeCreditOfferRefusal,
+    "credit-offer refusal leaves earlier schema and history unchanged"
+  );
   let bundledFailure;
   try {
     await execFileAsync(process.execPath, [bundledRunnerPath], {
@@ -1530,20 +1557,7 @@ async function testCreditWalletLeastPrivilegeProfiles(migrationPlan) {
       applied.schemaPhase === "0018_credit_checkout_reservation",
     "least-privilege credit-wallet migration resumes after 0017 helper creation and remains bounded to 0018"
   );
-  const appliedOffer = await runProductionMigrationStage({
-    databaseUrl: databaseUrlForUser(
-      creditPrivilegeDatabase,
-      creditMigrationUser
-    ),
-    target: "credit-offer",
-    verifyOnly: false,
-    privilegeProfile: "credit-expand",
-  });
-  assert(
-    appliedOffer.appliedCount === migrationPlan.through0019.length &&
-      appliedOffer.schemaPhase === "0019_credit_offer_v2",
-    "the separate credit-offer target applies 0019 only after exact 0018"
-  );
+  await testCreditOfferModeWithMigrationPrincipal(migrationPlan);
   if (requireMigrationSuper) {
     await admin.query(
       `REVOKE SUPER ON *.* FROM \`${creditMigrationUser}\`@'%'`
@@ -1563,7 +1577,7 @@ async function testCreditWalletLeastPrivilegeProfiles(migrationPlan) {
           postDdlGrantVerification,
           "credit-expand-pregrant"
         ),
-        "completed 0018 inspection still requires temporary SUPER when binary logging demands it",
+        "completed credit migration inspection still requires temporary SUPER when binary logging demands it",
         "lacks global SUPER"
       );
     }
@@ -1743,6 +1757,108 @@ async function withDatabaseResult(database, action) {
     result = await action(connection);
   });
   return result;
+}
+
+async function testCreditOfferModeWithMigrationPrincipal(migrationPlan) {
+  const { productionContract } = await loadAndVerifyMigrationManifest();
+  const options = productionMigrationOptionsForMode(
+    "apply-credit-offer",
+    "migration-bridge"
+  );
+  const migrationUrl = databaseUrlForUser(
+    creditPrivilegeDatabase,
+    creditMigrationUser
+  );
+  const offerStatements = await readMigrationStatements(
+    migrationPlan.creditOffer0019
+  );
+  const previousStatements = [
+    ...(await readMigrationStatements(migrationPlan.creditWallet0017)),
+    ...(await readMigrationStatements(migrationPlan.creditCheckout0018)),
+  ];
+  const previousRoutines = [
+    "credit_reserve_checkout_intent",
+    "credit_freeze_wallet_for_review",
+  ].map(name => {
+    const statements = previousStatements.filter(statement =>
+      statement.startsWith(`CREATE PROCEDURE \`${name}\`(`)
+    );
+    assert(statements.length === 1, `exact 0018 fixture routine ${name}`);
+    return { name, statement: statements[0] };
+  });
+  const { schemaCaptureOptions } = schemaCapturePlanForPrivilege(
+    productionContract,
+    "credit-expand"
+  );
+  const capture = async () => {
+    const connection = await mysql.createConnection(migrationUrl);
+    try {
+      await configureProductionSchemaSession(connection);
+      return JSON.stringify({
+        schema: await captureProductionSchemaState(
+          connection,
+          schemaCaptureOptions
+        ),
+        history: await captureMigrationHistory(connection),
+      });
+    } finally {
+      await connection.end();
+    }
+  };
+
+  for (let boundary = 0; boundary <= offerStatements.length; boundary += 1) {
+    const migrationConnection = await mysql.createConnection(migrationUrl);
+    try {
+      await configureProductionSchemaSession(migrationConnection);
+      if (boundary > 0) {
+        // Reset only this disposable fixture to canonical 0018. Recreate both
+        // routines as the same restricted principal, preserving definer and
+        // MySQL automatic routine-grant behavior at every interrupted prefix.
+        for (const { name, statement } of previousRoutines) {
+          await migrationConnection.query(`DROP PROCEDURE \`${name}\``);
+          await migrationConnection.query(statement);
+        }
+        await withDatabase(creditPrivilegeDatabase, async connection => {
+          await connection.query(
+            "DELETE FROM `__drizzle_migrations` WHERE `hash`=? AND `created_at`=?",
+            [
+              migrationPlan.creditOffer0019.sha256,
+              migrationPlan.creditOffer0019.when,
+            ]
+          );
+          await connection.query(
+            `ALTER TABLE \`__drizzle_migrations\` AUTO_INCREMENT=${migrationPlan.through0018.length + 1}`
+          );
+        });
+      }
+      await applyStatements(
+        migrationConnection,
+        offerStatements.slice(0, boundary)
+      );
+    } finally {
+      await migrationConnection.end();
+    }
+    const applied = await runProductionMigrationStage({
+      ...options,
+      databaseUrl: migrationUrl,
+    });
+    assert(
+      applied.appliedCount === migrationPlan.through0019.length &&
+        applied.schemaPhase === "0019_credit_offer_v2",
+      `explicit credit-offer mode resumes boundary ${boundary} with the same restricted principal`
+    );
+    const beforeNoop = await capture();
+    const noop = await runProductionMigrationStage({
+      ...options,
+      databaseUrl: migrationUrl,
+    });
+    assert(
+      noop.appliedCount === migrationPlan.through0019.length &&
+        noop.schemaPhase === "0019_credit_offer_v2" &&
+        (await capture()) === beforeNoop,
+      `exact 0019 no-op preserves routines, schema, and history after boundary ${boundary}`
+    );
+  }
 }
 
 async function captureSchemaFingerprint(connection) {

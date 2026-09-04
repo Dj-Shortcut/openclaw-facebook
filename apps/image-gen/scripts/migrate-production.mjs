@@ -986,6 +986,16 @@ export function productionMigrationOptionsForMode(mode, artifactKind = "") {
         }
       : null;
   }
+  if (mode === "apply-credit-offer") {
+    return artifactKind === "migration-bridge"
+      ? {
+          verifyOnly: false,
+          target: "credit-offer",
+          creditOfferTransition: true,
+          privilegeProfile: "credit-expand",
+        }
+      : null;
+  }
   if (mode === "verify-artifact") {
     if (artifactKind === "migration-bridge") {
       return {
@@ -1281,6 +1291,21 @@ export async function runProductionMigrations(options = {}) {
   if (!productionDatabasePrivilegeProfiles.includes(privilegeProfile)) {
     throw new Error("production database privilege profile is unsupported");
   }
+  const creditOfferTransition = options.creditOfferTransition ?? false;
+  if (typeof creditOfferTransition !== "boolean") {
+    throw new Error("credit-offer transition option must be boolean");
+  }
+  if (
+    creditOfferTransition &&
+    (verifyOnly ||
+      target !== "credit-offer" ||
+      allowEmptyBootstrap ||
+      privilegeProfile !== "credit-expand")
+  ) {
+    throw new Error(
+      "credit-offer transition requires apply with credit-expand privileges and no bootstrap"
+    );
+  }
   if (
     privilegeProfile === "phase-bound-runtime" &&
     (!verifyOnly || !bridgeArtifactVerification || target !== "compatible")
@@ -1386,6 +1411,18 @@ export async function runProductionMigrations(options = {}) {
       migrationPlan,
       schemaCaptureOptions
     );
+    // Inspection proves exact 0018 history plus a reviewed 0019 DDL prefix,
+    // or exact completed 0019. Keep this fence under the same singleton lock
+    // as inspection and writes; never bridge an earlier production phase.
+    if (
+      creditOfferTransition &&
+      beforeState.kind !== "resume-0019" &&
+      beforeState.kind !== "complete"
+    ) {
+      throw new Error(
+        "credit-offer transition requires exact 0018, a known 0019 prefix, or exact 0019"
+      );
+    }
     const initialStablePhase = stableSchemaPhase(beforeState);
     if (verifyOnly) {
       if (!initialStablePhase) {
