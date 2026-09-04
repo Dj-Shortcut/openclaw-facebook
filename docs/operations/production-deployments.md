@@ -34,6 +34,45 @@ image-gen lockfile for the Actions dependency cache; the image-gen release
 step therefore reuses packages without changing the immutable artifact or
 production approval gates.
 
+### Owner Page token rotation
+
+The reviewed image-gen runtime contains
+`dist/rotate-facebook-page-token.cjs` for one bounded owner operation after
+Meta rotates the token of the already connected Page. It is not a Page-connect
+flow and cannot create, reconnect, or switch a binding. Before running it, use
+approved metadata-only inspection to record the current workspace ID, owner
+member user ID, channel-connection ID, binding epoch, and Page ID. Verify in
+Meta that the replacement token belongs to that same Page and has the required
+Messenger permissions; the command deliberately makes no Graph request.
+
+Run the artifact only from the exact reviewed runtime in an approved operator
+shell that already has its normal `DATABASE_URL` and `JWT_SECRET`. Disable
+shell tracing, provide the replacement token without placing it in command
+arguments or shell history, and set these process-only inputs:
+
+- `FACEBOOK_PAGE_TOKEN_ROTATE_CONFIRM=rotate-exact-page-token`;
+- `FACEBOOK_PAGE_TOKEN_ROTATE_WORKSPACE_ID`;
+- `FACEBOOK_PAGE_TOKEN_ROTATE_ACTOR_USER_ID`;
+- `FACEBOOK_PAGE_TOKEN_ROTATE_CONNECTION_ID`;
+- `FACEBOOK_PAGE_TOKEN_ROTATE_BINDING_EPOCH`;
+- `FACEBOOK_PAGE_TOKEN_ROTATE_APPROVAL_REFERENCE`;
+- `FACEBOOK_PAGE_TOKEN_ROTATE_PAGE_ID`;
+- `FACEBOOK_PAGE_TOKEN_ROTATE_ACCESS_TOKEN`.
+
+Execute `node dist/rotate-facebook-page-token.cjs`, then unset every rotation
+input in that shell. Success is one JSON line with event
+`facebook_page_token_rotated` and only workspace/binding metadata. The raw
+token is sealed before storage, removed from the child-process environment,
+and excluded from output and the transactional audit record. Only an exact
+`owner` membership is accepted. A changed Page, connection ID, binding epoch,
+disconnected/missing binding, concurrent fence loss, or audit failure rolls
+back and fails closed. The operation preserves the connection ID, Page ID,
+binding epoch, display name, and recorded scopes; it only stores the new sealed
+token, restores the binding status to `connected`, and records the rotation
+time. If delivery verification fails, do not change the binding: repeat the
+same fenced operation with the retained previous token or another reviewed
+same-Page token.
+
 Every workflow job that can receive a Fly API token installs the same reviewed
 `flyctl` binary without a remote setup action or install script. Version
 `0.4.85` is downloaded only from

@@ -58,7 +58,9 @@ RUN printf '%s\n' 'runtime' > /app/.leaderbot-artifact-kind
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/drizzle ./drizzle
 COPY --from=build /app/public ./public
-RUN test -s /app/dist/billing-trigger-runtime-preflight.cjs
+RUN test -s /app/dist/billing-trigger-runtime-preflight.cjs && \
+    test -s /app/dist/rotate-facebook-page-token.cjs && \
+    node --check /app/dist/rotate-facebook-page-token.cjs
 
 EXPOSE 8080
 CMD ["node", "dist/index.cjs"]

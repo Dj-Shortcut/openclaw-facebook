@@ -291,6 +291,262 @@ describe("channel connection database claims", () => {
     expect(workspaceConnection.lock).toHaveBeenCalledWith("update");
   });
 
+  it("rotates only the owner-approved current Facebook Page binding fence", async () => {
+    const membership = lockedSelect([{ role: "owner" }]);
+    const pageClaim = lockedSelect([{ id: 7, workspaceId: 42 }]);
+    const workspaceConnection = lockedSelect([
+      {
+        id: 7,
+        status: "token_expired",
+        externalId: connection.externalId,
+        providerAccountExternalId: null,
+        bindingEpoch: 5,
+      },
+    ]);
+    const listed = [
+      {
+        id: 7,
+        bindingEpoch: 5,
+        ...connection,
+        encryptedAccessToken: "sealed-rotated-page-token",
+      },
+    ];
+    const list = listSelect(listed);
+    dbMock.select
+      .mockReturnValueOnce({ from: membership.from })
+      .mockReturnValueOnce({ from: pageClaim.from })
+      .mockReturnValueOnce({ from: workspaceConnection.from })
+      .mockReturnValueOnce({ from: list.from });
+    const updateWhere = vi.fn(async () => [{ affectedRows: 1 }, []]);
+    const set = vi.fn(() => ({ where: updateWhere }));
+    dbMock.update.mockReturnValue({ set });
+    const values = vi.fn(async () => undefined);
+    dbMock.insert.mockReturnValue({ values });
+    const audit = {
+      workspaceId: 42,
+      userId: 7,
+      event: "facebook_page_token.rotated",
+      metadata: { source: "operator_cli" },
+    };
+
+    await expect(
+      upsertChannelConnection(
+        {
+          ...connection,
+          id: 7,
+          bindingEpoch: 5,
+          encryptedAccessToken: "sealed-rotated-page-token",
+        },
+        {
+          authorization: { actorUserId: 7, allowedRoles: ["owner"] },
+          updatePolicy: "rotate_exact_facebook_page_token",
+          auditLog: audit,
+        }
+      )
+    ).resolves.toEqual(listed);
+
+    expect(set).toHaveBeenCalledOnce();
+    expect(set).toHaveBeenCalledWith({
+      status: "connected",
+      encryptedAccessToken: "sealed-rotated-page-token",
+      lastCheckedAt: expect.any(Date),
+    });
+    const updateQuery = new MySqlDialect().sqlToQuery(
+      updateWhere.mock.calls[0]?.[0]
+    );
+    expect(updateQuery.params).toEqual(
+      expect.arrayContaining([
+        7,
+        42,
+        "facebook_messenger",
+        connection.externalId,
+        5,
+      ])
+    );
+    expect(values).toHaveBeenCalledOnce();
+    expect(values).toHaveBeenCalledWith(audit);
+  });
+
+  it("refuses a stale Facebook binding epoch before credential mutation", async () => {
+    const membership = lockedSelect([{ role: "owner" }]);
+    const pageClaim = lockedSelect([{ id: 7, workspaceId: 42 }]);
+    const workspaceConnection = lockedSelect([
+      {
+        id: 7,
+        status: "connected",
+        externalId: connection.externalId,
+        providerAccountExternalId: null,
+        bindingEpoch: 6,
+      },
+    ]);
+    dbMock.select
+      .mockReturnValueOnce({ from: membership.from })
+      .mockReturnValueOnce({ from: pageClaim.from })
+      .mockReturnValueOnce({ from: workspaceConnection.from });
+
+    await expect(
+      upsertChannelConnection(
+        { ...connection, id: 7, bindingEpoch: 5 },
+        {
+          authorization: { actorUserId: 7, allowedRoles: ["owner"] },
+          updatePolicy: "rotate_exact_facebook_page_token",
+          auditLog: {
+            workspaceId: 42,
+            userId: 7,
+            event: "facebook_page_token.rotated",
+            metadata: { source: "operator_cli" },
+          },
+        }
+      )
+    ).rejects.toBeInstanceOf(FacebookChannelConnectionMigrationRequiredError);
+
+    expect(dbMock.update).not.toHaveBeenCalled();
+    expect(dbMock.insert).not.toHaveBeenCalled();
+  });
+
+  it("rejects an admin before inspecting or rotating the owner Page binding", async () => {
+    const membership = lockedSelect([{ role: "admin" }]);
+    dbMock.select.mockReturnValueOnce({ from: membership.from });
+
+    await expect(
+      upsertChannelConnection(
+        { ...connection, id: 7, bindingEpoch: 5 },
+        {
+          authorization: { actorUserId: 7, allowedRoles: ["owner"] },
+          updatePolicy: "rotate_exact_facebook_page_token",
+          auditLog: {
+            workspaceId: 42,
+            userId: 7,
+            event: "facebook_page_token.rotated",
+            metadata: { source: "operator_cli" },
+          },
+        }
+      )
+    ).rejects.toBeInstanceOf(ChannelConnectionAuthorizationError);
+
+    expect(dbMock.select).toHaveBeenCalledOnce();
+    expect(dbMock.update).not.toHaveBeenCalled();
+    expect(dbMock.insert).not.toHaveBeenCalled();
+  });
+
+  it("requires the owner authorization and rotation audit contract", async () => {
+    await expect(
+      upsertChannelConnection(
+        { ...connection, id: 7, bindingEpoch: 5 },
+        { updatePolicy: "rotate_exact_facebook_page_token" }
+      )
+    ).rejects.toBeInstanceOf(ChannelConnectionAuthorizationError);
+
+    expect(dbMock.transaction).not.toHaveBeenCalled();
+    expect(dbMock.update).not.toHaveBeenCalled();
+    expect(dbMock.insert).not.toHaveBeenCalled();
+  });
+
+  it("refuses to use token rotation to reconnect a disconnected Page", async () => {
+    const membership = lockedSelect([{ role: "owner" }]);
+    const pageClaim = lockedSelect([]);
+    const workspaceConnection = lockedSelect([
+      {
+        id: 7,
+        status: "disconnected",
+        externalId: null,
+        providerAccountExternalId: null,
+        bindingEpoch: 6,
+      },
+    ]);
+    dbMock.select
+      .mockReturnValueOnce({ from: membership.from })
+      .mockReturnValueOnce({ from: pageClaim.from })
+      .mockReturnValueOnce({ from: workspaceConnection.from });
+
+    await expect(
+      upsertChannelConnection(
+        { ...connection, id: 7, bindingEpoch: 6 },
+        {
+          authorization: { actorUserId: 7, allowedRoles: ["owner"] },
+          updatePolicy: "rotate_exact_facebook_page_token",
+          auditLog: {
+            workspaceId: 42,
+            userId: 7,
+            event: "facebook_page_token.rotated",
+            metadata: { source: "operator_cli" },
+          },
+        }
+      )
+    ).rejects.toBeInstanceOf(FacebookChannelConnectionMigrationRequiredError);
+
+    expect(dbMock.update).not.toHaveBeenCalled();
+    expect(dbMock.insert).not.toHaveBeenCalled();
+  });
+
+  it("refuses to use token rotation to create a missing Page binding", async () => {
+    const membership = lockedSelect([{ role: "owner" }]);
+    const pageClaim = lockedSelect([]);
+    const workspaceConnection = lockedSelect([]);
+    dbMock.select
+      .mockReturnValueOnce({ from: membership.from })
+      .mockReturnValueOnce({ from: pageClaim.from })
+      .mockReturnValueOnce({ from: workspaceConnection.from });
+
+    await expect(
+      upsertChannelConnection(
+        { ...connection, id: 7, bindingEpoch: 5 },
+        {
+          authorization: { actorUserId: 7, allowedRoles: ["owner"] },
+          updatePolicy: "rotate_exact_facebook_page_token",
+          auditLog: {
+            workspaceId: 42,
+            userId: 7,
+            event: "facebook_page_token.rotated",
+            metadata: { source: "operator_cli" },
+          },
+        }
+      )
+    ).rejects.toBeInstanceOf(FacebookChannelConnectionMigrationRequiredError);
+
+    expect(dbMock.update).not.toHaveBeenCalled();
+    expect(dbMock.insert).not.toHaveBeenCalled();
+  });
+
+  it("rolls back the rotation audit when the binding fence update loses", async () => {
+    const membership = lockedSelect([{ role: "owner" }]);
+    const pageClaim = lockedSelect([{ id: 7, workspaceId: 42 }]);
+    const workspaceConnection = lockedSelect([
+      {
+        id: 7,
+        status: "connected",
+        externalId: connection.externalId,
+        providerAccountExternalId: null,
+        bindingEpoch: 5,
+      },
+    ]);
+    dbMock.select
+      .mockReturnValueOnce({ from: membership.from })
+      .mockReturnValueOnce({ from: pageClaim.from })
+      .mockReturnValueOnce({ from: workspaceConnection.from });
+    const updateWhere = vi.fn(async () => [{ affectedRows: 0 }, []]);
+    const set = vi.fn(() => ({ where: updateWhere }));
+    dbMock.update.mockReturnValue({ set });
+
+    await expect(
+      upsertChannelConnection(
+        { ...connection, id: 7, bindingEpoch: 5 },
+        {
+          authorization: { actorUserId: 7, allowedRoles: ["owner"] },
+          updatePolicy: "rotate_exact_facebook_page_token",
+          auditLog: {
+            workspaceId: 42,
+            userId: 7,
+            event: "facebook_page_token.rotated",
+            metadata: { source: "operator_cli" },
+          },
+        }
+      )
+    ).rejects.toBeInstanceOf(FacebookChannelConnectionMigrationRequiredError);
+
+    expect(dbMock.insert).not.toHaveBeenCalled();
+  });
+
   it("refuses to replace an existing Facebook Page under the preserving policy", async () => {
     const pageClaim = lockedSelect([]);
     const workspaceConnection = lockedSelect([

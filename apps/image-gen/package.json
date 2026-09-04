@@ -8,7 +8,7 @@
   },
   "scripts": {
     "build": "vite build && esbuild server/_core/index.ts --platform=node --packages=external --bundle --format=esm --outfile=dist/index.js",
-    "build:docker": "vite build && esbuild server/_core/index.ts --platform=node --bundle --format=cjs --external:vite --outfile=dist/index.cjs && esbuild scripts/run-production-migrations.mjs --platform=node --bundle --format=cjs '--define:import.meta.url=\"file:///app/scripts/migrate-production.mjs\"' --outfile=dist/migrate-production.cjs && esbuild scripts/run-credit-migration-definer-grants.mjs --platform=node --bundle --format=cjs --outfile=dist/credit-migration-definer-grants.cjs && esbuild scripts/run-billing-trigger-runtime-preflight.mjs --platform=node --bundle --format=cjs --outfile=dist/billing-trigger-runtime-preflight.cjs",
+    "build:docker": "vite build && esbuild server/_core/index.ts --platform=node --bundle --format=cjs --external:vite --outfile=dist/index.cjs && esbuild scripts/run-production-migrations.mjs --platform=node --bundle --format=cjs '--define:import.meta.url=\"file:///app/scripts/migrate-production.mjs\"' --outfile=dist/migrate-production.cjs && esbuild scripts/run-credit-migration-definer-grants.mjs --platform=node --bundle --format=cjs --outfile=dist/credit-migration-definer-grants.cjs && esbuild scripts/run-billing-trigger-runtime-preflight.mjs --platform=node --bundle --format=cjs --outfile=dist/billing-trigger-runtime-preflight.cjs && esbuild server/cli/rotateFacebookPageToken.ts --platform=node --bundle --format=cjs '--define:import.meta.url=\"file:///app/dist/rotate-facebook-page-token.cjs\"' --outfile=dist/rotate-facebook-page-token.cjs",
     "check": "tsc --noEmit",
     "db:generate": "drizzle-kit generate",
     "db:generate-production-contract": "node scripts/generate-production-schema-contract.mjs",
@@ -30,6 +30,7 @@
     "fallow:summary": "pnpm dlx fallow@2.27.0 --root . --summary --score",
     "fallow:gate": "node scripts/check-fallow-gate.mjs .fallow/report.json",
     "fix:docker": "scripts\\fix-docker.cmd",
+    "facebook:rotate-page-token": "tsx server/cli/rotateFacebookPageToken.ts",
     "format": "prettier --write .",
     "format:server:release": "node scripts/format-release-server.mjs",
     "lint": "eslint client/src shared",
