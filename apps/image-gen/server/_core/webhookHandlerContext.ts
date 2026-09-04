@@ -37,7 +37,6 @@ import type { BotLogger, BotPayloadContext } from "./botContext";
 import type { ConversationAction } from "./botResponse";
 import type { MaybeInFlightMessageResult } from "./webhookFallback";
 import type { HandlerContext, MessengerState } from "./webhookHandlerTypes";
-import { requestMessengerPortalHandoff } from "./messengerPortalHandoff";
 
 type FeatureContextBase = Omit<BotPayloadContext, "payload">;
 
@@ -349,13 +348,6 @@ export function createHandlerContext({
       clearImageContext: async () => {
         await clearPendingImageState(psid);
       },
-      requestPortalHandoff: async () =>
-        await requestMessengerPortalHandoff({
-          facebookPageId: state.pageId,
-          messengerSenderId: psid,
-          messengerSenderUserKey: userId,
-          requestId: reqId,
-        }),
       runImageGeneration: async (
         sourceImageUrl,
         promptHint,

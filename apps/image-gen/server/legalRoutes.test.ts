@@ -124,22 +124,6 @@ describe("legal routes", () => {
     expect(billingPolicy).not.toContain("Bijzondere vrijstellingsregeling");
   });
 
-  it("retains the exact legacy Startpilot terms while that separate offer still exists", () => {
-    const terms = renderLegalRoute("/terms").body;
-
-    expect(terms).toContain("Separate legacy Startpilot offer");
-    expect(terms).toContain("eligible Belgian consumers");
-    expect(terms).toContain("costs €19 once");
-    expect(terms).toContain("30 days of access");
-    expect(terms).toContain("one workspace and one connected Facebook Page");
-    expect(terms).toContain("up to 300 AI answers and 20 image generations");
-    expect(terms).toContain("limited to 5 images per day");
-    expect(terms).toContain(
-      "no subscription, direct-debit mandate, automatic top-up or overage charge"
-    );
-    expect(terms).toContain("separate from the Messenger premium-credit pack");
-  });
-
   it("uses the shared HTML escaper for text inserted into legal pages and receipts", () => {
     expect(escapeHtml(`<script data-owner="O'Reilly">&</script>`)).toBe(
       "&lt;script data-owner=&quot;O&#39;Reilly&quot;&gt;&amp;&lt;/script&gt;"

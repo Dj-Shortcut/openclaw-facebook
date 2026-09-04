@@ -1,14 +1,10 @@
 import Footer from "./components/Footer";
-import { Toaster } from "@/components/ui/sonner";
-import { TooltipProvider } from "@/components/ui/tooltip";
 import { lazy, Suspense } from "react";
-import { Route, Switch, useLocation } from "wouter";
+import { Route, Switch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
-import { ThemeProvider } from "./contexts/ThemeContext";
 
-const Home = lazy(() => import("./pages/Home"));
 const NotFound = lazy(() => import("./pages/NotFound"));
-const PortalHandoff = lazy(() => import("./pages/PortalHandoff"));
+const LandingPage = lazy(() => import("./pages/LandingPage"));
 const CreditCheckout = lazy(() => import("./pages/CreditCheckout"));
 const DataDeletionPage = lazy(() =>
   import("./pages/Legal").then(module => ({ default: module.DataDeletionPage }))
@@ -37,15 +33,12 @@ function Router() {
         <Route path={"/terms"} component={TermsPage} />
         <Route path={"/billing-policy"} component={BillingPolicyPage} />
         <Route path={"/data-deletion"} component={DataDeletionPage} />
-        <Route path={"/handoff/:token"} component={PortalHandoff} />
-        <Route path={"/handoff"} component={PortalHandoff} />
         <Route path={"/credits/checkout/return"} component={CreditCheckout} />
         <Route
           path={"/credits/checkout/:intentId"}
           component={CreditCheckout}
         />
-        <Route path={"/portal"} component={Home} />
-        <Route path={"/:?"} component={Home} />
+        <Route path={"/"} component={LandingPage} />
         <Route path={"/404"} component={NotFound} />
         {/* Final fallback route */}
         <Route component={NotFound} />
@@ -55,22 +48,14 @@ function Router() {
 }
 
 function App() {
-  const [location] = useLocation();
-  const showPublicFooter = location !== "/portal";
-
   return (
     <ErrorBoundary>
-      <ThemeProvider defaultTheme="light">
-        <TooltipProvider>
-          <div className="min-h-screen flex flex-col bg-[#f6f2ea] text-foreground">
-            <Toaster />
-            <div className="grow bg-[#f6f2ea]">
-              <Router />
-            </div>
-            {showPublicFooter ? <Footer /> : null}
-          </div>
-        </TooltipProvider>
-      </ThemeProvider>
+      <div className="min-h-screen flex flex-col bg-[#f6f2ea] text-foreground">
+        <div className="grow bg-[#f6f2ea]">
+          <Router />
+        </div>
+        <Footer />
+      </div>
     </ErrorBoundary>
   );
 }

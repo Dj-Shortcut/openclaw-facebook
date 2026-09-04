@@ -53,13 +53,6 @@ export type MolliePayment = {
   };
 };
 
-export type MollieCustomer = {
-  resource: "customer";
-  id: string;
-  mode: "test" | "live";
-  metadata?: unknown;
-};
-
 export type MollieMandate = {
   resource: "mandate";
   id: string;
@@ -131,72 +124,6 @@ export class MollieClient {
       throw new Error("Mollie API base URL must not contain query or fragment");
     }
     this.apiBaseUrl = parsedApiBaseUrl.toString().replace(/\/$/, "");
-  }
-
-  async createCustomer(input: {
-    externalReference: string;
-    idempotencyKey: string;
-  }): Promise<MollieCustomer> {
-    return this.request<MollieCustomer>("/customers", {
-      method: "POST",
-      idempotencyKey: input.idempotencyKey,
-      body: {
-        name: "Leaderbot customer",
-        metadata: { billingReference: input.externalReference },
-      },
-    });
-  }
-
-  async createFirstPayment(input: {
-    customerId: string;
-    amount: MollieAmount;
-    description: string;
-    intentId: string;
-    redirectUrl: string;
-    webhookUrl: string;
-    idempotencyKey: string;
-  }): Promise<MolliePayment> {
-    return this.request<MolliePayment>("/payments", {
-      method: "POST",
-      idempotencyKey: input.idempotencyKey,
-      body: {
-        amount: input.amount,
-        customerId: input.customerId,
-        sequenceType: "first",
-        method: "bancontact",
-        locale: "nl_BE",
-        description: input.description,
-        redirectUrl: input.redirectUrl,
-        webhookUrl: input.webhookUrl,
-        metadata: { billingIntentId: input.intentId },
-      },
-    });
-  }
-
-  async createOneTimePayment(input: {
-    customerId: string;
-    amount: MollieAmount;
-    description: string;
-    intentId: string;
-    redirectUrl: string;
-    webhookUrl: string;
-    idempotencyKey: string;
-  }): Promise<MolliePayment> {
-    return this.request<MolliePayment>("/payments", {
-      method: "POST",
-      idempotencyKey: input.idempotencyKey,
-      body: {
-        amount: input.amount,
-        customerId: input.customerId,
-        sequenceType: "oneoff",
-        method: "bancontact",
-        locale: "nl_BE",
-        description: input.description,
-        redirectUrl: input.redirectUrl,
-        webhookUrl: input.webhookUrl,
-        metadata: { billingIntentId: input.intentId },
-      },
-    });
   }
 
   async createCreditPayment(input: {

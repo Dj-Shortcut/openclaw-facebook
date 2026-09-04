@@ -75,12 +75,6 @@ type TranslationKey =
   | "startpilotDailyQuotaReached"
   | "startpilotQuotaReached"
   | "openLeaderbot"
-  | "openPortal"
-  | "portalAction"
-  | "portalJoinPrompt"
-  | "portalLinkSent"
-  | "portalLinkNotLinked"
-  | "portalLinkUnavailable"
   | "generationGenericFailure"
   | "errorFallback"
   | "unsupportedMedia"
@@ -173,10 +167,6 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
     startpilotQuotaReached:
       "Je Startpilot-tegoed is opgebruikt. Open Leaderbot om je gebruik te bekijken. Er start nooit automatisch een nieuwe betaling.",
     openLeaderbot: "Open Leaderbot",
-    openPortal: "Open klantenportaal",
-    portalAction: "Klantenportaal",
-    portalJoinPrompt:
-      "Word lid van Leaderbot of meld je aan om je afgeschermde klantenportaal te openen.",
     generationGenericFailure: "Ik kon die afbeelding nu niet maken.",
     errorFallback: "Er liep iets mis aan mijn kant. Probeer gerust opnieuw.",
     unsupportedMedia:
@@ -217,17 +207,11 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
       "De videomaker deed er te lang over. Probeer straks opnieuw met dezelfde foto.",
     videoGenerationUnavailable: "Video maken staat nog niet aan.",
     videoGenerationPremiumRequired:
-      "Deze video met stem is beschikbaar in Leaderbot Premium. Activeer Premium in je klantenportaal.",
+      "Deze video met stem is beschikbaar in Leaderbot Premium. Neem contact op om Premium te activeren.",
     videoGenerationGenericFailure:
       "Ik kon die video nu niet maken. Je foto blijft bewaard, dus je kunt een andere aanpassing vragen.",
     outOfVideoCredits:
       "Je hebt je gratis videocredits voor vandaag opgebruikt. Probeer morgen opnieuw.",
-    portalLinkSent:
-      "Ik heb je beveiligde portallink hierboven gestuurd. Hij verloopt snel en werkt maar een keer.",
-    portalLinkNotLinked:
-      "Deze Messenger-chat is nog niet veilig gekoppeld aan een bestaand portalaccount. Gebruik je oorspronkelijke handofflink of contacteer privacy@leaderbot.live.",
-    portalLinkUnavailable:
-      "Ik kan nu geen beveiligde portallink maken. Probeer straks opnieuw.",
     unsupportedGif: "GIF ontvangen, stuur best een gewone foto voor bewerking.",
     unsupportedAudio:
       "Ik heb je voice ontvangen, maar kan die nog niet verwerken. Stuur tekst of een foto.",
@@ -312,10 +296,6 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
     startpilotQuotaReached:
       "Your Startpilot credit is used up. Open Leaderbot to review usage. A new payment never starts automatically.",
     openLeaderbot: "Open Leaderbot",
-    openPortal: "Open customer portal",
-    portalAction: "Customer portal",
-    portalJoinPrompt:
-      "Join Leaderbot or sign in to open your private customer portal.",
     generationGenericFailure: "I could not generate that image right now.",
     errorFallback: "Something went wrong on my side. Please try again.",
     unsupportedMedia:
@@ -355,17 +335,11 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
       "The video provider took too long. Please try again later with the same photo.",
     videoGenerationUnavailable: "Video generation is not enabled yet.",
     videoGenerationPremiumRequired:
-      "This video-with-voice feature is available with Leaderbot Premium. Activate Premium in your customer portal.",
+      "This video-with-voice feature is available with Leaderbot Premium. Contact us to activate Premium.",
     videoGenerationGenericFailure:
       "I could not create that video right now. Your photo is still available, so you can ask for a different edit.",
     outOfVideoCredits:
       "You used your free video credits for today. Try again tomorrow.",
-    portalLinkSent:
-      "I sent your secure portal link above. It expires soon and only works once.",
-    portalLinkNotLinked:
-      "This Messenger chat is not securely linked to an existing portal account yet. Use your original handoff link or contact privacy@leaderbot.live.",
-    portalLinkUnavailable:
-      "I cannot create a secure portal link right now. Please try again later.",
     unsupportedGif: "I got your GIF, send a regular photo instead.",
     unsupportedAudio:
       "I got your voice message, but I can't process it yet. Send text or a photo.",

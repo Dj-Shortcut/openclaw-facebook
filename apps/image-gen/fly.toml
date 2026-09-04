@@ -89,7 +89,6 @@ kill_timeout = 300
   NODE_ENV = "production"
   OPENAI_IMAGE_MAX_RETRIES = "0"
   PORT = "8080"
-  PORTAL_BASE_URL = "https://app.leaderbot.live"
   # Temporary storage migration bridge for existing and non-Messenger objects.
   # New Messenger writes are scoped even while this read/delete bridge is on.
   STORAGE_ALLOW_LEGACY_KEYS = "true"

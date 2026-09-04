@@ -32,9 +32,11 @@ app = "node deploy/fly-gateway/bin/start-gateway.mjs --allow-unconfigured --port
 [http_service]
 internal_port = 3000
 force_https = true
-auto_stop_machines = false
-auto_start_machines = true
-min_machines_running = 1
+# Retirement default: the legacy gateway must remain stopped unless an
+# explicitly reviewed rollback starts it.
+auto_stop_machines = true
+auto_start_machines = false
+min_machines_running = 0
 processes = ["app"]
 
 [[http_service.checks]]

@@ -29,6 +29,10 @@ config file, process groups, desired scale, Machine ownership rule, service
 check, reviewed rollback-image allowlist, and Meta callback expectations.
 `npm run production:validate` checks the repository contract in PR CI. The
 production workflow checks live drift before and after every deploy.
+The shared validation job installs the pinned pnpm toolchain once and uses the
+image-gen lockfile for the Actions dependency cache; the image-gen release
+step therefore reuses packages without changing the immutable artifact or
+production approval gates.
 
 Every workflow job that can receive a Fly API token installs the same reviewed
 `flyctl` binary without a remote setup action or install script. Version

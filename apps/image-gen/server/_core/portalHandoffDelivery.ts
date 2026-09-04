@@ -48,9 +48,8 @@ export type SendPortalHandoffResult =
 function getPortalBaseUrl(baseUrl?: string): string {
   const rawBaseUrl =
     baseUrl?.trim() ||
-    process.env.PORTAL_BASE_URL?.trim() ||
     process.env.APP_BASE_URL?.trim() ||
-    "https://leaderbot.live";
+    "https://app.leaderbot.live";
   const parsed = new URL(rawBaseUrl);
 
   if (process.env.NODE_ENV === "production" && parsed.protocol !== "https:") {

@@ -10,7 +10,7 @@ import { ensureHttpRateLimiterReady } from "./httpRateLimit";
 import { ensureStateStoreReady } from "./stateStore";
 import { ensureWebhookIngressQueueReady } from "./meta/webhookIngressQueue";
 import { ensureWebhookReplayProtectionReady } from "./webhookReplayProtection";
-import { assertPortalDatabaseConfig } from "./env";
+import { assertDatabaseConfig } from "./env";
 import { assertConversationIdentityConfig } from "./conversationIdentityConfig";
 import {
   assertMollieBillingEnabled,
@@ -38,7 +38,6 @@ import {
   getMollieAccountingImportConfig,
   isMollieAccountingImportEnabled,
 } from "./billing/accountingWorker";
-import { assertWhatsAppTenantBindingReadiness } from "./whatsappBindingReadiness";
 import {
   getCreditCheckoutPilotConfig,
   withCreditCheckoutHmacKeyring,
@@ -130,12 +129,8 @@ export function buildRuntimeReadinessChecks(): ReadinessCheck[] {
       check: ensureStateStoreReady,
     },
     {
-      name: "portal_database_config",
-      check: assertPortalDatabaseConfig,
-    },
-    {
-      name: "whatsapp_tenant_binding",
-      check: assertWhatsAppTenantBindingReadiness,
+      name: "database_config",
+      check: assertDatabaseConfig,
     },
     {
       name: "mollie_billing_config",
