@@ -5,7 +5,6 @@ import { formatFaceMemoryRetentionDays } from "./faceMemoryRetention";
 
 const CONVERSATION_ACTION_NEW_IMAGE = "new_image";
 const CONVERSATION_ACTION_EDIT_PHOTO = "edit_photo";
-const CONVERSATION_ACTION_VIDEO = "video";
 const CONVERSATION_ACTION_CHANGE_BACKGROUND = "change_background";
 const CONVERSATION_ACTION_COMBINE_PHOTOS = "combine_photos";
 const CONVERSATION_ACTION_PRIVACY_INFO = "privacy";
@@ -22,11 +21,6 @@ export function buildQuickStartResponse(lang: Lang): ConversationResponse {
         id: CONVERSATION_ACTION_EDIT_PHOTO,
         label: t(lang, "editPhoto"),
         inputText: t(lang, "editPhoto"),
-      },
-      {
-        id: CONVERSATION_ACTION_VIDEO,
-        label: t(lang, "makeVideo"),
-        inputText: t(lang, "makeVideo"),
       },
       {
         id: CONVERSATION_ACTION_PRIVACY_INFO,

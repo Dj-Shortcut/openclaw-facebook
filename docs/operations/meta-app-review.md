@@ -37,6 +37,11 @@ mix it into the owner-bot review or subscription behavior.
 
 ## Review demo checklist
 
+Public quick-start actions contain only new image, edit photo and privacy.
+The video beta is not advertised in these shared actions. Natural-language
+video requests still require the enabled feature flag and the exact allowed
+user and Page binding before any provider work.
+
 Before requesting review or changing public access, record:
 
 1. Webhook verification and signed POST delivery.

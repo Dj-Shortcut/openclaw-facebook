@@ -74,7 +74,6 @@ describe("sharedTextHandler", () => {
         actions: [
           { id: "new_image", label: "Nieuwe afbeelding", inputText: "new_image" },
           { id: "edit_photo", label: "Pas foto aan", inputText: "Pas foto aan" },
-          { id: "video", label: "Maak video", inputText: "Maak video" },
           { id: "privacy", label: "Privacy", inputText: "Privacy" },
         ],
       },
@@ -115,7 +114,6 @@ describe("sharedTextHandler", () => {
         actions: [
           { id: "new_image", label: "Nieuwe afbeelding", inputText: "new_image" },
           { id: "edit_photo", label: "Pas foto aan", inputText: "Pas foto aan" },
-          { id: "video", label: "Maak video", inputText: "Maak video" },
           { id: "privacy", label: "Privacy", inputText: "Privacy" },
         ],
       },
@@ -150,7 +148,6 @@ describe("sharedTextHandler", () => {
         actions: [
           { id: "new_image", label: "Nieuwe afbeelding", inputText: "new_image" },
           { id: "edit_photo", label: "Pas foto aan", inputText: "Pas foto aan" },
-          { id: "video", label: "Maak video", inputText: "Maak video" },
           { id: "privacy", label: "Privacy", inputText: "Privacy" },
         ],
       },
@@ -431,7 +428,6 @@ describe("sharedTextHandler", () => {
         actions: [
           { id: "new_image", label: "New image", inputText: "new_image" },
           { id: "edit_photo", label: "Edit photo", inputText: "Edit photo" },
-          { id: "video", label: "Make video", inputText: "Make video" },
           { id: "privacy", label: "Privacy", inputText: "Privacy" },
         ],
       },
@@ -566,7 +562,6 @@ describe("sharedTextHandler", () => {
         actions: [
           { id: "new_image", label: "Nieuwe afbeelding", inputText: "new_image" },
           { id: "edit_photo", label: "Pas foto aan", inputText: "Pas foto aan" },
-          { id: "video", label: "Maak video", inputText: "Maak video" },
           { id: "privacy", label: "Privacy", inputText: "Privacy" },
         ],
       },
@@ -599,7 +594,6 @@ describe("sharedTextHandler", () => {
         actions: [
           { id: "new_image", label: "Nieuwe afbeelding", inputText: "new_image" },
           { id: "edit_photo", label: "Pas foto aan", inputText: "Pas foto aan" },
-          { id: "video", label: "Maak video", inputText: "Maak video" },
           { id: "privacy", label: "Privacy", inputText: "Privacy" },
         ],
       },
@@ -633,7 +627,6 @@ describe("sharedTextHandler", () => {
         actions: [
           { id: "new_image", label: "Nieuwe afbeelding", inputText: "new_image" },
           { id: "edit_photo", label: "Pas foto aan", inputText: "Pas foto aan" },
-          { id: "video", label: "Maak video", inputText: "Maak video" },
           { id: "privacy", label: "Privacy", inputText: "Privacy" },
         ],
       },
@@ -665,7 +658,6 @@ describe("sharedTextHandler", () => {
         actions: [
           { id: "new_image", label: "Nieuwe afbeelding", inputText: "new_image" },
           { id: "edit_photo", label: "Pas foto aan", inputText: "Pas foto aan" },
-          { id: "video", label: "Maak video", inputText: "Maak video" },
           { id: "privacy", label: "Privacy", inputText: "Privacy" },
         ],
       },

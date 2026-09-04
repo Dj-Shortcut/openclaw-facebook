@@ -36,7 +36,6 @@ describe("conversation actions", () => {
       actions: [
         { id: "new_image", label: "Nieuwe afbeelding", inputText: "new_image" },
         { id: "edit_photo", label: "Pas foto aan", inputText: "Pas foto aan" },
-        { id: "video", label: "Maak video", inputText: "Maak video" },
         { id: "privacy", label: "Privacy", inputText: "Privacy" },
       ],
     });

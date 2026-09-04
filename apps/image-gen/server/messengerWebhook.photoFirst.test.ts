@@ -526,11 +526,6 @@ describe("photo-first onboarding", () => {
         },
         {
           content_type: "text",
-          title: "Maak video",
-          payload: "OPENCLAW_ACTION:Maak%20video",
-        },
-        {
-          content_type: "text",
           title: "Privacy",
           payload: "OPENCLAW_ACTION:Privacy",
         },
@@ -624,11 +619,6 @@ describe("photo-first onboarding", () => {
           content_type: "text",
           title: "Pas foto aan",
           payload: "OPENCLAW_ACTION:Pas%20foto%20aan",
-        },
-        {
-          content_type: "text",
-          title: "Maak video",
-          payload: "OPENCLAW_ACTION:Maak%20video",
         },
         {
           content_type: "text",
