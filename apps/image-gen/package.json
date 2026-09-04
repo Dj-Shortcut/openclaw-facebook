@@ -61,7 +61,7 @@
     "dotenv": "^17.4.2",
     "drizzle-orm": "^0.45.2",
     "express": "^5.2.1",
-    "express-rate-limit": "8.6.2",
+    "express-rate-limit": "8.7.0",
     "ioredis": "^6.0.0",
     "jose": "6.2.9",
     "lucide-react": "^1.30.0",
