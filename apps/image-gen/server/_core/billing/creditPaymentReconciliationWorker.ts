@@ -7,7 +7,10 @@ import {
   renewBillingTenantLease,
 } from "./billingSchedulerStore";
 import { getConfiguredBillingMode } from "./config";
-import { enqueueDueCustomerlessCreditPaymentRecoveries } from "./creditPaymentRecovery";
+import {
+  enqueueDueCustomerlessCreditPaymentRecoveries,
+  resolveDueCustomerlessCreditPaymentOperations,
+} from "./creditPaymentRecovery";
 
 const DISPATCH_INTERVAL_MS = 60_000;
 const INITIAL_DISPATCH_DELAY_MS = 30_000;
@@ -69,6 +72,12 @@ export async function runCreditPaymentReconciliationSchedulerOnce(
     heartbeat.unref();
     try {
       await assertBillingTenantLeaseOwned(lease);
+      await resolveDueCustomerlessCreditPaymentOperations(
+        lease.workspaceId,
+        lease.mode,
+        claimNow,
+        lease
+      );
       enqueued += await enqueueDueCustomerlessCreditPaymentRecoveries(
         lease.workspaceId,
         lease.mode,

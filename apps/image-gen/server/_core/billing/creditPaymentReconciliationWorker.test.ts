@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   assertLease: vi.fn(),
   releaseLease: vi.fn(),
   renewLease: vi.fn(),
+  resolveDueOperations: vi.fn(),
   enqueueRecoveries: vi.fn(),
   safeLog: vi.fn(),
 }));
@@ -19,6 +20,7 @@ vi.mock("./billingSchedulerStore", () => ({
   renewBillingTenantLease: mocks.renewLease,
 }));
 vi.mock("./creditPaymentRecovery", () => ({
+  resolveDueCustomerlessCreditPaymentOperations: mocks.resolveDueOperations,
   enqueueDueCustomerlessCreditPaymentRecoveries: mocks.enqueueRecoveries,
 }));
 
@@ -43,6 +45,7 @@ beforeEach(() => {
   mocks.assertLease.mockResolvedValue(undefined);
   mocks.releaseLease.mockResolvedValue(true);
   mocks.renewLease.mockResolvedValue(true);
+  mocks.resolveDueOperations.mockResolvedValue(3);
   mocks.enqueueRecoveries.mockResolvedValue(2);
 });
 
@@ -65,11 +68,20 @@ describe("credit payment reconciliation worker", () => {
       now,
       "reconciliation"
     );
+    expect(mocks.resolveDueOperations).toHaveBeenCalledExactlyOnceWith(
+      42,
+      "test",
+      now,
+      LEASE
+    );
     expect(mocks.enqueueRecoveries).toHaveBeenCalledExactlyOnceWith(
       42,
       "test",
       now,
       LEASE
+    );
+    expect(mocks.resolveDueOperations.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.enqueueRecoveries.mock.invocationCallOrder[0]!
     );
     expect(mocks.assertLease).toHaveBeenCalledTimes(2);
     expect(mocks.releaseLease).toHaveBeenCalledWith(
@@ -83,7 +95,7 @@ describe("credit payment reconciliation worker", () => {
   });
 
   it("backs off a failed tenant lease and logs no private error detail", async () => {
-    mocks.enqueueRecoveries.mockRejectedValueOnce(
+    mocks.resolveDueOperations.mockRejectedValueOnce(
       new Error("private database host must stay redacted")
     );
 
@@ -101,6 +113,7 @@ describe("credit payment reconciliation worker", () => {
     expect(JSON.stringify(mocks.safeLog.mock.calls)).not.toContain(
       "private database host"
     );
+    expect(mocks.enqueueRecoveries).not.toHaveBeenCalled();
   });
 
   it("keeps dispatcher failures redacted so the timer cannot reject globally", async () => {
