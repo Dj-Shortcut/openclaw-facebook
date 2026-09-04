@@ -1,6 +1,6 @@
 import { systemRouter } from "./_core/systemRouter";
 import { billingAdminRouter } from "./_core/billing/billingAdminRouter";
-import { publicProcedure, router } from "./_core/trpc";
+import { router } from "./_core/trpc";
 
 export const appRouter = router({
   system: systemRouter,

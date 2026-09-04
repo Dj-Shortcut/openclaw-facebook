@@ -37,6 +37,10 @@ import {
   creditWalletRoutineNames,
   productionRuntimeWritableTableNames,
 } from "../scripts/production-schema-contract.mjs";
+import {
+  assertProvisionerGrants,
+  buildProvisionerSql,
+} from "../../../scripts/image-gen-credit-provisioner-bootstrap-contract.mjs";
 
 const suite = describe.runIf(
   process.env.RUN_MYSQL_INTEGRATION === "1" && Boolean(process.env.DATABASE_URL)
@@ -437,6 +441,71 @@ suite("0018 credit wallet MySQL 8.4 procedure boundary", () => {
       ]);
     }
   }
+
+  it("creates the exact restricted provisioner and verifies its effective grants", async () => {
+    const databaseUrl = new URL(process.env.DATABASE_URL!);
+    const databaseName = decodeURIComponent(databaseUrl.pathname.slice(1));
+    const username = `lbcp_${randomUUID().replaceAll("-", "").slice(0, 16)}`;
+    const password = `Aa1!${hash(randomUUID())}${hash(randomUUID()).slice(0, 32)}`;
+    const sql = buildProvisionerSql({ databaseName, password, username });
+    let deniedTable: string | undefined;
+    let provisioner: Connection | undefined;
+    try {
+      await connection.query(sql.createStatement);
+      for (const statement of sql.grantStatements) {
+        await connection.query(statement);
+      }
+      const [grantRows] = await connection.query<RowDataPacket[]>(
+        `SHOW GRANTS FOR ${sql.account}`
+      );
+      const grants = grantRows.flatMap(row => Object.values(row)).map(String);
+      expect(() => assertProvisionerGrants(grants, databaseName)).not.toThrow();
+
+      const provisionerUrl = new URL(databaseUrl);
+      provisionerUrl.username = username;
+      provisionerUrl.password = password;
+      const candidateDeniedTable = `lbcp_denied_${randomUUID()
+        .replaceAll("-", "")
+        .slice(0, 16)}`;
+      await connection.query(
+        `CREATE TABLE \`${candidateDeniedTable}\` (\`id\` BIGINT NOT NULL PRIMARY KEY) ENGINE=InnoDB`
+      );
+      deniedTable = candidateDeniedTable;
+      provisioner = await mysql.createConnection(provisionerUrl.href);
+      const [[identity]] = await provisioner.query<RowDataPacket[]>(
+        "SELECT CURRENT_USER() AS currentUser,DATABASE() AS databaseName"
+      );
+      expect(identity).toMatchObject({
+        currentUser: `${username}@%`,
+        databaseName,
+      });
+      await expect(
+        provisioner.query("DELETE FROM ?? WHERE 1=0", [deniedTable])
+      ).rejects.toMatchObject({
+        code: "ER_TABLEACCESS_DENIED_ERROR",
+        errno: 1142,
+        sqlState: "42000",
+      });
+      await expect(
+        provisioner.query("DROP TABLE ??", [deniedTable])
+      ).rejects.toMatchObject({
+        code: "ER_TABLEACCESS_DENIED_ERROR",
+        errno: 1142,
+        sqlState: "42000",
+      });
+    } finally {
+      if (provisioner) {
+        await provisioner.end().catch(() => undefined);
+      }
+      try {
+        if (deniedTable) {
+          await connection.query(`DROP TABLE IF EXISTS \`${deniedTable}\``);
+        }
+      } finally {
+        await connection.query(`DROP USER IF EXISTS ${sql.account}`);
+      }
+    }
+  });
 
   it("preserves the 0016 ownerless paid-effect writer and closes NULL shapes", async () => {
     const scope = await createScope();

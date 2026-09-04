@@ -442,6 +442,9 @@ export class MollieClient {
   }
 }
 
+/** Bancontact minimum is EUR 0.02 (two minor units). */
+const BANCONTACT_MIN_MINOR = 2;
+
 function assertProfilePaymentPaginationUrl(url: URL): void {
   const limits = url.searchParams.getAll("limit");
   const cursors = url.searchParams.getAll("from");
@@ -489,7 +492,8 @@ function assertCreditPaymentInput(
     idempotencyKey: string;
   }
 ): void {
-  if (parseAmountMinor(input.amount) <= 0) {
+  const amountMinor = parseAmountMinor(input.amount);
+  if (amountMinor < BANCONTACT_MIN_MINOR) {
     throw new Error("invalid credit payment amount");
   }
   if (

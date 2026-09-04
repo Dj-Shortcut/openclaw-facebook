@@ -1110,9 +1110,6 @@ async function testCreditWalletLeastPrivilegeProfiles(migrationPlan) {
   await admin.query(
     `GRANT SELECT, EXECUTE ON \`${creditPrivilegeDatabase}\`.* TO \`${creditProvisionerUser}\`@'%' WITH GRANT OPTION`
   );
-  await admin.query(
-    `GRANT CREATE, TRIGGER, CREATE ROUTINE, ALTER ROUTINE ON \`${creditPrivilegeDatabase}\`.* TO \`${creditProvisionerUser}\`@'%' WITH GRANT OPTION`
-  );
   for (const tableName of productionRuntimeWritableTableNames) {
     await admin.query(
       `GRANT INSERT, UPDATE, DELETE ON \`${creditPrivilegeDatabase}\`.\`${tableName}\` TO \`${creditProvisionerUser}\`@'%' WITH GRANT OPTION`
@@ -2727,7 +2724,6 @@ function testSchemaDigestContracts() {
     "GRANT CREATE USER ON *.* TO `credit_provisioner`@`%`",
     "GRANT SELECT ON `mysql`.`user` TO `credit_provisioner`@`%`",
     "GRANT SELECT, EXECUTE ON `leaderbot`.* TO `credit_provisioner`@`%` WITH GRANT OPTION",
-    "GRANT CREATE, TRIGGER, CREATE ROUTINE, ALTER ROUTINE ON `leaderbot`.* TO `credit_provisioner`@`%` WITH GRANT OPTION",
     ...productionRuntimeWritableTableNames.map(
       tableName =>
         `GRANT INSERT, UPDATE, DELETE ON \`leaderbot\`.\`${tableName}\` TO \`credit_provisioner\`@\`%\` WITH GRANT OPTION`
@@ -2735,17 +2731,6 @@ function testSchemaDigestContracts() {
     "GRANT DELETE, CREATE ON `leaderbot`.`credit_wallets` TO `credit_provisioner`@`%` WITH GRANT OPTION",
   ];
   assertCreditProvisionerGrantScope(creditProvisionerGrants, "leaderbot");
-  expectSynchronousFailure(
-    () =>
-      assertCreditProvisionerGrantScope(
-        creditProvisionerGrants.filter(
-          grant => !grant.includes("CREATE, TRIGGER, CREATE ROUTINE, ALTER ROUTINE")
-        ),
-        "leaderbot"
-      ),
-    "credit provisioner rejects missing migration schema delegation",
-    "credit provisioner privilege boundary mismatch"
-  );
   for (const [label, grants] of [
     [
       "global all",

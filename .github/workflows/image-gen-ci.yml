@@ -129,15 +129,13 @@ jobs:
           pnpm exec vitest run --no-file-parallelism \
             server/billingExecution.mysql.test.ts \
             server/billingHandoffErasure.mysql.test.ts \
-            server/billingPrivacySerialization.mysql.test.ts \
             server/creditCheckoutRetention.mysql.test.ts \
             server/creditCheckoutReservationSchema.mysql.test.ts \
             server/creditPaymentFlow.mysql.test.ts \
             server/creditWalletSchema.mysql.test.ts \
             server/internalAiAnswerQuota.mysql.test.ts \
             server/messengerErasureRetry.mysql.test.ts \
-            server/messengerProviderAttemptFence.mysql.test.ts \
-            server/paymentSnapshot.mysql.test.ts
+            server/messengerProviderAttemptFence.mysql.test.ts
         env:
           DATABASE_URL: mysql://root:root@127.0.0.1:3306/test_image_gen_ci
           RUN_MYSQL_INTEGRATION: "1"

@@ -42,7 +42,6 @@ type SharedTextHandlerInput = {
     normalizedText: string;
     hasPhoto: boolean;
   }) => Promise<boolean>;
-  runMollieTestCommand?: () => Promise<BotResponse | null>;
   logState?: (state: MessengerUserState, context: string) => void;
   logAckIgnored?: (ack: string) => void;
 };
@@ -159,13 +158,6 @@ function buildDefaultTextResponse(
   return { response: buildQuickStartResponse(lang) };
 }
 
-function isMollieTestCommand(normalizedText: string): boolean {
-  return (
-    normalizedText === "mollie betalings test" ||
-    normalizedText === "mollie betalingstest"
-  );
-}
-
 async function tryHandleVideoAnimationIntent(
   input: SharedTextHandlerInput,
   trimmedText: string,
@@ -219,10 +211,6 @@ export async function handleSharedTextMessage(
   const ackResult = tryHandleAck(input, trimmedText);
   if (ackResult) {
     return ackResult;
-  }
-
-  if (isMollieTestCommand(normalizedText) && input.runMollieTestCommand) {
-    return { response: await input.runMollieTestCommand() };
   }
 
   const greetingResult = await tryHandleGreetingOrSmalltalk(

@@ -90,43 +90,43 @@
       "config": "apps/image-gen/fly.toml",
       "workingDirectory": "apps/image-gen",
       "deployScript": "deploy:image-gen",
-      "deploymentEnabled": true,
-      "deploymentBlockReason": null,
+      "deploymentEnabled": false,
+      "deploymentBlockReason": "Application deploys are frozen while the protected 0016-to-0018 credit schema expansion runs; the attested bridge is the only recovery image.",
       "sourceDeployEnabled": false,
       "sourceDeployBlockReason": "Production deploys require an immutable image built from reviewed source and recorded in this manifest before rollout.",
       "trustedBuilderWorkflow": ".github/workflows/build-production-artifacts.yml",
-      "reviewedImage": "registry.fly.io/leaderbot-fb-image-gen@sha256:dc40601684b2f9f7b3698914c5acb887ea7103631873a316930414e55ef10a03",
+      "reviewedImage": "registry.fly.io/leaderbot-fb-image-gen@sha256:a37632c86a72a87cd94f5c030c8b88be330420289c553f4570e234c85df233b8",
       "reviewedArtifactKind": "migration-bridge",
-      "reviewedSourceCommit": "ab7a7e97003bd65fb31b8e57c718d6329b163d9f",
+      "reviewedSourceCommit": "f26d80e1eb47361541b9812a1c0d47477afac535",
       "reviewedSettledPredecessor": {
-        "identity": "deploy-32860967800-1",
-        "image": "registry.fly.io/leaderbot-fb-image-gen@sha256:01ccf154e0ac4c314f68775a0fd00fe925aaba92fee997a32f932c8d4c36d806",
-        "path": "deploy/production/rollback-configs/image-gen-01ccf154e0ac-deploy-32860967800-1.toml",
-        "sha256": "77d8504fe70a95d4db229cd445e5f0c446189fcb1ab963f1140a3fb041013ceb"
+        "identity": "deploy-33297361675-1",
+        "image": "registry.fly.io/leaderbot-fb-image-gen@sha256:a37632c86a72a87cd94f5c030c8b88be330420289c553f4570e234c85df233b8",
+        "path": "deploy/production/rollback-configs/image-gen-a37632c86a72-deploy-33297361675-1.toml",
+        "sha256": "cd74c375ff2ebfa9c178cea325377b654851a71d105375ca51b826796bf9e9c0"
       },
       "reviewedRollbackImages": [
-        "registry.fly.io/leaderbot-fb-image-gen@sha256:01ccf154e0ac4c314f68775a0fd00fe925aaba92fee997a32f932c8d4c36d806"
+        "registry.fly.io/leaderbot-fb-image-gen@sha256:a37632c86a72a87cd94f5c030c8b88be330420289c553f4570e234c85df233b8"
       ],
       "reviewedRollbackConfigs": {
-        "registry.fly.io/leaderbot-fb-image-gen@sha256:01ccf154e0ac4c314f68775a0fd00fe925aaba92fee997a32f932c8d4c36d806": {
-          "path": "deploy/production/rollback-configs/image-gen-01ccf154e0ac-deploy-32860967800-1.toml",
-          "sha256": "77d8504fe70a95d4db229cd445e5f0c446189fcb1ab963f1140a3fb041013ceb"
+        "registry.fly.io/leaderbot-fb-image-gen@sha256:a37632c86a72a87cd94f5c030c8b88be330420289c553f4570e234c85df233b8": {
+          "path": "deploy/production/rollback-configs/image-gen-a37632c86a72-deploy-33297361675-1.toml",
+          "sha256": "cd74c375ff2ebfa9c178cea325377b654851a71d105375ca51b826796bf9e9c0"
         }
       },
       "reviewedRollbackArtifactKinds": {
-        "registry.fly.io/leaderbot-fb-image-gen@sha256:01ccf154e0ac4c314f68775a0fd00fe925aaba92fee997a32f932c8d4c36d806": "runtime"
+        "registry.fly.io/leaderbot-fb-image-gen@sha256:a37632c86a72a87cd94f5c030c8b88be330420289c553f4570e234c85df233b8": "migration-bridge"
       },
       "reviewedRollbackSourceCommits": {
-        "registry.fly.io/leaderbot-fb-image-gen@sha256:01ccf154e0ac4c314f68775a0fd00fe925aaba92fee997a32f932c8d4c36d806": "0b778ef7936b492b9b22b21690ecf54ea60a9856"
+        "registry.fly.io/leaderbot-fb-image-gen@sha256:a37632c86a72a87cd94f5c030c8b88be330420289c553f4570e234c85df233b8": "f26d80e1eb47361541b9812a1c0d47477afac535"
       },
       "databaseSchemaPhase": "0016_expand",
       "databaseSchemaTransition": {
         "from": "0016_expand",
         "to": "0018_credit_checkout_reservation",
-        "state": "bridge_reviewed",
+        "state": "expand_pending",
         "legacyBaseImage": "registry.fly.io/leaderbot-fb-image-gen@sha256:01ccf154e0ac4c314f68775a0fd00fe925aaba92fee997a32f932c8d4c36d806",
-        "bridgeImage": "registry.fly.io/leaderbot-fb-image-gen@sha256:dc40601684b2f9f7b3698914c5acb887ea7103631873a316930414e55ef10a03",
-        "bridgeSourceCommit": "ab7a7e97003bd65fb31b8e57c718d6329b163d9f",
+        "bridgeImage": "registry.fly.io/leaderbot-fb-image-gen@sha256:a37632c86a72a87cd94f5c030c8b88be330420289c553f4570e234c85df233b8",
+        "bridgeSourceCommit": "f26d80e1eb47361541b9812a1c0d47477afac535",
         "bridgePredicateType": "https://leaderbot.live/attestations/migration-bridge/v1"
       },
       "databaseRecovery": {
@@ -144,8 +144,10 @@
         "0018_credit_checkout_reservation"
       ],
       "reviewedRollbackImageSchemaPhases": {
-        "registry.fly.io/leaderbot-fb-image-gen@sha256:01ccf154e0ac4c314f68775a0fd00fe925aaba92fee997a32f932c8d4c36d806": [
-          "0016_expand"
+        "registry.fly.io/leaderbot-fb-image-gen@sha256:a37632c86a72a87cd94f5c030c8b88be330420289c553f4570e234c85df233b8": [
+          "0016_expand",
+          "0017_credit_wallet_expand",
+          "0018_credit_checkout_reservation"
         ]
       },
       "generationQueueWriteVersion": "v1",

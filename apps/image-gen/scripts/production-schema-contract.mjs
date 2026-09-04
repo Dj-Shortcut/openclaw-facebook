@@ -647,7 +647,6 @@ export function assertCreditProvisionerGrantScope(grants, databaseName) {
   const observedTables = new Set();
   let hasCreateUser = false;
   let hasSchemaDelegation = false;
-  let hasMigrationSchemaDelegation = false;
   let hasMysqlUserRead = false;
   const unexpected = [];
 
@@ -710,21 +709,6 @@ export function assertCreditProvisionerGrantScope(grants, databaseName) {
       hasSchemaDelegation = true;
       continue;
     }
-    if (
-      scope?.kind === "object" &&
-      !scope.databaseWildcard &&
-      scope.databaseName === databaseName &&
-      scope.objectWildcard &&
-      privileges.size === 4 &&
-      privileges.has("CREATE") &&
-      privileges.has("TRIGGER") &&
-      privileges.has("CREATE ROUTINE") &&
-      privileges.has("ALTER ROUTINE") &&
-      hasGrantOption
-    ) {
-      hasMigrationSchemaDelegation = true;
-      continue;
-    }
     const expected =
       scope?.kind === "object" && scope.databaseName === databaseName
         ? expectedTablePrivileges.get(scope.objectName)
@@ -748,7 +732,6 @@ export function assertCreditProvisionerGrantScope(grants, databaseName) {
   if (
     !hasCreateUser ||
     !hasSchemaDelegation ||
-    !hasMigrationSchemaDelegation ||
     !hasMysqlUserRead ||
     missingTables.length > 0 ||
     unexpected.length > 0

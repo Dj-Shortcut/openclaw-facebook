@@ -645,14 +645,20 @@ jobs:
           set -euo pipefail
           transition_state="$(jq -er '.apps["image-gen"].databaseSchemaTransition.state' deploy/production/apps.json)"
           transition_target="$(jq -er '.apps["image-gen"].databaseSchemaTransition.to' deploy/production/apps.json)"
-          if [[ "$transition_state" = "runtime_reviewed" && "$transition_target" = "0018_credit_checkout_reservation" ]]; then
-            expected_principal_sha256="$(jq -er '.apps["image-gen"].databaseSchemaTransition.runtimePrincipalSha256' deploy/production/apps.json)"
-            [[ "$expected_principal_sha256" =~ ^[a-f0-9]{64}$ ]]
-            # The protected staging workflow already ran this exact reviewed
-            # probe through runtime_verification_url. The bridge Machine still
-            # has the rollback principal, so running it there would validate
-            # the wrong identity. Every successor Machine is proved below.
-            echo "Restricted runtime trigger preflight is bound to protected staging evidence."
+          if [[ "$transition_target" = "0018_credit_checkout_reservation" && "$transition_state" != "complete" ]]; then
+            if [[ "$transition_state" = "runtime_reviewed" ]]; then
+              expected_principal_sha256="$(jq -er '.apps["image-gen"].databaseSchemaTransition.runtimePrincipalSha256' deploy/production/apps.json)"
+              [[ "$expected_principal_sha256" =~ ^[a-f0-9]{64}$ ]]
+              # The protected staging workflow already ran this exact reviewed
+              # probe through runtime_verification_url. The bridge Machine still
+              # has the rollback principal, so running it there would validate
+              # the wrong identity. Every successor Machine is proved below.
+              echo "Restricted runtime trigger preflight is bound to protected staging evidence."
+            else
+              # During bridge_reviewed and expand transitions, the live runtime
+              # principal has not yet reached final-grant coverage.
+              echo "Billing trigger preflight is deferred until final schema complete."
+            fi
             exit 0
           fi
           probe_container=""

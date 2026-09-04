@@ -251,37 +251,3 @@ export async function reserveMessengerCreditCheckout(
     toJSON: () => jsonView,
   });
 }
-
-/**
- * Test-only checkout entry point for the owner-operated Mollie pilot.
- * It deliberately derives the pilot scope from the current authenticated
- * Messenger request rather than exposing a reusable public bypass.
- */
-export async function reserveMessengerCreditCheckoutForTestCommand(
-  input: MessengerCreditCheckoutRequest,
-  dependencies: Dependencies = defaultDependencies
-): Promise<ReservedMessengerCreditCheckout> {
-  if (process.env.MOLLIE_MODE?.trim() !== "test") fail();
-  if (process.env.MOLLIE_TEST_COMMAND_ENABLED?.trim() !== "true") fail();
-
-  const baseConfig = dependencies.config();
-  const testPilotScope = Object.freeze({
-    channelConnectionId: input.channelConnectionId,
-    bindingEpoch: input.bindingEpoch,
-    privacyEpoch: input.privacyEpoch,
-    userKeyHash: createHash("sha256")
-      .update("leaderbot.credit-checkout-test-user.v1\\0", "utf8")
-      .update(input.userKey, "utf8")
-      .digest("hex"),
-  });
-  return reserveMessengerCreditCheckout(input, {
-    ...dependencies,
-    config: () =>
-      Object.freeze({
-        ...baseConfig,
-        checkoutEnabled: true,
-        paidCreditsEnabled: true,
-        testPilotScope,
-      }),
-  });
-}

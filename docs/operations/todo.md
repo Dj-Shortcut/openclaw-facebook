@@ -48,6 +48,24 @@ Live payment enablement remains gated by the relevant P1 through P4 evidence.
       volume data under an explicit privacy/retention decision. Extract the
       generic OpenClaw channel to its standalone project before removing the
       root package and ClawHub workflows from this repository.
+  - [x] PR #479 removed the automatic gateway health probe at exact `main`
+        merge `6f48774d9ffdb744441570ed0da619bf08be6fb7` on
+        `2026-08-30T17:37:55Z`. Because the observation duration had not yet
+        been fixed before that merge, this timestamp is not the observation
+        start.
+  - [x] PR #480 fixed the observation duration in advance at exactly 168
+        continuous hours (seven 24-hour periods) and merged to `main` as
+        `c251a5e34c46bd327ffa5c015ed038f1fced545e` on
+        `2026-08-30T17:44:08Z`. That exact SHA and UTC timestamp start the
+        observation clock.
+  - [ ] After that start, collect continuous metadata-only gateway ingress
+        evidence for all 168 hours. The scheduled end is
+        `2026-09-06T17:44:08Z` only if the full window remains uninterrupted. A
+        green health check is not user-traffic evidence. Any evidence gap,
+        gateway probe, gateway Machine mutation, or direct Page-callback drift
+        resets the clock and requires a new reviewed start and scheduled end.
+        Do not stop, delete, scale, or replace the gateway Machine or its
+        volumes during this window.
 
 - [ ] **P2 - User-scoped purchased-credit ledger.** Add an append-only credit
       ledger, wallet projection, and idempotent reservation/commit/release model
@@ -70,6 +88,33 @@ Live payment enablement remains gated by the relevant P1 through P4 evidence.
       Mode, pass paid checkout, delayed/replayed webhook, cancellation, failure,
       refund, partially used wallet, provider failure, delivery failure,
       deletion, budget exhaustion, receipt, reconciliation, and rollback.
+  - [ ] Protected schema run `33300214073` stopped before any database change
+        because the dedicated migration role lacked exactly `CREATE`,
+        `TRIGGER`, `CREATE ROUTINE`, and `ALTER ROUTINE`. The reviewed
+        transition must first snapshot the encrypted database volume, add only
+        the missing subset through the fixed-output repair, prove the strict
+        migration boundary, and then run the existing `0016 -> 0018` transition
+        once. The repair must decide its exact delta under lock, recover an
+        uncertain `GRANT`, and keep exact 0017/0018 resumes verification-only.
+        Its pre-repair snapshot is a recorded recovery reference; the separate
+        restore-tested snapshot remains mandatory before DDL. Do not deploy a
+        `0019` runtime or start Mollie Test Mode before the exact `0018` runtime
+        and rollback evidence are settled; `0019` requires its own later
+        reviewed transition.
+  - [ ] Before any Mollie Test Mode checkout, prove the restricted runtime,
+        settle the manifest at `complete` with the bridge removed from rollback,
+        then use the protected obsolete-principal flow to lock, retain the
+        24-hour unlock window, and drop the old broad runtime principal. Keep
+        `IMAGE_GEN_DATABASE_PROVISIONER_URL` until that drop succeeds. Next run
+        the separately reviewed
+        `.github/workflows/retire-image-gen-credit-provisioners.yml` path to
+        lock all reserved `lbcp_*` accounts under its own database-backed
+        24-hour recovery window, drop them, and prove the inventory empty. An
+        authorized owner must then delete the exact production environment
+        secret before the workflow's separate stable-absence verification.
+        Commercial exposure remains incomplete until both cleanup paths have
+        metadata-only success evidence; do not substitute manual SQL or
+        unreviewed secret-field edits.
 
 - [ ] **P5 - Bounded live pilot and legacy removal.** Obtain legal/accounting
       approval, enable one reviewed live offer for a bounded audience, monitor
@@ -79,6 +124,18 @@ Live payment enablement remains gated by the relevant P1 through P4 evidence.
       and stale secrets/workflows/docs.
 
 ## Current P1 gate
+
+- Protected deployment inspection run `33297361675` proved the owner Page uses
+  the canonical direct callback
+  `https://leaderbot-fb-image-gen.fly.dev/facebook/webhook`. PR #479 removed the
+  scheduled gateway health request. PR #480 then fixed and started the reviewed
+  168-hour observation contract at
+  `c251a5e34c46bd327ffa5c015ed038f1fced545e` on
+  `2026-08-30T17:44:08Z`, with conditional end
+  `2026-09-06T17:44:08Z`. P1 remains open until uninterrupted metadata-only
+  zero-ingress evidence, direct Messenger smokes, rollback/retention decisions,
+  the later reviewed gateway stop, and standalone channel publication are
+  complete.
 
 - Storage-proxy startup ordering was fixed and merged in PR #445 at reviewed
   source commit `6a7d0431e1e02076a2db7fcf12c8358d7fbf33cd`.

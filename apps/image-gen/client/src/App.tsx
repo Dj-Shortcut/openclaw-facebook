@@ -4,6 +4,7 @@ import { Route, Switch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 
 const NotFound = lazy(() => import("./pages/NotFound"));
+const LandingPage = lazy(() => import("./pages/LandingPage"));
 const CreditCheckout = lazy(() => import("./pages/CreditCheckout"));
 const DataDeletionPage = lazy(() =>
   import("./pages/Legal").then(module => ({ default: module.DataDeletionPage }))
@@ -37,6 +38,7 @@ function Router() {
           path={"/credits/checkout/:intentId"}
           component={CreditCheckout}
         />
+        <Route path={"/"} component={LandingPage} />
         <Route path={"/404"} component={NotFound} />
         {/* Final fallback route */}
         <Route component={NotFound} />

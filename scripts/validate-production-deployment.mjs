@@ -6,6 +6,8 @@ import { pathToFileURL } from "node:url";
 
 const MANIFEST_PATH = "deploy/production/apps.json";
 const PRODUCTION_WORKFLOW_PATH = ".github/workflows/deploy-production.yml";
+const PRODUCTION_UPTIME_WORKFLOW_PATH =
+  ".github/workflows/production-uptime.yml";
 const TRUSTED_ARTIFACT_WORKFLOW_PATH =
   ".github/workflows/build-production-artifacts.yml";
 const SCHEMA_TRANSITION_WORKFLOW_PATH =
@@ -14,6 +16,26 @@ const CREDIT_MIGRATION_DEFINER_GRANT_PATH =
   "apps/image-gen/scripts/credit-migration-definer-grants.mjs";
 const CREDIT_MIGRATION_DEFINER_GRANT_RUNNER_PATH =
   "apps/image-gen/scripts/run-credit-migration-definer-grants.mjs";
+const CREDIT_PROVISIONER_BOOTSTRAP_CONTRACT_PATH =
+  "scripts/image-gen-credit-provisioner-bootstrap-contract.mjs";
+const CREDIT_PROVISIONER_BOOTSTRAP_CONTRACT_TEST_PATH =
+  "scripts/image-gen-credit-provisioner-bootstrap-contract.test.mjs";
+const CREDIT_PROVISIONER_BOOTSTRAP_RUNNER_PATH =
+  "scripts/provision-image-gen-credit-provisioner.mjs";
+const CREDIT_PROVISIONER_BOOTSTRAP_RUNNER_TEST_PATH =
+  "scripts/provision-image-gen-credit-provisioner.test.mjs";
+const CREDIT_MIGRATION_PRINCIPAL_REPAIR_CONTRACT_PATH =
+  "scripts/image-gen-credit-migration-principal-repair-contract.mjs";
+const CREDIT_MIGRATION_PRINCIPAL_REPAIR_RUNNER_PATH =
+  "scripts/repair-image-gen-credit-migration-principal.mjs";
+const CREDIT_MIGRATION_PRINCIPAL_REPAIR_TEST_PATH =
+  "scripts/image-gen-credit-migration-principal-repair-contract.test.mjs";
+const CREDIT_PROVISIONER_RETIREMENT_WORKFLOW_PATH =
+  ".github/workflows/retire-image-gen-credit-provisioners.yml";
+const CREDIT_PROVISIONER_RETIREMENT_RUNNER_PATH =
+  "scripts/retire-image-gen-credit-provisioners.mjs";
+const CREDIT_PROVISIONER_RETIREMENT_RUNNER_TEST_PATH =
+  "scripts/retire-image-gen-credit-provisioners.test.mjs";
 const RUNTIME_PRINCIPAL_STAGING_WORKFLOW_PATH =
   ".github/workflows/stage-image-gen-credit-runtime-principal.yml";
 const RUNTIME_PRINCIPAL_CLEANUP_WORKFLOW_PATH =
@@ -61,6 +83,7 @@ const VERIFIED_FLYCTL_WORKFLOW_JOBS = Object.freeze({
   [SCHEMA_TRANSITION_WORKFLOW_PATH]: ["preflight", "expand"],
   [RUNTIME_PRINCIPAL_STAGING_WORKFLOW_PATH]: ["stage"],
   [RUNTIME_PRINCIPAL_CLEANUP_WORKFLOW_PATH]: ["preflight", "mutate"],
+  [CREDIT_PROVISIONER_RETIREMENT_WORKFLOW_PATH]: ["mutate"],
   [PRODUCTION_RECONCILIATION_WORKFLOW_PATH]: [
     "recover-gateway",
     "recover-image-gen",
@@ -170,6 +193,18 @@ function referencesExactHttpUrl(source, expected) {
     }
   }
   return false;
+}
+
+function referencesExactHostnameToken(source, expectedHostname) {
+  const executableSource = source.replace(/^\s*#.*$/gmu, "");
+  const escapedHostname = expectedHostname.replace(
+    /[.*+?^${}()|[\]\\]/g,
+    "\\$&",
+  );
+  return new RegExp(
+    `(^|[^a-z0-9.-])${escapedHostname}\\.?(?=$|[^a-z0-9.-])`,
+    "iu",
+  ).test(executableSource);
 }
 
 function readJson(filePath) {
@@ -3942,7 +3977,6 @@ function validateSchemaTransitionWorkflow(rootDir) {
       "--format json",
       "must request JSON before querying the bridge attestation predicate",
     ],
-    ["--live image-gen", "must prove all app and worker Machines"],
     [
       "FLY_PRODUCTION_READONLY_TOKEN",
       "must inspect only production metadata before environment approval",
@@ -3952,16 +3986,32 @@ function validateSchemaTransitionWorkflow(rootDir) {
       "must refuse unresolved image deployment state before schema approval",
     ],
     [
+      "--output-json",
+      "must return the release-bound settled identity without reading shadow config",
+    ],
+    [
+      '(.identity | type == "string" and test("^deploy-[0-9]+-[0-9]+$"))',
+      "must parse only an exact release-bound deployment identity",
+    ],
+    [
+      '(.releaseVersion | type == "number")',
+      "must bind the pre-DDL proof to an exact Fly release version",
+    ],
+    [
+      '(.releaseWatermark | type == "string" and test("^[a-f0-9]{64}$"))',
+      "must bind the pre-DDL proof to the exact observed Fly release history",
+    ],
+    [
       '[[ "$settled_identity" =~ ^deploy-[0-9]+-[0-9]+$ ]]',
       "must refuse bootstrap, rollback, and malformed identities before schema DDL",
     ],
     [
-      '--expected-deployment-identity "$settled_identity"',
-      "must bind bridge drift to the exact live deployment identity",
+      "settled-live.json",
+      "must retain the exact first settled release tuple until the DDL boundary",
     ],
     [
-      '--verify-settled-baseline image-gen "$settled_identity"',
-      "must prove the live bridge came from a completed successful canonical deploy",
+      'test "$current_tuple" = "$settled_tuple"',
+      "must refuse a release or Machine change immediately before schema DDL",
     ],
     [
       '--verify-source-ci "$GITHUB_SHA"',
@@ -4234,8 +4284,59 @@ function validateSchemaTransitionWorkflow(rootDir) {
       `${SCHEMA_TRANSITION_WORKFLOW_PATH} must use pinned flyctl config-show JSON output without unsupported --json`,
     );
   }
+  if (
+    workflow.includes("flyctl config show --app leaderbot-fb-image-gen") ||
+    workflow.includes("--live image-gen")
+  ) {
+    fail(
+      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must derive the bridge identity only from the release-bound settled-live result`,
+    );
+  }
+  if ((workflow.match(/--output-json/g) ?? []).length !== 2) {
+    fail(
+      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must parse both settled release proofs as structured JSON`,
+    );
+  }
+  if (
+    (
+      workflow.match(
+        /\(\.identity \| type == "string" and test\("\^deploy-\[0-9\]\+-\[0-9\]\+\$"\)\)/g,
+      ) ?? []
+    ).length !== 2
+  ) {
+    fail(
+      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must validate the exact deployment identity in both settled release tuples`,
+    );
+  }
+  if (
+    (workflow.match(/\(\.releaseVersion \| type == "number"\)/g) ?? [])
+      .length !== 2
+  ) {
+    fail(
+      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must validate the exact Fly release version in both settled release tuples`,
+    );
+  }
+  if (
+    (
+      workflow.match(
+        /\(\.releaseWatermark \| type == "string" and test\("\^\[a-f0-9\]\{64\}\$"\)\)/g,
+      ) ?? []
+    ).length !== 2
+  ) {
+    fail(
+      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must validate the exact Fly release history in both settled release tuples`,
+    );
+  }
   const preflightJob = namedWorkflowJobBody(workflow, "preflight");
   const expandJob = namedWorkflowJobBody(workflow, "expand");
+  if (
+    (preflightJob?.match(/--settled-live image-gen/g) ?? []).length !== 1 ||
+    (expandJob?.match(/--settled-live image-gen/g) ?? []).length !== 2
+  ) {
+    fail(
+      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must prove the exact settled release once before approval and twice around protected recovery work`,
+    );
+  }
   const [preflightStep] = namedWorkflowStepBodies(
     workflow,
     "Preflight settled image-gen baseline before approval",
@@ -4331,18 +4432,41 @@ function validateSchemaTransitionWorkflow(rootDir) {
       `${SCHEMA_TRANSITION_WORKFLOW_PATH} must give the bounded Machine start, start poll, and 8m SSH probe enough outer time`,
     );
   }
-  const snapshotBaselineIndex = workflow.indexOf("snapshots-before.json");
-  const snapshotCreateIndex = workflow.indexOf("volumes snapshots create");
+  const credentialSnapshotBaselineIndex = workflow.indexOf(
+    "credential-snapshots-before.json",
+  );
+  const credentialSnapshotCreateIndex = workflow.indexOf(
+    "volumes snapshots create",
+    credentialSnapshotBaselineIndex,
+  );
+  const credentialSnapshotSelectorIndex = workflow.indexOf(
+    "scripts/select-fresh-fly-snapshot.mjs",
+    credentialSnapshotCreateIndex,
+  );
+  const snapshotBaselineIndex = workflow.indexOf(
+    'before="$RUNNER_TEMP/leaderbot-schema-transition/snapshots-before.json"',
+  );
+  const snapshotCreateIndex = workflow.indexOf(
+    "volumes snapshots create",
+    snapshotBaselineIndex,
+  );
   const snapshotSelectorIndex = workflow.indexOf(
     "scripts/select-fresh-fly-snapshot.mjs",
+    snapshotCreateIndex,
   );
   if (
+    credentialSnapshotBaselineIndex < 0 ||
+    credentialSnapshotCreateIndex <= credentialSnapshotBaselineIndex ||
+    credentialSnapshotSelectorIndex <= credentialSnapshotCreateIndex ||
     snapshotBaselineIndex < 0 ||
     snapshotCreateIndex <= snapshotBaselineIndex ||
-    snapshotSelectorIndex <= snapshotCreateIndex
+    snapshotSelectorIndex <= snapshotCreateIndex ||
+    (workflow.match(/node scripts\/select-fresh-fly-snapshot[.]mjs/g) ?? [])
+      .length !== 2 ||
+    (workflow.match(/flyctl volumes snapshots create/g) ?? []).length !== 2
   ) {
     fail(
-      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must capture the old snapshot ids before selecting the one fresh result`,
+      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must capture each old snapshot inventory before selecting each fresh result`,
     );
   }
   const recoveryUploadIndex = workflow.indexOf(
@@ -4354,31 +4478,94 @@ function validateSchemaTransitionWorkflow(rootDir) {
   const schemaInspectionIndex = workflow.indexOf(
     "Inspect the exact live schema phase without changing it",
   );
+  const migrationPrincipalRepairIndex = workflow.indexOf(
+    "Repair and verify only the approved migration-principal rights",
+  );
+  const credentialRecoveryUploadIndex = workflow.indexOf(
+    "Upload pre-repair credential-boundary recovery reference",
+  );
   const applyExpandIndex = workflow.indexOf(
     "LEADERBOT_PRODUCTION_MIGRATION_MODE=apply-credit-wallet-expand",
   );
-  const strictBridgeIndex = workflow.indexOf(
-    '--expected-deployment-identity "$settled_identity"',
+  const releaseBoundBridgeIndex = workflow.indexOf(
+    'settled_state="$(node scripts/validate-production-deployment.mjs',
   );
-  const settledBridgeIndex = workflow.indexOf(
-    '--verify-settled-baseline image-gen "$settled_identity"',
+  const settledTupleWriteIndex = workflow.indexOf(
+    '> "$evidence_dir/settled-live.json"',
+  );
+  const preDdlReleaseBoundBridgeIndex = workflow.indexOf(
+    "--settled-live image-gen",
+    recoveryUploadIndex,
+  );
+  const settledTupleComparisonIndex = workflow.indexOf(
+    'test "$current_tuple" = "$settled_tuple"',
   );
   if (
-    strictBridgeIndex < 0 ||
-    settledBridgeIndex <= strictBridgeIndex ||
+    releaseBoundBridgeIndex < 0 ||
+    settledTupleWriteIndex <= releaseBoundBridgeIndex ||
     recoveryUploadIndex < 0 ||
     definerGrantIndex < 0 ||
     schemaInspectionIndex < 0 ||
+    credentialRecoveryUploadIndex <= credentialSnapshotSelectorIndex ||
+    migrationPrincipalRepairIndex <= credentialRecoveryUploadIndex ||
+    schemaInspectionIndex <= migrationPrincipalRepairIndex ||
     schemaInspectionIndex >= snapshotCreateIndex ||
     definerGrantIndex <= recoveryUploadIndex ||
+    preDdlReleaseBoundBridgeIndex <= recoveryUploadIndex ||
+    preDdlReleaseBoundBridgeIndex >= definerGrantIndex ||
+    settledTupleComparisonIndex <= preDdlReleaseBoundBridgeIndex ||
+    settledTupleComparisonIndex >= definerGrantIndex ||
     applyExpandIndex < 0 ||
     applyExpandIndex <= definerGrantIndex ||
     recoveryUploadIndex > applyExpandIndex ||
-    settledBridgeIndex > applyExpandIndex
+    settledTupleWriteIndex > recoveryUploadIndex
   ) {
     fail(
-      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must inspect first and durably upload verified snapshot evidence before grant mutation or credit DDL`,
+      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must snapshot and repair the exact migration role, inspect the schema, and durably upload recovery evidence before definer grants or credit DDL`,
     );
+  }
+  const [credentialRecoveryUploadStep] = namedWorkflowStepBodies(
+    workflow,
+    "Upload pre-repair credential-boundary recovery reference",
+  );
+  if (
+    !credentialRecoveryUploadStep?.includes(
+      "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+    ) ||
+    !credentialRecoveryUploadStep.includes(
+      "credential-boundary-snapshot.json",
+    ) ||
+    !credentialRecoveryUploadStep.includes("if-no-files-found: error")
+  ) {
+    fail(
+      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must durably upload the pre-repair recovery reference before root mutation`,
+    );
+  }
+  const [migrationPrincipalRepairStep] = namedWorkflowStepBodies(
+    workflow,
+    "Repair and verify only the approved migration-principal rights",
+  );
+  for (const [required, message] of [
+    [
+      "secrets.IMAGE_GEN_DATABASE_MIGRATION_URL",
+      "must use only the protected migration URL for migration-role verification",
+    ],
+    [
+      "secrets.FLY_DATABASE_MIGRATION_TOKEN",
+      "must use only the reviewed database token for the private root session",
+    ],
+    [
+      "repair-image-gen-credit-migration-principal.mjs",
+      "must call the reviewed fixed-output repair runner",
+    ],
+    [
+      'test "$output" = "credit_migration_principal_ready"',
+      "must accept only the fixed successful repair marker",
+    ],
+  ]) {
+    if (!migrationPrincipalRepairStep?.includes(required)) {
+      fail(`${SCHEMA_TRANSITION_WORKFLOW_PATH} ${message}`);
+    }
   }
   const probeStepIndex = workflow.indexOf(
     "Prove the restored MySQL copy and remote command exit status",
@@ -4484,10 +4671,6 @@ function validateCreditMigrationDefinerGrant(rootDir) {
       "must use MySQL future-table grant semantics without schema DELETE",
     ],
     [
-      "GRANT CREATE, TRIGGER, CREATE ROUTINE, ALTER ROUTINE ON ${schema}.* TO ${account}",
-      "must delegate only the four missing migration schema privileges",
-    ],
-    [
       'assertProductionMigrationRuntime(migration, "credit-expand")',
       "must verify the exact effective migration boundary after granting",
     ],
@@ -4568,6 +4751,523 @@ function validateCreditMigrationDefinerGrant(rootDir) {
   ) {
     fail(
       "image-gen migration bridge must bundle and syntax-check the exact definer grant runner",
+    );
+  }
+}
+
+function validateCreditProvisionerBootstrapHelper(rootDir) {
+  const bootstrapTestPaths = [
+    CREDIT_PROVISIONER_BOOTSTRAP_CONTRACT_TEST_PATH,
+    CREDIT_PROVISIONER_BOOTSTRAP_RUNNER_TEST_PATH,
+  ];
+  for (const testPath of bootstrapTestPaths) {
+    if (!fs.existsSync(path.join(rootDir, testPath))) {
+      fail(`Missing ${testPath}`);
+    }
+  }
+  let packageJson;
+  try {
+    packageJson = JSON.parse(
+      fs.readFileSync(path.join(rootDir, "package.json"), "utf8"),
+    );
+  } catch {
+    fail("package.json must contain the reviewed production-contract command");
+  }
+  const productionContractTokens = String(
+    packageJson?.scripts?.["test:production-contracts"] ?? "",
+  ).split(/\s+/);
+  for (const testPath of bootstrapTestPaths) {
+    if (
+      productionContractTokens.filter((token) => token === testPath).length !==
+      1
+    ) {
+      fail(
+        `package.json test:production-contracts must include exact ${testPath}`,
+      );
+    }
+  }
+  const contractPath = path.join(
+    rootDir,
+    CREDIT_PROVISIONER_BOOTSTRAP_CONTRACT_PATH,
+  );
+  if (!fs.existsSync(contractPath)) {
+    fail(`Missing ${CREDIT_PROVISIONER_BOOTSTRAP_CONTRACT_PATH}`);
+  }
+  const contract = fs.readFileSync(contractPath, "utf8");
+  for (const [needle, message] of [
+    [
+      "assertCreditProvisionerGrantScope",
+      "must reuse the exact reviewed provisioner privilege contract",
+    ],
+    [
+      "productionRuntimeWritableTableNames",
+      "must derive runtime table grants from the canonical schema contract",
+    ],
+    [
+      "creditWalletMigrationTablePrivileges",
+      "must derive wallet migration grants from the canonical schema contract",
+    ],
+    [
+      "export function assertBootstrapManifest",
+      "must fail closed on the frozen 0016-to-0018 manifest transition",
+    ],
+    [
+      "export function selectReviewedDatabaseTarget",
+      "must bind account creation to the exact reviewed database Machine and volume",
+    ],
+    [
+      "export function assertRecoverySnapshot",
+      "must require an exact fresh completed recovery snapshot",
+    ],
+    [
+      "export function parseManagedProvisionerAccounts",
+      "must recognize only the reserved managed-account namespace",
+    ],
+    [
+      "export function buildProvisionerSql",
+      "must build account creation separately from the exact grants",
+    ],
+    [
+      "export function assertProvisionerGrants",
+      "must verify the resulting effective provisioner grants",
+    ],
+    [
+      "export function assertProvisionerUrl",
+      "must validate the loopback-only provisioner URL contract",
+    ],
+    [
+      "export function githubSecretSetArgs",
+      "must centralize the protected environment secret destination",
+    ],
+    [
+      '"leaderbot_credit_provisioner_bootstrap_v1"',
+      "must pin one MySQL advisory lock for the full operation",
+    ],
+    [
+      '"IMAGE_GEN_DATABASE_PROVISIONER_URL"',
+      "must target only the protected provisioner environment secret",
+    ],
+    [
+      '"credit_provisioner_ready"',
+      "must retain a fixed metadata-only success marker",
+    ],
+    [
+      '"credit_provisioner_bootstrap_failed"',
+      "must retain a fixed metadata-only failure marker",
+    ],
+    [
+      '"credit_provisioner_bootstrap_cleanup_incomplete"',
+      "must retain a fixed metadata-only cleanup failure marker",
+    ],
+  ]) {
+    if (!contract.includes(needle)) {
+      fail(`${CREDIT_PROVISIONER_BOOTSTRAP_CONTRACT_PATH} ${message}`);
+    }
+  }
+  if (
+    contract.includes("--body") ||
+    /console\.|process\.(?:stdout|stderr)|error\.(?:message|stack)/.test(
+      contract,
+    )
+  ) {
+    fail(
+      `${CREDIT_PROVISIONER_BOOTSTRAP_CONTRACT_PATH} must not serialize credentials, identities, grants, or dynamic failures`,
+    );
+  }
+
+  const runnerPath = path.join(
+    rootDir,
+    CREDIT_PROVISIONER_BOOTSTRAP_RUNNER_PATH,
+  );
+  if (!fs.existsSync(runnerPath)) {
+    fail(`Missing ${CREDIT_PROVISIONER_BOOTSTRAP_RUNNER_PATH}`);
+  }
+  const runner = fs.readFileSync(runnerPath, "utf8");
+  for (const [needle, message] of [
+    [
+      'from "./image-gen-credit-provisioner-bootstrap-contract.mjs"',
+      "must use the reviewed pure bootstrap contract",
+    ],
+    [
+      'PINNED_FLYCTL_VERSION = "0.4.94"',
+      "must pin the flyctl version that produced the reviewed database metadata shape",
+    ],
+    [
+      'return Object.freeze(["auth", "token", "--hostname", "github.com"])',
+      "must obtain the logged-in GitHub token without placing it in an argument",
+    ],
+    [
+      "GITHUB_REPOSITORY: REPOSITORY",
+      "must bind exact-main CI inspection to the reviewed repository",
+    ],
+    [
+      "GITHUB_TOKEN: token",
+      "must pass the in-memory GitHub token only to the CI inspection environment",
+    ],
+    [
+      "environment: sourceCiEnvironment",
+      "must scope the GitHub token to the exact-source CI child process",
+    ],
+    [
+      "buildSourceCiEnvironment(githubToken, {})",
+      "must isolate exact-source CI from ambient child-process environment",
+    ],
+    [
+      "/bin/sh -lc 'exec env MYSQL_PWD=",
+      "must cross Fly's direct-exec boundary through an explicit static remote shell",
+    ],
+    [
+      "buildRootMysqlSshArgs({ app, machineId })",
+      "must use the reviewed root-MySQL SSH arguments in the live session constructor",
+    ],
+    ['"0:3306"', "must let Fly atomically allocate the local proxy port"],
+    [
+      "parseFlyProxyPort",
+      "must accept only the exact Fly proxy binding announcement",
+    ],
+    [
+      "waitForFlyProxyStartup",
+      "must prove the exact proxy child remains alive before database authentication",
+    ],
+    [
+      "attachChildStdinFailureHandler",
+      "must route an early child stdin close through bounded failure handling",
+    ],
+    [
+      '"--recovery-snapshot-id"',
+      "must require the operator-supplied recovery snapshot identity",
+    ],
+    [
+      '"production:validate"',
+      "must run the complete production contract before mutation",
+    ],
+    [
+      '"--verify-source-ci"',
+      "must require green CI for the exact current main source",
+    ],
+    [
+      "accountMayExist = true",
+      "must arm account cleanup before the first account mutation",
+    ],
+    [
+      "secretMayExist = true",
+      "must arm ambiguous-publication preservation before the GitHub mutation",
+    ],
+    [
+      "observeStableSecretState",
+      "must observe stable secret state without rotating a concurrent valid publication",
+    ],
+    [
+      "assertExistingPublishedState",
+      "must reconcile an exact prior publication without remote mutation",
+    ],
+    [
+      "assertAccountUsable",
+      "must reject locked or password-expired provisioner accounts",
+    ],
+    [
+      "SECRET_STABILIZATION_WINDOW_MS",
+      "must require stable secret absence over a bounded window",
+    ],
+    [
+      "GET_LOCK",
+      "must acquire the reviewed advisory lock before account recovery or mutation",
+    ],
+    [
+      "IS_USED_LOCK",
+      "must prove the same advisory lock remains held before publishing the secret",
+    ],
+    [
+      "githubSecretSetArgs",
+      "must use the reviewed GitHub environment secret command",
+    ],
+    [
+      "input: storedProvisionerUrl",
+      "must pass the provisioner URL through stdin",
+    ],
+    [
+      'process.on("SIGINT"',
+      "must convert an interrupt into bounded fail-closed cleanup",
+    ],
+    [
+      'process.on("SIGTERM"',
+      "must convert termination into bounded fail-closed cleanup",
+    ],
+    [
+      "CREDIT_PROVISIONER_SUCCESS_MARKER",
+      "must emit only the fixed success marker",
+    ],
+    [
+      "CREDIT_PROVISIONER_FAILURE_MARKER",
+      "must retain the fixed failure marker",
+    ],
+    [
+      "CREDIT_PROVISIONER_CLEANUP_FAILURE_MARKER",
+      "must distinguish incomplete rollback without exposing details",
+    ],
+    ["timeoutMs", "must bound commands, tunnel startup, and cleanup"],
+  ]) {
+    if (!runner.includes(needle)) {
+      fail(`${CREDIT_PROVISIONER_BOOTSTRAP_RUNNER_PATH} ${message}`);
+    }
+  }
+  const accountMutation = runner.indexOf(
+    "await rootSession.execute(sql.createStatement",
+  );
+  const accountSqlBuild = runner.indexOf("const sql = buildProvisionerSql(");
+  const accountCleanupArm = runner.lastIndexOf(
+    "accountMayExist = true;",
+    accountMutation,
+  );
+  if (
+    accountCleanupArm < 0 ||
+    accountSqlBuild < 0 ||
+    accountMutation < 0 ||
+    accountCleanupArm < accountSqlBuild ||
+    accountCleanupArm > accountMutation
+  ) {
+    fail(
+      `${CREDIT_PROVISIONER_BOOTSTRAP_RUNNER_PATH} must arm account cleanup before the first account mutation`,
+    );
+  }
+  if (occurrenceCount(runner, "attachChildStdinFailureHandler(") < 3) {
+    fail(
+      `${CREDIT_PROVISIONER_BOOTSTRAP_RUNNER_PATH} must attach stdin failure handling to both command and MySQL children`,
+    );
+  }
+  const databaseCleanup = runner.indexOf(
+    "const databaseSignal = deps.createCleanupSignal()",
+  );
+  const bootstrapStart = runner.indexOf(
+    "export async function bootstrapCreditProvisioner",
+    databaseCleanup,
+  );
+  const cleanupBody = runner.slice(databaseCleanup, bootstrapStart);
+  const ambiguityPreservation = cleanupBody.indexOf(
+    "if (secretMayExist) {\n      cleanupComplete = false;",
+  );
+  const accountCleanup = runner.indexOf(
+    "await cleanupRoot.disableAndDrop(existing, databaseSignal)",
+    databaseCleanup,
+  );
+  if (
+    databaseCleanup < 0 ||
+    bootstrapStart <= databaseCleanup ||
+    ambiguityPreservation < 0 ||
+    accountCleanup <= databaseCleanup ||
+    runner
+      .slice(databaseCleanup, bootstrapStart)
+      .includes("deleteSecretIfPresent")
+  ) {
+    fail(
+      `${CREDIT_PROVISIONER_BOOTSTRAP_RUNNER_PATH} must preserve the account once protected-secret publication may have started`,
+    );
+  }
+  const bootstrapLock = runner.indexOf(
+    "await rootSession.acquireLock(signal)",
+    bootstrapStart,
+  );
+  const secretObservation = runner.indexOf(
+    "await deps.observeSecretState(signal)",
+    bootstrapLock,
+  );
+  const orphanInventory = runner.indexOf(
+    "await rootSession.listManagedAccounts(signal)",
+    secretObservation,
+  );
+  const orphanGuard = runner.indexOf(
+    "if (orphans.length !== 0)",
+    orphanInventory,
+  );
+  const orphanGuardBody = runner.slice(orphanGuard, accountMutation);
+  if (
+    bootstrapStart < 0 ||
+    bootstrapLock < bootstrapStart ||
+    secretObservation < bootstrapLock ||
+    orphanInventory < secretObservation ||
+    orphanGuard < orphanInventory ||
+    orphanGuard > accountMutation ||
+    !orphanGuardBody.includes("CREDIT_PROVISIONER_CLEANUP_FAILURE_MARKER") ||
+    !orphanGuardBody.includes("fail();")
+  ) {
+    fail(
+      `${CREDIT_PROVISIONER_BOOTSTRAP_RUNNER_PATH} must retain an absent-secret orphan without mutation`,
+    );
+  }
+  if (
+    occurrenceCount(
+      runner,
+      "await deps.assertExactRepository(expectedHead, signal)",
+    ) !== 2
+  ) {
+    fail(
+      `${CREDIT_PROVISIONER_BOOTSTRAP_RUNNER_PATH} must reprove exact clean remote main immediately before and after secret publication`,
+    );
+  }
+  const secretMutation = runner.indexOf(
+    "await deps.setSecret(storedProvisionerUrl",
+  );
+  const secretCleanupArm = runner.lastIndexOf(
+    "secretMayExist = true;",
+    secretMutation,
+  );
+  const prePublicationAbsence = runner.lastIndexOf(
+    "await deps.assertSecretPresence(false, signal)",
+    secretMutation,
+  );
+  if (
+    secretCleanupArm < 0 ||
+    secretMutation < 0 ||
+    secretCleanupArm > secretMutation ||
+    prePublicationAbsence < orphanInventory ||
+    prePublicationAbsence > secretMutation
+  ) {
+    fail(
+      `${CREDIT_PROVISIONER_BOOTSTRAP_RUNNER_PATH} must reprove secret absence and arm cleanup before publishing the protected secret`,
+    );
+  }
+  if (
+    runner.includes("findOpenLoopbackPort") ||
+    runner.includes("waitForLoopbackPort") ||
+    runner.includes("randomInt")
+  ) {
+    fail(
+      `${CREDIT_PROVISIONER_BOOTSTRAP_RUNNER_PATH} must not release a probed loopback port before Fly binds it`,
+    );
+  }
+  const stdoutWrites = runner.match(/process\.stdout\.write/g) ?? [];
+  if (
+    runner.includes("--body") ||
+    /console\.|process\.stderr|String\(error|JSON\.stringify\(error/.test(
+      runner,
+    ) ||
+    stdoutWrites.length !== 1 ||
+    !runner.includes("process.stdout.write(`${marker}\\n`)")
+  ) {
+    fail(
+      `${CREDIT_PROVISIONER_BOOTSTRAP_RUNNER_PATH} must not log credentials, managed account names, grants, or dynamic failures`,
+    );
+  }
+}
+
+function validateCreditMigrationPrincipalRepair(rootDir) {
+  for (const relativePath of [
+    CREDIT_MIGRATION_PRINCIPAL_REPAIR_CONTRACT_PATH,
+    CREDIT_MIGRATION_PRINCIPAL_REPAIR_RUNNER_PATH,
+    CREDIT_MIGRATION_PRINCIPAL_REPAIR_TEST_PATH,
+  ]) {
+    if (!fs.existsSync(path.join(rootDir, relativePath))) {
+      fail(`Missing ${relativePath}`);
+    }
+  }
+  const contract = fs.readFileSync(
+    path.join(rootDir, CREDIT_MIGRATION_PRINCIPAL_REPAIR_CONTRACT_PATH),
+    "utf8",
+  );
+  for (const [required, message] of [
+    [
+      '"CREATE",\n  "TRIGGER",\n  "CREATE ROUTINE",\n  "ALTER ROUTINE"',
+      "must limit repair to the exact four reviewed schema privileges",
+    ],
+    [
+      "detectMissingCreditMigrationPrivileges",
+      "must prove the existing boundary is otherwise exact before mutation",
+    ],
+    [
+      'operation: "revoke"',
+      "must revoke only newly added privileges after failed verification",
+    ],
+    [
+      "const lockedState = await readState();",
+      "must decide the privilege delta only after the repair lock is held",
+    ],
+    [
+      "attemptedPrivileges = [...missing];",
+      "must arm uncertain-GRANT recovery before sending the mutation",
+    ],
+    [
+      "const observed = await readState();",
+      "must observe effective grants after an uncertain mutation result",
+    ],
+    [
+      "const recovered = await recoverRoot(activeRoot);",
+      "must reconnect under a fresh lock after root transport loss",
+    ],
+    [
+      "verifyRollback(attemptedPrivileges)",
+      "must verify the exact pre-repair boundary after rollback",
+    ],
+    [
+      "CreditMigrationPrincipalCleanupError",
+      "must distinguish an incomplete rollback from a clean refusal",
+    ],
+  ]) {
+    if (!contract.includes(required)) {
+      fail(`${CREDIT_MIGRATION_PRINCIPAL_REPAIR_CONTRACT_PATH} ${message}`);
+    }
+  }
+  if (/console[.]|process[.](?:stdout|stderr)/.test(contract)) {
+    fail(
+      `${CREDIT_MIGRATION_PRINCIPAL_REPAIR_CONTRACT_PATH} must not log database identities or failures`,
+    );
+  }
+  const runner = fs.readFileSync(
+    path.join(rootDir, CREDIT_MIGRATION_PRINCIPAL_REPAIR_RUNNER_PATH),
+    "utf8",
+  );
+  for (const [required, message] of [
+    [
+      "classifyCreditMigrationHistory",
+      "must bind repair and resume verification to exact credit histories",
+    ],
+    [
+      'if (initialPhase !== "0016_expand")',
+      "must keep completed 0017 and 0018 histories verification-only",
+    ],
+    [
+      'verifyRuntime(connection, "credit-expand")',
+      "must strictly verify the complete migration boundary after repair",
+    ],
+    [
+      "new RootMysqlSession",
+      "must keep root access inside the exact reviewed database Machine",
+    ],
+    [
+      '["PATH", "FLY_API_TOKEN", "TMPDIR", "NO_COLOR"]',
+      "must pass only the minimal Fly child environment to the root session",
+    ],
+    [
+      "CREDIT_MIGRATION_PRINCIPAL_CLEANUP_FAILURE_MARKER",
+      "must preserve the fixed cleanup-incomplete result",
+    ],
+  ]) {
+    if (!runner.includes(required)) {
+      fail(`${CREDIT_MIGRATION_PRINCIPAL_REPAIR_RUNNER_PATH} ${message}`);
+    }
+  }
+  if (/console[.]|error[.](?:message|stack)|String\(error/.test(runner)) {
+    fail(
+      `${CREDIT_MIGRATION_PRINCIPAL_REPAIR_RUNNER_PATH} must emit only fixed metadata markers`,
+    );
+  }
+  let packageJson;
+  try {
+    packageJson = JSON.parse(
+      fs.readFileSync(path.join(rootDir, "package.json"), "utf8"),
+    );
+  } catch {
+    fail("package.json must contain the reviewed production-contract command");
+  }
+  const tokens = String(
+    packageJson?.scripts?.["test:production-contracts"] ?? "",
+  ).split(/\s+/);
+  if (
+    tokens.filter(
+      (token) => token === CREDIT_MIGRATION_PRINCIPAL_REPAIR_TEST_PATH,
+    ).length !== 1
+  ) {
+    fail(
+      `package.json test:production-contracts must include exact ${CREDIT_MIGRATION_PRINCIPAL_REPAIR_TEST_PATH}`,
     );
   }
 }
@@ -4822,6 +5522,489 @@ function validateRuntimePrincipalStagingWorkflow(rootDir) {
   ) {
     fail(
       `${RUNTIME_PRINCIPAL_STAGING_WORKFLOW_PATH} must finish exact replacement-principal DML proof before credential staging begins`,
+    );
+  }
+}
+
+function validateCreditProvisionerRetirementRunner(rootDir) {
+  for (const relativePath of [
+    CREDIT_PROVISIONER_RETIREMENT_RUNNER_PATH,
+    CREDIT_PROVISIONER_RETIREMENT_RUNNER_TEST_PATH,
+  ]) {
+    if (!fs.existsSync(path.join(rootDir, relativePath))) {
+      fail(`Missing ${relativePath}`);
+    }
+  }
+  let packageJson;
+  try {
+    packageJson = JSON.parse(
+      fs.readFileSync(path.join(rootDir, "package.json"), "utf8"),
+    );
+  } catch {
+    fail("package.json must contain the reviewed production-contract command");
+  }
+  const productionContractTokens = String(
+    packageJson?.scripts?.["test:production-contracts"] ?? "",
+  ).split(/\s+/);
+  if (
+    productionContractTokens.filter(
+      (token) => token === CREDIT_PROVISIONER_RETIREMENT_RUNNER_TEST_PATH,
+    ).length !== 1
+  ) {
+    fail(
+      `package.json test:production-contracts must include exact ${CREDIT_PROVISIONER_RETIREMENT_RUNNER_TEST_PATH}`,
+    );
+  }
+  const runner = fs.readFileSync(
+    path.join(rootDir, CREDIT_PROVISIONER_RETIREMENT_RUNNER_PATH),
+    "utf8",
+  );
+  for (const [needle, message] of [
+    [
+      'from "./image-gen-credit-provisioner-bootstrap-contract.mjs"',
+      "must reuse the exact managed-account and advisory-lock contract",
+    ],
+    [
+      'from "./provision-image-gen-credit-provisioner.mjs"',
+      "must reuse the root-local Fly MySQL session",
+    ],
+    [
+      'const DATABASE_APP = "leaderbot-portal-mysql"',
+      "must pin the reviewed database app",
+    ],
+    [
+      'const DATABASE_NAME = "leaderbot"',
+      "must pin the reviewed database name",
+    ],
+    [
+      'const SCHEMA_PHASE = "0018_credit_checkout_reservation"',
+      "must run only after the final credit schema",
+    ],
+    ["const MAX_MANAGED_ACCOUNTS = 16", "must bound the managed cohort"],
+    [
+      "const MIN_DROP_AGE_MS = 24 * 60 * 60 * 1_000",
+      "must preserve at least a 24-hour recovery window",
+    ],
+    [
+      "const MAX_DROP_AGE_MS = 30 * 24 * 60 * 60 * 1_000",
+      "must reject stale lock evidence",
+    ],
+    [
+      'const ATTRIBUTE_KEY = "leaderbot_credit_provisioner_retirement_v1"',
+      "must persist the exact database-backed retirement cohort",
+    ],
+    [
+      "leaderbot-credit-provisioner-retirement-v1",
+      "must domain-separate the cohort fingerprint",
+    ],
+    [
+      "deriveRetirementMembersSha256",
+      "must fingerprint the exact managed-account membership",
+    ],
+    [
+      "membersSha256",
+      "must bind account membership into attributes and evidence",
+    ],
+    [
+      "CREDIT_PROVISIONER_RETIREMENT_INVENTORY_QUERY",
+      "must inspect every exact managed database account",
+    ],
+    [
+      "INFORMATION_SCHEMA.USER_ATTRIBUTES",
+      "must read the documented MySQL user-attribute surface",
+    ],
+    ["account_locked", "must prove account lock state from MySQL"],
+    [
+      "performance_schema.threads",
+      "must prove no managed provisioner session survives retirement",
+    ],
+    [
+      "assertNoActiveManagedSessions",
+      "must gate account mutation and completion on zero active sessions",
+    ],
+    ["ALTER USER", "must mutate only through reviewed account statements"],
+    ["ACCOUNT LOCK", "must provide the recoverable first phase"],
+    ["ACCOUNT UNLOCK", "must provide protected recovery"],
+    ["DROP USER", "must provide the explicit irreversible phase"],
+    [
+      "assertObsoletePrincipalDropEvidence",
+      "must require prior obsolete-runtime-principal removal evidence",
+    ],
+    ["assertLockEvidence", "must bind drop to the exact lock artifact"],
+    ["assertDropWindow", "must enforce the lock evidence time window"],
+    [
+      "enforceMaximum: inventory.length !== 0",
+      "must enforce maximum evidence age only for a new irreversible drop",
+    ],
+    ["acquireLock", "must serialize with provisioner bootstrap"],
+    ["assertLockHeld", "must reprove the shared database lock around mutation"],
+    [
+      "credit_provisioners_locked",
+      "must emit only the fixed lock success marker",
+    ],
+    [
+      "credit_provisioners_unlocked",
+      "must emit only the fixed unlock success marker",
+    ],
+    [
+      "credit_provisioners_dropped",
+      "must emit only the fixed drop success marker",
+    ],
+    [
+      "credit_provisioner_retirement_failed",
+      "must retain one redacted failure marker",
+    ],
+    [
+      "credit_provisioner_retirement_failed_stage=arguments",
+      "must identify argument-validation failures without dynamic details",
+    ],
+    [
+      "credit_provisioner_retirement_failed_stage=database_transition",
+      "must identify database-transition failures without dynamic details",
+    ],
+    [
+      "credit_provisioner_retirement_failed_stage=evidence_write_after_transition",
+      "must identify post-transition evidence-write failures without dynamic details",
+    ],
+    ['flag: "wx"', "must never overwrite existing retirement evidence"],
+    ["mode: 0o600", "must write retirement evidence owner-only"],
+  ]) {
+    if (!runner.includes(needle)) {
+      fail(`${CREDIT_PROVISIONER_RETIREMENT_RUNNER_PATH} ${message}`);
+    }
+  }
+  const stdoutWrites = runner.match(/process\.stdout\.write/g) ?? [];
+  const stderrWrites = runner.match(/process\.stderr\.write/g) ?? [];
+  if (
+    stdoutWrites.length !== 1 ||
+    stderrWrites.length !== 1 ||
+    !runner.includes("process.stdout.write(`${marker}\\n`)") ||
+    !runner.includes("process.stderr.write(`${stage}\\n`)") ||
+    /console\.|String\(error|JSON\.stringify\(error|error\.(?:message|stack)/.test(
+      runner,
+    ) ||
+    /gh secret delete|flyctl secrets|fly secrets|flyctl deploy|fly deploy|MOLLIE_[A-Z_]+_ENABLED=true/.test(
+      runner,
+    )
+  ) {
+    fail(
+      `${CREDIT_PROVISIONER_RETIREMENT_RUNNER_PATH} must expose only fixed markers and must not mutate deployments, secrets, billing, or providers`,
+    );
+  }
+}
+
+function validateCreditProvisionerRetirementWorkflow(rootDir) {
+  const workflowPath = path.join(
+    rootDir,
+    CREDIT_PROVISIONER_RETIREMENT_WORKFLOW_PATH,
+  );
+  if (!fs.existsSync(workflowPath)) {
+    fail(`Missing ${CREDIT_PROVISIONER_RETIREMENT_WORKFLOW_PATH}`);
+  }
+  const workflow = fs.readFileSync(workflowPath, "utf8");
+  assertNoDirectGithubExpressionsInRunBlocks(
+    workflow,
+    CREDIT_PROVISIONER_RETIREMENT_WORKFLOW_PATH,
+  );
+  for (const [needle, message] of [
+    ["workflow_dispatch:", "must be manually dispatched"],
+    ['test "$GITHUB_REF" = "refs/heads/main"', "must require protected main"],
+    ["actions: read", "must read only reviewed workflow evidence"],
+    ["contents: read", "must keep repository permissions read-only"],
+    [
+      "group: production-deploy-image-gen",
+      "must serialize with image-gen rollout work",
+    ],
+    ["cancel-in-progress: false", "must never cancel a retirement transition"],
+    [
+      "queue: max",
+      "must retain every protected retirement run in the shared image-gen lock queue",
+    ],
+    ["  preflight:", "must separate read-only proof from mutation"],
+    ["  mutate:", "must isolate the protected database operation"],
+    ["  postflight:", "must independently reobserve secret absence"],
+    ["environment: production-inspection", "must use protected inspection"],
+    ["environment: production", "must require protected approval"],
+    ["needs: preflight", "must finish inspection before production approval"],
+    ["needs: mutate", "must finish protected resolution before postflight"],
+    [
+      "inputs.operation == 'verify_secret_absent'",
+      "must reserve postflight for stable secret-absence proof",
+    ],
+    [
+      'databaseSchemaTransition.state\' deploy/production/apps.json)" = "complete"',
+      "must wait for a completed schema cutover",
+    ],
+    [
+      'databaseSchemaTransition.to\' deploy/production/apps.json)" = "0018_credit_checkout_reservation"',
+      "must require the final credit schema",
+    ],
+    [
+      'databaseSchemaPhase\' deploy/production/apps.json)" = "0018_credit_checkout_reservation"',
+      "must require the exact settled schema phase",
+    ],
+    [
+      'reviewedArtifactKind\' deploy/production/apps.json)" = "runtime"',
+      "must require the restricted runtime artifact",
+    ],
+    [
+      "$app.reviewedRollbackImages | index($bridge) | not",
+      "must retire the migration bridge before provisioner cleanup",
+    ],
+    [
+      'all($app.reviewedRollbackImages[]; $app.reviewedRollbackArtifactKinds[.] == "runtime")',
+      "must retain only runtime rollback images",
+    ],
+    [
+      '--verify-source-ci "$EXPECTED_HEAD"',
+      "must require green CI for the exact reviewed source",
+    ],
+    [
+      '--verify-settled-baseline image-gen "$EXPECTED_DEPLOYMENT_IDENTITY"',
+      "must bind cleanup to the settled deployment",
+    ],
+    [
+      '.apps["image-gen"].desiredScale | {app:.app.count,worker:.worker.count}',
+      "must derive the exact successor count from reviewed desiredScale",
+    ],
+    [
+      "length == ($expected.app + $expected.worker)",
+      "must reject extra or missing settled Machines",
+    ],
+    [
+      "([.[].id] | length == (unique | length))",
+      "must require unique settled Machine identities",
+    ],
+    [
+      ".config.env.LEADERBOT_DEPLOYMENT_IDENTITY == $identity",
+      "must bind every settled Machine to the reviewed deployment identity",
+    ],
+    [
+      ".image_ref.digest == $digest",
+      "must bind every settled Machine to the reviewed image digest",
+    ],
+    [
+      '([.[] | select(.config.metadata.fly_process_group == "app")] | length) == $expected.app',
+      "must require the exact reviewed app Machine count",
+    ],
+    [
+      '([.[] | select(.config.metadata.fly_process_group == "worker")] | length) == $expected.worker',
+      "must require the exact reviewed worker Machine count",
+    ],
+    [
+      "EXPECTED_RUNTIME_PRINCIPAL_SHA256=$EXPECTED_RUNTIME_PRINCIPAL_SHA256 node /app/dist/billing-trigger-runtime-preflight.cjs",
+      "must reprove the restricted principal on every Machine",
+    ],
+    [
+      "https://leaderbot-fb-image-gen.fly.dev/healthz",
+      "must reprove production liveness before database work",
+    ],
+    [
+      "https://leaderbot-fb-image-gen.fly.dev/readyz",
+      "must reprove production readiness before database work",
+    ],
+    [
+      ".github/workflows/cleanup-image-gen-runtime-principals.yml",
+      "must require the protected obsolete-principal drop workflow",
+    ],
+    [
+      "image-gen-obsolete-principal-drop-",
+      "must bind cleanup to exact obsolete-principal evidence",
+    ],
+    [
+      "image-gen-credit-provisioner-retirement-lock-",
+      "must bind irreversible drop to exact lock evidence",
+    ],
+    [
+      "if (!Number.isFinite(age) || age < 86_400_000) fail();",
+      "must preserve the 24-hour minimum before drop or reconciliation",
+    ],
+    [
+      "node scripts/retire-image-gen-credit-provisioners.mjs",
+      "must invoke only the reviewed retirement runner",
+    ],
+    [
+      '--expected-runtime-principal-sha256 "$EXPECTED_RUNTIME_PRINCIPAL_SHA256"',
+      "must bind account mutation to the restricted runtime principal",
+    ],
+    [
+      '--expected-deployment-identity "$EXPECTED_DEPLOYMENT_IDENTITY"',
+      "must bind account mutation to the exact deployment",
+    ],
+    [
+      '--obsolete-drop-evidence "$root/obsolete-drop/evidence.json"',
+      "must pass the exact obsolete-principal evidence to the runner",
+    ],
+    [
+      'args+=(--lock-evidence "$root/lock/evidence.json")',
+      "must pass lock evidence only for drop",
+    ],
+    [
+      "/contents/${encodedWorkflowPath}?ref=${run.head_sha}",
+      "must load every evidence workflow from its exact historical source",
+    ],
+    [
+      'source.encoding !== "base64"',
+      "must require byte-addressable historical workflow source",
+    ],
+    [
+      'createHash("sha1")',
+      "must independently derive the historical workflow Git blob identity",
+    ],
+    [
+      ".update(`blob ${remoteWorkflow.length}\\0`)",
+      "must hash the historical source as an exact Git blob",
+    ],
+    [
+      "blobSha !== source.sha",
+      "must compare historical source bytes with the Git blob identity",
+    ],
+    [
+      "!remoteWorkflow.equals(currentWorkflow)",
+      "must reject evidence produced by a different workflow implementation",
+    ],
+    [
+      "secrets.IMAGE_GEN_DATABASE_PROVISIONER_URL != ''",
+      "must prove effective protected-secret resolution is empty",
+    ],
+    [
+      "currentAge < 15_000",
+      "must separate the two protected absence observations",
+    ],
+    [
+      "credit_provisioner_secret_resolution_absent",
+      "must emit one fixed effective-resolution marker",
+    ],
+    [
+      "credit_provisioner_secret_absence_verified",
+      "must emit one fixed final absence marker",
+    ],
+    ["retention-days: 90", "must retain metadata-only retirement evidence"],
+  ]) {
+    if (!workflow.includes(needle)) {
+      fail(`${CREDIT_PROVISIONER_RETIREMENT_WORKFLOW_PATH} ${message}`);
+    }
+  }
+  const productionEnvironments =
+    workflow.match(/^\s{4}environment: production$/gmu) ?? [];
+  const inspectionEnvironments =
+    workflow.match(/^\s{4}environment: production-inspection$/gmu) ?? [];
+  if (
+    productionEnvironments.length !== 2 ||
+    inspectionEnvironments.length !== 1 ||
+    occurrenceCount(
+      workflow,
+      "secrets.IMAGE_GEN_DATABASE_PROVISIONER_URL != ''",
+    ) !== 3 ||
+    occurrenceCount(workflow, "TARGET_SECRET_RESOLVED:") !== 2 ||
+    occurrenceCount(workflow, 'test "$TARGET_SECRET_RESOLVED" = "false"') !== 2
+  ) {
+    fail(
+      `${CREDIT_PROVISIONER_RETIREMENT_WORKFLOW_PATH} must use one inspection gate, two protected production observations, and exact secret-resolution boundaries`,
+    );
+  }
+  if (
+    occurrenceCount(
+      workflow,
+      'databaseSchemaTransition.state\' deploy/production/apps.json)" = "complete"',
+    ) !== 2
+  ) {
+    fail(
+      `${CREDIT_PROVISIONER_RETIREMENT_WORKFLOW_PATH} must wait for a completed schema cutover in both protected phases`,
+    );
+  }
+  const jobNames = workflowJobNames(workflow);
+  const preflightJob = namedWorkflowJobBody(workflow, "preflight");
+  const mutateJob = namedWorkflowJobBody(workflow, "mutate");
+  const postflightJob = namedWorkflowJobBody(workflow, "postflight");
+  if (
+    JSON.stringify(jobNames) !==
+      JSON.stringify(["preflight", "mutate", "postflight"]) ||
+    !preflightJob?.includes("environment: production-inspection") ||
+    preflightJob.includes("environment: production\n") ||
+    !mutateJob?.includes("environment: production") ||
+    !mutateJob.includes("needs: preflight") ||
+    occurrenceCount(mutateJob, "PROVISIONER_SECRET_RESOLVED:") !== 1 ||
+    occurrenceCount(mutateJob, "TARGET_SECRET_RESOLVED:") !== 1 ||
+    !postflightJob?.includes("environment: production") ||
+    !postflightJob.includes("needs: mutate") ||
+    occurrenceCount(postflightJob, "TARGET_SECRET_RESOLVED:") !== 1
+  ) {
+    fail(
+      `${CREDIT_PROVISIONER_RETIREMENT_WORKFLOW_PATH} must bind preflight, mutation, and both secret observations to their exact protected jobs`,
+    );
+  }
+  const [sourceEvidenceStep] = namedWorkflowStepBodies(
+    workflow,
+    "Validate protected source runs and exact artifacts",
+  );
+  for (const required of [
+    'run?.event !== "workflow_dispatch"',
+    'run.head_branch !== "main"',
+    "run.head_repository?.full_name !== process.env.GITHUB_REPOSITORY",
+    "run.path !== workflowPath",
+    'run.status !== "completed"',
+    'run.conclusion !== "success"',
+    "run.run_attempt !== Number(attempt)",
+    "/contents/${encodedWorkflowPath}?ref=${run.head_sha}",
+    "blobSha !== source.sha",
+    "!remoteWorkflow.equals(currentWorkflow)",
+  ]) {
+    if (!sourceEvidenceStep?.includes(required)) {
+      fail(
+        `${CREDIT_PROVISIONER_RETIREMENT_WORKFLOW_PATH} must bind every evidence artifact to the exact successful protected workflow source`,
+      );
+    }
+  }
+  const [topologyStep] = namedWorkflowStepBodies(
+    workflow,
+    "Reprove every settled runtime Machine before database access",
+  );
+  const loopStart = topologyStep?.indexOf(
+    'for machine_id in "${machine_ids[@]}"; do',
+  );
+  const preflightCommand = topologyStep?.indexOf(
+    "EXPECTED_RUNTIME_PRINCIPAL_SHA256=$EXPECTED_RUNTIME_PRINCIPAL_SHA256 node /app/dist/billing-trigger-runtime-preflight.cjs",
+  );
+  const loopEnd = topologyStep?.indexOf("          done", loopStart ?? -1);
+  if (
+    !topologyStep?.includes('.state == "started"') ||
+    !topologyStep.includes('test("^[a-f0-9]{14}$")') ||
+    !topologyStep.includes("mapfile -t machine_ids") ||
+    !topologyStep.includes(
+      'test "${#machine_ids[@]}" = "$expected_machine_count"',
+    ) ||
+    loopStart === undefined ||
+    loopStart < 0 ||
+    preflightCommand === undefined ||
+    preflightCommand <= loopStart ||
+    loopEnd === undefined ||
+    loopEnd <= preflightCommand
+  ) {
+    fail(
+      `${CREDIT_PROVISIONER_RETIREMENT_WORKFLOW_PATH} must reprove every exact started Machine inside the bounded topology loop`,
+    );
+  }
+  if (
+    workflow.includes("IMAGE_GEN_DATABASE_MIGRATION_URL") ||
+    workflow.includes("IMAGE_GEN_RETIREMENT_METADATA_READ_TOKEN") ||
+    workflow.includes("github-environments-and-secrets-read-only-v1") ||
+    workflow.includes("/environments/production/secrets") ||
+    workflow.includes("/actions/organization-secrets") ||
+    workflow.includes("/actions/secrets") ||
+    workflow.includes("gh secret delete") ||
+    /method:\s*["']DELETE["']/.test(workflow) ||
+    /flyctl secrets|fly secrets|flyctl deploy|fly deploy/.test(workflow) ||
+    /flyctl machine (?:start|stop|restart|update|remove|destroy|clone)/.test(
+      workflow,
+    ) ||
+    /flyctl volumes? (?:create|destroy|extend|fork)/.test(workflow) ||
+    /MOLLIE_[A-Z_]+_ENABLED=true|api\.mollie\.com|api\.openai\.com|graph\.facebook\.com/.test(
+      workflow,
+    )
+  ) {
+    fail(
+      `${CREDIT_PROVISIONER_RETIREMENT_WORKFLOW_PATH} must not use secret-inventory credentials, reuse migration credentials, remove secrets, deploy, mutate Machines or volumes, enable billing, or call product providers`,
     );
   }
 }
@@ -6515,7 +7698,7 @@ export function validateProductionRepository(rootDir = process.cwd()) {
       "must restrict the provisioner to reviewer-gated production jobs",
     ],
     [
-      "not root, and has no `ALL`, `SUPER`, or other schema-wide DML or DDL grant",
+      "not root, and has no `ALL`, `SUPER`, or schema-wide DML or DDL grant",
       "must document the provisioner's explicit privilege ceiling",
     ],
     [
@@ -6525,10 +7708,6 @@ export function validateProductionRepository(rootDir = process.cwd()) {
     [
       "schema-level `SELECT, EXECUTE WITH GRANT\nOPTION`",
       "must document the provisioner's exact schema delegation boundary",
-    ],
-    [
-      "schema-level `CREATE, TRIGGER, CREATE ROUTINE, ALTER ROUTINE WITH GRANT\nOPTION`",
-      "must document the provisioner's exact migration-schema delegation boundary",
     ],
     [
       "table-level `INSERT, UPDATE, DELETE WITH GRANT OPTION` only on the 41",
@@ -6709,11 +7888,12 @@ export function validateProductionRepository(rootDir = process.cwd()) {
     JSON.stringify([
       "cleanup-image-gen-runtime-principals.yml",
       "image-gen-schema-transition.yml",
+      "retire-image-gen-credit-provisioners.yml",
       "stage-image-gen-credit-runtime-principal.yml",
     ])
   ) {
     fail(
-      "IMAGE_GEN_DATABASE_PROVISIONER_URL may exist only in the three protected image-gen database workflows",
+      "IMAGE_GEN_DATABASE_PROVISIONER_URL may exist only in the four protected image-gen database workflows",
     );
   }
   for (const [target, script] of [
@@ -6746,6 +7926,10 @@ export function validateProductionRepository(rootDir = process.cwd()) {
   validateImageGenMigrationCi(rootDir);
   validateTrustedArtifactWorkflow(rootDir);
   validateCreditMigrationDefinerGrant(rootDir);
+  validateCreditMigrationPrincipalRepair(rootDir);
+  validateCreditProvisionerBootstrapHelper(rootDir);
+  validateCreditProvisionerRetirementRunner(rootDir);
+  validateCreditProvisionerRetirementWorkflow(rootDir);
   validateSchemaTransitionWorkflow(rootDir);
   validateRuntimePrincipalStagingWorkflow(rootDir);
   validateRuntimePrincipalCleanupWorkflow(rootDir);
@@ -7580,6 +8764,24 @@ export function validateProductionRepository(rootDir = process.cwd()) {
     }
     if (new Set(config.allowedFields).size !== config.allowedFields.length) {
       fail(`${object} allowed Meta fields must not contain duplicates`);
+    }
+  }
+
+  const pageCallback = manifest.meta.page;
+  const legacyGatewayHostname = `${CANONICAL_TARGETS.gateway.app}.fly.dev`;
+  if (
+    pageCallback?.migrationState === "canonical" &&
+    new URL(normalizeUrl(pageCallback.expectedCallback)).hostname !==
+      legacyGatewayHostname
+  ) {
+    const uptimeWorkflow = fs.readFileSync(
+      path.join(rootDir, PRODUCTION_UPTIME_WORKFLOW_PATH),
+      "utf8",
+    );
+    if (referencesExactHostnameToken(uptimeWorkflow, legacyGatewayHostname)) {
+      fail(
+        `${PRODUCTION_UPTIME_WORKFLOW_PATH} must not probe the legacy OpenClaw gateway after the Page callback is canonical`,
+      );
     }
   }
 
@@ -8588,9 +9790,20 @@ export function checkLiveFlyDrift(target, options = {}) {
       strategy: expectedDeploy.strategy ?? app.strategy,
       ...expectedDeploy,
     };
-    compareExactObject(live.deploy, canonicalDeploy, "deploy", blockingErrors, [
-      "release_command_timeout",
-    ]);
+    const normalizedLiveDeploy =
+      liveDeployIsObject &&
+      !Object.hasOwn(live.deploy, "strategy") &&
+      canonicalDeploy.strategy === "rolling" &&
+      app.strategy === "rolling"
+        ? { strategy: "rolling", ...live.deploy }
+        : live.deploy;
+    compareExactObject(
+      normalizedLiveDeploy,
+      canonicalDeploy,
+      "deploy",
+      blockingErrors,
+      ["release_command_timeout"],
+    );
   }
   compareObject(liveEnv, canonicalEnv, "env", blockingErrors);
   for (const liveKey of Object.keys(liveEnv)) {
@@ -9290,15 +10503,135 @@ export async function checkSettledLiveFlyDrift(target, options = {}) {
   const configArgs = ["config", "show", "--app", app.app];
   const machineArgs = ["machine", "list", "--app", app.app, "--json"];
   const scaleArgs = ["scale", "show", "--app", app.app, "--json"];
+  const releasesArgs = ["releases", "--app", app.app, "--image", "--json"];
   const cachedOutputs = new Map();
-  for (const args of [configArgs, machineArgs, scaleArgs]) {
+  for (const args of [configArgs, machineArgs, scaleArgs, releasesArgs]) {
     cachedOutputs.set(args.join("\0"), run(args));
   }
   const live = JSON.parse(cachedOutputs.get(configArgs.join("\0")));
   const machines = JSON.parse(cachedOutputs.get(machineArgs.join("\0")));
-  const identity = live?.env?.LEADERBOT_DEPLOYMENT_IDENTITY ?? "none";
-  if (!/^(?:none|deploy-[0-9]+-[0-9]+)$/.test(identity)) {
-    fail("live deployment identity is not a trusted settled baseline");
+  const releases = JSON.parse(cachedOutputs.get(releasesArgs.join("\0")));
+  if (!Array.isArray(machines)) {
+    fail("settled-live preflight requires a Fly Machine list");
+  }
+  const machineIds = machines.map((machine) => machine?.id);
+  if (
+    machineIds.some(
+      (machineId) =>
+        typeof machineId !== "string" || !/^[a-f0-9]{14}$/.test(machineId),
+    )
+  ) {
+    fail("settled-live preflight contains an invalid Fly Machine id");
+  }
+  if (new Set(machineIds).size !== machineIds.length) {
+    fail("settled-live preflight contains duplicate Fly Machine ids");
+  }
+  const runtimeMachines = machines.filter(
+    (machine) => !hasReleaseCommandMarker(machine),
+  );
+  if (runtimeMachines.length === 0) {
+    fail("settled-live preflight found no production runtime Machine");
+  }
+  const machineIdentities = new Set(
+    runtimeMachines.map((machine) => {
+      const env = machine?.config?.env ?? {};
+      const value = Object.hasOwn(env, "LEADERBOT_DEPLOYMENT_IDENTITY")
+        ? env.LEADERBOT_DEPLOYMENT_IDENTITY
+        : "none";
+      if (
+        typeof value !== "string" ||
+        !/^(?:none|deploy-[0-9]+-[0-9]+)$/.test(value)
+      ) {
+        fail(
+          `settled-live preflight Machine ${machine.id} deployment identity is invalid`,
+        );
+      }
+      return value;
+    }),
+  );
+  if (machineIdentities.size !== 1) {
+    fail(
+      "settled-live preflight requires one uniform Machine deployment identity",
+    );
+  }
+  const identity = [...machineIdentities][0];
+  const liveEnv = live?.env ?? {};
+  if (!Array.isArray(releases)) {
+    fail("settled-live preflight requires a Fly release list");
+  }
+  const normalizedReleases = releases.map((release) => {
+    if (
+      typeof release?.Version !== "number" ||
+      !Number.isSafeInteger(release.Version) ||
+      release.Version <= 0
+    ) {
+      fail("settled-live preflight contains an invalid Fly release version");
+    }
+    if (typeof release.InProgress !== "boolean") {
+      fail("settled-live preflight contains invalid Fly release progress");
+    }
+    return { ...release, normalizedVersion: release.Version };
+  });
+  if (
+    new Set(normalizedReleases.map((release) => release.normalizedVersion))
+      .size !== normalizedReleases.length
+  ) {
+    fail("settled-live preflight contains duplicate Fly release versions");
+  }
+  if (normalizedReleases.some((release) => release.InProgress === true)) {
+    fail("settled-live preflight found an in-progress Fly release");
+  }
+  const activeRelease = normalizedReleases
+    .filter(
+      (release) =>
+        (release?.Status === "complete" || release?.Status === "running") &&
+        typeof release?.ImageRef === "string",
+    )
+    .sort((left, right) => right.normalizedVersion - left.normalizedVersion)[0];
+  if (!activeRelease) {
+    fail("settled-live preflight could not bind the active Fly release");
+  }
+  const newerReleases = normalizedReleases.filter(
+    (release) => release.normalizedVersion > activeRelease.normalizedVersion,
+  );
+  if (newerReleases.some((release) => release.Status !== "failed")) {
+    fail("settled-live preflight found a newer non-terminal Fly release");
+  }
+  if (
+    newerReleases.length === 0 &&
+    Object.hasOwn(liveEnv, "LEADERBOT_DEPLOYMENT_IDENTITY") &&
+    (typeof liveEnv.LEADERBOT_DEPLOYMENT_IDENTITY !== "string" ||
+      liveEnv.LEADERBOT_DEPLOYMENT_IDENTITY !== identity)
+  ) {
+    fail("live config deployment identity differs from the settled Machines");
+  }
+  const releaseWatermark = createHash("sha256")
+    .update(
+      JSON.stringify(
+        [...normalizedReleases]
+          .sort(
+            (left, right) => left.normalizedVersion - right.normalizedVersion,
+          )
+          .map((release) => [
+            release.normalizedVersion,
+            release.Status,
+            release.InProgress,
+            release.ImageRef ?? null,
+          ]),
+      ),
+    )
+    .digest("hex");
+  const activeReleaseVersion = String(activeRelease.normalizedVersion);
+  for (const machine of runtimeMachines) {
+    const releaseVersion = machine?.config?.metadata?.fly_release_version;
+    if (
+      typeof releaseVersion !== "string" ||
+      releaseVersion !== activeReleaseVersion
+    ) {
+      fail(
+        `settled-live preflight Machine ${machine.id} is not bound to the active Fly release`,
+      );
+    }
   }
   const rawMachineImages = new Set(
     machines.map((machine) => machine?.config?.image).filter(Boolean),
@@ -9310,26 +10643,15 @@ export async function checkSettledLiveFlyDrift(target, options = {}) {
     fail("settled-live preflight found no production Machine image");
   }
   let imageRecords = [];
-  let releaseImage;
-  if ([...rawMachineImages].some((image) => !isImmutableAppImage(app, image))) {
+  const releaseImage = activeRelease.ImageRef;
+  if (
+    [...rawMachineImages, releaseImage].some(
+      (image) => !isImmutableAppImage(app, image),
+    )
+  ) {
     imageRecords = JSON.parse(
       run(["image", "show", "--app", app.app, "--json"]),
     );
-    const releases = JSON.parse(
-      run(["releases", "--app", app.app, "--image", "--json"]),
-    );
-    releaseImage = releases
-      .filter(
-        (release) =>
-          (release?.Status === "complete" || release?.Status === "running") &&
-          typeof release?.ImageRef === "string",
-      )
-      .sort(
-        (left, right) => Number(right.Version) - Number(left.Version),
-      )[0]?.ImageRef;
-    if (!releaseImage) {
-      fail("settled-live preflight could not bind the current release image");
-    }
   }
   const resolvedImages = new Map(
     [...rawMachineImages].map((image) => [
@@ -9366,20 +10688,13 @@ export async function checkSettledLiveFlyDrift(target, options = {}) {
     fail("settled-live preflight requires one uniform immutable Machine image");
   }
   const expectedImage = [...immutableImages][0];
-  if (releaseImage) {
-    const resolvedReleaseImage = isImmutableAppImage(app, releaseImage)
-      ? releaseImage
-      : resolveImmutableReleaseImage(
-          target,
-          releaseImage,
-          imageRecords,
-          rootDir,
-        );
-    if (resolvedReleaseImage !== expectedImage) {
-      fail(
-        "settled-live preflight Machine image does not match the current release",
-      );
-    }
+  const resolvedReleaseImage = isImmutableAppImage(app, releaseImage)
+    ? releaseImage
+    : resolveImmutableReleaseImage(target, releaseImage, imageRecords, rootDir);
+  if (resolvedReleaseImage !== expectedImage) {
+    fail(
+      "settled-live preflight Machine image does not match the current release",
+    );
   }
   if (!reviewedProductionImages(app).has(expectedImage)) {
     fail("settled-live preflight image is outside the reviewed allowlist");
@@ -9419,6 +10734,20 @@ export async function checkSettledLiveFlyDrift(target, options = {}) {
       fail(`Unexpected uncached Fly read: ${args.join(" ")}`);
     return cachedOutputs.get(key);
   };
+  const effectiveLive = structuredClone(live);
+  if (newerReleases.length > 0) {
+    const activeMachineEnv = { ...(runtimeMachines[0]?.config?.env ?? {}) };
+    delete activeMachineEnv.FLY_PROCESS_GROUP;
+    delete activeMachineEnv.PRIMARY_REGION;
+    delete activeMachineEnv.LEADERBOT_DEPLOYMENT_IDENTITY;
+    effectiveLive.env = {
+      ...activeMachineEnv,
+      ...(identity === "none"
+        ? {}
+        : { LEADERBOT_DEPLOYMENT_IDENTITY: identity }),
+    };
+  }
+  cachedOutputs.set(configArgs.join("\0"), JSON.stringify(effectiveLive));
   const reviewedLegacyConfig =
     identity === "none" &&
     allowsFirstTrustedBootstrap(target, app, expectedImage)
@@ -9451,13 +10780,28 @@ export async function checkSettledLiveFlyDrift(target, options = {}) {
         candidate.reconcilableDrift.length === 0,
     ) ?? results[0];
   const errors = [...result.blockingErrors, ...result.reconcilableDrift];
-  if (errors.length) return { ...result, identity, expectedImage };
+  const releaseVersion = activeRelease.normalizedVersion;
+  if (errors.length) {
+    return {
+      ...result,
+      identity,
+      expectedImage,
+      releaseVersion,
+      releaseWatermark,
+    };
+  }
   await verifySettledBaseline(target, identity, {
     ...options,
     rootDir,
     expectedImage,
   });
-  return { ...result, identity, expectedImage };
+  return {
+    ...result,
+    identity,
+    expectedImage,
+    releaseVersion,
+    releaseWatermark,
+  };
 }
 
 const isMain =
@@ -9834,6 +11178,17 @@ if (isMain) {
         `${result.app} unsettled production drift:\n- ${errors.join("\n- ")}\n`,
       );
       process.exitCode = 1;
+    } else if (process.argv.includes("--output-json")) {
+      process.stdout.write(
+        `${JSON.stringify({
+          target: result.target,
+          app: result.app,
+          identity: result.identity,
+          expectedImage: result.expectedImage,
+          releaseVersion: result.releaseVersion,
+          releaseWatermark: result.releaseWatermark,
+        })}\n`,
+      );
     } else {
       process.stdout.write(
         `${result.app} matches settled identity ${result.identity}.\n`,

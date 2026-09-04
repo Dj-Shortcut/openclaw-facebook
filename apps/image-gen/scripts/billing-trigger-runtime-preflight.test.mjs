@@ -26,6 +26,13 @@ function exactRuntimeGrants() {
   ];
 }
 
+function exactLegacyRuntimeGrants() {
+  return [
+    "GRANT USAGE ON *.* TO `runtime`@`%`",
+    "GRANT SELECT, INSERT, UPDATE, DELETE ON `leaderbot`.* TO `runtime`@`%`",
+  ];
+}
+
 function successfulConnection(options = {}) {
   const scheduler = {
     enabled: 0,
@@ -137,6 +144,31 @@ describe("billing trigger runtime preflight", () => {
     expect(connection.query).not.toHaveBeenCalledWith(
       "SHOW GRANTS FOR CURRENT_USER()"
     );
+  });
+
+  it("accepts the legacy runtime grant profile for pre-final migration states", async () => {
+    const connection = successfulConnection({
+      grants: exactLegacyRuntimeGrants(),
+    });
+
+    await expect(
+      assertBillingTriggerRuntimePreflight(connection, "test", {
+        grantProfile: "runtime",
+      })
+    ).resolves.toBeUndefined();
+    expect(connection.query).not.toHaveBeenCalledWith(
+      expect.stringContaining("CALL `credit_reserve_checkout_intent`")
+    );
+    const statements = connection.query.mock.calls.map(([statement]) =>
+      String(statement)
+    );
+    expect(
+      statements.some(statement =>
+        /^(INSERT INTO|UPDATE|DELETE FROM) `credit_(wallets|reservations|ledger)`/.test(
+          statement
+        )
+      )
+    ).toBe(false);
   });
 
   it("exercises all three triggers and always verifies the rollback", async () => {
