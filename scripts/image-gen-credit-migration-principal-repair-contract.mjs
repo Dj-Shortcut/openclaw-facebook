@@ -136,9 +136,7 @@ export function hasCreditMigrationGlobalSuper(grants) {
   }
   let hasSuper = false;
   for (const grant of grants) {
-    const parsed = /^(GRANT|REVOKE) (.+) ON \*\.\* (?:TO|FROM) /i.exec(
-      grant,
-    );
+    const parsed = /^(GRANT|REVOKE) (.+) ON \*\.\* (?:TO|FROM) /i.exec(grant);
     const privileges = parsed?.[2]
       ?.split(",")
       .map((privilege) => privilege.trim().toUpperCase());
@@ -398,12 +396,12 @@ export async function revokeTemporaryCreditMigrationSuper({
     );
     if (currentLock.length !== 1 || currentLock[0] !== "1") fail();
   };
+  // Cleanup targets the granted account, independently of later binlog policy changes.
   const assertIdentity = (state) => {
     if (
       state?.account?.username !== account.username ||
       state?.account?.hostname !== account.hostname ||
-      state?.databaseName !== databaseName ||
-      state?.requireSuper !== true
+      state?.databaseName !== databaseName
     ) {
       fail();
     }
@@ -433,6 +431,18 @@ export async function revokeTemporaryCreditMigrationSuper({
       }
       activeRoot = recovered;
       await acquireAndValidateLock();
+      const resumed = await readState();
+      assertIdentity(resumed);
+      if (hasCreditMigrationGlobalSuper(resumed.grants)) {
+        await activeRoot.execute(
+          buildCreditMigrationPrivilegeStatement({
+            account,
+            databaseName,
+            operation: "revoke",
+            privileges: ["SUPER"],
+          }),
+        );
+      }
     }
     const observed = await readState();
     assertIdentity(observed);

@@ -86,6 +86,8 @@ function createRepositoryFixture() {
     ".github/workflows/recover-completed-production-deployment.yml",
     ".github/workflows/reconcile-production-deployment.yml",
     "scripts/select-fresh-fly-snapshot.mjs",
+    "scripts/fly-restore-probe-status.mjs",
+    "scripts/fly-restore-probe-status.test.mjs",
     "scripts/image-gen-credit-migration-principal-repair-contract.mjs",
     "scripts/image-gen-credit-migration-principal-repair-contract.test.mjs",
     "scripts/repair-image-gen-credit-migration-principal.mjs",
@@ -4019,6 +4021,54 @@ describe("production deployment contract", () => {
     );
   });
 
+  it.each([
+    "scripts/fly-restore-probe-status.mjs",
+    "scripts/fly-restore-probe-status.test.mjs",
+  ])("requires restore-probe file %s", (relativePath) => {
+    const root = createRepositoryFixture();
+    fs.unlinkSync(path.join(root, relativePath));
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      `Missing ${relativePath}`,
+    );
+  });
+
+  it.each([
+    ["missing", ""],
+    ["substring", " prefixed/scripts/fly-restore-probe-status.test.mjs"],
+    [
+      "duplicate",
+      " scripts/fly-restore-probe-status.test.mjs scripts/fly-restore-probe-status.test.mjs",
+    ],
+  ])(
+    "rejects %s restore-probe production test registration",
+    (_label, replacement) => {
+      const root = createRepositoryFixture();
+      const testPath = "scripts/fly-restore-probe-status.test.mjs";
+      replaceFixtureText(root, "package.json", ` ${testPath}`, replacement);
+
+      expect(() => validateProductionRepository(root)).toThrow(
+        `package.json test:production-contracts must include exact ${testPath}`,
+      );
+    },
+  );
+
+  it("does not require automatic probe removal through an unrelated Docker flag", () => {
+    const root = createRepositoryFixture();
+    const workflowPath = path.join(
+      root,
+      ".github/workflows/image-gen-schema-transition.yml",
+    );
+    const workflow = fs.readFileSync(workflowPath, "utf8");
+    expect(workflow).toContain("docker run --rm");
+    fs.writeFileSync(
+      workflowPath,
+      workflow.replaceAll("docker run --rm", "docker run"),
+    );
+
+    expect(() => validateProductionRepository(root)).not.toThrow();
+  });
+
   it("keeps the restore probe free of SSH authority", () => {
     const root = createRepositoryFixture();
     replaceFixtureText(
@@ -4107,6 +4157,24 @@ describe("production deployment contract", () => {
     );
     expect(() => validateProductionRepository(root)).toThrow(
       "must fail closed when exit evidence never arrives",
+    );
+  });
+
+  it("requires the runner-side timeout marker even when the inner probe marker remains", () => {
+    const root = createRepositoryFixture();
+    const relativePath = ".github/workflows/image-gen-schema-transition.yml";
+    replaceFixtureText(
+      root,
+      relativePath,
+      "printf '%s\\n' mysql_restore_probe_failed",
+      ":",
+    );
+    expect(fs.readFileSync(path.join(root, relativePath), "utf8")).toContain(
+      'printf "%s\\n" mysql_restore_probe_failed',
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must emit a metadata-only runner failure marker when restore exit evidence never arrives",
     );
   });
 

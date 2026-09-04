@@ -453,6 +453,139 @@ describe("credit migration principal repair contract", () => {
 });
 
 describe("temporary migration SUPER cleanup", () => {
+  it.each([
+    [false, false],
+    [true, false],
+  ])(
+    "revokes SUPER independently of binlog policy (%s -> %s)",
+    async (before, after) => {
+      const { readState, root } = rootHarness({ requireSuper: true });
+      await root.execute("GRANT SUPER ON *.* TO 'credit_migrator'@'%'");
+      let reads = 0;
+      const verify = vi.fn(async () => undefined);
+
+      await expect(
+        revokeTemporaryCreditMigrationSuper({
+          account: ACCOUNT,
+          databaseName: DATABASE,
+          readState: async () => ({
+            ...(await readState()),
+            requireSuper: reads++ === 0 ? before : after,
+          }),
+          recoverRoot: vi.fn(),
+          root,
+          verify,
+        }),
+      ).resolves.toBe("revoked");
+      expect(hasCreditMigrationGlobalSuper((await readState()).grants)).toBe(
+        false,
+      );
+      expect(verify).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([false, true])(
+    "recovers a revoke transport loss (already applied: %s)",
+    async (applied) => {
+      const { readState, root: replacementRoot, statements } = rootHarness();
+      await replacementRoot.execute(
+        "GRANT SUPER ON *.* TO 'credit_migrator'@'%'",
+      );
+      statements.length = 0;
+      const firstRoot = {
+        execute: vi.fn(async (statement) => {
+          if (statement.startsWith("REVOKE")) {
+            if (applied) await replacementRoot.execute(statement);
+            throw new Error("synthetic transport loss");
+          }
+          return ["1"];
+        }),
+      };
+      const recoverRoot = vi.fn(async () => replacementRoot);
+      const verify = vi.fn(async () => undefined);
+
+      await expect(
+        revokeTemporaryCreditMigrationSuper({
+          account: ACCOUNT,
+          databaseName: DATABASE,
+          readState,
+          recoverRoot,
+          root: firstRoot,
+          verify,
+        }),
+      ).resolves.toBe("revoked");
+      expect(recoverRoot).toHaveBeenCalledExactlyOnceWith(firstRoot);
+      expect(
+        statements.filter((statement) => statement.startsWith("REVOKE")),
+      ).toEqual(["REVOKE SUPER ON *.* FROM 'credit_migrator'@'%'"]);
+      expect(statements).toContain(
+        "SELECT GET_LOCK('leaderbot_credit_migration_principal_repair_v1',0)",
+      );
+      expect(hasCreditMigrationGlobalSuper((await readState()).grants)).toBe(
+        false,
+      );
+      expect(verify).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("reports cleanup incomplete after one unsuccessful recovery attempt", async () => {
+    const { readState, root, statements } = rootHarness({ failRevoke: true });
+    await root.execute("GRANT SUPER ON *.* TO 'credit_migrator'@'%'");
+    const recoverRoot = vi.fn(async () => root);
+    const verify = vi.fn();
+
+    await expect(
+      revokeTemporaryCreditMigrationSuper({
+        account: ACCOUNT,
+        databaseName: DATABASE,
+        readState,
+        recoverRoot,
+        root,
+        verify,
+      }),
+    ).rejects.toBeInstanceOf(CreditMigrationPrincipalCleanupError);
+    expect(recoverRoot).toHaveBeenCalledOnce();
+    expect(
+      statements.filter((statement) => statement.startsWith("REVOKE")),
+    ).toHaveLength(2);
+    expect(hasCreditMigrationGlobalSuper((await readState()).grants)).toBe(
+      true,
+    );
+    expect(verify).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { account: { ...ACCOUNT, username: "different_migrator" } },
+    { account: { ...ACCOUNT, hostname: "localhost" } },
+    { databaseName: "different_database" },
+  ])(
+    "refuses a changed cleanup identity after reconnect: %j",
+    async (changed) => {
+      const { readState, root, statements } = rootHarness({ failRevoke: true });
+      await root.execute("GRANT SUPER ON *.* TO 'credit_migrator'@'%'");
+      const initial = await readState();
+      readState
+        .mockResolvedValueOnce(initial)
+        .mockResolvedValue({ ...initial, ...changed });
+      const verify = vi.fn();
+
+      await expect(
+        revokeTemporaryCreditMigrationSuper({
+          account: ACCOUNT,
+          databaseName: DATABASE,
+          readState,
+          recoverRoot: vi.fn(async () => root),
+          root,
+          verify,
+        }),
+      ).rejects.toBeInstanceOf(CreditMigrationPrincipalCleanupError);
+      expect(
+        statements.filter((statement) => statement.startsWith("REVOKE")),
+      ).toHaveLength(1);
+      expect(verify).not.toHaveBeenCalled();
+    },
+  );
+
   it("revokes SUPER under the private lock and verifies it is absent", async () => {
     const { readState, root, statements } = rootHarness({ requireSuper: true });
     await root.execute(
@@ -480,24 +613,27 @@ describe("temporary migration SUPER cleanup", () => {
     );
   });
 
-  it("is idempotent when SUPER is already absent", async () => {
-    const { readState, root, statements } = rootHarness({ requireSuper: true });
-    const verify = vi.fn(async () => undefined);
-    await expect(
-      revokeTemporaryCreditMigrationSuper({
-        account: ACCOUNT,
-        databaseName: DATABASE,
-        readState,
-        recoverRoot: vi.fn(async () => root),
-        root,
-        verify,
-      }),
-    ).resolves.toBe("already_revoked");
-    expect(statements.some((statement) => statement.startsWith("REVOKE"))).toBe(
-      false,
-    );
-    expect(verify).toHaveBeenCalledOnce();
-  });
+  it.each([false, true])(
+    "is idempotent when SUPER is absent (required: %s)",
+    async (requireSuper) => {
+      const { readState, root, statements } = rootHarness({ requireSuper });
+      const verify = vi.fn(async () => undefined);
+      await expect(
+        revokeTemporaryCreditMigrationSuper({
+          account: ACCOUNT,
+          databaseName: DATABASE,
+          readState,
+          recoverRoot: vi.fn(async () => root),
+          root,
+          verify,
+        }),
+      ).resolves.toBe("already_revoked");
+      expect(
+        statements.some((statement) => statement.startsWith("REVOKE")),
+      ).toBe(false);
+      expect(verify).toHaveBeenCalledOnce();
+    },
+  );
 });
 
 describe("credit migration principal repair resumability", () => {

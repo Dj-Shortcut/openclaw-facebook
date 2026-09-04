@@ -49,6 +49,9 @@ const PRODUCTION_RECONCILIATION_WORKFLOW_PATH =
 const PRODUCTION_COMPLETION_RECOVERY_WORKFLOW_PATH =
   ".github/workflows/recover-completed-production-deployment.yml";
 const FRESH_SNAPSHOT_SELECTOR_PATH = "scripts/select-fresh-fly-snapshot.mjs";
+const FLY_RESTORE_PROBE_STATUS_PATH = "scripts/fly-restore-probe-status.mjs";
+const FLY_RESTORE_PROBE_STATUS_TEST_PATH =
+  "scripts/fly-restore-probe-status.test.mjs";
 const PINNED_NODE_BASE_IMAGE =
   "node:24-alpine@sha256:d32cdf619f63fe0471182d08996dd516c6275bb5fd31ae06e55a570bd9e1ad43";
 const PINNED_GATEWAY_NODE_BASE_IMAGE =
@@ -3936,6 +3939,34 @@ function validateTrustedArtifactWorkflow(rootDir) {
 }
 
 function validateSchemaTransitionWorkflow(rootDir) {
+  for (const requiredPath of [
+    FLY_RESTORE_PROBE_STATUS_PATH,
+    FLY_RESTORE_PROBE_STATUS_TEST_PATH,
+  ]) {
+    if (!fs.existsSync(path.join(rootDir, requiredPath))) {
+      fail(`Missing ${requiredPath}`);
+    }
+  }
+  let packageJson;
+  try {
+    packageJson = JSON.parse(
+      fs.readFileSync(path.join(rootDir, "package.json"), "utf8"),
+    );
+  } catch {
+    fail("package.json must contain the reviewed production-contract command");
+  }
+  const productionContractTokens = String(
+    packageJson?.scripts?.["test:production-contracts"] ?? "",
+  ).split(/\s+/);
+  if (
+    productionContractTokens.filter(
+      (token) => token === FLY_RESTORE_PROBE_STATUS_TEST_PATH,
+    ).length !== 1
+  ) {
+    fail(
+      `package.json test:production-contracts must include exact ${FLY_RESTORE_PROBE_STATUS_TEST_PATH}`,
+    );
+  }
   const workflowPath = path.join(rootDir, SCHEMA_TRANSITION_WORKFLOW_PATH);
   if (!fs.existsSync(workflowPath)) {
     fail(`Missing ${SCHEMA_TRANSITION_WORKFLOW_PATH}`);
@@ -4116,7 +4147,6 @@ function validateSchemaTransitionWorkflow(rootDir) {
       "must verify the restored volume is isolated before probing",
     ],
     ["--restart no", "must disable restart of the isolated probe"],
-    ["--rm", "must request automatic removal of the isolated probe"],
     ["--detach", "must start the isolated probe without blocking the job"],
     [
       '--metadata "leaderbot_restore_probe=$GITHUB_RUN_ID"',
@@ -4438,8 +4468,8 @@ function validateSchemaTransitionWorkflow(rootDir) {
       "must fail closed when exit evidence never arrives",
     ],
     [
-      'printf "%s\\n" mysql_restore_probe_failed',
-      "must emit a metadata-only failure marker for a failed restore probe",
+      "printf '%s\\n' mysql_restore_probe_failed",
+      "must emit a metadata-only runner failure marker when restore exit evidence never arrives",
     ],
     [
       "chown mysql:root /var/lib/mysql",

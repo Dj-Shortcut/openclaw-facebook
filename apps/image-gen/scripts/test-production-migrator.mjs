@@ -2143,7 +2143,7 @@ function testStagedRolloutContracts() {
   );
   assert(
     productionDatabasePrivilegeProfiles.includes("credit-expand-postddl"),
-    "credit post-DDL inspection rejects retained temporary SUPER"
+    "credit post-DDL inspection is an executable migration privilege profile"
   );
   for (const phase of [
     "0016_expand",
@@ -2606,6 +2606,20 @@ function testSchemaDigestContracts() {
     ],
     "leaderbot",
     true
+  );
+  expectSynchronousFailure(
+    () =>
+      assertCreditWalletMigrationGrantScope(
+        [
+          creditMigrationGrant,
+          ...creditMigrationTableGrants,
+          "GRANT SUPER ON *.* TO `credit_migrator`@`%`",
+        ],
+        "leaderbot",
+        false
+      ),
+    "credit post-DDL inspection rejects retained temporary SUPER",
+    "excessive global SUPER"
   );
   expectSynchronousFailure(
     () =>
