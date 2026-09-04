@@ -5276,6 +5276,15 @@ function validateCreditProvisionerBootstrapHelper(rootDir) {
       fail(`${CREDIT_PROVISIONER_BOOTSTRAP_RUNNER_PATH} ${message}`);
     }
   }
+  if (
+    !/export const ROOT_MYSQL_REMOTE_COMMAND_FLYCTL_CSV\s*=\s*`"\$\{ROOT_MYSQL_REMOTE_COMMAND\.replaceAll\(\s*'"'\s*,\s*'""'\s*\)\}"`;/u.test(
+      runner,
+    )
+  ) {
+    fail(
+      `${CREDIT_PROVISIONER_BOOTSTRAP_RUNNER_PATH} must expose the exact RFC 4180 flyctl StringSlice field`,
+    );
+  }
   const accountMutation = runner.indexOf(
     "await rootSession.execute(sql.createStatement",
   );
@@ -5498,6 +5507,15 @@ function validateCreditMigrationPrincipalRepair(rootDir) {
     path.join(rootDir, CREDIT_MIGRATION_PRINCIPAL_REPAIR_RUNNER_PATH),
     "utf8",
   );
+  if (
+    !runner.includes("export function buildRootFlyctlEnvironment") ||
+    !runner.includes('["PATH", "HOME", "FLY_API_TOKEN"]') ||
+    occurrenceCount(runner, "env: buildRootFlyctlEnvironment(),") !== 2
+  ) {
+    fail(
+      `${CREDIT_MIGRATION_PRINCIPAL_REPAIR_RUNNER_PATH} must pass the existing HOME and explicit repair token through the shared root Fly child allowlist`,
+    );
+  }
   for (const [required, message] of [
     [
       "classifyCreditMigrationHistory",
@@ -5516,7 +5534,7 @@ function validateCreditMigrationPrincipalRepair(rootDir) {
       "must keep root access inside the exact reviewed database Machine",
     ],
     [
-      '["PATH", "FLY_API_TOKEN", "TMPDIR", "NO_COLOR"]',
+      '["TMPDIR", "NO_COLOR"]',
       "must pass only the minimal Fly child environment to the root session",
     ],
     [
@@ -8081,10 +8099,27 @@ export function validateProductionRepository(rootDir = process.cwd()) {
       "never from hardcoded counts",
       "must derive recovery scale only from validated interrupted data",
     ],
+    [
+      "ROOT_MYSQL_REMOTE_COMMAND_FLYCTL_CSV",
+      "must import the reviewed repair-command CSV field",
+    ],
+    [
+      '--expiry 4h --command "$root_mysql_command_csv" --json',
+      "must pass only the reviewed repair-command CSV field to flyctl",
+    ],
+    [
+      "parses\n`--command` as an RFC 4180 CSV field",
+      "must explain the pinned flyctl StringSlice transport encoding",
+    ],
   ]) {
     if (!productionRunbook.includes(needle)) {
       fail(`Production deployment runbook ${message}`);
     }
+  }
+  if (productionRunbook.includes('--command "$root_mysql_command"')) {
+    fail(
+      "Production deployment runbook must not pass the raw root command to flyctl StringSlice parsing",
+    );
   }
   if (
     productionRunbook.includes("IMAGE_GEN_DATABASE_RECOVERY_INSPECTION_URL") ||

@@ -36,6 +36,35 @@ function fail() {
   throw new Error("credit migration principal repair rejected");
 }
 
+export function buildRootFlyctlEnvironment(environment = process.env) {
+  if (
+    !environment ||
+    typeof environment !== "object" ||
+    Array.isArray(environment)
+  ) {
+    fail();
+  }
+  const required = ["PATH", "HOME", "FLY_API_TOKEN"];
+  if (
+    required.some(
+      (name) =>
+        typeof environment[name] !== "string" ||
+        environment[name].trim().length === 0,
+    )
+  ) {
+    fail();
+  }
+  const names = [
+    ...required,
+    ...["TMPDIR", "NO_COLOR"].filter(
+      (name) => typeof environment[name] === "string",
+    ),
+  ];
+  return Object.freeze(
+    Object.fromEntries(names.map((name) => [name, environment[name]])),
+  );
+}
+
 export function parseCliArguments(argv) {
   if (!Array.isArray(argv) || argv.length !== 6) fail();
   const appIndex = argv.indexOf("--database-app");
@@ -162,11 +191,7 @@ export async function executeRepair(
         app,
         machineId,
         signal,
-        env: Object.fromEntries(
-          ["PATH", "FLY_API_TOKEN", "TMPDIR", "NO_COLOR"]
-            .filter((name) => typeof process.env[name] === "string")
-            .map((name) => [name, process.env[name]]),
-        ),
+        env: buildRootFlyctlEnvironment(),
       }),
     readPhase = readExactCreditMigrationPhase,
     readState = readCurrentState,
@@ -286,11 +311,7 @@ export async function executeSuperCleanup(
         app,
         machineId,
         signal,
-        env: Object.fromEntries(
-          ["PATH", "FLY_API_TOKEN", "TMPDIR", "NO_COLOR"]
-            .filter((name) => typeof process.env[name] === "string")
-            .map((name) => [name, process.env[name]]),
-        ),
+        env: buildRootFlyctlEnvironment(),
       }),
     readPhase = readExactCreditMigrationPhase,
     readState = readCurrentState,

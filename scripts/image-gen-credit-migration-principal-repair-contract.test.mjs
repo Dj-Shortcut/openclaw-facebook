@@ -1,3 +1,7 @@
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -16,6 +20,7 @@ import {
   revokeTemporaryCreditMigrationSuper,
 } from "./image-gen-credit-migration-principal-repair-contract.mjs";
 import {
+  buildRootFlyctlEnvironment,
   classifyCreditMigrationHistory,
   executeRepair,
   executeSuperCleanup,
@@ -178,6 +183,116 @@ function postDdlPrepareHarness(phase, rootOptions = {}) {
 }
 
 describe("credit migration principal repair contract", () => {
+  it("forwards the existing HOME and token to Fly without ambient secrets", () => {
+    const environment = buildRootFlyctlEnvironment({
+      PATH: "/opt/fly/bin:/usr/bin",
+      HOME: "/home/runner",
+      FLY_API_TOKEN: "synthetic-repair-token",
+      FLY_ACCESS_TOKEN: "unreviewed-fallback-token",
+      TMPDIR: "/runner/temp",
+      NO_COLOR: "1",
+      DATABASE_MIGRATION_URL: "mysql://private",
+      GH_TOKEN: "github-private",
+      UNRELATED_SECRET: "private",
+    });
+
+    expect(environment).toEqual({
+      PATH: "/opt/fly/bin:/usr/bin",
+      HOME: "/home/runner",
+      FLY_API_TOKEN: "synthetic-repair-token",
+      TMPDIR: "/runner/temp",
+      NO_COLOR: "1",
+    });
+    expect(Object.isFrozen(environment)).toBe(true);
+  });
+
+  it.each(["PATH", "HOME", "FLY_API_TOKEN"])(
+    "fails closed without required Fly child environment %s",
+    (missing) => {
+      const environment = {
+        PATH: "/opt/fly/bin:/usr/bin",
+        HOME: "/home/runner",
+        FLY_API_TOKEN: "synthetic-repair-token",
+      };
+      delete environment[missing];
+
+      expect(() => buildRootFlyctlEnvironment(environment)).toThrow(
+        "credit migration principal repair rejected",
+      );
+    },
+  );
+
+  it("opens the fake Fly child with HOME and no ambient credentials", async () => {
+    const directory = mkdtempSync(path.join(os.tmpdir(), "leaderbot-fake-fly-"));
+    const executable = path.join(directory, "flyctl");
+    writeFileSync(
+      executable,
+      `#!${process.execPath}
+if (!process.env.HOME || !process.env.FLY_API_TOKEN || process.env.FLY_ACCESS_TOKEN || process.env.GH_TOKEN || process.env.UNRELATED_SECRET) process.exit(64);
+let buffer = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", chunk => {
+  buffer += chunk;
+  let newline;
+  while ((newline = buffer.indexOf("\\n")) >= 0) {
+    const line = buffer.slice(0, newline).replace(/\\r$/, "");
+    buffer = buffer.slice(newline + 1);
+    if (line.startsWith("SELECT '__lbcp_") && line.endsWith("';")) process.stdout.write(line.slice(8, -2) + "\\n");
+    else if (line.startsWith("SELECT ")) process.stdout.write("1\\n");
+  }
+});
+`,
+      { mode: 0o700 },
+    );
+    chmodSync(executable, 0o700);
+    const names = [
+      "PATH",
+      "HOME",
+      "FLY_API_TOKEN",
+      "FLY_ACCESS_TOKEN",
+      "GH_TOKEN",
+      "UNRELATED_SECRET",
+    ];
+    const previous = Object.fromEntries(
+      names.map((name) => [name, process.env[name]]),
+    );
+    Object.assign(process.env, {
+      PATH: directory,
+      HOME: "/home/runner",
+      FLY_API_TOKEN: "synthetic-repair-token",
+      FLY_ACCESS_TOKEN: "unreviewed-fallback-token",
+      GH_TOKEN: "github-private",
+      UNRELATED_SECRET: "private",
+    });
+    const connection = { end: vi.fn(async () => undefined) };
+    try {
+      await expect(
+        executeSuperCleanup(
+          {
+            app: "leaderbot-portal-mysql",
+            machineId: "080d3ddb5099e8",
+            operation: "revoke-super",
+          },
+          {
+            migrationUrl:
+              "mysql://credit_migrator:secret@127.0.0.1:13306/leaderbot",
+            mysql: { createConnection: vi.fn(async () => connection) },
+            readPhase: vi.fn(async () => "0016_expand"),
+            readState: vi.fn(async () => migrationState()),
+            signal: new AbortController().signal,
+          },
+        ),
+      ).resolves.toBe("already_revoked");
+      expect(connection.end).toHaveBeenCalledOnce();
+    } finally {
+      for (const name of names) {
+        if (previous[name] === undefined) delete process.env[name];
+        else process.env[name] = previous[name];
+      }
+      rmSync(directory, { force: true, recursive: true });
+    }
+  });
+
   it("accepts only the exact private migration account shape", () => {
     expect(parseCreditMigrationAccount("credit_migrator@%")).toEqual(ACCOUNT);
     expect(() => parseCreditMigrationAccount("root@%")).toThrow();
@@ -1284,6 +1399,37 @@ describe("credit migration principal repair CLI", () => {
     );
     expect(output).toHaveBeenLastCalledWith(
       `${CREDIT_MIGRATION_PRINCIPAL_FAILURE_MARKER}\n`,
+    );
+    output.mockRestore();
+  });
+
+  it("fails closed with a fixed marker when the Fly child has no HOME", async () => {
+    const output = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+    await expect(
+      runCli(
+        [
+          "--database-app",
+          "leaderbot-portal-mysql",
+          "--database-machine-id",
+          "080d3ddb5099e8",
+          "--operation",
+          "prepare",
+        ],
+        {
+          execute: vi.fn(async () =>
+            buildRootFlyctlEnvironment({
+              PATH: "/opt/fly/bin:/usr/bin",
+              FLY_API_TOKEN: "synthetic-repair-token",
+            }),
+          ),
+        },
+      ),
+    ).resolves.toBe(CREDIT_MIGRATION_PRINCIPAL_FAILURE_MARKER);
+    expect(output).toHaveBeenCalledExactlyOnceWith(
+      `${CREDIT_MIGRATION_PRINCIPAL_FAILURE_MARKER}\n`,
+    );
+    expect(JSON.stringify(output.mock.calls)).not.toContain(
+      "synthetic-repair-token",
     );
     output.mockRestore();
   });

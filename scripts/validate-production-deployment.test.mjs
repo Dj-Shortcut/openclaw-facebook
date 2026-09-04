@@ -1985,6 +1985,20 @@ describe("production deployment contract", () => {
     );
   });
 
+  it("requires the reviewed flyctl CSV field for repair-token creation", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      "docs/operations/production-deployments.md",
+      '--expiry 4h --command "$root_mysql_command_csv" --json',
+      '--expiry 4h --command "$root_mysql_command" --json',
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must pass only the reviewed repair-command CSV field to flyctl",
+    );
+  });
+
   it("rejects a broad automatic-recovery database inspection principal", () => {
     const root = createRepositoryFixture();
     replaceFixtureText(
@@ -3568,6 +3582,20 @@ describe("production deployment contract", () => {
     );
   });
 
+  it("requires the exact quoted flyctl StringSlice field", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      "scripts/provision-image-gen-credit-provisioner.mjs",
+      `\`"\${ROOT_MYSQL_REMOTE_COMMAND.replaceAll('"', '""')}"\``,
+      `ROOT_MYSQL_REMOTE_COMMAND.replaceAll('"', '""')`,
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must expose the exact RFC 4180 flyctl StringSlice field",
+    );
+  });
+
   it("requires protected-secret observation under the database lock", () => {
     const root = createRepositoryFixture();
     replaceFixtureText(
@@ -3968,6 +3996,20 @@ describe("production deployment contract", () => {
 
     expect(() => validateProductionRepository(root)).toThrow(
       "must verify the live tunnel and surface only fixed migration-repair outcomes",
+    );
+  });
+
+  it("requires HOME in both root Fly child allowlists", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      "scripts/repair-image-gen-credit-migration-principal.mjs",
+      '["PATH", "HOME", "FLY_API_TOKEN"]',
+      '["PATH", "FLY_API_TOKEN"]',
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must pass the existing HOME and explicit repair token through the shared root Fly child allowlist",
     );
   });
 

@@ -137,17 +137,17 @@ gh run view "$run_id" --repo Dj-Shortcut/openclaw-facebook \
   --json databaseId,attempt,event,headBranch,status,workflowName,url
 test "$(gh secret list --repo Dj-Shortcut/openclaw-facebook --env production \
   --json name --jq '[.[] | select(.name == "FLY_DATABASE_REPAIR_EXEC_TOKEN")] | length')" = 0
-root_mysql_command="$(node --input-type=module -e \
-  'import {ROOT_MYSQL_REMOTE_COMMAND} from "./scripts/provision-image-gen-credit-provisioner.mjs"; process.stdout.write(ROOT_MYSQL_REMOTE_COMMAND)')"
+root_mysql_command_csv="$(node --input-type=module -e \
+  'import {ROOT_MYSQL_REMOTE_COMMAND_FLYCTL_CSV} from "./scripts/provision-image-gen-credit-provisioner.mjs"; process.stdout.write(ROOT_MYSQL_REMOTE_COMMAND_FLYCTL_CSV)')"
 flyctl tokens list --app leaderbot-portal-mysql --scope app | \
   REPAIR_RUN_ID="$run_id" node --input-type=module -e \
   'import {parseFlyTokenInventory} from "./scripts/retire-image-gen-repair-exec-token.mjs"; let s=""; for await (const c of process.stdin) s+=c; if (parseFlyTokenInventory(s).some(t=>t.name===`leaderbot-pr486-repair-${process.env.REPAIR_RUN_ID}`)) process.exit(1)'
 repair_token_json="$(flyctl tokens create machine-exec \
   --app leaderbot-portal-mysql --name "leaderbot-pr486-repair-$run_id" \
-  --expiry 4h --command "$root_mysql_command" --json)"
+  --expiry 4h --command "$root_mysql_command_csv" --json)"
 repair_token="$(printf '%s' "$repair_token_json" | node --input-type=module -e \
   'try { let s=""; for await (const c of process.stdin) s+=c; const v=JSON.parse(s).token; if(typeof v!=="string" || !v.trim()) process.exit(1); process.stdout.write(v); } catch { process.exit(1); }')"
-unset repair_token_json root_mysql_command
+unset repair_token_json root_mysql_command_csv
 printf '%s' "$repair_token" | gh secret set FLY_DATABASE_REPAIR_EXEC_TOKEN \
   --repo Dj-Shortcut/openclaw-facebook --env production
 unset repair_token
@@ -162,11 +162,14 @@ test -n "$secret_updated_at"
 ```
 
 Record only `run_id`, `run_attempt`, `token_id`, and `secret_updated_at` in the
-operator evidence. Never record the token value. The command is imported from
-the reviewed root helper verbatim: do not substitute `--command-prefix`, omit
-`--command`, use a deploy/migration token, or extend the four-hour expiry. Fly's
-token inventory exposes ID/name/expiry/revocation metadata, not command
-caveats; the exact creation command above establishes the command restriction.
+operator evidence. Never record the token value. Fly CLI `0.4.94` parses
+`--command` as an RFC 4180 CSV field. The imported fixed encoding decodes to the
+reviewed root-helper command verbatim before Fly applies its exact command
+caveat; never pass the raw `ROOT_MYSQL_REMOTE_COMMAND` constant to this flag.
+Do not substitute `--command-prefix`, omit `--command`, use a deploy/migration
+token, or extend the four-hour expiry. Fly's token inventory exposes
+ID/name/expiry/revocation metadata, not command caveats; the exact creation
+command above establishes the command restriction.
 Only after successful installation and metadata capture may the operator
 approve the protected job. If installation fails or the token expires, do not
 approve the job or treat expiry as proof that temporary MySQL grants vanished.
