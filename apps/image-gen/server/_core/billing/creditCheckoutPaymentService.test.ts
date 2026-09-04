@@ -42,6 +42,7 @@ const config: MollieConfig = Object.freeze({
   liveBillingEnabled: false,
 });
 
+/** Historical v1 fixture: proves existing intents remain payable/recoverable. */
 function session(
   patch: Partial<CreditCheckoutPaymentSession["record"]> = {}
 ): CreditCheckoutPaymentSession {
@@ -49,6 +50,8 @@ function session(
     intentId: INTENT_ID,
     offer: {
       mode: "test",
+      offerId: "premium_images_8_medium_v1",
+      offerVersion: 1,
       amount: "4.99",
       currency: "EUR",
       creditCount: 8,
@@ -89,6 +92,28 @@ function session(
       urlExposedAt: null,
       paidAt: null,
       ...patch,
+    },
+  };
+}
+
+function currentV2Session(): CreditCheckoutPaymentSession {
+  const historical = session();
+  return {
+    ...historical,
+    offer: {
+      ...historical.offer,
+      offerId: "premium_images_9_medium_v2",
+      offerVersion: 2,
+      amount: "5.00",
+      creditCount: 9,
+      refundPolicyVersion: 2,
+    },
+    record: {
+      ...historical.record,
+      planCode: "premium_images_9_medium_v2",
+      expectedAmount: "5.00",
+      creditCount: 9,
+      mollieDescription: "Leaderbot - 9 premium beeldcredits",
     },
   };
 }
@@ -237,6 +262,31 @@ describe("confirmCreditCheckoutPayment", () => {
         outcome: { kind: "known_succeeded", paymentId: PAYMENT_ID },
       })
     );
+  });
+
+  it("creates every new v2 checkout with the exact server-owned €5/9 offer", async () => {
+    const test = harness({
+      providerResult: payment({
+        amount: { currency: "EUR", value: "5.00" },
+        description: "Leaderbot - 9 premium beeldcredits",
+      }),
+    });
+
+    await expect(
+      confirmCreditCheckoutPayment(currentV2Session(), test.dependencies)
+    ).resolves.toEqual({
+      checkoutUrl: "https://www.mollie.com/checkout/select-method/x",
+    });
+
+    expect(test.createCreditPayment).toHaveBeenCalledWith({
+      amount: { currency: "EUR", value: "5.00" },
+      description: "Leaderbot - 9 premium beeldcredits",
+      billingIntentId: INTENT_ID,
+      metadataHash: "c".repeat(64),
+      redirectUrl: "https://app.leaderbot.live/credits/checkout/return",
+      webhookUrl: "https://app.leaderbot.live/api/webhooks/mollie/payments",
+      idempotencyKey: `credit-payment:${INTENT_ID}`,
+    });
   });
 
   it.each(["before", "after"] as const)(

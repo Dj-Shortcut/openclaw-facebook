@@ -134,6 +134,13 @@
       "when": 1787886000000,
       "tag": "0018_credit_checkout_reservation",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "5",
+      "when": 1788048000000,
+      "tag": "0019_credit_offer_v2",
+      "breakpoints": true
     }
   ]
 }

@@ -1,8 +1,10 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import {
   CREDIT_CHECKOUT_BILLING_POLICY_PATH,
   creditBillingPolicyCopy,
+  creditCheckoutErrorCopy,
   creditCheckoutModeDisclosure,
   creditCheckoutRefundPolicyDisclosure,
   parseCreditCheckoutOffer,
@@ -10,24 +12,45 @@ import {
 
 const exactOffer = Object.freeze({
   mode: "test",
-  amount: "4.99",
+  offerId: "premium_images_9_medium_v2",
+  offerVersion: 2,
+  amount: "5.00",
   currency: "EUR",
-  creditCount: 8,
+  creditCount: 9,
   imageQuality: "medium",
   expires: false,
   automaticRenewal: false,
   refundPolicyId: "premium_image_credit_refund",
-  refundPolicyVersion: 1,
+  refundPolicyVersion: 2,
 });
 
 describe("credit checkout UI contract", () => {
+  it("binds the error view to an uncertainty alert without encouraging another payment", () => {
+    expect(creditCheckoutErrorCopy).toEqual({
+      title: "We kunnen je betaalstatus niet bevestigen",
+      body: "Heb je al een betaling gestart of bevestigd, betaal dan niet opnieuw. Controleer de betaalstatus later.",
+    });
+    const source = readFileSync(
+      new URL("../client/src/pages/CreditCheckout.tsx", import.meta.url),
+      "utf8"
+    );
+    const errorView = source.match(
+      /\{state.kind === "error" \? \(([\s\S]*?)\) : null\}/
+    )?.[1];
+    expect(errorView).toBeDefined();
+    expect(errorView).toContain('<div role="alert">');
+    expect(errorView).toContain("{creditCheckoutErrorCopy.title}");
+    expect(errorView).toContain("{creditCheckoutErrorCopy.body}");
+    expect(errorView).not.toMatch(/niets aangerekend|nieuwe\s+link/i);
+  });
+
   it("shows the exact versioned refund consequences before confirmation", () => {
     expect(parseCreditCheckoutOffer(exactOffer)).toBe(exactOffer);
     expect(creditCheckoutRefundPolicyDisclosure(exactOffer)).toContain(
-      "Terugbetalingsbeleid versie 1"
+      "Terugbetalingsbeleid versie 2"
     );
     expect(creditCheckoutRefundPolicyDisclosure(exactOffer)).toContain(
-      "8 gekochte credits verwijderd"
+      "9 gekochte credits verwijderd"
     );
     expect(creditCheckoutRefundPolicyDisclosure(exactOffer)).toContain(
       "gereserveerd of gebruikt"
@@ -44,10 +67,10 @@ describe("credit checkout UI contract", () => {
     );
     expect(
       creditCheckoutModeDisclosure({ ...exactOffer, mode: "live" })
-    ).toContain("echte betaling van € 4,99");
+    ).toContain("echte betaling van € 5,00");
   });
 
-  it("publishes the bounded Dutch refund and consumer-rights policy", () => {
+  it("publishes a version-neutral Dutch refund and consumer-rights policy", () => {
     const policy = [
       creditBillingPolicyCopy.title,
       creditBillingPolicyCopy.intro,
@@ -57,11 +80,12 @@ describe("credit checkout UI contract", () => {
       ]),
     ].join("\n");
 
-    expect(policy).toContain("€ 4,99");
-    expect(policy).toContain("acht beeldcredits in medium kwaliteit");
+    expect(policy).toContain("exacte eenmalige prijs");
+    expect(policy).toContain("aantal beeldcredits");
+    expect(policy).toContain("medium kwaliteit");
     expect(policy).toContain("Mollie Test Mode");
     expect(policy).toContain("schrijft geen echt geld af");
-    expect(policy).toContain("verwijderen we de acht");
+    expect(policy).toContain("met die betaling gekochte credits");
     expect(policy).toContain("terugboeking (chargeback)");
     expect(policy).toContain("handmatige controle");
     expect(policy).toContain("dubbel of technisch fout");
@@ -72,11 +96,42 @@ describe("credit checkout UI contract", () => {
     expect(policy).toContain("geen abonnement");
     expect(policy).not.toContain("automatische incasso");
     expect(policy).not.toContain("14 dagen");
+    expect(policy).not.toContain("€ 5,00");
+    expect(policy).not.toContain("negen inbegrepen credits");
+  });
+
+  it("keeps an exact historical v1 return session readable", () => {
+    const historical = {
+      ...exactOffer,
+      offerId: "premium_images_8_medium_v1",
+      offerVersion: 1,
+      amount: "4.99",
+      creditCount: 8,
+      refundPolicyVersion: 1,
+    } as const;
+    expect(parseCreditCheckoutOffer(historical)).toBe(historical);
+    expect(
+      creditCheckoutModeDisclosure({ ...historical, mode: "live" })
+    ).toContain("echte betaling van € 4,99");
+    expect(creditCheckoutRefundPolicyDisclosure(historical)).toContain(
+      "Terugbetalingsbeleid versie 1"
+    );
+    expect(creditCheckoutRefundPolicyDisclosure(historical)).toContain(
+      "8 gekochte credits"
+    );
+    expect(CREDIT_CHECKOUT_BILLING_POLICY_PATH).toBe("/billing-policy");
+    const versionNeutralPolicy = [
+      creditBillingPolicyCopy.intro,
+      ...creditBillingPolicyCopy.sections.map(section => section.body),
+    ].join("\n");
+    expect(versionNeutralPolicy).toContain("bundelversie");
+    expect(versionNeutralPolicy).not.toContain("€ 5,00");
+    expect(versionNeutralPolicy).not.toContain("negen inbegrepen credits");
   });
 
   it.each([
     { ...exactOffer, refundPolicyId: "other_policy" },
-    { ...exactOffer, refundPolicyVersion: 2 },
+    { ...exactOffer, refundPolicyVersion: 1 },
     Object.fromEntries(
       Object.entries(exactOffer).filter(([key]) => key !== "refundPolicyId")
     ),

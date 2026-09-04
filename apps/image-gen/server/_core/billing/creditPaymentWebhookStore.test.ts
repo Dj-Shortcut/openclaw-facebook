@@ -10,7 +10,13 @@ vi.mock("../../db", () => ({
 }));
 
 import type { MolliePayment } from "./mollieClient";
-import { PREMIUM_IMAGE_CREDIT_OFFER_ID } from "./creditCatalog";
+import {
+  getCreditOffer,
+  LEGACY_PREMIUM_IMAGE_CREDIT_OFFER_ID,
+  LEGACY_PREMIUM_IMAGE_CREDIT_OFFER_VERSION,
+  PREMIUM_IMAGE_CREDIT_OFFER_ID,
+  PREMIUM_IMAGE_CREDIT_OFFER_VERSION,
+} from "./creditCatalog";
 import {
   classifyCreditPaymentFinancialAdjustmentState,
   classifyCreditPaymentAdjustment,
@@ -24,6 +30,14 @@ import {
 } from "./creditPaymentWebhookStore";
 
 const ADJUSTMENT_HASH = "e".repeat(64);
+const legacyOffer = getCreditOffer(
+  LEGACY_PREMIUM_IMAGE_CREDIT_OFFER_ID,
+  LEGACY_PREMIUM_IMAGE_CREDIT_OFFER_VERSION
+)!;
+const currentOffer = getCreditOffer(
+  PREMIUM_IMAGE_CREDIT_OFFER_ID,
+  PREMIUM_IMAGE_CREDIT_OFFER_VERSION
+)!;
 
 const basePayment = {
   resource: "payment",
@@ -286,6 +300,7 @@ describe("credit payment adjustment classification", () => {
   it("accepts a distinct completed refund set totaling the full €4.99", () => {
     expect(
       classifyCreditPaymentAdjustment({
+        offer: legacyOffer,
         snapshotHash: ADJUSTMENT_HASH,
         refunds: [
           {
@@ -310,6 +325,32 @@ describe("credit payment adjustment classification", () => {
       actionable: true,
       kind: "refund_debit",
       providerEffectIds: ["re_credit_a", "re_credit_b"],
+    });
+  });
+
+  it("uses the stored v2 €5.00 offer amount for a full refund", () => {
+    expect(
+      classifyCreditPaymentAdjustment({
+        offer: currentOffer,
+        snapshotHash: ADJUSTMENT_HASH,
+        refunds: [
+          {
+            id: "re_credit_v2_a",
+            status: "refunded",
+            amount: { currency: "EUR", value: "2.00" },
+          },
+          {
+            id: "re_credit_v2_b",
+            status: "refunded",
+            amount: { currency: "EUR", value: "3.00" },
+          },
+        ],
+        chargebacks: [],
+      })
+    ).toEqual({
+      actionable: true,
+      kind: "refund_debit",
+      providerEffectIds: ["re_credit_v2_a", "re_credit_v2_b"],
     });
   });
 
@@ -356,6 +397,7 @@ describe("credit payment adjustment classification", () => {
   ])("contains $label refund evidence", ({ refunds, chargebacks }) => {
     expect(
       classifyCreditPaymentAdjustment({
+        offer: legacyOffer,
         snapshotHash: ADJUSTMENT_HASH,
         refunds,
         chargebacks,
@@ -366,6 +408,7 @@ describe("credit payment adjustment classification", () => {
   it("accepts exactly one active full chargeback", () => {
     expect(
       classifyCreditPaymentAdjustment({
+        offer: legacyOffer,
         snapshotHash: ADJUSTMENT_HASH,
         refunds: [],
         chargebacks: [
@@ -386,6 +429,7 @@ describe("credit payment adjustment classification", () => {
   it("accepts a reversed chargeback only after its exact debit", () => {
     const providerEffectId = "chb_credit_1";
     const reversed = {
+      offer: legacyOffer,
       snapshotHash: ADJUSTMENT_HASH,
       refunds: [],
       chargebacks: [
@@ -435,6 +479,7 @@ describe("credit payment adjustment classification", () => {
     };
     expect(
       classifyCreditPaymentAdjustment({
+        offer: legacyOffer,
         snapshotHash: ADJUSTMENT_HASH,
         refunds: [completedRefund],
         chargebacks: [],
@@ -464,6 +509,7 @@ describe("credit payment adjustment classification", () => {
   it("keeps a changed completed refund effect in review", () => {
     expect(
       classifyCreditPaymentAdjustment({
+        offer: legacyOffer,
         snapshotHash: ADJUSTMENT_HASH,
         refunds: [
           {
@@ -513,6 +559,7 @@ describe("credit payment adjustment classification", () => {
     } as const;
     expect(
       classifyCreditPaymentAdjustment({
+        offer: legacyOffer,
         snapshotHash: ADJUSTMENT_HASH,
         refunds: [],
         chargebacks: [
@@ -541,6 +588,7 @@ describe("credit payment adjustment classification", () => {
     } as const;
     expect(
       classifyCreditPaymentAdjustment({
+        offer: legacyOffer,
         snapshotHash: ADJUSTMENT_HASH,
         refunds: [],
         chargebacks: [
@@ -565,6 +613,13 @@ describe("credit payment adjustment classification", () => {
 });
 
 describe("credit payment browser completion evidence", () => {
+  const legacyIntentSnapshot = {
+    planCode: LEGACY_PREMIUM_IMAGE_CREDIT_OFFER_ID,
+    expectedAmount: "4.99",
+    currency: "EUR",
+    creditCount: 8,
+    mollieDescription: "Leaderbot - 8 premium beeldcredits",
+  };
   const completion = {
     workspaceId: 11,
     mode: "test" as const,
@@ -582,16 +637,23 @@ describe("credit payment browser completion evidence", () => {
   });
 
   it("requires one exact joined payment-effect and purchase-grant row", async () => {
-    const limit = vi.fn(async () => [{ entryId: "grant-entry" }]);
-    const where = vi.fn(() => ({ limit }));
-    const innerJoin = vi.fn(() => ({ where }));
-    const from = vi.fn(() => ({ innerJoin }));
-    const select = vi.fn(() => ({ from }));
+    const intentLimit = vi.fn(async () => [legacyIntentSnapshot]);
+    const intentWhere = vi.fn(() => ({ limit: intentLimit }));
+    const grantLimit = vi.fn(async () => [{ entryId: "grant-entry" }]);
+    const grantWhere = vi.fn(() => ({ limit: grantLimit }));
+    const innerJoin = vi.fn(() => ({ where: grantWhere }));
+    const select = vi
+      .fn()
+      .mockReturnValueOnce({
+        from: vi.fn(() => ({ where: intentWhere })),
+      })
+      .mockReturnValueOnce({ from: vi.fn(() => ({ innerJoin })) });
     getDatabaseOrThrowMock.mockResolvedValue({ select });
 
     await expect(isCreditPaymentGrantComplete(completion)).resolves.toBe(true);
-    expect(limit).toHaveBeenCalledWith(2);
-    const predicate = where.mock.calls[0]?.[0];
+    expect(intentLimit).toHaveBeenCalledWith(2);
+    expect(grantLimit).toHaveBeenCalledWith(2);
+    const predicate = grantWhere.mock.calls[0]?.[0];
     const compiled = new MySqlDialect().sqlToQuery(predicate);
     expect(compiled.sql).toContain("`payment_ledger`.`workspace_id` = ?");
     expect(compiled.sql).toContain(
@@ -615,7 +677,7 @@ describe("credit payment browser completion evidence", () => {
         completion.walletId,
         completion.metadataHash,
         "purchase_grant",
-        PREMIUM_IMAGE_CREDIT_OFFER_ID,
+        LEGACY_PREMIUM_IMAGE_CREDIT_OFFER_ID,
         "4.99",
         "EUR",
         8,
@@ -625,17 +687,45 @@ describe("credit payment browser completion evidence", () => {
 
   it("fails closed when the joined evidence is absent or duplicated", async () => {
     for (const rows of [[], [{ entryId: "one" }, { entryId: "two" }]]) {
-      const limit = vi.fn(async () => rows);
-      const where = vi.fn(() => ({ limit }));
-      const innerJoin = vi.fn(() => ({ where }));
-      const from = vi.fn(() => ({ innerJoin }));
+      const select = vi
+        .fn()
+        .mockReturnValueOnce({
+          from: vi.fn(() => ({
+            where: vi.fn(() => ({
+              limit: vi.fn(async () => [legacyIntentSnapshot]),
+            })),
+          })),
+        })
+        .mockReturnValueOnce({
+          from: vi.fn(() => ({
+            innerJoin: vi.fn(() => ({
+              where: vi.fn(() => ({ limit: vi.fn(async () => rows) })),
+            })),
+          })),
+        });
       getDatabaseOrThrowMock.mockResolvedValueOnce({
-        select: vi.fn(() => ({ from })),
+        select,
       });
       await expect(isCreditPaymentGrantComplete(completion)).resolves.toBe(
         false
       );
     }
+  });
+
+  it("fails closed when the stored offer tuple mixes v1 and v2", async () => {
+    const select = vi.fn(() => ({
+      from: vi.fn(() => ({
+        where: vi.fn(() => ({
+          limit: vi.fn(async () => [
+            { ...legacyIntentSnapshot, expectedAmount: "5.00" },
+          ]),
+        })),
+      })),
+    }));
+    getDatabaseOrThrowMock.mockResolvedValue({ select });
+
+    await expect(isCreditPaymentGrantComplete(completion)).resolves.toBe(false);
+    expect(select).toHaveBeenCalledOnce();
   });
 });
 

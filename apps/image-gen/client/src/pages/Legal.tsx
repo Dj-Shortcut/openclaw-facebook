@@ -37,7 +37,7 @@ const legalCopy: Record<LegalPageKind, LegalPageCopy> = {
       },
       {
         heading: "Payments",
-        body: "A premium-credit purchase starts only from a signed checkout link opened from Messenger. Mollie processes one €4.99 payment after the customer reviews and confirms checkout. The purchase adds eight medium-quality image credits that do not expire. It does not create a subscription, automatic renewal, direct-debit mandate, automatic top-up or overage charge.",
+        body: "A premium-credit purchase starts only from a signed checkout link opened from Messenger. Mollie processes one €5.00 payment after the customer reviews and confirms checkout. The purchase adds nine medium-quality image or editing credits that do not expire. It does not create a subscription, automatic renewal, direct-debit mandate, automatic top-up or overage charge.",
       },
     ],
   },
@@ -48,7 +48,7 @@ const legalCopy: Record<LegalPageKind, LegalPageCopy> = {
     sections: [
       {
         heading: "Premium image credits",
-        body: "Leaderbot premium credits cost €4.99 as a single payment for eight medium-quality image generations. Credits do not expire. One credit is consumed only after the image provider accepts that generation successfully; a failure before the provider call does not consume a credit. Purchase starts only from a signed checkout link opened from Messenger and requires explicit confirmation before continuing to Mollie.",
+        body: "Leaderbot premium credits cost €5.00 as a single payment for nine medium-quality image generations or edits. Credits do not expire. One credit is consumed only for one successfully delivered usable premium generation or edit; a failed or undelivered result does not consume a credit. Purchase starts only from a signed checkout link opened from Messenger and requires explicit confirmation before continuing to Mollie.",
       },
       {
         heading: "No subscription or overage",

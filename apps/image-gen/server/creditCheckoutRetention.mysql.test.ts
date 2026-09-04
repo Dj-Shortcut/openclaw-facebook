@@ -72,7 +72,7 @@ suite("expired pristine credit checkout retention", () => {
       capabilityHash: hash(`capability:${suffix}`),
     };
     await client.query(
-      "CALL `credit_reserve_checkout_intent`(?,?,?,'test',?,1,1,?,?,2,'premium_images_8_medium_v1','4.99',8,'Leaderbot - 8 premium beeldcredits',?,?,?, ?,TIMESTAMPADD(MINUTE,10,CURRENT_TIMESTAMP))",
+      "CALL `credit_reserve_checkout_intent`(?,?,?,'test',?,1,1,?,?,2,'premium_images_9_medium_v2','5.00',9,'Leaderbot - 9 premium beeldcredits',?,?,?, ?,TIMESTAMPADD(MINUTE,10,CURRENT_TIMESTAMP))",
       [
         value.intentId,
         value.walletId,
@@ -108,7 +108,7 @@ suite("expired pristine credit checkout retention", () => {
       capabilityHash: hash(`capability:${suffix}`),
     };
     await connection.query(
-      "CALL `credit_reserve_checkout_intent`(?,?,?,'test',?,1,1,?,?,2,'premium_images_8_medium_v1','4.99',8,'Leaderbot - 8 premium beeldcredits',?,?,?, ?,TIMESTAMPADD(MINUTE,10,CURRENT_TIMESTAMP))",
+      "CALL `credit_reserve_checkout_intent`(?,?,?,'test',?,1,1,?,?,2,'premium_images_9_medium_v2','5.00',9,'Leaderbot - 9 premium beeldcredits',?,?,?, ?,TIMESTAMPADD(MINUTE,10,CURRENT_TIMESTAMP))",
       [
         next.intentId,
         next.walletId,

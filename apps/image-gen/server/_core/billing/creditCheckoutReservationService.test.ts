@@ -54,11 +54,11 @@ function dependencies(
 }
 
 describe("Messenger credit checkout reservation", () => {
-  it("creates one exact, provider-silent €4.99 credit checkout action", async () => {
+  it("creates one exact, provider-silent €5.00 credit checkout action", async () => {
     const deps = dependencies();
     const result = await reserveMessengerCreditCheckout(INPUT, deps);
 
-    expect(result.label).toBe("8 premiumcredits - € 4,99");
+    expect(result.label).toBe("9 premiumcredits - € 5,00");
     expect(result.actionUrl).toMatch(
       /^https:\/\/app[.]leaderbot[.]live\/credits\/checkout\/[0-9a-f-]{36}#[A-Za-z0-9_-]{43}$/
     );
@@ -81,10 +81,10 @@ describe("Messenger credit checkout reservation", () => {
         privacyEpoch: 5,
         userKey: INPUT.userKey,
         authorizationEpoch: 7,
-        offerSnapshotCode: "premium_images_8_medium_v1",
-        expectedAmount: "4.99",
-        creditCount: 8,
-        description: "Leaderbot - 8 premium beeldcredits",
+        offerSnapshotCode: "premium_images_9_medium_v2",
+        expectedAmount: "5.00",
+        creditCount: 9,
+        description: "Leaderbot - 9 premium beeldcredits",
         capabilityHash: expect.stringMatching(/^[0-9a-f]{64}$/),
         capabilityExpiresAt: new Date("2026-08-28T12:10:00.000Z"),
       })

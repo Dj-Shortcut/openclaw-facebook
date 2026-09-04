@@ -17,7 +17,7 @@ const databaseUrl = new URL(process.env.DATABASE_URL ?? "");
 const databaseName = databaseUrl.pathname.slice(1);
 if (
   !["127.0.0.1", "localhost"].includes(databaseUrl.hostname) ||
-  !/^leaderbot_artifact_(?:base|expand|credit_wallet|credit_checkout)$/.test(
+  !/^leaderbot_artifact_(?:base|expand|credit_wallet|credit_checkout|credit_offer)$/.test(
     databaseName
   )
 ) {
@@ -33,10 +33,11 @@ if (
     "0016_expand",
     "0017_credit_wallet_expand",
     "0018_credit_checkout_reservation",
+    "0019_credit_offer_v2",
   ]).has(phase)
 ) {
   throw new Error(
-    "artifact schema fixture phase must be 0015_base, 0016_expand, 0017_credit_wallet_expand, or 0018_credit_checkout_reservation"
+    "artifact schema fixture phase must be 0015_base, 0016_expand, 0017_credit_wallet_expand, 0018_credit_checkout_reservation, or 0019_credit_offer_v2"
   );
 }
 
@@ -52,7 +53,9 @@ const phaseMigrations =
       ? migrationPlan.through0016
       : phase === "0017_credit_wallet_expand"
         ? migrationPlan.through0017
-        : migrationPlan.through0018;
+        : phase === "0018_credit_checkout_reservation"
+          ? migrationPlan.through0018
+          : migrationPlan.through0019;
 const connection = await mysql.createConnection(databaseUrl.toString());
 
 try {

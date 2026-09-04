@@ -1,12 +1,12 @@
 {
   "version": 1,
-  "journalSha256": "bdfcaee304bd0bfefe5c61bb351cbdef111c9f22cb30fb5411f0503f631f9a65",
+  "journalSha256": "883df98138f7c91c815fd714f92ee43ded49c140b13d9f1ced8dab43f2dcba6c",
   "baseSchemaSnapshot": "meta/0014_snapshot.json",
   "baseSchemaSnapshotSha256": "e0102aad23d607b4b359d1a11458d56c63533d73f056f332076ba952b7468b35",
-  "schemaSnapshot": "meta/0018_snapshot.json",
-  "schemaSnapshotSha256": "7b1440a644d2e30a1beb79a21dbeadf5d97252857226a919e78c0c0a20a17a64",
+  "schemaSnapshot": "meta/0019_snapshot.json",
+  "schemaSnapshotSha256": "3caa5ac07cf7630963a0ec3afc7c9770bafb020602a6c4b64d1c6ed73f0a439d",
   "productionSchemaContract": "production-schema-contract.json",
-  "productionSchemaContractSha256": "6bdef47572ba32b6e6dca20ac421037f80cb690bd68bd195c817b8864989ff8e",
+  "productionSchemaContractSha256": "5c3866f98ceb30e5df5a6942691491f8fd1fc92857dc0d0328e68d9af4acbeba",
   "migrations": [
     {
       "idx": 0,
@@ -121,6 +121,12 @@
       "when": 1787886000000,
       "tag": "0018_credit_checkout_reservation",
       "sha256": "039eb055fbcf83b9988ae5c428ebe1d884c525b1608913e9e597f7938ee6c7c2"
+    },
+    {
+      "idx": 19,
+      "when": 1788048000000,
+      "tag": "0019_credit_offer_v2",
+      "sha256": "d95dc374c44071e0275ac469c5e72b60cd28f319fcf277f09162fbcbc33b8799"
     }
   ]
 }

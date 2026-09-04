@@ -96,6 +96,8 @@ describe("credit checkout browser sessions", () => {
     );
     expect(result.offer).toEqual({
       mode: "test",
+      offerId: "premium_images_8_medium_v1",
+      offerVersion: 1,
       amount: "4.99",
       currency: "EUR",
       creditCount: 8,
@@ -121,6 +123,29 @@ describe("credit checkout browser sessions", () => {
         sessionNonceHash: expect.stringMatching(/^[0-9a-f]{64}$/),
       })
     );
+  });
+
+  it("returns the current v2 offer from an exact stored v2 intent", async () => {
+    const deps = dependencies(
+      record({
+        planCode: "premium_images_9_medium_v2",
+        expectedAmount: "5.00",
+        creditCount: 9,
+        mollieDescription: "Leaderbot - 9 premium beeldcredits",
+      })
+    );
+    const result = await claimCreditCheckoutBrowserSession(
+      { intentId: INTENT_ID, capability: CAPABILITY.toUrlFragment() },
+      deps
+    );
+
+    expect(result.offer).toMatchObject({
+      offerId: "premium_images_9_medium_v2",
+      offerVersion: 2,
+      amount: "5.00",
+      creditCount: 9,
+      refundPolicyVersion: 2,
+    });
   });
 
   it.each([

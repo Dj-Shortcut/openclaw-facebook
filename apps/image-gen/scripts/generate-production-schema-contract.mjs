@@ -74,6 +74,7 @@ try {
   const migration0016 = migrationFile(migrationPlan.expand0016);
   const migration0017 = migrationFile(migrationPlan.creditWallet0017);
   const migration0018 = migrationFile(migrationPlan.creditCheckout0018);
+  const migration0019 = migrationFile(migrationPlan.creditOffer0019);
 
   const connection = await mysql.createConnection(databaseUrl());
   let base0014;
@@ -92,6 +93,9 @@ try {
   let partial0018CreditCheckout;
   let final0018;
   let history0018;
+  let partial0019CreditOffer;
+  let final0019;
+  let history0019;
   try {
     await assertProductionMigrationRuntime(connection, "credit-bootstrap");
     await createHistoryTable(connection);
@@ -222,6 +226,43 @@ try {
     final0018 = await captureProductionSchemaState(connection);
     await insertMigrationHistory(connection, migration0018);
     history0018 = await captureMigrationHistory(connection);
+
+    const statements0019 = await readFileStatements(migration0019);
+    if (
+      statements0019.length !== 4 ||
+      statements0019[0] !==
+        "DROP PROCEDURE IF EXISTS `credit_reserve_checkout_intent`;" ||
+      !/^CREATE PROCEDURE `credit_reserve_checkout_intent`(?:\s|\()/i.test(
+        statements0019[1]
+      ) ||
+      statements0019[2] !==
+        "DROP PROCEDURE IF EXISTS `credit_freeze_wallet_for_review`;" ||
+      !/^CREATE PROCEDURE `credit_freeze_wallet_for_review`(?:\s|\()/i.test(
+        statements0019[3]
+      )
+    ) {
+      throw new Error("0019 statement contract is unsupported");
+    }
+    const states0019 = [];
+    const boundaries0019 = [];
+    for (let boundary = 0; boundary <= statements0019.length; boundary += 1) {
+      const schema = await captureProductionSchemaState(connection);
+      const schemaSha256 = sha256(canonicalJson(schema));
+      states0019.push({ resumeFrom: boundary, schemaSha256, schema });
+      boundaries0019.push({ boundary, resumeFrom: boundary, schemaSha256 });
+      if (boundary < statements0019.length) {
+        await connection.query(statements0019[boundary]);
+      }
+    }
+    partial0019CreditOffer = {
+      statementCount: statements0019.length,
+      statementSha256: statements0019.map(statement => sha256(statement)),
+      boundaries: boundaries0019,
+      states: states0019,
+    };
+    final0019 = await captureProductionSchemaState(connection);
+    await insertMigrationHistory(connection, migration0019);
+    history0019 = await captureMigrationHistory(connection);
   } finally {
     await connection.end();
   }
@@ -282,6 +323,9 @@ try {
     partial0018CreditCheckout,
     final0018,
     history0018,
+    partial0019CreditOffer,
+    final0019,
+    history0019,
   };
   await fs.writeFile(outputPath, `${canonicalPrettyJson(contract)}\n`, "utf8");
   process.stdout.write(

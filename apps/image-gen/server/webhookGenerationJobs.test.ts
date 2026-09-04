@@ -3103,7 +3103,7 @@ describe("messenger generation job safety", () => {
       intentId: "22222222-2222-8222-8222-222222222222",
       actionUrl:
         "https://app.leaderbot.live/credits/checkout/22222222-2222-8222-8222-222222222222#capability",
-      label: "8 premiumcredits - € 4,99",
+      label: "9 premiumcredits - € 5,00",
       toJSON: () => ({
         intentId: "22222222-2222-8222-8222-222222222222",
         capability: "redacted" as const,
@@ -3134,11 +3134,11 @@ describe("messenger generation job safety", () => {
     expect(reserveMessengerProviderAttemptFenceMock).not.toHaveBeenCalled();
     expect(sendButtonTemplateMock).toHaveBeenCalledWith(
       job.psid,
-      expect.stringContaining("Koop eenmalig 8 premiumcredits voor € 4,99"),
+      expect.stringContaining("Koop eenmalig 9 premiumcredits voor € 5,00"),
       [
         {
           type: "web_url",
-          title: "Koop 8 credits",
+          title: "Koop 9 credits",
           url: expect.stringMatching(
             /^https:\/\/app[.]leaderbot[.]live\/credits\/checkout\//
           ),
@@ -3151,7 +3151,7 @@ describe("messenger generation job safety", () => {
       "Geen abonnement of automatische verlenging"
     );
     expect(sendButtonTemplateMock.mock.calls[0]?.[1]).toContain(
-      "vervalt nooit"
+      "Credits vervallen niet"
     );
     await expect(
       runWithMessengerRequestContext(
@@ -3167,6 +3167,54 @@ describe("messenger generation job safety", () => {
         }
       )
     ).resolves.toBe("AWAITING_EDIT_PROMPT");
+  });
+
+  it("keeps a cross-version retry silent after the original checkout CTA was sent", async () => {
+    process.env.MESSENGER_FREE_DAILY_LIMIT = "0";
+    reservePaidCreditGenerationMock.mockResolvedValueOnce({
+      available: false,
+      reason: "empty",
+    });
+    reserveMessengerCreditCheckoutMock.mockResolvedValueOnce({
+      intentId: "22222222-2222-8222-8222-222222222223",
+      actionUrl:
+        "https://app.leaderbot.live/credits/checkout/22222222-2222-8222-8222-222222222223#v2-capability",
+      label: "9 premiumcredits - € 5,00",
+      toJSON: () => ({
+        intentId: "22222222-2222-8222-8222-222222222223",
+        capability: "redacted" as const,
+      }),
+    });
+    const job = paidCreditGenerationJob("cross-version-checkout-cta");
+    const priorTransportAttempts = new Set([
+      `${job.reqId}\0premium-credit-checkout-offer-v1`,
+    ]);
+    const graphSend = vi.fn(async () => ({ sent: true as const }));
+    const observedAttemptKeys: string[] = [];
+    const runner = createTestRunner({
+      sendLoggedActions: async (
+        _recipient,
+        _text,
+        _actions,
+        requestId,
+        deliveryControl
+      ) => {
+        const attemptKey = deliveryControl?.providerAttemptKey ?? "";
+        observedAttemptKeys.push(attemptKey);
+        const transportKey = `${requestId}\0${attemptKey}`;
+        if (priorTransportAttempts.has(transportKey)) {
+          return { sent: true as const };
+        }
+        priorTransportAttempts.add(transportKey);
+        return await graphSend();
+      },
+    });
+
+    await runner.processMessengerGenerationJob(job);
+
+    expect(reserveMessengerCreditCheckoutMock).toHaveBeenCalledOnce();
+    expect(observedAttemptKeys).toEqual(["premium-credit-checkout-offer-v1"]);
+    expect(graphSend).not.toHaveBeenCalled();
   });
 
   it("falls back to the free-quota notice when a pending refund blocks checkout", async () => {

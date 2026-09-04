@@ -21,6 +21,10 @@ import {
 } from "./_core/billing/creditCheckoutReservationService";
 import { deriveCreditCheckoutTestUserKeyHash } from "./_core/billing/creditCheckoutConfig";
 import {
+  commitDeliveredPaidCreditGeneration,
+  reservePaidCreditGeneration,
+} from "./_core/billing/creditGenerationAdmission";
+import {
   claimCreditCheckoutBrowserSession,
   readCreditCheckoutBrowserSession,
 } from "./_core/billing/creditCheckoutSession";
@@ -271,14 +275,14 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
       capability,
     });
     expect(claimed.offer).toMatchObject({
-      amount: "4.99",
+      amount: "5.00",
       currency: "EUR",
-      creditCount: 8,
+      creditCount: 9,
       imageQuality: "medium",
       expires: false,
       automaticRenewal: false,
       refundPolicyId: "premium_image_credit_refund",
-      refundPolicyVersion: 1,
+      refundPolicyVersion: 2,
     });
     await expect(
       claimCreditCheckoutBrowserSession({
@@ -307,8 +311,8 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
       authorizationEpoch: record.authorizationEpoch,
       sessionNonceHash: record.checkoutCapabilitySessionNonceHash!,
       metadataHash: record.creditMetadataHash!,
-      offerId: "premium_images_8_medium_v1",
-      offerVersion: 1,
+      offerId: "premium_images_9_medium_v2",
+      offerVersion: 2,
     } satisfies CreditCheckoutProviderScope;
     return {
       owner,
@@ -327,8 +331,8 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
       id: fixture.paymentId,
       mode: "test",
       status,
-      amount: { currency: "EUR", value: "4.99" },
-      description: "Leaderbot - 8 premium beeldcredits",
+      amount: { currency: "EUR", value: "5.00" },
+      description: "Leaderbot - 9 premium beeldcredits",
       method: status === "paid" ? "bancontact" : null,
       sequenceType: "oneoff",
       customerId: null,
@@ -504,13 +508,13 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
       kind === "refund"
         ? {
             ...paid,
-            amountRefunded: { currency: "EUR", value: "4.99" },
+            amountRefunded: { currency: "EUR", value: "5.00" },
             _embedded: {
               refunds: [
                 {
                   id: providerEffectId,
                   status: "refunded",
-                  amount: { currency: "EUR", value: "4.99" },
+                  amount: { currency: "EUR", value: "5.00" },
                   createdAt: "2026-08-28T13:00:00.000Z",
                 },
               ],
@@ -524,7 +528,7 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
               chargebacks: [
                 {
                   id: providerEffectId,
-                  amount: { currency: "EUR", value: "4.99" },
+                  amount: { currency: "EUR", value: "5.00" },
                   createdAt: "2026-08-28T13:00:00.000Z",
                 },
               ],
@@ -627,7 +631,7 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
         retries: Number(state.retries),
       }).toEqual({
         walletStatus: kind === "refund" ? "active" : "frozen",
-        balance: 8,
+        balance: 9,
         reserved: 0,
         reservations: 0,
         retries: 1,
@@ -643,7 +647,7 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
     }
   }
 
-  it("runs on an exact fresh 0000-to-0018 MySQL 8.4.11 bootstrap", async () => {
+  it("runs on an exact fresh 0000-to-0019 MySQL 8.4.11 bootstrap", async () => {
     const [[server]] = await connection.query<RowDataPacket[]>(
       "SELECT VERSION() AS version,@@innodb_page_size AS pageSize,@@GLOBAL.binlog_format AS binlogFormat"
     );
@@ -654,9 +658,9 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
     const [[history]] = await connection.query<RowDataPacket[]>(
       "SELECT COUNT(*) AS count,MIN(`created_at`) AS firstMigration,MAX(`created_at`) AS lastMigration FROM `__drizzle_migrations`"
     );
-    expect(Number(history.count)).toBe(19);
+    expect(Number(history.count)).toBe(20);
     expect(Number(history.firstMigration)).toBe(1771791967247);
-    expect(Number(history.lastMigration)).toBe(1787886000000);
+    expect(Number(history.lastMigration)).toBe(1788048000000);
 
     const [routines] = await connection.query<RowDataPacket[]>(
       "SELECT `ROUTINE_NAME` AS name FROM information_schema.ROUTINES WHERE `ROUTINE_SCHEMA`=DATABASE() AND `ROUTINE_TYPE`='PROCEDURE' AND `ROUTINE_NAME` LIKE 'credit\\_%' ESCAPE '\\\\' ORDER BY `ROUTINE_NAME`"
@@ -666,7 +670,108 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
     );
   });
 
-  it("consumes one browser capability and grants exactly eight customerless one-off credits once", async () => {
+  it("replays an exact historical v1 checkout but rejects a fresh v1 purchase", async () => {
+    const owner = await createOwnerScope();
+    await addPrivacySubject(owner, USER_B);
+    const intentId = randomUUID();
+    const walletId = randomUUID();
+    const financialSubjectRef = sha256(`historical-v1-financial:${intentId}`);
+    const metadataHash = sha256(`historical-v1-metadata:${intentId}`);
+    const checkoutScopeKey = `credit-checkout:v1:${sha256(`historical-v1-scope:${intentId}`)}`;
+    const capabilityHash = sha256(`historical-v1-capability:${intentId}`);
+    const idempotencyKey = `credit-payment:${intentId}`;
+
+    await connection.query(
+      "INSERT INTO `credit_wallets` " +
+        "(`wallet_id`,`workspace_id`,`mode`,`channel_connection_id`,`binding_epoch`," +
+        "`privacy_epoch`,`current_user_key_hash`,`financial_subject_ref`,`status`," +
+        "`credit_balance`,`reserved_credits`,`balance_version`) " +
+        "VALUES (?,?,'test',?,1,1,?,?,'active',0,0,1)",
+      [
+        walletId,
+        owner.workspaceId,
+        owner.channelConnectionId,
+        owner.userKey,
+        financialSubjectRef,
+      ]
+    );
+    await connection.query(
+      "INSERT INTO `billing_intents` " +
+        "(`intent_id`,`workspace_id`,`mode`,`plan_code`,`kind`,`expected_amount`," +
+        "`currency`,`interval`,`entitlements`,`mollie_description`,`status`," +
+        "`idempotency_key`,`checkout_scope_key`,`messenger_sender_user_key`," +
+        "`messenger_channel_connection_id`,`messenger_binding_epoch`,`messenger_privacy_epoch`," +
+        "`credit_wallet_id`,`credit_financial_subject_ref`,`credit_count`," +
+        "`credit_metadata_hash`,`checkout_capability_hash`,`checkout_capability_expires_at`," +
+        "`billing_profile_version`,`authorization_epoch`) " +
+        "VALUES (?,?,'test','premium_images_8_medium_v1','credit_purchase',4.99," +
+        "'EUR','oneoff',JSON_OBJECT(),'Leaderbot - 8 premium beeldcredits','created'," +
+        "?,?,?,?,1,1,?,?,8,?,?,TIMESTAMPADD(MINUTE,10,CURRENT_TIMESTAMP),0,2)",
+      [
+        intentId,
+        owner.workspaceId,
+        idempotencyKey,
+        checkoutScopeKey,
+        owner.userKey,
+        owner.channelConnectionId,
+        walletId,
+        financialSubjectRef,
+        metadataHash,
+        capabilityHash,
+      ]
+    );
+
+    const [replayedRows] = await connection.query(
+      "CALL `credit_reserve_checkout_intent`(?,?,?,'test',?,1,1,?,?,2,'premium_images_8_medium_v1','4.99',8,'Leaderbot - 8 premium beeldcredits',?,?,?,?,TIMESTAMPADD(MINUTE,10,CURRENT_TIMESTAMP))",
+      [
+        intentId,
+        walletId,
+        owner.workspaceId,
+        owner.channelConnectionId,
+        owner.userKey,
+        financialSubjectRef,
+        metadataHash,
+        idempotencyKey,
+        checkoutScopeKey,
+        capabilityHash,
+      ]
+    );
+    expect((replayedRows as RowDataPacket[][])[0]?.[0]).toMatchObject({
+      result: "already_applied",
+      intent_id: intentId,
+      wallet_id: walletId,
+    });
+
+    const rejectedIntentId = randomUUID();
+    const rejectedWalletId = randomUUID();
+    await expect(
+      connection.query(
+        "CALL `credit_reserve_checkout_intent`(?,?,?,'test',?,1,1,?,?,2,'premium_images_8_medium_v1','4.99',8,'Leaderbot - 8 premium beeldcredits',?,?,?,?,TIMESTAMPADD(MINUTE,10,CURRENT_TIMESTAMP))",
+        [
+          rejectedIntentId,
+          rejectedWalletId,
+          owner.workspaceId,
+          owner.channelConnectionId,
+          USER_B,
+          sha256(`fresh-v1-financial:${rejectedIntentId}`),
+          sha256(`fresh-v1-metadata:${rejectedIntentId}`),
+          `credit-payment:${rejectedIntentId}`,
+          `credit-checkout:v1:${sha256(`fresh-v1-scope:${rejectedIntentId}`)}`,
+          sha256(`fresh-v1-capability:${rejectedIntentId}`),
+        ]
+      )
+    ).rejects.toThrow("legacy credit offer is replay-only");
+    const [[freshV1SideEffects]] = await connection.query<RowDataPacket[]>(
+      "SELECT (SELECT COUNT(*) FROM `billing_intents` WHERE BINARY `intent_id`=BINARY ?) AS intents,(SELECT COUNT(*) FROM `credit_wallets` WHERE BINARY `wallet_id`=BINARY ?) AS wallets",
+      [rejectedIntentId, rejectedWalletId]
+    );
+    expect({
+      intents: Number(freshV1SideEffects.intents),
+      wallets: Number(freshV1SideEffects.wallets),
+    }).toEqual({ intents: 0, wallets: 0 });
+  });
+
+  it("consumes one browser capability and grants exactly nine customerless one-off credits once", async () => {
     const owner = await createOwnerScope();
     await addPrivacySubject(owner, USER_B);
     const fixture = await reserveAndConsumeCheckout(owner, "happy");
@@ -699,8 +804,8 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
       createClient: () => ({
         createCreditPayment: async input => {
           expect(input).toMatchObject({
-            amount: { currency: "EUR", value: "4.99" },
-            description: "Leaderbot - 8 premium beeldcredits",
+            amount: { currency: "EUR", value: "5.00" },
+            description: "Leaderbot - 9 premium beeldcredits",
             billingIntentId: fixture.providerScope.intentId,
             metadataHash: fixture.providerScope.metadataHash,
             idempotencyKey: `credit-payment:${fixture.providerScope.intentId}`,
@@ -786,7 +891,7 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
 
     expect(await walletState(fixture.providerScope.walletId)).toMatchObject({
       status: "active",
-      balance: 8,
+      balance: 9,
       reserved: 0,
     });
     const [[effects]] = await connection.query<RowDataPacket[]>(
@@ -833,6 +938,134 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
       wallets: Number(otherUser.wallets),
       balance: Number(otherUser.balance),
     }).toEqual({ wallets: 0, balance: 0 });
+  });
+
+  it("grants EUR 5.00 for nine v2 credits and commits one premium result from 9 to 8 exactly once", async () => {
+    const owner = await createOwnerScope();
+    const fixture = await reserveAndConsumeCheckout(owner, "v2-one-premium");
+    expect(fixture.session.offer).toMatchObject({
+      offerId: "premium_images_9_medium_v2",
+      offerVersion: 2,
+      amount: "5.00",
+      creditCount: 9,
+      expires: false,
+    });
+    await openCheckout(fixture);
+    const paid = molliePayment(fixture, "paid");
+    await expect(
+      applyCreditPaymentWebhookSnapshot({
+        webhookPaymentId: fixture.paymentId,
+        expectedMode: "test",
+        payment: paid,
+      })
+    ).resolves.toBe("processed");
+    expect(await walletState(fixture.providerScope.walletId)).toMatchObject({
+      status: "active",
+      balance: 9,
+      reserved: 0,
+    });
+
+    // Use the production admission/SQL path without a fake wallet or commit.
+    // Only provider/payment and successful-delivery evidence are simulated;
+    // this is a local database-chain test, not a Meta delivery assertion.
+    const generation = {
+      workspaceId: owner.workspaceId,
+      channelConnectionId: owner.channelConnectionId,
+      bindingEpoch: owner.bindingEpoch,
+      privacyEpoch: owner.privacyEpoch,
+      userKey: owner.userKey,
+      requestId: `mysql-v2-one-premium-${randomUUID()}`,
+    };
+    const decision = await reservePaidCreditGeneration(generation);
+    expect(decision.available).toBe(true);
+    if (!decision.available) {
+      throw new Error("paid premium reservation was not acquired");
+    }
+    const reservation = decision.reservation;
+    expect(reservation).toMatchObject({ mode: "test", imageQuality: "medium" });
+    expect(await walletState(fixture.providerScope.walletId)).toMatchObject({
+      balance: 9,
+      reserved: 1,
+    });
+    await expect(reservePaidCreditGeneration(generation)).resolves.toEqual({
+      available: false,
+      reason: "request_in_progress",
+    });
+    await reservation.markTransportStarted();
+    await reservation.markProviderAccepted();
+    expect(await walletState(fixture.providerScope.walletId)).toMatchObject({
+      balance: 9,
+      reserved: 1,
+    });
+
+    await reservation.commitDeliveredOutput();
+    expect(await walletState(fixture.providerScope.walletId)).toMatchObject({
+      status: "active",
+      balance: 8,
+      reserved: 0,
+    });
+    // Reconstruct the persisted proof instead of replaying only a memoized
+    // handle: both calls execute the real terminal procedure against MySQL.
+    await commitDeliveredPaidCreditGeneration({ ...generation, mode: "test" });
+    await commitDeliveredPaidCreditGeneration({ ...generation, mode: "test" });
+    await expect(reservePaidCreditGeneration(generation)).resolves.toEqual({
+      available: false,
+      reason: "request_closed",
+    });
+    await expect(
+      applyCreditPaymentWebhookSnapshot({
+        webhookPaymentId: fixture.paymentId,
+        expectedMode: "test",
+        payment: paid,
+      })
+    ).resolves.toBe("duplicate");
+    expect(await walletState(fixture.providerScope.walletId)).toMatchObject({
+      status: "active",
+      balance: 8,
+      reserved: 0,
+    });
+
+    const [ledger] = await connection.query<RowDataPacket[]>(
+      "SELECT `entry_kind` AS kind,`balance_delta` AS balanceDelta," +
+        "`reserved_delta` AS reservedDelta,`reservation_id` AS reservationId," +
+        "`offer_id` AS offerId,`payment_amount` AS paymentAmount," +
+        "`purchased_credit_count` AS purchasedCreditCount " +
+        "FROM `credit_ledger` WHERE `workspace_id`=? AND `mode`='test' " +
+        "AND BINARY `wallet_id`=BINARY ? ORDER BY `wallet_version_after`",
+      [owner.workspaceId, fixture.providerScope.walletId]
+    );
+    expect(
+      ledger.map(row => ({
+        kind: row.kind,
+        balanceDelta: Number(row.balanceDelta),
+        reservedDelta: Number(row.reservedDelta),
+        reservationId: row.reservationId,
+      }))
+    ).toEqual([
+      {
+        kind: "purchase_grant",
+        balanceDelta: 9,
+        reservedDelta: 0,
+        reservationId: null,
+      },
+      {
+        kind: "reservation_hold",
+        balanceDelta: 0,
+        reservedDelta: 1,
+        reservationId: reservation.reservationId,
+      },
+      {
+        kind: "generation_spend",
+        balanceDelta: -1,
+        reservedDelta: -1,
+        reservationId: reservation.reservationId,
+      },
+    ]);
+    expect(ledger[0]).toMatchObject({
+      offerId: "premium_images_9_medium_v2",
+      paymentAmount: "5.00",
+      purchasedCreditCount: 9,
+    });
   });
 
   it("keeps an early webhook customerless after finalize and recovers exposure without another POST", async () => {
@@ -1125,7 +1358,7 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
       intentStatus: "paid",
       ledgerStatus: "paid",
       paidEffectApplied: 1,
-      balance: 8,
+      balance: 9,
       grants: 1,
       grantedDeliveries: 1,
       preservedDeliveries: 1,
@@ -1148,7 +1381,7 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
     ).resolves.toBe("processed");
     expect(await walletState(fixture.providerScope.walletId)).toMatchObject({
       status: "active",
-      balance: 8,
+      balance: 9,
       reserved: 0,
     });
 
@@ -1160,7 +1393,7 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
           {
             id: `re_${randomUUID().replaceAll("-", "")}`,
             status: "failed",
-            amount: { currency: "EUR", value: "4.99" },
+            amount: { currency: "EUR", value: "5.00" },
           },
         ],
         chargebacks: [],
@@ -1182,7 +1415,7 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
           {
             id: `re_${randomUUID().replaceAll("-", "")}`,
             status: "pending",
-            amount: { currency: "EUR", value: "4.99" },
+            amount: { currency: "EUR", value: "5.00" },
           },
         ],
         chargebacks: [],
@@ -1230,7 +1463,7 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
       ),
     }).toEqual({
       walletStatus: "active",
-      balance: 8,
+      balance: 9,
       refundDebits: 0,
       manualReviews: 0,
       pendingRefundDeliveries: 1,
@@ -1240,7 +1473,7 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
     const secondRefundId = `re_${randomUUID().replaceAll("-", "")}`;
     const refundedPayment: MolliePayment = {
       ...paid,
-      amountRefunded: { currency: "EUR", value: "4.99" },
+      amountRefunded: { currency: "EUR", value: "5.00" },
       _embedded: {
         refunds: [
           {
@@ -1252,7 +1485,7 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
           {
             id: secondRefundId,
             status: "refunded",
-            amount: { currency: "EUR", value: "2.99" },
+            amount: { currency: "EUR", value: "3.00" },
             createdAt: "2026-08-28T10:00:01.000Z",
           },
         ],
@@ -1307,7 +1540,7 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
               refundDebits: 0,
               walletStatus: "active",
               refundAdjustmentEntryId: input.entryId,
-              balance: 8,
+              balance: 9,
             });
             observedPendingBeforeDebit = true;
 
@@ -1390,7 +1623,7 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
       walletStatus: "active",
       balance: 0,
       refundDebits: 1,
-      refundDelta: -8,
+      refundDelta: -9,
       exactEvidence: 1,
       completedDeliveries: 1,
       pendingDeliveries: 0,
@@ -1531,7 +1764,7 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
       completedDeliveries: Number(partialReview.completedDeliveries),
     }).toEqual({
       walletStatus: "frozen",
-      balance: 8,
+      balance: 9,
       refundDebits: 0,
       manualReviews: 1,
       completedDeliveries: 1,
@@ -1559,7 +1792,7 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
         chargebacks: [
           {
             id: chargebackId,
-            amount: { currency: "EUR", value: "4.99" },
+            amount: { currency: "EUR", value: "5.00" },
             createdAt: "2026-08-28T11:00:00.000Z",
           },
         ],
@@ -1643,7 +1876,7 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
       manualReviews: Number(state.manualReviews),
     }).toEqual({
       walletStatus: "frozen",
-      balance: 8,
+      balance: 9,
       debits: 1,
       restores: 1,
       manualReviews: 1,
@@ -1695,13 +1928,13 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
 
     const refunded: MolliePayment = {
       ...paid,
-      amountRefunded: { currency: "EUR", value: "4.99" },
+      amountRefunded: { currency: "EUR", value: "5.00" },
       _embedded: {
         refunds: [
           {
             id: `re_${randomUUID().replaceAll("-", "")}`,
             status: "refunded",
-            amount: { currency: "EUR", value: "4.99" },
+            amount: { currency: "EUR", value: "5.00" },
           },
         ],
         chargebacks: [],
@@ -1864,7 +2097,7 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
       .sort();
     expect(results).toEqual(["duplicate", "processed"]);
     expect(await walletState(fixture.providerScope.walletId)).toMatchObject({
-      balance: 8,
+      balance: 9,
       reserved: 0,
     });
     const [[counts]] = await connection.query<RowDataPacket[]>(
@@ -1923,7 +2156,7 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
       undefined
     );
     expect(await walletState(fixture.providerScope.walletId)).toMatchObject({
-      balance: 8,
+      balance: 9,
       reserved: 0,
     });
   });

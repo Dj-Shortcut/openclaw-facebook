@@ -44,6 +44,8 @@ import {
   assertTriggerGrantScope,
   canonicalRoutineTuple,
   canonicalTriggerTuple,
+  captureMigrationHistory,
+  captureProductionSchemaState,
   configureProductionSchemaSession,
   creditWalletRoutineNames,
   creditWalletTableNames,
@@ -105,6 +107,8 @@ const resume0016Databases = Array.from(
 const stagedRolloutDatabase = "leaderbot_production_migrator_staged_rollout";
 const creditBoundaryDatabase = "leaderbot_production_migrator_credit_boundary";
 const creditFreshDatabase = "leaderbot_production_migrator_credit_fresh";
+const creditOfferFreshDatabase =
+  "leaderbot_production_migrator_credit_offer_fresh";
 const creditPrivilegeDatabase =
   "leaderbot_production_migrator_credit_privilege";
 const bridgeArtifactDatabase = "leaderbot_production_migrator_bridge_artifact";
@@ -141,6 +145,7 @@ const databases = [
   stagedRolloutDatabase,
   creditBoundaryDatabase,
   creditFreshDatabase,
+  creditOfferFreshDatabase,
   creditPrivilegeDatabase,
   bridgeArtifactDatabase,
 ];
@@ -303,7 +308,7 @@ try {
       target: "contract",
     }),
     "retired contract target",
-    "migration target must be compatible, expand, or credit-wallet"
+    "migration target must be compatible, expand, credit-wallet, or credit-offer"
   );
   const migration0016ForVerify = await readMigrationStatements(
     migrationPlan.expand0016
@@ -520,6 +525,13 @@ try {
     migrationPlan,
     migration0018Statements,
   });
+  const migration0019Statements = await readMigrationStatements(
+    migrationPlan.creditOffer0019
+  );
+  await testEvery0019StatementBoundary({
+    migrationPlan,
+    migration0019Statements,
+  });
   await testBridgeArtifactDualPhaseVerification(migrationPlan);
   const freshCredit = await runProductionMigrationStage({
     databaseUrl: databaseUrl(creditFreshDatabase),
@@ -531,7 +543,7 @@ try {
   assert(
     freshCredit.appliedCount === migrationPlan.through0018.length &&
       freshCredit.schemaPhase === "0018_credit_checkout_reservation",
-    "fresh credit-wallet bootstrap reaches exact 0018"
+    "fresh credit-wallet bootstrap remains bounded to exact 0018"
   );
   await assertExactCreditWalletObjects(creditFreshDatabase);
   await testCreditWalletLeastPrivilegeProfiles(migrationPlan);
@@ -544,7 +556,30 @@ try {
   assert(
     creditNoop.appliedCount === migrationPlan.through0018.length &&
       creditNoop.schemaPhase === "0018_credit_checkout_reservation",
-    "complete 0018 is an exact no-op"
+    "complete 0018 credit-wallet state is an exact no-op"
+  );
+  const freshCreditOffer = await runProductionMigrationStage({
+    databaseUrl: databaseUrl(creditOfferFreshDatabase),
+    target: "credit-offer",
+    verifyOnly: false,
+    allowEmptyBootstrap: true,
+    privilegeProfile: "credit-bootstrap",
+  });
+  assert(
+    freshCreditOffer.appliedCount === migrationPlan.through0019.length &&
+      freshCreditOffer.schemaPhase === "0019_credit_offer_v2",
+    "fresh credit-offer bootstrap reaches exact 0019 without changing the 0018 bridge"
+  );
+  const creditOfferNoop = await runProductionMigrationStage({
+    databaseUrl: databaseUrl(creditOfferFreshDatabase),
+    target: "credit-offer",
+    verifyOnly: false,
+    privilegeProfile: "credit-bootstrap",
+  });
+  assert(
+    creditOfferNoop.appliedCount === migrationPlan.through0019.length &&
+      creditOfferNoop.schemaPhase === "0019_credit_offer_v2",
+    "complete 0019 credit-offer state is an exact no-op"
   );
 
   await withDatabase(databases[2], async connection => {
@@ -818,7 +853,7 @@ try {
   });
 
   process.stdout.write(
-    "Production migrator passed: singleton, exact 0000-0018 plan, fresh and 0017-to-0018 apply, every 0016/0017/0018 boundary resume, routine/trigger inventory, no-op, and drift refusal.\n"
+    "Production migrator passed: singleton, exact 0000-0019 plan, fresh and 0018-to-0019 apply, every 0016/0017/0018/0019 boundary resume, routine/trigger inventory, no-op, and drift refusal.\n"
   );
 } finally {
   await admin.query(`DROP USER IF EXISTS \`${creditMigrationUser}\`@'%'`);
@@ -932,6 +967,45 @@ async function testEvery0018StatementBoundary({
       resumed.appliedCount === migrationPlan.through0018.length &&
         resumed.schemaPhase === "0018_credit_checkout_reservation",
       `0018 resumes after statement boundary ${boundary}`
+    );
+  }
+  await assertExactCreditWalletObjects(creditBoundaryDatabase);
+}
+
+async function testEvery0019StatementBoundary({
+  migrationPlan,
+  migration0019Statements,
+}) {
+  assert(
+    migration0019Statements.length === 4,
+    "0019 exposes the exact four-statement migration contract"
+  );
+  for (
+    let boundary = 0;
+    boundary <= migration0019Statements.length;
+    boundary += 1
+  ) {
+    await admin.query(`DROP DATABASE IF EXISTS \`${creditBoundaryDatabase}\``);
+    await admin.query(
+      `CREATE DATABASE \`${creditBoundaryDatabase}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci`
+    );
+    await withDatabase(creditBoundaryDatabase, async connection => {
+      await applyMigrationPrefix(connection, migrationPlan.through0018);
+      await applyStatements(
+        connection,
+        migration0019Statements.slice(0, boundary)
+      );
+    });
+    const resumed = await runProductionMigrationStage({
+      databaseUrl: databaseUrl(creditBoundaryDatabase),
+      target: "credit-offer",
+      verifyOnly: false,
+      privilegeProfile: "credit-bootstrap",
+    });
+    assert(
+      resumed.appliedCount === migrationPlan.through0019.length &&
+        resumed.schemaPhase === "0019_credit_offer_v2",
+      `0019 resumes after statement boundary ${boundary}`
     );
   }
   await assertExactCreditWalletObjects(creditBoundaryDatabase);
@@ -1289,6 +1363,31 @@ async function testCreditWalletLeastPrivilegeProfiles(migrationPlan) {
   } finally {
     await restoredGrantVerification.end();
   }
+  const beforeCreditOfferRefusal = await withDatabaseResult(
+    creditPrivilegeDatabase,
+    captureSchemaFingerprint
+  );
+  await expectFailure(
+    runProductionMigrationStage({
+      ...productionMigrationOptionsForMode(
+        "apply-credit-offer",
+        "migration-bridge"
+      ),
+      databaseUrl: databaseUrlForUser(
+        creditPrivilegeDatabase,
+        creditMigrationUser
+      ),
+    }),
+    "credit-offer mode refuses the earlier 0016 phase",
+    "credit-offer transition requires exact 0018"
+  );
+  assert(
+    (await withDatabaseResult(
+      creditPrivilegeDatabase,
+      captureSchemaFingerprint
+    )) === beforeCreditOfferRefusal,
+    "credit-offer refusal leaves earlier schema and history unchanged"
+  );
   let bundledFailure;
   try {
     await execFileAsync(process.execPath, [bundledRunnerPath], {
@@ -1454,9 +1553,11 @@ async function testCreditWalletLeastPrivilegeProfiles(migrationPlan) {
     privilegeProfile: "credit-expand",
   });
   assert(
-    applied.appliedCount === migrationPlan.through0018.length,
-    "least-privilege credit migration resumes after 0017 helper creation and applies 0018"
+    applied.appliedCount === migrationPlan.through0018.length &&
+      applied.schemaPhase === "0018_credit_checkout_reservation",
+    "least-privilege credit-wallet migration resumes after 0017 helper creation and remains bounded to 0018"
   );
+  await testCreditOfferModeWithMigrationPrincipal(migrationPlan);
   if (requireMigrationSuper) {
     await admin.query(
       `REVOKE SUPER ON *.* FROM \`${creditMigrationUser}\`@'%'`
@@ -1476,7 +1577,7 @@ async function testCreditWalletLeastPrivilegeProfiles(migrationPlan) {
           postDdlGrantVerification,
           "credit-expand-pregrant"
         ),
-        "completed 0018 inspection still requires temporary SUPER when binary logging demands it",
+        "completed credit migration inspection still requires temporary SUPER when binary logging demands it",
         "lacks global SUPER"
       );
     }
@@ -1500,13 +1601,13 @@ async function testCreditWalletLeastPrivilegeProfiles(migrationPlan) {
   }
   const verified = await runProductionMigrationStage({
     databaseUrl: databaseUrlForUser(creditPrivilegeDatabase, creditRuntimeUser),
-    target: "credit-wallet",
+    target: "credit-offer",
     verifyOnly: true,
     privilegeProfile: "credit-runtime",
   });
   assert(
-    verified.appliedCount === migrationPlan.through0018.length,
-    "least-privilege runtime verifies exact 0018 schema"
+    verified.appliedCount === migrationPlan.through0019.length,
+    "least-privilege runtime verifies exact 0019 schema"
   );
   const runtimeConnection = await mysql.createConnection(
     databaseUrlForUser(creditPrivilegeDatabase, creditRuntimeUser)
@@ -1547,7 +1648,7 @@ async function testCreditWalletLeastPrivilegeProfiles(migrationPlan) {
     const walletId = "10000000-0000-4000-8000-000000000002";
     const financialSubjectRef = "b".repeat(64);
     const [procedureRows] = await runtimeConnection.query(
-      "CALL `credit_reserve_checkout_intent`(?, ?, ?, 'test', ?, 1, 1, ?, ?, 2, 'premium_images_8_medium_v1', '4.99', 8, 'Leaderbot - 8 premium beeldcredits', ?, ?, ?, ?, TIMESTAMPADD(MINUTE,10,CURRENT_TIMESTAMP))",
+      "CALL `credit_reserve_checkout_intent`(?, ?, ?, 'test', ?, 1, 1, ?, ?, 2, 'premium_images_9_medium_v2', '5.00', 9, 'Leaderbot - 9 premium beeldcredits', ?, ?, ?, ?, TIMESTAMPADD(MINUTE,10,CURRENT_TIMESTAMP))",
       [
         intentId,
         walletId,
@@ -1618,7 +1719,7 @@ async function testCreditWalletLeastPrivilegeProfiles(migrationPlan) {
         creditPrivilegeDatabase,
         creditRuntimeUser
       ),
-      target: "credit-wallet",
+      target: "credit-offer",
       verifyOnly: true,
       privilegeProfile: "credit-runtime",
     }),
@@ -1656,6 +1757,108 @@ async function withDatabaseResult(database, action) {
     result = await action(connection);
   });
   return result;
+}
+
+async function testCreditOfferModeWithMigrationPrincipal(migrationPlan) {
+  const { productionContract } = await loadAndVerifyMigrationManifest();
+  const options = productionMigrationOptionsForMode(
+    "apply-credit-offer",
+    "migration-bridge"
+  );
+  const migrationUrl = databaseUrlForUser(
+    creditPrivilegeDatabase,
+    creditMigrationUser
+  );
+  const offerStatements = await readMigrationStatements(
+    migrationPlan.creditOffer0019
+  );
+  const previousStatements = [
+    ...(await readMigrationStatements(migrationPlan.creditWallet0017)),
+    ...(await readMigrationStatements(migrationPlan.creditCheckout0018)),
+  ];
+  const previousRoutines = [
+    "credit_reserve_checkout_intent",
+    "credit_freeze_wallet_for_review",
+  ].map(name => {
+    const statements = previousStatements.filter(statement =>
+      statement.startsWith(`CREATE PROCEDURE \`${name}\`(`)
+    );
+    assert(statements.length === 1, `exact 0018 fixture routine ${name}`);
+    return { name, statement: statements[0] };
+  });
+  const { schemaCaptureOptions } = schemaCapturePlanForPrivilege(
+    productionContract,
+    "credit-expand"
+  );
+  const capture = async () => {
+    const connection = await mysql.createConnection(migrationUrl);
+    try {
+      await configureProductionSchemaSession(connection);
+      return JSON.stringify({
+        schema: await captureProductionSchemaState(
+          connection,
+          schemaCaptureOptions
+        ),
+        history: await captureMigrationHistory(connection),
+      });
+    } finally {
+      await connection.end();
+    }
+  };
+
+  for (let boundary = 0; boundary <= offerStatements.length; boundary += 1) {
+    const migrationConnection = await mysql.createConnection(migrationUrl);
+    try {
+      await configureProductionSchemaSession(migrationConnection);
+      if (boundary > 0) {
+        // Reset only this disposable fixture to canonical 0018. Recreate both
+        // routines as the same restricted principal, preserving definer and
+        // MySQL automatic routine-grant behavior at every interrupted prefix.
+        for (const { name, statement } of previousRoutines) {
+          await migrationConnection.query(`DROP PROCEDURE \`${name}\``);
+          await migrationConnection.query(statement);
+        }
+        await withDatabase(creditPrivilegeDatabase, async connection => {
+          await connection.query(
+            "DELETE FROM `__drizzle_migrations` WHERE `hash`=? AND `created_at`=?",
+            [
+              migrationPlan.creditOffer0019.sha256,
+              migrationPlan.creditOffer0019.when,
+            ]
+          );
+          await connection.query(
+            `ALTER TABLE \`__drizzle_migrations\` AUTO_INCREMENT=${migrationPlan.through0018.length + 1}`
+          );
+        });
+      }
+      await applyStatements(
+        migrationConnection,
+        offerStatements.slice(0, boundary)
+      );
+    } finally {
+      await migrationConnection.end();
+    }
+    const applied = await runProductionMigrationStage({
+      ...options,
+      databaseUrl: migrationUrl,
+    });
+    assert(
+      applied.appliedCount === migrationPlan.through0019.length &&
+        applied.schemaPhase === "0019_credit_offer_v2",
+      `explicit credit-offer mode resumes boundary ${boundary} with the same restricted principal`
+    );
+    const beforeNoop = await capture();
+    const noop = await runProductionMigrationStage({
+      ...options,
+      databaseUrl: migrationUrl,
+    });
+    assert(
+      noop.appliedCount === migrationPlan.through0019.length &&
+        noop.schemaPhase === "0019_credit_offer_v2" &&
+        (await capture()) === beforeNoop,
+      `exact 0019 no-op preserves routines, schema, and history after boundary ${boundary}`
+    );
+  }
 }
 
 async function captureSchemaFingerprint(connection) {
@@ -2074,12 +2277,20 @@ function testStagedRolloutContracts() {
     "credit checkout partial recovery is hidden outside its explicit inspection mode"
   );
   assert(
+    transitionInspectionPhase(
+      { kind: "resume-0019", nextStatement: 2 },
+      { inspectCreditWalletTransition: true }
+    ) === null,
+    "the existing max-0018 credit-wallet inspector cannot attest a partial 0019 transition"
+  );
+  assert(
     JSON.stringify(productionSchemaPhases) ===
       JSON.stringify([
         "0015_base",
         "0016_expand",
         "0017_credit_wallet_expand",
         "0018_credit_checkout_reservation",
+        "0019_credit_offer_v2",
       ]),
     "schema phase names are stable"
   );
@@ -2092,12 +2303,13 @@ function testStagedRolloutContracts() {
     exactPlan.expand0016.tag === "0016_static_epoch_scope_fks" &&
       exactPlan.creditWallet0017.tag === "0017_credit_wallet_expand" &&
       exactPlan.creditCheckout0018.tag === "0018_credit_checkout_reservation" &&
-      exactPlan.through0018.length === productionMigrationTags.length,
-    "exact named production migration plan terminates at 0018"
+      exactPlan.creditOffer0019.tag === "0019_credit_offer_v2" &&
+      exactPlan.through0019.length === productionMigrationTags.length,
+    "exact named production migration plan terminates at 0019"
   );
   for (const [label, tail] of [
-    ["unreviewed future tail", "0019_unreviewed_future_tail"],
-    ["later future tail", "0020_unreviewed_future_tail"],
+    ["unreviewed future tail", "0020_unreviewed_future_tail"],
+    ["later future tail", "0021_unreviewed_future_tail"],
   ]) {
     const planWithFutureTail = resolveProductionMigrationPlan([
       ...exactPlanRows,
@@ -2106,10 +2318,12 @@ function testStagedRolloutContracts() {
     assert(
       planWithFutureTail.all.length === productionMigrationTags.length &&
         planWithFutureTail.through0016.length ===
-          productionMigrationTags.length - 2 &&
+          productionMigrationTags.length - 3 &&
         planWithFutureTail.through0017.length ===
-          productionMigrationTags.length - 1 &&
+          productionMigrationTags.length - 2 &&
         planWithFutureTail.through0018.length ===
+          productionMigrationTags.length - 1 &&
+        planWithFutureTail.through0019.length ===
           productionMigrationTags.length &&
         !planWithFutureTail.all.some(migration => migration.tag === tail),
       `${label} cannot alter the selected or bootstrapped migration count`
@@ -2128,10 +2342,10 @@ function testStagedRolloutContracts() {
       ],
     ],
     [
-      "different migration interleaved at 0018",
+      "different migration interleaved at 0019",
       exactPlanRows.map((row, index) =>
         index === exactPlanRows.length - 1
-          ? { idx: index, tag: "0018_handoff_privacy_scope" }
+          ? { idx: index, tag: "0019_handoff_privacy_scope" }
           : row
       ),
     ],
@@ -2177,7 +2391,16 @@ function testStagedRolloutContracts() {
         target: "credit-wallet",
         privilegeProfile: "credit-runtime",
       }),
-    "credit-wallet runtime verification uses exact procedure rights"
+    "credit-wallet runtime verification remains bounded to exact 0018"
+  );
+  assert(
+    JSON.stringify(productionMigrationOptionsForMode("verify-credit-offer")) ===
+      JSON.stringify({
+        verifyOnly: true,
+        target: "credit-offer",
+        privilegeProfile: "credit-runtime",
+      }),
+    "credit-offer runtime verification is the separate exact 0019 target"
   );
   assert(
     JSON.stringify(
@@ -2267,7 +2490,19 @@ function testStagedRolloutContracts() {
         allowEmptyBootstrap: true,
         privilegeProfile: "credit-bootstrap",
       }),
-    "credit wallet empty bootstrap is bounded to the exact 0018 plan"
+    "credit wallet empty bootstrap remains bounded to the exact 0018 plan"
+  );
+  assert(
+    JSON.stringify(
+      productionMigrationOptionsForMode("apply-empty-credit-offer-bootstrap")
+    ) ===
+      JSON.stringify({
+        verifyOnly: false,
+        target: "credit-offer",
+        allowEmptyBootstrap: true,
+        privilegeProfile: "credit-bootstrap",
+      }),
+    "credit offer empty bootstrap is a test-only exact 0019 plan"
   );
   assert(
     JSON.stringify(
@@ -2300,15 +2535,22 @@ function testStagedRolloutContracts() {
     "stable 0016 bridge verification requires the legacy runtime principal"
   );
   assert(
-    bridgeArtifactPrivilegeProfileForState({ kind: "complete" }) ===
-      "credit-runtime",
-    "stable 0018 bridge verification requires the credit runtime principal"
+    bridgeArtifactPrivilegeProfileForState({ kind: "complete" }) === null,
+    "the max-0018 bridge refuses an exact 0019 schema"
+  );
+  assert(
+    bridgeArtifactPrivilegeProfileForState({
+      kind: "resume-0019",
+      nextStatement: 0,
+    }) === "credit-runtime",
+    "stable 0018 bridge verification remains available during the 0019 transition"
   );
   for (const state of [
     { kind: "resume-0016", phase: 0 },
     { kind: "resume-0017", nextStatement: 1 },
     { kind: "resume-0018", nextStatement: 0 },
     { kind: "resume-0018", nextStatement: 1 },
+    { kind: "resume-0019", nextStatement: 1 },
   ]) {
     assert(
       bridgeArtifactPrivilegeProfileForState(state) === null,
@@ -2321,10 +2563,10 @@ function testStagedRolloutContracts() {
     ) ===
       JSON.stringify({
         verifyOnly: true,
-        target: "credit-wallet",
+        target: "credit-offer",
         privilegeProfile: "credit-runtime",
       }),
-    "runtime artifact requires the exact final 0018 credit schema"
+    "runtime artifact requires the exact final 0019 credit schema"
   );
   assert(
     JSON.stringify(
@@ -2351,6 +2593,11 @@ function testStagedRolloutContracts() {
       productionMigrationOptionsForMode(
         "verify-credit-wallet-transition",
         "runtime"
+      ) === null &&
+      productionMigrationOptionsForMode("apply-credit-offer-v2") === null &&
+      productionMigrationOptionsForMode(
+        "apply-credit-offer-v2",
+        "migration-bridge"
       ) === null &&
       productionMigrationOptionsForMode("verify-artifact") === null &&
       productionMigrationOptionsForMode("verify-artifact", "unknown") ===
@@ -3114,8 +3361,8 @@ async function testContractManifestBinding() {
     ...migrations,
     {
       idx: migrations.length,
-      tag: "0019_future_append_only",
-      when: Number(migrationPlan.creditCheckout0018.when) + 1,
+      tag: "0020_future_append_only",
+      when: Number(migrationPlan.creditOffer0019.when) + 1,
       sha256: "a".repeat(64),
     },
   ]);

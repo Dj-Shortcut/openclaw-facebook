@@ -1,16 +1,23 @@
 export type CreditCheckoutOffer = Readonly<{
   mode: "test" | "live";
-  amount: "4.99";
+  offerId: "premium_images_8_medium_v1" | "premium_images_9_medium_v2";
+  offerVersion: 1 | 2;
+  amount: "4.99" | "5.00";
   currency: "EUR";
-  creditCount: 8;
+  creditCount: 8 | 9;
   imageQuality: "medium";
   expires: false;
   automaticRenewal: false;
   refundPolicyId: "premium_image_credit_refund";
-  refundPolicyVersion: 1;
+  refundPolicyVersion: 1 | 2;
 }>;
 
 export const CREDIT_CHECKOUT_BILLING_POLICY_PATH = "/billing-policy" as const;
+
+export const creditCheckoutErrorCopy = {
+  title: "We kunnen je betaalstatus niet bevestigen",
+  body: "Heb je al een betaling gestart of bevestigd, betaal dan niet opnieuw. Controleer de betaalstatus later.",
+} as const;
 
 export const creditBillingPolicyCopy = {
   title: "Betaling en terugbetaling van premiumcredits",
@@ -19,15 +26,15 @@ export const creditBillingPolicyCopy = {
   sections: [
     {
       heading: "Eén vaste aankoop",
-      body: "De bundel kost € 4,99 en voegt acht beeldcredits in medium kwaliteit toe. De credits vervallen niet. Dit is geen abonnement: er is geen automatische verlenging, automatische top-up, overage, domiciliëring of andere terugkerende aanrekening.",
+      body: "De checkout toont de exacte eenmalige prijs, het aantal beeldcredits en de toepasselijke bundelversie. De credits hebben medium kwaliteit en vervallen niet. Dit is geen abonnement: er is geen automatische verlenging, automatische top-up, overage, domiciliëring of andere terugkerende aanrekening.",
     },
     {
       heading: "Test Mode en live betaling",
-      body: "Een checkout die duidelijk Mollie Test Mode vermeldt, simuleert de betaling en schrijft geen echt geld af. Alleen een checkout die uitdrukkelijk als echte betaling wordt getoond, kan na je bevestiging een echte betaling van € 4,99 starten.",
+      body: "Een checkout die duidelijk Mollie Test Mode vermeldt, simuleert de betaling en schrijft geen echt geld af. Alleen een checkout die uitdrukkelijk als echte betaling wordt getoond, kan na je bevestiging de exact getoonde eenmalige prijs aanrekenen.",
     },
     {
       heading: "Volledige terugbetaling en terugboeking",
-      body: "Na een volledige terugbetaling die Mollie bevestigt, verwijderen we de acht met die betaling gekochte credits uit de betaalde balans. Als credits al gereserveerd of gebruikt zijn, of als betaal- of terugbetalingsbewijzen elkaar tegenspreken, pauzeren we premiumgebruik en volgt een handmatige controle. Een terugboeking (chargeback) kan dezelfde veiligheidscontrole starten.",
+      body: "Na een volledige terugbetaling die Mollie bevestigt, verwijderen we de met die betaling gekochte credits uit de betaalde balans. Als credits al gereserveerd of gebruikt zijn, of als betaal- of terugbetalingsbewijzen elkaar tegenspreken, pauzeren we premiumgebruik en volgt een handmatige controle. Een terugboeking (chargeback) kan dezelfde veiligheidscontrole starten. De checkout vermeldt vóór bevestiging welke versie van dit beleid geldt.",
     },
     {
       heading: "Dubbele of technische aanrekening",
@@ -39,7 +46,7 @@ export const creditBillingPolicyCopy = {
     },
     {
       heading: "Vóór je bevestigt",
-      body: "De checkout toont de totale prijs van € 4,99, de acht inbegrepen credits, medium kwaliteit, geen vervaldatum, geen abonnement of extra kosten, en het toepasselijke terugbetalingsbeleid. Een Messengerbericht of het openen van de link rekent nog niets aan.",
+      body: "De checkout toont de exacte totale prijs, het exacte aantal inbegrepen credits, medium kwaliteit, geen vervaldatum, geen abonnement of extra kosten, en het toepasselijke terugbetalingsbeleid met versienummer. Eén succesvol geleverde bruikbare premium generatie of bewerking verbruikt één credit. Een Messengerbericht of het openen van de link rekent nog niets aan.",
     },
   ],
 } as const;
@@ -52,6 +59,8 @@ const CREDIT_CHECKOUT_OFFER_KEYS = Object.freeze([
   "expires",
   "imageQuality",
   "mode",
+  "offerId",
+  "offerVersion",
   "refundPolicyId",
   "refundPolicyVersion",
 ]);
@@ -66,14 +75,23 @@ export function parseCreditCheckoutOffer(value: unknown): CreditCheckoutOffer {
     keys.length !== CREDIT_CHECKOUT_OFFER_KEYS.length ||
     !keys.every((key, index) => key === CREDIT_CHECKOUT_OFFER_KEYS[index]) ||
     (offer.mode !== "test" && offer.mode !== "live") ||
-    offer.amount !== "4.99" ||
     offer.currency !== "EUR" ||
-    offer.creditCount !== 8 ||
     offer.imageQuality !== "medium" ||
     offer.expires !== false ||
     offer.automaticRenewal !== false ||
     offer.refundPolicyId !== "premium_image_credit_refund" ||
-    offer.refundPolicyVersion !== 1
+    !(
+      (offer.offerId === "premium_images_8_medium_v1" &&
+        offer.offerVersion === 1 &&
+        offer.amount === "4.99" &&
+        offer.creditCount === 8 &&
+        offer.refundPolicyVersion === 1) ||
+      (offer.offerId === "premium_images_9_medium_v2" &&
+        offer.offerVersion === 2 &&
+        offer.amount === "5.00" &&
+        offer.creditCount === 9 &&
+        offer.refundPolicyVersion === 2)
+    )
   ) {
     throw new Error("Invalid checkout offer");
   }
