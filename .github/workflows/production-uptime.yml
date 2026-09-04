@@ -15,11 +15,77 @@ on:
 permissions:
   contents: read
 
+env:
+  FLYCTL_VERSION: 0.4.85
+
 concurrency:
   group: production-uptime-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  gateway-retirement-canary:
+    name: Gateway retirement canary
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    environment: production-inspection
+    steps:
+      - name: Check out retirement canary contract
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+
+      - name: Install exact verified flyctl
+        timeout-minutes: 3
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$RUNNER_OS" = "Linux"
+          test "$RUNNER_ARCH" = "X64"
+          test "$FLYCTL_VERSION" = "0.4.85"
+          install_root="$(mktemp -d "$RUNNER_TEMP/leaderbot-flyctl.XXXXXX")"
+          archive="$install_root/flyctl_0.4.85_Linux_x86_64.tar.gz"
+          extract_dir="$install_root/extract"
+          bin_dir="$install_root/bin"
+          install -d -m 0700 "$extract_dir" "$bin_dir"
+          curl --fail --show-error --silent --location \
+            --proto '=https' --proto-redir '=https' --tlsv1.2 \
+            --retry 3 --retry-all-errors \
+            --output "$archive" \
+            "https://github.com/superfly/flyctl/releases/download/v0.4.85/flyctl_0.4.85_Linux_x86_64.tar.gz"
+          printf '%s  %s\n' \
+            "c3b5ed05319adf8a265d68171758ea7b37bd340c5c3dc4e09e17fb6344b8ff90" \
+            "$archive" | sha256sum --check --strict
+          tar --extract --gzip --file "$archive" --directory "$extract_dir" flyctl
+          test -f "$extract_dir/flyctl"
+          test ! -L "$extract_dir/flyctl"
+          install -m 0755 "$extract_dir/flyctl" "$bin_dir/flyctl"
+          ln -s flyctl "$bin_dir/fly"
+          version_output="$("$bin_dir/flyctl" version)"
+          [[ "$version_output" =~ ^flyctl\ v0\.4\.85([[:space:]]|$) ]]
+          printf '%s\n' "$bin_dir" >> "$GITHUB_PATH"
+
+      - name: Check stopped gateway and canonical Meta callback
+        timeout-minutes: 3
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_PRODUCTION_READONLY_TOKEN }}
+          META_APP_ID: ${{ secrets.META_APP_ID }}
+          META_APP_SECRET: ${{ secrets.META_APP_SECRET }}
+          MESSENGER_PAGE_ID: ${{ secrets.MESSENGER_PAGE_ID }}
+          MESSENGER_PAGE_ACCESS_TOKEN: ${{ secrets.MESSENGER_PAGE_ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$FLY_API_TOKEN"
+          test -n "$META_APP_ID"
+          test -n "$META_APP_SECRET"
+          test -n "$MESSENGER_PAGE_ID"
+          test -n "$MESSENGER_PAGE_ACCESS_TOKEN"
+          npm run production:drift:gateway
+
   healthz:
     name: Health endpoints
     runs-on: ubuntu-latest

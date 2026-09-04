@@ -105,8 +105,12 @@ these environment secrets:
 - `IMAGE_GEN_DATABASE_PROVISIONER_URL`: `127.0.0.1:13306` URL for the separate
   protected database provisioner that alone creates, grants, locks, unlocks,
   and drops reviewed MySQL principals;
-- `META_APP_ID` and `META_APP_SECRET`: used only to read and verify webhook
-  subscriptions; values are never printed.
+- `META_APP_ID` and `META_APP_SECRET`: used only to read and verify app-level
+  webhook subscriptions; values are never printed;
+- `MESSENGER_PAGE_ID` and `MESSENGER_PAGE_ACCESS_TOKEN`: used only to verify
+  that the production Page remains subscribed to the reviewed Meta app through
+  `/{page-id}/subscribed_apps` with the exact reviewed Page-level fields;
+  neither values nor returned identifiers are printed.
 
 ### One-off repair-exec token installation and verified retirement
 
@@ -201,11 +205,16 @@ cases. Do not infer database cleanup from token expiry or cancellation alone.
 
 Create a second environment named `production-inspection`, limited to protected
 `main`, with no reviewer or wait timer and with administrator bypass disabled.
-It contains only `FLY_PRODUCTION_READONLY_TOKEN`, an expiring Fly organization
-read-only token. The early safety gate may use it only for metadata-only config,
-release, image, Machine, and scale reads. It must never use logs, SSH, volumes,
-secrets, or customer-content paths. This gate runs before a queued production
-approval can block an older recovery.
+It contains `FLY_PRODUCTION_READONLY_TOKEN`, an expiring Fly organization
+read-only token, plus `META_APP_ID`, `META_APP_SECRET`, `MESSENGER_PAGE_ID`,
+and `MESSENGER_PAGE_ACCESS_TOKEN` for the scheduled callback inspection. The
+early safety gate may use Fly access only for
+metadata-only config, release, image, Machine, and scale reads, plus
+retirement-volume inventory and secret-name/status reads. It never prints secret values or
+digests and must never use logs, SSH, volume contents, secret mutation, or
+customer-content paths. The Meta credentials are scoped to the reviewed
+callback checker and must never be interpolated into output. This gate runs
+before a queued production approval can block an older recovery.
 
 Create a third environment named `production-recovery`, also limited to
 protected `main`, with no reviewer or wait timer and with administrator bypass
@@ -268,7 +277,8 @@ Settings UI that `production` still requires its reviewer and has no
 administrator bypass, while
 `production-inspection` and `production-recovery` have protected-main access,
 no reviewer, no wait timer, and no administrator bypass. Also verify that the
-inspection environment contains only its read-only Fly token. Verify that
+inspection environment contains only its read-only Fly token plus the four
+Meta callback variables named above. Verify that
 `production-schema-cleanup` also has protected-main access, no reviewer, no wait
 timer, no administrator bypass, and only its narrowly scoped database migration
 token. Treat any drift as a release blocker.
@@ -441,21 +451,19 @@ SQL-mode, definer, grant or probe mismatch is a failed transition and must be
 restored from the reviewed trigger definitions or the pre-change snapshot
 before billing is enabled.
 
-The gateway currently has `deploymentEnabled: false`. This is an explicit
-bootstrap gate, not an operator override: both the workflow and the canonical
-package script reject it. Rehearse the volume migration and prove the current
-managed release first. Adding a digest and changing the flag is deliberately
-not enough to enable it. `apps.gateway.stateRebaseline` now records the exact
-legacy Machine, image, encrypted volume, mount and region as metadata-only
-evidence. The legacy release has no deployment label, so the manifest uses the
-explicit `legacy_unlabeled` sentinel rather than inventing an identity. Its
-three configuration hashes remain `null` together until a canonical capture is
-reviewed; that unresolved state cannot advance. A later, separately reviewed
-transition must fill all three hashes, bind an attested artifact built from
-fully pinned inputs, pass the protected volume-copy rehearsal, and independently
-review both recovery and successor identities. Until that complete transition
-settles, the workflow rejects the target before production approval or any Fly
-mutation and gateway quota enforcement stays off.
+The gateway has `deploymentEnabled: false` because it is now an intentionally
+stopped retirement canary, not a deployable production target. Both the
+workflow and canonical package script reject a gateway deployment. Adding a
+digest or changing that flag is not a supported way to restart it.
+`apps.gateway.retirementCanary` binds the exact stopped, cordoned Machine,
+full Machine-configuration hash, preserved encrypted volume, required secret
+names/statuses, direct-runtime health evidence, and the narrow compute-recovery
+order. It is explicitly not routable recovery. Generic successor/recovery
+provenance options fail closed in this state. `apps.gateway.stateRebaseline` remains as historical metadata
+for the unchanged legacy Machine/volume tuple; it does not authorize a new
+gateway rollout. A future decision to resume gateway development would require
+a new reviewed transition with fully pinned artifact, recovery, state, and
+Messenger ownership evidence. Gateway quota enforcement stays off.
 
 ## Normal release
 
@@ -913,16 +921,22 @@ table.
 The deploy run remains failed so the incident is visible and its artifacts
 record both releases.
 
-The disabled gateway has no manual rollback shortcut. Its later reviewed
-bootstrap/rebaseline transition must first prove and record the live identity,
-immutable image, exact volume attachment, and complete Machine configuration;
-only that transition may establish its initial rollback point. For image-gen or
-storage-proxy, promote the new release to that target's `reviewedImage` and
-retain only independently reviewed previous digests in
-`reviewedRollbackImages`. The workflow validates both operator input and every
-pre-release capture before any deploy. Approval, canonical configuration, drift
-checks, relevant Meta verification, and smoke checks still apply. Do not restore
-a release by starting an ad-hoc Machine.
+The disabled gateway has no generic deployment or recovery shortcut. The sole
+exception is compute recovery of the recorded retirement canary: after the
+metadata-only canary proves the exact volume attachment and required secret
+names/statuses, uncordon the exact preserved Machine and then start that same
+Machine, in that order. This state is not marked available or routable recovery. That does not
+create, replace, deploy, scale, delete, or change the Meta callback. This is a
+compute rollback only. If Messenger routing must return to the gateway, perform
+a separate reviewed callback cutback after the Machine is healthy and before
+claiming routing recovery; never leave both paths as intentional ingress owners.
+Any other gateway recovery requires a separately reviewed transition. For image-gen or storage-proxy,
+promote the new release to that target's `reviewedImage` and retain only
+independently reviewed previous digests in `reviewedRollbackImages`. The
+workflow validates both operator input and every pre-release capture before any
+deploy. Approval, canonical configuration, drift checks, relevant Meta
+verification, and smoke checks still apply. Do not restore a release by
+starting an ad-hoc Machine.
 
 ## Stateful gateway exception
 
@@ -932,27 +946,47 @@ has been backed up, migration has been rehearsed on a copy, and the canonical
 Machine-volume attachment is explicitly approved. The pre-deploy drift gate is
 intentionally fail-closed while this remains unresolved.
 
-### Gateway quiescence observation
+### Gateway compute-only retirement state
 
-The canonical owner Page callback now points directly to `apps/image-gen`, but
-that callback proof alone does not authorize stopping the legacy gateway. The
-scheduled production uptime workflow must not probe the gateway during the
-zero-traffic observation window; it continues to monitor image-gen and the
-storage proxy.
+The canonical owner Page callback points directly to `apps/image-gen`. The
+earlier proposed 168-hour observation could not prove zero valid Messenger
+ingress because aggregate Fly traffic also includes scanners. On `2026-08-30`
+the owner explicitly chose a compute-only stop instead; no zero-ingress claim
+is made from the incomplete observation. On `2026-09-04`, the owner ended the
+168-hour requirement entirely.
 
-The observation duration is fixed in advance at exactly 168 continuous hours,
-or seven 24-hour periods. The clock starts only when this duration contract is
-merged to `main`, not at the earlier probe-removal merge. Record that contract's
-exact merge SHA and UTC timestamp in `docs/operations/todo.md`; PR creation time
-and gateway logs collected before that point do not count. Collect metadata-only
-ingress evidence without calling the public gateway endpoint. Keep overlapping
-captures if the provider exposes only a bounded log window, and never record
-message content or user identifiers. Any evidence gap, gateway probe, gateway
-Machine mutation, or drift away from the canonical direct Page callback resets
-the full 168-hour clock. The quiescence changes do not stop, scale, redeploy,
-delete, or otherwise mutate any gateway Machine, secret, or volume. Those
-actions remain separate, reviewed retirement steps with their own rollback and
-retention evidence.
+The exact legacy Machine `28621d2c559558` is stopped and cordoned. Its immutable
+legacy image, encrypted `/data` volume `vol_v8elpyo26xwdmk1v`, attachment, and
+secrets remain preserved. Every other gateway Machine was stopped when the
+canary was recorded. Direct image-gen `/healthz` and `/readyz` passed after the
+cordon. The scheduled production uptime workflow continues to monitor image-gen
+and the storage proxy and must not probe the intentionally stopped gateway.
+The scheduled `production:drift:gateway` canary treats only this exact stopped,
+cordoned Machine/image/volume tuple with no other active gateway Machine as
+healthy retirement state. It also reads the actual Fly volume inventory,
+checks the required secret names/statuses without printing values or digests,
+and runs the canonical Meta callback validator. An uncordon, start, missing or
+detached volume, changed Machine configuration, missing required secret, Page
+callback drift, or another active gateway Machine fails closed.
+
+This state proves only that OpenClaw compute is off while its recorded recovery
+resources remain preserved. It is not a traffic conclusion and is not routable
+Messenger recovery. If a separately reviewed incident response later chooses
+to recover only the recorded compute, its exact order is:
+
+```bash
+flyctl machine uncordon 28621d2c559558 --app leaderbot-openclaw-gateway
+flyctl machine start 28621d2c559558 --app leaderbot-openclaw-gateway
+```
+
+Do not execute these commands as part of retirement inspection, and do not use
+`fly deploy`, scaling, a different Machine, or a replacement image for this
+recovery. `uncordon` plus `start` restores compute only; it does not
+change the Meta callback. After the Machine is healthy, any callback cutback
+requires separate review before routing recovery is claimed. Reassess the
+direct callback and never run both paths as intentional ingress owners. Do not
+delete the preserved Machine, image, volume, or secrets until the retention
+decision and standalone-channel extraction are complete.
 
 The manifest contract has four stages:
 

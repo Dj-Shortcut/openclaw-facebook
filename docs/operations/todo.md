@@ -34,38 +34,42 @@ ClawHub, install, release, and rollback routes are proven.
 
 Owner-directed execution note (2026-08-28): implementation and Test Mode work
 for P2 through P4 may continue while the currently deployed bot remains in use.
-That sequencing decision is not production evidence for P1. P1 remains open
-until the direct owner Page callback, zero OpenClaw gateway traffic, rollback,
-retention, and standalone-channel extraction proofs below are actually recorded.
+That sequencing decision is not production evidence for P1. The owner has
+accepted compute-only OpenClaw retirement without the superseded 168-hour
+traffic observation. P1 remains open for the separate retention decision and
+standalone-channel extraction, together with any direct-runtime evidence still
+listed below; this decision makes no zero-traffic or routable recovery claim.
 Live payment enablement remains gated by the relevant P1 through P4 evidence.
 
 - [ ] **P1 - Direct owner bot and OpenClaw retirement proof.** Point the owner
       Page at the direct `apps/image-gen` Messenger callback using the intended
       Meta app and credentials. Prove verification, signatures, text, consent,
       image generation, edits, quota, deletion, queue, delivery, monitoring,
-      and rollback without OpenClaw. Record zero gateway traffic before
-      disabling its callback and infrastructure. Preserve or delete legacy
-      volume data under an explicit privacy/retention decision. Extract the
-      generic OpenClaw channel to its standalone project before removing the
-      root package and ClawHub workflows from this repository.
-  - [x] PR #479 removed the automatic gateway health probe at exact `main`
-        merge `6f48774d9ffdb744441570ed0da619bf08be6fb7` on
-        `2026-08-30T17:37:55Z`. Because the observation duration had not yet
-        been fixed before that merge, this timestamp is not the observation
-        start.
-  - [x] PR #480 fixed the observation duration in advance at exactly 168
-        continuous hours (seven 24-hour periods) and merged to `main` as
-        `c251a5e34c46bd327ffa5c015ed038f1fced545e` on
-        `2026-08-30T17:44:08Z`. That exact SHA and UTC timestamp start the
-        observation clock.
-  - [ ] After that start, collect continuous metadata-only gateway ingress
-        evidence for all 168 hours. The scheduled end is
-        `2026-09-06T17:44:08Z` only if the full window remains uninterrupted. A
-        green health check is not user-traffic evidence. Any evidence gap,
-        gateway probe, gateway Machine mutation, or direct Page-callback drift
-        resets the clock and requires a new reviewed start and scheduled end.
-        Do not stop, delete, scale, or replace the gateway Machine or its
-        volumes during this window.
+      and rollback without OpenClaw. Keep every legacy gateway Machine stopped
+      and keep the recorded Machine and volume only as preserved resources.
+      Preserve or delete legacy volume data under an explicit
+      privacy/retention decision. Extract the generic
+      OpenClaw channel to its standalone project before removing the root
+      package and ClawHub workflows from this repository.
+  - [x] Protected deployment inspection run `33297361675` proved that the
+        owner Page uses the canonical direct callback
+        `https://leaderbot-fb-image-gen.fly.dev/facebook/webhook`.
+  - [x] On `2026-08-30`, Machine
+        `28621d2c559558` stopped at `2026-08-30T18:32:57.629Z` and was cordoned
+        at `2026-08-30T18:34:04.903Z`; its exact recorded legacy image and
+        encrypted volume `vol_v8elpyo26xwdmk1v` remain attached and were not
+        deleted. Every other gateway Machine was also stopped. The direct
+        image-gen `/healthz` and `/readyz` both passed at
+        `2026-08-30T18:38:00Z`.
+  - [x] On `2026-09-04`, the owner explicitly ended the proposed 168-hour
+        observation and confirmed that every OpenClaw Machine remains off while
+        the direct `apps/image-gen` bot works. This closes only the compute
+        retirement decision. It does not prove zero traffic and does not make
+        the preserved Machine routable recovery.
+  - [ ] Keep gateway deployment and generic recovery blocked. Do not delete the
+        recorded Machine, volume, image, or secrets until the privacy/retention
+        decision and standalone-channel extraction are complete. Any restart or
+        Meta callback cutback is a new, separately reviewed operation.
 
 - [ ] **P2 - User-scoped purchased-credit ledger.** Add an append-only credit
       ledger, wallet projection, and idempotent reservation/commit/release model
@@ -127,15 +131,14 @@ Live payment enablement remains gated by the relevant P1 through P4 evidence.
 
 - Protected deployment inspection run `33297361675` proved the owner Page uses
   the canonical direct callback
-  `https://leaderbot-fb-image-gen.fly.dev/facebook/webhook`. PR #479 removed the
-  scheduled gateway health request. PR #480 then fixed and started the reviewed
-  168-hour observation contract at
-  `c251a5e34c46bd327ffa5c015ed038f1fced545e` on
-  `2026-08-30T17:44:08Z`, with conditional end
-  `2026-09-06T17:44:08Z`. P1 remains open until uninterrupted metadata-only
-  zero-ingress evidence, direct Messenger smokes, rollback/retention decisions,
-  the later reviewed gateway stop, and standalone channel publication are
-  complete.
+  `https://leaderbot-fb-image-gen.fly.dev/facebook/webhook`. The exact legacy
+  Machine is stopped and cordoned, its encrypted rollback volume remains
+  attached, all other gateway Machines are stopped, and direct image-gen
+  health/readiness passed. On `2026-09-04`, the owner accepted this as
+  compute-only retirement and ended the 168-hour observation requirement. No
+  traffic or routable-recovery conclusion is drawn. This closes only the
+  compute decision; the other P1 evidence, retention decision, and standalone
+  channel publication remain open.
 
 - Storage-proxy startup ordering was fixed and merged in PR #445 at reviewed
   source commit `6a7d0431e1e02076a2db7fcf12c8358d7fbf33cd`.

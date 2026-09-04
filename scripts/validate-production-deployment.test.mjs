@@ -22,6 +22,7 @@ import {
   materializeSuccessorSourceRoot,
   referencesForbiddenFlyApiUrl,
   resolveImmutableReleaseImage,
+  sha256CanonicalJson,
   validateDeploymentEnabled,
   validateProductionRepository,
   validateRecoveryProtocol,
@@ -430,6 +431,33 @@ function metaResponse(pageCallback, transform = (data) => data) {
       };
     },
   };
+}
+
+function metaCallbackFetch(
+  pageCallback,
+  transform = (data) => data,
+  pageApps = [
+    {
+      id: "test-app",
+      subscribed_fields: [
+        "messages",
+        "messaging_postbacks",
+        "message_deliveries",
+        "message_reads",
+      ],
+    },
+  ],
+) {
+  return async (url) =>
+    url.includes("/subscribed_apps?")
+      ? {
+          ok: true,
+          status: 200,
+          async json() {
+            return { data: pageApps };
+          },
+        }
+      : metaResponse(pageCallback, transform);
 }
 
 function canonicalDeploymentRun(
@@ -2344,6 +2372,36 @@ describe("production deployment contract", () => {
     expect(() => validateProductionRepository(root)).not.toThrow();
   });
 
+  it.each([
+    [
+      "callback check",
+      "          npm run production:drift:gateway\n",
+      "          npm run production:drift:image-gen\n",
+    ],
+    [
+      "Meta credential",
+      "          META_APP_SECRET: ${{ secrets.META_APP_SECRET }}\n",
+      "          META_APP_SECRET: ${{ secrets.UNREVIEWED_SECRET }}\n",
+    ],
+    [
+      "schedule",
+      '    - cron: "*/15 * * * *"\n',
+      '    - cron: "0 0 * * *"\n',
+    ],
+  ])("requires the scheduled gateway retirement %s", (_label, before, after) => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/production-uptime.yml",
+      before,
+      after,
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      ".github/workflows/production-uptime.yml must run one scheduled metadata-only gateway and Meta callback canary",
+    );
+  });
+
   it("does not allow the storage-proxy readiness path to be removed", () => {
     const root = createRepositoryFixture();
     const manifestPath = path.join(root, "deploy/production/apps.json");
@@ -2507,8 +2565,16 @@ describe("production deployment contract", () => {
     replaceFixtureText(
       root,
       ".github/workflows/production-uptime.yml",
-      "          persist-credentials: false\n",
-      "",
+      `      - name: Check out production readiness contract
+        if: github.event_name != 'pull_request'
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+`,
+      `      - name: Check out production readiness contract
+        if: github.event_name != 'pull_request'
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+`,
     );
 
     expect(() => validateProductionRepository(root)).toThrow(
@@ -2573,8 +2639,19 @@ describe("production deployment contract", () => {
     replaceFixtureText(
       root,
       ".github/workflows/production-uptime.yml",
-      "          persist-credentials: false\n",
-      "          persist-credentials: false\n          ref: deadbeef\n",
+      `      - name: Check out production readiness contract
+        if: github.event_name != 'pull_request'
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+`,
+      `      - name: Check out production readiness contract
+        if: github.event_name != 'pull_request'
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          ref: deadbeef
+`,
     );
 
     expect(() => validateProductionRepository(root)).toThrow(
@@ -6452,6 +6529,39 @@ describe("production deployment contract", () => {
   });
 
   it.each([
+    ["machine id", (canary) => (canary.machine.id = "11111111111111")],
+    ["cordon state", (canary) => (canary.machine.cordoned = false)],
+    [
+      "machine config hash",
+      (canary) => (canary.machine.machineConfigSha256 = "not-a-hash"),
+    ],
+    ["volume state", (canary) => (canary.machine.volumeState = "pending")],
+    ["preserved volume", (canary) => (canary.machine.volumeId = "vol_wrong")],
+    ["compute-only state", (canary) => (canary.rollback.state = "available")],
+    ["routing state", (canary) => (canary.rollback.routable = true)],
+    [
+      "required secret status",
+      (canary) =>
+        (canary.rollback.requiredSecretStatuses.MESSENGER_APP_SECRET =
+          "Staged"),
+    ],
+    [
+      "rollback order",
+      (canary) => (canary.rollback.order = ["start", "uncordon"]),
+    ],
+  ])("rejects gateway retirement drift in %s", (_label, mutate) => {
+    const root = createRepositoryFixture();
+    const manifestPath = path.join(root, "deploy/production/apps.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    mutate(manifest.apps.gateway.retirementCanary);
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "gateway retirement canary must bind the exact stopped, cordoned Machine",
+    );
+  });
+
+  it.each([
     ["builderWorkflow", ".github/workflows/untrusted.yml"],
     ["predicateType", "https://example.invalid/untrusted"],
     ["sourceCommit", "not-a-git-sha"],
@@ -9593,6 +9703,139 @@ describe("settled production identity", () => {
     sleepImpl: async () => {},
   };
 
+  function gatewayRetirementFlyState(root, mutateMachines = () => {}) {
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(root, "deploy/production/apps.json"), "utf8"),
+    );
+    const app = manifest.apps.gateway;
+    const expected = app.retirementCanary.machine;
+    const digest = expected.image.match(/@(sha256:[a-f0-9]{64})$/)[1];
+    const machines = [
+      {
+        id: expected.id,
+        state: "stopped",
+        cordoned: true,
+        region: expected.region,
+        image_ref: {
+          registry: "registry.fly.io",
+          repository: app.app,
+          digest,
+        },
+        config: {
+          image: expected.image,
+          mounts: [
+            {
+              volume: expected.volumeId,
+              path: expected.mountPath,
+              encrypted: true,
+            },
+          ],
+        },
+      },
+      { id: "2871333b4d3768", state: "stopped" },
+    ];
+    app.retirementCanary.machine.machineConfigSha256 = sha256CanonicalJson(
+      machines[0].config,
+    );
+    fs.writeFileSync(
+      path.join(root, "deploy/production/apps.json"),
+      `${JSON.stringify(manifest, null, 2)}\n`,
+    );
+    mutateMachines(machines);
+    const volumes = [
+      {
+        id: expected.volumeId,
+        state: expected.volumeState,
+        region: expected.region,
+        encrypted: true,
+        attached_machine_id: expected.id,
+      },
+    ];
+    const secrets = Object.entries(
+      app.retirementCanary.rollback.requiredSecretStatuses,
+    ).map(([name, status]) => ({ name, status, digest: "not-inspected" }));
+    return (args) => {
+      const command = args.slice(0, 2).join(" ");
+      expect(args.slice(2)).toEqual(["--app", app.app, "--json"]);
+      if (command === "machine list") return JSON.stringify(machines);
+      if (command === "volumes list") return JSON.stringify(volumes);
+      if (command === "secrets list") return JSON.stringify(secrets);
+      throw new Error(`unexpected Fly read: ${command}`);
+    };
+  }
+
+  const canonicalCallbackCheck = async () => ({
+    callbacks: [],
+    errors: [],
+    warnings: [],
+  });
+
+  it("accepts only the exact stopped and cordoned gateway retirement canary", async () => {
+    const root = createRepositoryFixture();
+    await expect(
+      checkSettledLiveFlyDrift("gateway", {
+        rootDir: root,
+        runFly: gatewayRetirementFlyState(root),
+        checkMetaCallbacksImpl: canonicalCallbackCheck,
+      }),
+    ).resolves.toMatchObject({
+      identity: "none",
+      blockingErrors: [],
+      reconcilableDrift: [],
+    });
+  });
+
+  it.each([
+    ["uncordoned", (machines) => (machines[0].cordoned = false)],
+    ["restarted", (machines) => (machines[0].state = "started")],
+    ["another active Machine", (machines) => (machines[1].state = "started")],
+    ["missing rollback volume", (machines) => (machines[0].config.mounts = [])],
+    [
+      "an extra mount",
+      (machines) =>
+        machines[0].config.mounts.push({
+          volume: "vol_unreviewed",
+          path: "/other",
+          encrypted: true,
+        }),
+    ],
+    [
+      "different service autostart configuration",
+      (machines) =>
+        (machines[0].config.services = [
+          { autostart: false, internal_port: 8080 },
+        ]),
+    ],
+  ])(
+    "fails closed when the gateway retirement canary is %s",
+    async (_label, mutate) => {
+      const root = createRepositoryFixture();
+      const result = await checkSettledLiveFlyDrift("gateway", {
+        rootDir: root,
+        runFly: gatewayRetirementFlyState(root, mutate),
+        checkMetaCallbacksImpl: canonicalCallbackCheck,
+      });
+      expect(result.blockingErrors.length).toBeGreaterThan(0);
+    },
+  );
+
+  it.each([
+    { requireCurrentReviewedImage: true },
+    { expectedSourceSha: "1".repeat(40) },
+  ])("never ignores gateway successor provenance options", async (options) => {
+    const root = createRepositoryFixture();
+    await expect(
+      checkSettledLiveFlyDrift("gateway", {
+        rootDir: root,
+        runFly: gatewayRetirementFlyState(root),
+        checkMetaCallbacksImpl: canonicalCallbackCheck,
+        ...options,
+      }),
+    ).rejects.toThrow(
+      "gateway retirement canary forbids successor provenance and generic recovery",
+    );
+  });
+
   it("accepts the exact reviewed predecessor for a runtime rotation", async () => {
     const root = createRepositoryFixture();
     const manifest = JSON.parse(
@@ -10848,6 +11091,81 @@ describe("settled production identity", () => {
     },
   );
 
+  it("fails closed when the canonical Meta Page callback drifts", async () => {
+    const root = createRepositoryFixture();
+    const result = await checkSettledLiveFlyDrift("gateway", {
+      rootDir: root,
+      runFly: gatewayRetirementFlyState(root),
+      checkMetaCallbacksImpl: async () => ({
+        callbacks: [],
+        errors: ["page uses an unreviewed callback"],
+        warnings: [],
+      }),
+    });
+    expect(result.blockingErrors).toContain(
+      "Meta callback drift: page uses an unreviewed callback",
+    );
+  });
+
+  it.each([
+    ["missing", () => []],
+    [
+      "detached",
+      (volume) => [{ ...volume, attached_machine_id: null }],
+    ],
+    ["unencrypted", (volume) => [{ ...volume, encrypted: false }]],
+  ])("fails closed when the retirement volume is %s", async (_label, mutate) => {
+    const root = createRepositoryFixture();
+    const canonicalRun = gatewayRetirementFlyState(root);
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(root, "deploy/production/apps.json"), "utf8"),
+    );
+    const expected = manifest.apps.gateway.retirementCanary.machine;
+    const volume = {
+      id: expected.volumeId,
+      state: expected.volumeState,
+      region: expected.region,
+      encrypted: true,
+      attached_machine_id: expected.id,
+    };
+    const result = await checkSettledLiveFlyDrift("gateway", {
+      rootDir: root,
+      runFly: (args) =>
+        args.slice(0, 2).join(" ") === "volumes list"
+          ? JSON.stringify(mutate(volume))
+          : canonicalRun(args),
+      checkMetaCallbacksImpl: canonicalCallbackCheck,
+    });
+    expect(result.blockingErrors.length).toBeGreaterThan(0);
+  });
+
+  it("fails closed when a required rollback secret is not deployed", async () => {
+    const root = createRepositoryFixture();
+    const canonicalRun = gatewayRetirementFlyState(root);
+    const secrets = JSON.parse(
+      canonicalRun([
+        "secrets",
+        "list",
+        "--app",
+        "leaderbot-openclaw-gateway",
+        "--json",
+      ]),
+    );
+    secrets.find((secret) => secret.name === "MESSENGER_APP_SECRET").status =
+      "Staged";
+    const result = await checkSettledLiveFlyDrift("gateway", {
+      rootDir: root,
+      runFly: (args) =>
+        args.slice(0, 2).join(" ") === "secrets list"
+          ? JSON.stringify(secrets)
+          : canonicalRun(args),
+      checkMetaCallbacksImpl: canonicalCallbackCheck,
+    });
+    expect(result.blockingErrors).toContain(
+      "gateway retirement canary required secret MESSENGER_APP_SECRET is not Deployed",
+    );
+  });
+
   it("accepts only the exact storage-proxy legacy predecessor for its first trusted rollout", async () => {
     const root = createRepositoryFixture();
     const manifestPath = path.join(root, "deploy/production/apps.json");
@@ -11108,8 +11426,11 @@ describe("Meta callback contract", () => {
       rootDir: repoRoot,
       appId: "test-app",
       appSecret: "test-secret",
-      fetchImpl: async () =>
-        metaResponse("https://leaderbot-fb-image-gen.fly.dev/facebook/webhook"),
+      pageId: "test-page",
+      pageAccessToken: "test-page-token",
+      fetchImpl: metaCallbackFetch(
+        "https://leaderbot-fb-image-gen.fly.dev/facebook/webhook",
+      ),
     });
 
     expect(result.errors).toEqual([]);
@@ -11121,10 +11442,11 @@ describe("Meta callback contract", () => {
       rootDir: repoRoot,
       appId: "test-app",
       appSecret: "test-secret",
-      fetchImpl: async () =>
-        metaResponse(
-          "https://leaderbot-openclaw-gateway.fly.dev/facebook/webhook",
-        ),
+      pageId: "test-page",
+      pageAccessToken: "test-page-token",
+      fetchImpl: metaCallbackFetch(
+        "https://leaderbot-openclaw-gateway.fly.dev/facebook/webhook",
+      ),
     });
 
     expect(result.errors).toContain("page uses an unreviewed callback");
@@ -11136,10 +11458,121 @@ describe("Meta callback contract", () => {
       rootDir: repoRoot,
       appId: "test-app",
       appSecret: "test-secret",
-      fetchImpl: async () => metaResponse("https://unexpected.example/webhook"),
+      pageId: "test-page",
+      pageAccessToken: "test-page-token",
+      fetchImpl: metaCallbackFetch("https://unexpected.example/webhook"),
     });
 
     expect(result.errors).toContain("page uses an unreviewed callback");
+  });
+
+  it("fails closed when the production Page is not subscribed to the reviewed app", async () => {
+    const result = await checkMetaCallbacks({
+      rootDir: repoRoot,
+      appId: "test-app",
+      appSecret: "test-secret",
+      pageId: "test-page",
+      pageAccessToken: "test-page-token",
+      fetchImpl: metaCallbackFetch(
+        "https://leaderbot-fb-image-gen.fly.dev/facebook/webhook",
+        (data) => data,
+        [],
+      ),
+    });
+
+    expect(result.errors).toContain(
+      "Page is not subscribed to the reviewed Meta app",
+    );
+  });
+
+  it("fails closed when the Page subscription is missing a required field", async () => {
+    const result = await checkMetaCallbacks({
+      rootDir: repoRoot,
+      appId: "test-app",
+      appSecret: "test-secret",
+      pageId: "test-page",
+      pageAccessToken: "test-page-token",
+      fetchImpl: metaCallbackFetch(
+        "https://leaderbot-fb-image-gen.fly.dev/facebook/webhook",
+        (data) => data,
+        [
+          {
+            id: "test-app",
+            subscribed_fields: [
+              "messages",
+              "messaging_postbacks",
+              "message_deliveries",
+            ],
+          },
+        ],
+      ),
+    });
+
+    expect(result.errors).toContain(
+      "Page subscription is missing required field message_reads",
+    );
+  });
+
+  it("fails closed when the Page subscription contains an unreviewed field", async () => {
+    const result = await checkMetaCallbacks({
+      rootDir: repoRoot,
+      appId: "test-app",
+      appSecret: "test-secret",
+      pageId: "test-page",
+      pageAccessToken: "test-page-token",
+      fetchImpl: metaCallbackFetch(
+        "https://leaderbot-fb-image-gen.fly.dev/facebook/webhook",
+        (data) => data,
+        [
+          {
+            id: "test-app",
+            subscribed_fields: [
+              "messages",
+              "messaging_postbacks",
+              "message_deliveries",
+              "message_reads",
+              "feed",
+            ],
+          },
+        ],
+      ),
+    });
+
+    expect(result.errors).toContain(
+      "Page subscription uses unreviewed field feed",
+    );
+  });
+
+  it("reads both app callbacks and the Page-to-app subscription without putting tokens in URLs", async () => {
+    const requests = [];
+    const fetchMeta = metaCallbackFetch(
+      "https://leaderbot-fb-image-gen.fly.dev/facebook/webhook",
+    );
+    await checkMetaCallbacks({
+      rootDir: repoRoot,
+      appId: "test-app",
+      appSecret: "test-secret",
+      pageId: "test-page",
+      pageAccessToken: "test-page-token",
+      fetchImpl: async (url, init) => {
+        requests.push({ url, authorization: init.headers.Authorization });
+        return fetchMeta(url);
+      },
+    });
+
+    expect(requests).toEqual([
+      {
+        url: "https://graph.facebook.com/v21.0/test-app/subscriptions",
+        authorization: "Bearer test-app|test-secret",
+      },
+      {
+        url: "https://graph.facebook.com/v21.0/test-page/subscribed_apps?fields=id%2Csubscribed_fields&limit=100",
+        authorization: "Bearer test-page-token",
+      },
+    ]);
+    expect(requests.map(({ url }) => url).join("\n")).not.toContain(
+      "test-page-token",
+    );
   });
 
   it("rejects an unreviewed subscription object", async () => {
@@ -11147,18 +11580,19 @@ describe("Meta callback contract", () => {
       rootDir: repoRoot,
       appId: "test-app",
       appSecret: "test-secret",
-      fetchImpl: async () =>
-        metaResponse(
-          "https://leaderbot-fb-image-gen.fly.dev/facebook/webhook",
-          (data) => [
-            ...data,
-            {
-              object: "instagram",
-              active: true,
-              callback_url: "https://unexpected.example/instagram",
-              fields: ["messages"],
-            },
-          ],
+      pageId: "test-page",
+      pageAccessToken: "test-page-token",
+      fetchImpl: metaCallbackFetch(
+        "https://leaderbot-fb-image-gen.fly.dev/facebook/webhook",
+        (data) => [
+          ...data,
+          {
+            object: "instagram",
+            active: true,
+            callback_url: "https://unexpected.example/instagram",
+            fields: ["messages"],
+          },
+        ],
         ),
     });
 
@@ -11172,16 +11606,17 @@ describe("Meta callback contract", () => {
       rootDir: repoRoot,
       appId: "test-app",
       appSecret: "test-secret",
-      fetchImpl: async () =>
-        metaResponse(
-          "https://leaderbot-fb-image-gen.fly.dev/facebook/webhook",
-          (data) =>
-            data.map((subscription) =>
-              subscription.object === "page"
-                ? { ...subscription, fields: [...subscription.fields, "feed"] }
-                : subscription,
-            ),
-        ),
+      pageId: "test-page",
+      pageAccessToken: "test-page-token",
+      fetchImpl: metaCallbackFetch(
+        "https://leaderbot-fb-image-gen.fly.dev/facebook/webhook",
+        (data) =>
+          data.map((subscription) =>
+            subscription.object === "page"
+              ? { ...subscription, fields: [...subscription.fields, "feed"] }
+              : subscription,
+          ),
+      ),
     });
 
     expect(result.errors).toContain("page uses unreviewed field feed");
@@ -11193,11 +11628,13 @@ describe("Meta callback contract", () => {
       rootDir: repoRoot,
       appId: "test-app",
       appSecret: "test-secret",
-      fetchImpl: async (_url, init) => {
+      pageId: "test-page",
+      pageAccessToken: "test-page-token",
+      fetchImpl: async (url, init) => {
         requestInit = init;
-        return metaResponse(
+        return metaCallbackFetch(
           "https://leaderbot-fb-image-gen.fly.dev/facebook/webhook",
-        );
+        )(url);
       },
     });
 
@@ -11210,6 +11647,8 @@ describe("Meta callback contract", () => {
         rootDir: repoRoot,
         appId: "test-app",
         appSecret: "test-secret",
+        pageId: "test-page",
+        pageAccessToken: "test-page-token",
         fetchImpl: async () => ({
           ok: false,
           status: 503,
