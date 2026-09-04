@@ -4147,8 +4147,8 @@ function validateSchemaTransitionWorkflow(rootDir) {
       "must cap probe Machine cleanup before any destroy operation",
     ],
     [
-      "timeout --signal=TERM 8m flyctl ssh console",
-      "must bound the remote restore verification and propagate its exit status",
+      "node scripts/fly-restore-probe-status.mjs",
+      "must verify structured exit evidence instead of accepting a stopped Machine",
     ],
     [
       "mysql-restore-check.sql",
@@ -4163,7 +4163,7 @@ function validateSchemaTransitionWorkflow(rootDir) {
       "must run restore cleanup after failures and cancellation",
     ],
     [
-      '.state|IN("started","stopped","suspended","created","failed")',
+      '.state|IN("starting","started","stopping","stopped","suspended","created","failed")',
       "must allow exact restore-probe cleanup in every known removable state",
     ],
     ["machine destroy", "must remove the isolated restore Machine"],
@@ -4252,7 +4252,7 @@ function validateSchemaTransitionWorkflow(rootDir) {
   if (
     occurrenceCount(
       workflow,
-      '.state|IN("started","stopped","suspended","created","failed")',
+      '.state|IN("starting","started","stopping","stopped","suspended","created","failed")',
     ) !== 2
   ) {
     fail(
@@ -4369,40 +4369,77 @@ function validateSchemaTransitionWorkflow(rootDir) {
   }
   const [restoreProbeStep] = namedWorkflowStepBodies(
     workflow,
-    "Prove the restored MySQL copy and remote command exit status",
+    "Prove the restored MySQL copy from the isolated Machine exit status",
   );
+  if (/flyctl\s+(?:ssh|machine\s+exec)\b/.test(workflow)) {
+    fail(
+      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must not use SSH or Machine-exec with the migration token`,
+    );
+  }
+  if (restoreProbeStep?.includes("--rm")) {
+    fail(
+      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must retain the probe until its exact exit evidence is verified`,
+    );
+  }
   for (const [required, message] of [
     ["flyctl machine run", "must create one isolated restore probe"],
     ["--restart no", "must disable restart of the isolated probe"],
-    ["--rm", "must request automatic removal of the isolated probe"],
     ["--detach", "must start the isolated probe without blocking the job"],
     [
-      "timeout --signal=TERM 8m flyctl ssh console",
-      "must bound the remote restore verification and propagate its exit status",
+      '-- -c "$probe" || probe_launch_status=$?',
+      "must run the fixed restore probe as the Machine entrypoint",
     ],
     [
-      'probe_b64="$(printf \'%s\' "$probe" | base64 --wrap=0)"',
-      "must encode the fixed restore probe without shell-quoting ambiguity",
+      '.state|IN("started","stopped")',
+      "must capture probes that already exited",
     ],
     [
-      'probe_command="/bin/sh -lc',
-      "must execute the restore probe through an explicit remote shell",
+      "probe_deadline=$((SECONDS + 480))",
+      "must bound the restore-probe status poll",
     ],
     [
-      "decoded=\\$(printf %s $probe_b64 | base64 -d) || exit 70; exec /bin/sh -c",
-      "must fail closed on decode errors and propagate the probe exit status",
+      'while test "$SECONDS" -lt "$probe_deadline"',
+      "must enforce the restore-probe status deadline",
     ],
     [
-      '--command "$probe_command"',
-      "must pass only the explicit shell command to flyctl SSH",
+      '--app "$db_app"',
+      "must bind the restore-probe API read to the reviewed database app",
+    ],
+    [
+      "node scripts/fly-restore-probe-status.mjs",
+      "must verify structured exit evidence instead of accepting a stopped Machine",
+    ],
+    [
+      '--machine-id "$probe_machine_id"',
+      "must bind probe results to the exact Machine",
+    ],
+    [
+      '--volume-id "$RESTORE_VOLUME_ID"',
+      "must bind probe results to the restored volume",
+    ],
+    [
+      '--run-id "$GITHUB_RUN_ID"',
+      "must bind probe results to this workflow run",
+    ],
+    [
+      '--run-attempt "$GITHUB_RUN_ATTEMPT" || result=$?',
+      "must bind and propagate the probe verification result",
+    ],
+    [
+      'if test "$result" = 0; then',
+      "must require a successful probe verification",
+    ],
+    [
+      'if test "$result" != 2; then',
+      "must retry only pending probe verification",
+    ],
+    [
+      'if test "$probe_verified" != true; then',
+      "must fail closed when exit evidence never arrives",
     ],
     [
       'printf "%s\\n" mysql_restore_probe_failed',
       "must emit a metadata-only failure marker for a failed restore probe",
-    ],
-    [
-      "tail -n 120 /tmp/mysql-restore-probe.log",
-      "must emit a bounded MySQL startup diagnostic before failing closed",
     ],
     [
       "chown mysql:root /var/lib/mysql",
@@ -4422,14 +4459,19 @@ function validateSchemaTransitionWorkflow(rootDir) {
       `${SCHEMA_TRANSITION_WORKFLOW_PATH} must not recursively rewrite restored snapshot ownership`,
     );
   }
+  if (restoreProbeStep?.includes("tail -n")) {
+    fail(
+      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must not emit raw restored database diagnostics`,
+    );
+  }
   if (
     namedWorkflowStepTimeout(
       workflow,
-      "Prove the restored MySQL copy and remote command exit status",
+      "Prove the restored MySQL copy from the isolated Machine exit status",
     ) < 22
   ) {
     fail(
-      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must give the bounded Machine start, start poll, and 8m SSH probe enough outer time`,
+      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must give the bounded Machine start and exit poll enough outer time`,
     );
   }
   const credentialSnapshotBaselineIndex = workflow.indexOf(
@@ -4619,7 +4661,10 @@ function validateSchemaTransitionWorkflow(rootDir) {
       "credit_migration_principal_repair_cleanup_incomplete",
       "must fail closed with the fixed cleanup-incomplete marker",
     ],
-    ['kill -0 "$proxy_pid"', "must revalidate the isolated tunnel before cleanup"],
+    [
+      'kill -0 "$proxy_pid"',
+      "must revalidate the isolated tunnel before cleanup",
+    ],
     [
       'n.createConnection(13306,"127.0.0.1"',
       "must revalidate database connectivity before cleanup",
@@ -4630,9 +4675,7 @@ function validateSchemaTransitionWorkflow(rootDir) {
     }
   }
   if (
-    migrationSuperCleanupStep?.includes(
-      "secrets.FLY_DATABASE_MIGRATION_TOKEN",
-    )
+    migrationSuperCleanupStep?.includes("secrets.FLY_DATABASE_MIGRATION_TOKEN")
   ) {
     fail(
       `${SCHEMA_TRANSITION_WORKFLOW_PATH} must not expose snapshot authority to SUPER cleanup`,
@@ -4661,7 +4704,7 @@ function validateSchemaTransitionWorkflow(rootDir) {
     );
   }
   const probeStepIndex = workflow.indexOf(
-    "Prove the restored MySQL copy and remote command exit status",
+    "Prove the restored MySQL copy from the isolated Machine exit status",
   );
   const [databaseBindingStep] = namedWorkflowStepBodies(
     workflow,

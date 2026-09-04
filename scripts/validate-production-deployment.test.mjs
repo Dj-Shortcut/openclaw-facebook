@@ -3906,10 +3906,12 @@ describe("production deployment contract", () => {
       "      - name: Inspect the exact live schema phase without changing it",
       repairStart,
     );
-    const repairStep = workflow.slice(repairStart, repairEnd).replace(
-      'n.createConnection(13306,"127.0.0.1"',
-      'n.createConnection(13307,"127.0.0.1"',
-    );
+    const repairStep = workflow
+      .slice(repairStart, repairEnd)
+      .replace(
+        'n.createConnection(13306,"127.0.0.1"',
+        'n.createConnection(13307,"127.0.0.1"',
+      );
     fs.writeFileSync(
       workflowPath,
       `${workflow.slice(0, repairStart)}${repairStep}${workflow.slice(repairEnd)}`,
@@ -4004,86 +4006,135 @@ describe("production deployment contract", () => {
     );
   });
 
-  it("requires a bounded disposable restore-probe Machine", () => {
+  it("retains the restore-probe until its exit evidence is verified", () => {
     const root = createRepositoryFixture();
     replaceFixtureText(
       root,
       ".github/workflows/image-gen-schema-transition.yml",
-      "            --rm \\\n",
-      "",
+      "--restart no",
+      "--restart no --rm",
     );
-
     expect(() => validateProductionRepository(root)).toThrow(
-      "must request automatic removal of the isolated probe",
+      "must retain the probe until its exact exit evidence is verified",
     );
   });
 
-  it("propagates the bounded remote restore-probe exit status", () => {
+  it("keeps the restore probe free of SSH authority", () => {
     const root = createRepositoryFixture();
     replaceFixtureText(
       root,
       ".github/workflows/image-gen-schema-transition.yml",
-      "timeout --signal=TERM 8m flyctl ssh console",
-      "flyctl ssh console",
+      '-- -c "$probe"',
+      '-- -c "$probe"\n          flyctl ssh console --app "$db_app"',
     );
-
     expect(() => validateProductionRepository(root)).toThrow(
-      "must bound the remote restore verification and propagate its exit status",
+      "must not use SSH or Machine-exec with the migration token",
     );
   });
 
-  it("runs the fixed restore probe through an explicit remote shell", () => {
+  it("runs the fixed restore probe as the Machine entrypoint", () => {
     const root = createRepositoryFixture();
     replaceFixtureText(
       root,
       ".github/workflows/image-gen-schema-transition.yml",
-      '--command "$probe_command"',
-      '--command "$probe"',
+      '-- -c "$probe"',
+      '-- -c "sleep 1200"',
     );
-
     expect(() => validateProductionRepository(root)).toThrow(
-      "must pass only the explicit shell command to flyctl SSH",
+      "must run the fixed restore probe as the Machine entrypoint",
     );
   });
 
-  it("rejects restore-probe shell decoys outside the exact probe step", () => {
+  it("bounds the restore-probe status poll", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/image-gen-schema-transition.yml",
+      "probe_deadline=$((SECONDS + 480))",
+      "probe_deadline=$((SECONDS + 48000))",
+    );
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must bound the restore-probe status poll",
+    );
+  });
+
+  it("handles a fast probe exit even if flyctl missed started state", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/image-gen-schema-transition.yml",
+      '-- -c "$probe" || probe_launch_status=$?',
+      '-- -c "$probe"',
+    );
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must run the fixed restore probe as the Machine entrypoint",
+    );
+  });
+
+  it("requires verified exit evidence, not only stopped state", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/image-gen-schema-transition.yml",
+      "node scripts/fly-restore-probe-status.mjs",
+      "node scripts/accept-stopped.mjs",
+    );
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must verify structured exit evidence instead of accepting a stopped Machine",
+    );
+  });
+
+  it("does not retry failed exit verification", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/image-gen-schema-transition.yml",
+      'if test "$result" != 2; then',
+      "if false; then",
+    );
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must retry only pending probe verification",
+    );
+  });
+
+  it("fails when no exit proof arrives", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/image-gen-schema-transition.yml",
+      'if test "$probe_verified" != true; then',
+      "if false; then",
+    );
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must fail closed when exit evidence never arrives",
+    );
+  });
+
+  it("does not expose raw database diagnostics", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/image-gen-schema-transition.yml",
+      'printf "%s\\n" mysql_restore_probe_failed',
+      'printf "%s\\n" mysql_restore_probe_failed; tail -n 120 /tmp/mysql-restore-probe.log',
+    );
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must not emit raw restored database diagnostics",
+    );
+  });
+
+  it("rejects restore-probe verification decoys outside the exact step", () => {
     const root = createRepositoryFixture();
     const relativePath = ".github/workflows/image-gen-schema-transition.yml";
     replaceFixtureText(
       root,
       relativePath,
-      'probe_b64="$(printf \'%s\' "$probe" | base64 --wrap=0)"',
-      'probe_b64="unsafe"',
+      '-- -c "$probe"',
+      '-- -c "sleep 1200"',
     );
-    fs.appendFileSync(
-      path.join(root, relativePath),
-      [
-        "",
-        "# Decoys outside the named restore-probe step must not satisfy it:",
-        '# probe_b64="$(printf \'%s\' "$probe" | base64 --wrap=0)"',
-        '# probe_command="/bin/sh -lc',
-        "# decoded=\\$(printf %s $probe_b64 | base64 -d) || exit 70; exec /bin/sh -c",
-        '# --command "$probe_command"',
-        "",
-      ].join("\n"),
-    );
-
+    fs.appendFileSync(path.join(root, relativePath), '\n# -- -c "$probe"\n');
     expect(() => validateProductionRepository(root)).toThrow(
-      "must encode the fixed restore probe without shell-quoting ambiguity",
-    );
-  });
-
-  it("requires bounded restore-probe startup diagnostics", () => {
-    const root = createRepositoryFixture();
-    replaceFixtureText(
-      root,
-      ".github/workflows/image-gen-schema-transition.yml",
-      "tail -n 120 /tmp/mysql-restore-probe.log",
-      "true",
-    );
-
-    expect(() => validateProductionRepository(root)).toThrow(
-      "must emit a bounded MySQL startup diagnostic before failing closed",
+      "must run the fixed restore probe as the Machine entrypoint",
     );
   });
 
@@ -4125,7 +4176,7 @@ describe("production deployment contract", () => {
     );
 
     expect(() => validateProductionRepository(root)).toThrow(
-      "must give the bounded Machine start, start poll, and 8m SSH probe enough outer time",
+      "must give the bounded Machine start and exit poll enough outer time",
     );
   });
 
@@ -4134,7 +4185,7 @@ describe("production deployment contract", () => {
     replaceFixtureText(
       root,
       ".github/workflows/image-gen-schema-transition.yml",
-      '.state|IN("started","stopped","suspended","created","failed")',
+      '.state|IN("starting","started","stopping","stopped","suspended","created","failed")',
       '.state|IN("started","stopped","suspended","created","failed","destroying")',
     );
 

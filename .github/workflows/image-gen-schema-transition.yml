@@ -258,7 +258,7 @@ jobs:
             volume="$(jq -cer --arg name "$volume_name" '[.[] | select(.name==$name)] | if length==1 then .[0] else error("probe volume mismatch") end' <<<"$volumes")"
             volume_id="$(jq -er '.id' <<<"$volume")"
             [[ "$volume_id" =~ ^vol_[a-z0-9]+$ ]]
-            jq -e '.state|IN("started","stopped","suspended","created","failed")' <<<"$machine" > /dev/null
+            jq -e '.state|IN("starting","started","stopping","stopped","suspended","created","failed")' <<<"$machine" > /dev/null
             jq -e --arg run "$probe_run" --arg attempt "$probe_attempt" --arg volume "$volume_id" '(.config.metadata.leaderbot_restore_probe // "")==$run and (.config.metadata.leaderbot_restore_probe_attempt // "")==$attempt and ([.config.mounts[]? | select(.volume==$volume and .path=="/var/lib/mysql")] | length)==1 and (.config.mounts|length)==1' <<<"$machine" > /dev/null
             test "$(jq -er '.attached_machine_id // ""' <<<"$volume")" = "$machine_id"
             flyctl machine destroy "$machine_id" --app "$db_app" --force
@@ -565,7 +565,7 @@ jobs:
           test "$(jq -er '.name' <<<"$restored")" = "$name"
           test -z "$(jq -er '.attached_machine_id // ""' <<<"$restored")"
 
-      - name: Prove the restored MySQL copy and remote command exit status
+      - name: Prove the restored MySQL copy from the isolated Machine exit status
         timeout-minutes: 25
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_DATABASE_MIGRATION_TOKEN }}
@@ -576,6 +576,10 @@ jobs:
           probe_memory="$(jq -er '.apps["image-gen"].databaseRecovery.probeVmMemoryMb' deploy/production/apps.json)"
           machine_name="leaderbot-restore-probe-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           printf '%s\n' "$machine_name" > "$RUNNER_TEMP/leaderbot-schema-transition/restore-machine-name.txt"
+          # Expanded only inside the isolated copy; never read production rows.
+          # shellcheck disable=SC2016
+          probe='set -eu; chown mysql:root /var/lib/mysql; mkdir -p /var/run/mysqld; chown mysql:mysql /var/run/mysqld; mysqld --user=mysql --skip-networking --skip-grant-tables --socket=/var/run/mysqld/mysqld.sock --pid-file=/var/run/mysqld/mysqld.pid --log-error=/tmp/mysql-restore-probe.log & pid=$!; cleanup(){ kill -TERM "$pid" >/dev/null 2>&1 || true; wait "$pid" >/dev/null 2>&1 || true; }; finish(){ status=$?; if test "$status" -ne 0; then printf "%s\n" mysql_restore_probe_failed; fi; cleanup; exit "$status"; }; trap finish EXIT; ready=0; for i in $(seq 1 60); do if mysqladmin --protocol=socket --socket=/var/run/mysqld/mysqld.sock -uroot ping --silent >/dev/null 2>&1; then ready=1; break; fi; sleep 2; done; test "$ready" = 1; mysql --protocol=socket --socket=/var/run/mysqld/mysqld.sock -uroot -Nse "SELECT CONCAT(0x434845434b205441424c452060,REPLACE(TABLE_SCHEMA,0x60,0x6060),0x602e60,REPLACE(TABLE_NAME,0x60,0x6060),0x603b) FROM information_schema.TABLES WHERE TABLE_TYPE=0x42415345205441424c45 AND TABLE_SCHEMA NOT IN (0x696e666f726d6174696f6e5f736368656d61,0x706572666f726d616e63655f736368656d61,0x737973) ORDER BY TABLE_SCHEMA,TABLE_NAME" > /tmp/mysql-restore-check.sql; test -s /tmp/mysql-restore-check.sql; mysql --protocol=socket --socket=/var/run/mysqld/mysqld.sock -uroot --batch --raw --skip-column-names < /tmp/mysql-restore-check.sql > /tmp/mysql-restore-check.out; test -s /tmp/mysql-restore-check.out; invalid=0; while IFS="$(printf "\t")" read -r table_name operation message_type message_text; do if test "$operation" != check || test "$message_type" != status || test "$message_text" != OK; then invalid=1; fi; done < /tmp/mysql-restore-check.out; test "$invalid" = 0; mysql --protocol=socket --socket=/var/run/mysqld/mysqld.sock -uroot -Nse "SELECT COUNT(*)>=1 FROM leaderbot.__drizzle_migrations" | grep -Fx 1 >/dev/null'
+          probe_launch_status=0
           flyctl machine run "$mysql_image" \
             --app "$db_app" \
             --name "$machine_name" \
@@ -583,40 +587,56 @@ jobs:
             --vm-memory "$probe_memory" \
             --volume "$RESTORE_VOLUME_ID:/var/lib/mysql" \
             --restart no \
-            --rm \
             --detach \
             --skip-dns-registration \
             --metadata "leaderbot_restore_probe=$GITHUB_RUN_ID" \
             --metadata "leaderbot_restore_probe_attempt=$GITHUB_RUN_ATTEMPT" \
             --entrypoint /bin/sh \
-            -- -c "sleep 1200"
+            -- -c "$probe" || probe_launch_status=$?
+          # Pinned flyctl can miss "started" when this one-shot process exits
+          # quickly. Only exact Machine/volume/exit evidence below can pass.
+          if test "$probe_launch_status" != 0; then
+            printf '%s\n' mysql_restore_probe_launch_unconfirmed
+          fi
           probe_machine=''
           for _ in $(seq 1 60); do
             machines="$(flyctl machine list --app "$db_app" --json)"
             probe_machine="$(jq -cer --arg name "$machine_name" --arg run "$GITHUB_RUN_ID" --arg attempt "$GITHUB_RUN_ATTEMPT" --arg volume "$RESTORE_VOLUME_ID" '[.[] | select(.name==$name and (.config.metadata.leaderbot_restore_probe // "")==$run and (.config.metadata.leaderbot_restore_probe_attempt // "")==$attempt and ([.config.mounts[]? | select(.volume==$volume and .path=="/var/lib/mysql")] | length)==1 and (.config.mounts|length)==1)] | if length==1 then .[0] elif length>1 then error("duplicate restore probe Machines") else empty end' <<<"$machines")" || true
-            if test -n "$probe_machine" && test "$(jq -er '.state' <<<"$probe_machine")" = "started"; then
+            if test -n "$probe_machine" && jq -e '.state|IN("started","stopped")' <<<"$probe_machine" >/dev/null; then
               break
             fi
             sleep 5
           done
           test -n "$probe_machine"
-          test "$(jq -er '.state' <<<"$probe_machine")" = "started"
+          jq -e '.state|IN("started","stopped")' <<<"$probe_machine" >/dev/null
           probe_machine_id="$(jq -er '.id' <<<"$probe_machine")"
           [[ "$probe_machine_id" =~ ^[0-9a-f]{14}$ ]]
           printf '%s\n' "$probe_machine_id" > "$RUNNER_TEMP/leaderbot-schema-transition/restore-machine-id.txt"
-          # This script is intentionally expanded only inside the isolated Machine.
-          # shellcheck disable=SC2016
-          probe='set -eu; chown mysql:root /var/lib/mysql; mkdir -p /var/run/mysqld; chown mysql:mysql /var/run/mysqld; mysqld --user=mysql --skip-networking --skip-grant-tables --socket=/var/run/mysqld/mysqld.sock --pid-file=/var/run/mysqld/mysqld.pid --log-error=/tmp/mysql-restore-probe.log & pid=$!; cleanup(){ kill -TERM "$pid" >/dev/null 2>&1 || true; wait "$pid" >/dev/null 2>&1 || true; }; finish(){ status=$?; if test "$status" -ne 0; then printf "%s\n" mysql_restore_probe_failed; test ! -s /tmp/mysql-restore-probe.log || tail -n 120 /tmp/mysql-restore-probe.log; test ! -s /tmp/mysql-restore-check.out || tail -n 120 /tmp/mysql-restore-check.out; fi; cleanup; exit "$status"; }; trap finish EXIT; ready=0; for i in $(seq 1 60); do if mysqladmin --protocol=socket --socket=/var/run/mysqld/mysqld.sock -uroot ping --silent >/dev/null 2>&1; then ready=1; break; fi; sleep 2; done; test "$ready" = 1; mysql --protocol=socket --socket=/var/run/mysqld/mysqld.sock -uroot -Nse "SELECT CONCAT(0x434845434b205441424c452060,REPLACE(TABLE_SCHEMA,0x60,0x6060),0x602e60,REPLACE(TABLE_NAME,0x60,0x6060),0x603b) FROM information_schema.TABLES WHERE TABLE_TYPE=0x42415345205441424c45 AND TABLE_SCHEMA NOT IN (0x696e666f726d6174696f6e5f736368656d61,0x706572666f726d616e63655f736368656d61,0x737973) ORDER BY TABLE_SCHEMA,TABLE_NAME" > /tmp/mysql-restore-check.sql; test -s /tmp/mysql-restore-check.sql; mysql --protocol=socket --socket=/var/run/mysqld/mysqld.sock -uroot --batch --raw --skip-column-names < /tmp/mysql-restore-check.sql > /tmp/mysql-restore-check.out; test -s /tmp/mysql-restore-check.out; invalid=0; while IFS="$(printf "\t")" read -r table_name operation message_type message_text; do if test "$operation" != check || test "$message_type" != status || test "$message_text" != OK; then invalid=1; fi; done < /tmp/mysql-restore-check.out; test "$invalid" = 0; mysql --protocol=socket --socket=/var/run/mysqld/mysqld.sock -uroot -Nse "SELECT COUNT(*)>=1 FROM leaderbot.__drizzle_migrations" | grep -Fx 1 >/dev/null'
-          probe_b64="$(printf '%s' "$probe" | base64 --wrap=0)"
-          [[ "$probe_b64" =~ ^[A-Za-z0-9+/]+={0,2}$ ]]
-          # flyctl executes --command directly, so invoke an explicit shell.
-          # Decode first and fail before running when transport is malformed.
-          probe_command="/bin/sh -lc 'decoded=\$(printf %s $probe_b64 | base64 -d) || exit 70; exec /bin/sh -c \"\$decoded\"'"
-          timeout --signal=TERM 8m flyctl ssh console \
-            --app "$db_app" \
-            --machine "$probe_machine_id" \
-            --quiet \
-            --command "$probe_command"
+          # Read the raw Machines API response: flyctl list drops zero/false
+          # exit fields while re-encoding JSON, and a stopped VM alone is no proof.
+          probe_verified=false
+          probe_deadline=$((SECONDS + 480))
+          while test "$SECONDS" -lt "$probe_deadline"; do
+            result=0
+            node scripts/fly-restore-probe-status.mjs \
+              --app "$db_app" \
+              --machine-id "$probe_machine_id" \
+              --volume-id "$RESTORE_VOLUME_ID" \
+              --run-id "$GITHUB_RUN_ID" \
+              --run-attempt "$GITHUB_RUN_ATTEMPT" || result=$?
+            if test "$result" = 0; then
+              probe_verified=true
+              break
+            fi
+            if test "$result" != 2; then
+              exit 1
+            fi
+            sleep 5
+          done
+          if test "$probe_verified" != true; then
+            printf '%s\n' mysql_restore_probe_failed
+            exit 1
+          fi
 
       - name: Remove isolated restore Machine and volume
         if: always()
@@ -647,7 +667,7 @@ jobs:
           for machine_id in "${machine_ids[@]}"; do
             [[ "$machine_id" =~ ^[0-9a-f]{14}$ ]]
             machine="$(jq -cer --arg id "$machine_id" '[.[] | select(.id==$id)] | if length==1 then .[0] else error("probe Machine mismatch") end' <<<"$machines")"
-            jq -e '.state|IN("started","stopped","suspended","created","failed")' <<<"$machine" > /dev/null
+            jq -e '.state|IN("starting","started","stopping","stopped","suspended","created","failed")' <<<"$machine" > /dev/null
             jq -e --arg name "$expected_machine_name" --arg run "$GITHUB_RUN_ID" --arg attempt "$GITHUB_RUN_ATTEMPT" --arg volume "$volume_id" '(.name // "")==$name and (.config.metadata.leaderbot_restore_probe // "")==$run and (.config.metadata.leaderbot_restore_probe_attempt // "")==$attempt and $volume!="" and ([.config.mounts[]? | select(.volume==$volume and .path=="/var/lib/mysql")] | length)==1 and (.config.mounts|length)==1' <<<"$machine" > /dev/null
             flyctl machine destroy "$machine_id" --app "$db_app" --force
           done

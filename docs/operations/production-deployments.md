@@ -5,6 +5,12 @@ dispatched `Deploy production` GitHub Actions workflow. `fly deploy` may replace
 or update Machines. Operators never use `fly machine run` as a deployment or
 migration shortcut. Only the protected schema workflow may create its one
 temporary, no-DNS Machine to prove that a fresh database snapshot restores.
+The fixed integrity check runs as that isolated Machine's entrypoint with
+networking disabled in MySQL and automatic restart disabled. The workflow reads
+structured exit evidence from the exact Machines API endpoint; a stopped
+Machine alone is not success. It retains the Machine until verification, then
+the existing unconditional cleanup removes the Machine and restored volume.
+This restore test uses no SSH or Machine-exec credential.
 
 ## Ownership model
 
