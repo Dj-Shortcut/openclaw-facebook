@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
-import { parse as parseCookieHeader } from "cookie";
+import { parseCookie as parseCookieHeader } from "cookie";
 import type { Express, Request, Response } from "express";
 import { z } from "zod";
 import * as db from "../db";
