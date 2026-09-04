@@ -11,11 +11,8 @@ import {
   type CreditCheckoutPilotConfig,
 } from "./creditCheckoutConfig";
 import {
-  PREMIUM_IMAGE_CREDIT_OFFER_ID,
-  PREMIUM_IMAGE_CREDIT_OFFER_VERSION,
-  PREMIUM_IMAGE_CREDIT_REFUND_POLICY_ID,
-  PREMIUM_IMAGE_CREDIT_REFUND_POLICY_VERSION,
-  getCreditOffer,
+  type CreditOffer,
+  getCreditOfferForStoredSnapshot,
 } from "./creditCatalog";
 import {
   consumeCreditCheckoutCapability,
@@ -40,14 +37,16 @@ export const CREDIT_CHECKOUT_SESSION_MAX_AGE_MS = 60 * 60_000;
 
 export type CreditCheckoutPublicOffer = Readonly<{
   mode: "test" | "live";
-  amount: "4.99";
+  offerId: CreditOffer["offerId"];
+  offerVersion: CreditOffer["offerVersion"];
+  amount: CreditOffer["amount"]["value"];
   currency: "EUR";
-  creditCount: 8;
+  creditCount: CreditOffer["creditCount"];
   imageQuality: "medium";
   expires: false;
   automaticRenewal: false;
-  refundPolicyId: typeof PREMIUM_IMAGE_CREDIT_REFUND_POLICY_ID;
-  refundPolicyVersion: typeof PREMIUM_IMAGE_CREDIT_REFUND_POLICY_VERSION;
+  refundPolicyId: CreditOffer["refundPolicyId"];
+  refundPolicyVersion: CreditOffer["refundPolicyVersion"];
 }>;
 
 export type ClaimedCreditCheckoutSession = Readonly<{
@@ -100,7 +99,7 @@ function isValidDate(value: Date | null): value is Date {
 function readExactScope(
   record: CreditCheckoutSessionRecord,
   config: CreditCheckoutPilotConfig
-): CreditWalletScope {
+): Readonly<{ scope: CreditWalletScope; offer: CreditOffer }> {
   const channelConnectionId = record.messengerChannelConnectionId;
   const bindingEpoch = record.messengerBindingEpoch;
   const privacyEpoch = record.messengerPrivacyEpoch;
@@ -110,6 +109,7 @@ function readExactScope(
   const metadataHash = record.creditMetadataHash;
   const capabilityHash = record.checkoutCapabilityHash;
   const capabilityExpiresAt = record.checkoutCapabilityExpiresAt;
+  const offer = getCreditOfferForStoredSnapshot(record);
   if (
     !config.checkoutEnabled ||
     !config.paidCreditsEnabled ||
@@ -117,13 +117,9 @@ function readExactScope(
     record.workspaceId !== config.workspaceId ||
     record.mode !== config.mode ||
     record.kind !== "credit_purchase" ||
-    record.planCode !== PREMIUM_IMAGE_CREDIT_OFFER_ID ||
-    record.expectedAmount !== "4.99" ||
-    record.currency !== "EUR" ||
+    !offer ||
     record.interval !== "oneoff" ||
     !isEmptyEntitlements(record.entitlements) ||
-    record.mollieDescription !== "Leaderbot - 8 premium beeldcredits" ||
-    record.creditCount !== 8 ||
     record.billingProfileVersion !== 0 ||
     !Number.isSafeInteger(record.authorizationEpoch) ||
     record.authorizationEpoch < 1 ||
@@ -163,25 +159,28 @@ function readExactScope(
     fail();
   }
   return {
-    workspaceId: record.workspaceId,
-    mode: record.mode,
-    channelConnectionId,
-    bindingEpoch,
-    privacyEpoch,
-    userKey,
-    walletId,
-    financialSubjectRef,
+    scope: {
+      workspaceId: record.workspaceId,
+      mode: record.mode,
+      channelConnectionId,
+      bindingEpoch,
+      privacyEpoch,
+      userKey,
+      walletId,
+      financialSubjectRef,
+    },
+    offer,
   };
 }
 
-function publicOffer(mode: "test" | "live"): CreditCheckoutPublicOffer {
-  const offer = getCreditOffer(
-    PREMIUM_IMAGE_CREDIT_OFFER_ID,
-    PREMIUM_IMAGE_CREDIT_OFFER_VERSION
-  );
-  if (!offer) fail();
+function publicOffer(
+  mode: "test" | "live",
+  offer: CreditOffer
+): CreditCheckoutPublicOffer {
   return Object.freeze({
     mode,
+    offerId: offer.offerId,
+    offerVersion: offer.offerVersion,
     amount: offer.amount.value,
     currency: offer.amount.currency,
     creditCount: offer.creditCount,
@@ -203,7 +202,7 @@ export async function claimCreditCheckoutBrowserSession(
   const config = dependencies.config();
   const record = await dependencies.readRecord(input.intentId);
   if (!record || record.intentId !== input.intentId) fail();
-  const scope = readExactScope(record, config);
+  const { scope, offer } = readExactScope(record, config);
   const now = dependencies.now();
   const capabilityExpiresAt = record.checkoutCapabilityExpiresAt;
   if (!isValidDate(capabilityExpiresAt)) fail();
@@ -230,7 +229,7 @@ export async function claimCreditCheckoutBrowserSession(
   return Object.freeze({
     cookieValue: `${record.intentId}.${sessionNonce}`,
     intentId: record.intentId,
-    offer: publicOffer(record.mode),
+    offer: publicOffer(record.mode, offer),
   });
 }
 
@@ -253,7 +252,7 @@ export async function readCreditCheckoutBrowserSession(
   const config = dependencies.config();
   const record = await dependencies.readRecord(intentId);
   if (!record || record.intentId !== intentId) fail();
-  readExactScope(record, config);
+  const { offer } = readExactScope(record, config);
   const capabilityExpiresAt = record.checkoutCapabilityExpiresAt;
   if (!isValidDate(capabilityExpiresAt)) fail();
   if (
@@ -274,7 +273,7 @@ export async function readCreditCheckoutBrowserSession(
   return Object.freeze({
     intentId,
     record,
-    offer: publicOffer(record.mode),
+    offer: publicOffer(record.mode, offer),
   });
 }
 

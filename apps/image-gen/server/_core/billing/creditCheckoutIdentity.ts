@@ -1,14 +1,7 @@
 import { createHash, createHmac } from "node:crypto";
 
 import type { MollieMode } from "./config";
-import {
-  type CreditOffer,
-  listCreditOffers,
-  PREMIUM_IMAGE_CREDIT_OFFER_ID,
-  PREMIUM_IMAGE_CREDIT_OFFER_VERSION,
-  PREMIUM_IMAGE_CREDIT_REFUND_POLICY_ID,
-  PREMIUM_IMAGE_CREDIT_REFUND_POLICY_VERSION,
-} from "./creditCatalog";
+import { type CreditOffer, listCreditOffers } from "./creditCatalog";
 import {
   deriveCreditCheckoutCapability,
   type CreditCheckoutCapabilityMaterial,
@@ -66,14 +59,14 @@ export type CreditPaymentMetadataSnapshot = Readonly<{
     authorizationEpoch: number;
   }>;
   offer: Readonly<{
-    offerId: typeof PREMIUM_IMAGE_CREDIT_OFFER_ID;
-    offerVersion: typeof PREMIUM_IMAGE_CREDIT_OFFER_VERSION;
+    offerId: CreditOffer["offerId"];
+    offerVersion: CreditOffer["offerVersion"];
     amount: Readonly<{
       currency: "EUR";
-      value: "4.99";
-      minor: 499;
+      value: CreditOffer["amount"]["value"];
+      minor: CreditOffer["amountMinor"];
     }>;
-    creditCount: 8;
+    creditCount: CreditOffer["creditCount"];
     creditUnit: "premium_image";
     imageQuality: "medium";
     validity: Readonly<{
@@ -87,9 +80,9 @@ export type CreditPaymentMetadataSnapshot = Readonly<{
       automaticTopUp: false;
       overageAllowed: false;
     }>;
-    refundPolicyId: typeof PREMIUM_IMAGE_CREDIT_REFUND_POLICY_ID;
-    refundPolicyVersion: typeof PREMIUM_IMAGE_CREDIT_REFUND_POLICY_VERSION;
-    description: "Leaderbot - 8 premium beeldcredits";
+    refundPolicyId: CreditOffer["refundPolicyId"];
+    refundPolicyVersion: CreditOffer["refundPolicyVersion"];
+    description: string;
   }>;
 }>;
 
@@ -224,7 +217,7 @@ function assertInput(
   const canonicalOffer = listCreditOffers().find(
     offer => offer === input.offer
   );
-  if (!canonicalOffer || !isExactPilotOffer(canonicalOffer)) {
+  if (!canonicalOffer) {
     fail("invalid_offer");
   }
 }
@@ -272,31 +265,6 @@ function assertWalletIdentityInput(
     fail("invalid_secret");
   }
   assertScope(input.scope);
-}
-
-function isExactPilotOffer(offer: CreditOffer): boolean {
-  return (
-    offer.offerId === PREMIUM_IMAGE_CREDIT_OFFER_ID &&
-    offer.offerVersion === PREMIUM_IMAGE_CREDIT_OFFER_VERSION &&
-    offer.purchaseKind === "credit_purchase" &&
-    offer.publicName === "8 premium beeldcredits" &&
-    offer.amountMinor === 499 &&
-    offer.amount.currency === "EUR" &&
-    offer.amount.value === "4.99" &&
-    offer.creditCount === 8 &&
-    offer.creditUnit === "premium_image" &&
-    offer.providerPolicy.imageQuality === "medium" &&
-    offer.validity.expires === false &&
-    offer.validity.expiresAfterDays === null &&
-    offer.paymentTerms.kind === "one_time" &&
-    offer.paymentTerms.automaticRenewal === false &&
-    offer.paymentTerms.mandateRequired === false &&
-    offer.paymentTerms.automaticTopUp === false &&
-    offer.paymentTerms.overageAllowed === false &&
-    offer.refundPolicyId === PREMIUM_IMAGE_CREDIT_REFUND_POLICY_ID &&
-    offer.refundPolicyVersion === PREMIUM_IMAGE_CREDIT_REFUND_POLICY_VERSION &&
-    offer.mollieDescription === "Leaderbot - 8 premium beeldcredits"
-  );
 }
 
 function fieldBytes(value: CanonicalField): Buffer {
@@ -450,7 +418,7 @@ function buildPaymentMetadataSnapshot(input: {
       amount: {
         currency: input.offer.amount.currency,
         value: input.offer.amount.value,
-        minor: 499 as const,
+        minor: input.offer.amountMinor,
       },
       creditCount: input.offer.creditCount,
       creditUnit: input.offer.creditUnit,
@@ -468,7 +436,7 @@ function buildPaymentMetadataSnapshot(input: {
       },
       refundPolicyId: input.offer.refundPolicyId,
       refundPolicyVersion: input.offer.refundPolicyVersion,
-      description: "Leaderbot - 8 premium beeldcredits" as const,
+      description: input.offer.mollieDescription,
     },
   });
 }

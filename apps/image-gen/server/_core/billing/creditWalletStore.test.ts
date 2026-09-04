@@ -100,10 +100,10 @@ const checkoutReservationInput = {
   ...scope,
   intentId: INTENT_ID,
   authorizationEpoch: 15,
-  offerSnapshotCode: "premium_images_8_medium_v1" as const,
-  expectedAmount: "4.99" as const,
-  creditCount: 8 as const,
-  description: "Leaderbot - 8 premium beeldcredits" as const,
+  offerSnapshotCode: "premium_images_9_medium_v2" as const,
+  expectedAmount: "5.00" as const,
+  creditCount: 9 as const,
+  description: "Leaderbot - 9 premium beeldcredits" as const,
   metadataHash: METADATA_HASH,
   idempotencyKey: `credit-payment:${INTENT_ID}`,
   checkoutScopeKey: CHECKOUT_SCOPE_KEY,
@@ -163,10 +163,10 @@ describe("creditWalletStore procedure boundary", () => {
           USER_KEY,
           FINANCIAL_REF,
           15,
-          "premium_images_8_medium_v1",
-          "4.99",
-          8,
-          "Leaderbot - 8 premium beeldcredits",
+          "premium_images_9_medium_v2",
+          "5.00",
+          9,
+          "Leaderbot - 9 premium beeldcredits",
           METADATA_HASH,
           `credit-payment:${INTENT_ID}`,
           CHECKOUT_SCOPE_KEY,
@@ -670,22 +670,22 @@ describe("creditWalletStore procedure boundary", () => {
       () =>
         reserveCreditCheckoutIntent({
           ...checkoutReservationInput,
-          offerSnapshotCode: "wrong" as "premium_images_8_medium_v1",
+          offerSnapshotCode: "wrong" as "premium_images_9_medium_v2",
         }),
       () =>
         reserveCreditCheckoutIntent({
           ...checkoutReservationInput,
-          expectedAmount: "5.00" as "4.99",
+          expectedAmount: "4.99" as "5.00",
         }),
       () =>
         reserveCreditCheckoutIntent({
           ...checkoutReservationInput,
-          creditCount: 9 as 8,
+          creditCount: 8 as 9,
         }),
       () =>
         reserveCreditCheckoutIntent({
           ...checkoutReservationInput,
-          description: "wrong" as "Leaderbot - 8 premium beeldcredits",
+          description: "wrong" as "Leaderbot - 9 premium beeldcredits",
         }),
       () =>
         reserveCreditCheckoutIntent({

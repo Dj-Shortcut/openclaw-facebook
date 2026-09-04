@@ -138,8 +138,8 @@ jobs:
               context="apps/image-gen"
               dockerfile=""
               kind="runtime"
-              schema_minimum="0018_credit_checkout_reservation"
-              schema_maximum="0018_credit_checkout_reservation"
+              schema_minimum="0019_credit_offer_v2"
+              schema_maximum="0019_credit_offer_v2"
               base_image=""
               ;;
             storage-proxy)
@@ -263,10 +263,10 @@ jobs:
             test "$base" = "$ARTIFACT_BASE_IMAGE"
           fi
 
-      - name: Prepare exact base, expand, and credit-checkout schema fixtures
+      - name: Prepare exact base, expand, credit-checkout, and credit-offer schema fixtures
         if: startsWith(inputs.target, 'image-gen-')
         run: |
-          mysql -h127.0.0.1 -uroot -proot -e "CREATE DATABASE leaderbot_artifact_base CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci; CREATE DATABASE leaderbot_artifact_expand CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci; CREATE DATABASE leaderbot_artifact_credit_checkout CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci"
+          mysql -h127.0.0.1 -uroot -proot -e "CREATE DATABASE leaderbot_artifact_base CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci; CREATE DATABASE leaderbot_artifact_expand CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci; CREATE DATABASE leaderbot_artifact_credit_checkout CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci; CREATE DATABASE leaderbot_artifact_credit_offer CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci"
           NODE_ENV=test \
             LEADERBOT_ALLOW_TEST_SCHEMA_FIXTURE=1 \
             LEADERBOT_TEST_SCHEMA_PHASE=0015_base \
@@ -282,7 +282,12 @@ jobs:
             LEADERBOT_TEST_SCHEMA_PHASE=0018_credit_checkout_reservation \
             DATABASE_URL=mysql://root:root@127.0.0.1:3306/leaderbot_artifact_credit_checkout \
             node apps/image-gen/scripts/prepare-artifact-schema-fixture.mjs
-          mysql -h127.0.0.1 -uroot -proot -e "CREATE USER 'runtime_base'@'%' IDENTIFIED BY 'runtime_base'; GRANT SELECT, INSERT, UPDATE, DELETE ON leaderbot_artifact_base.* TO 'runtime_base'@'%'; CREATE USER 'runtime_expand'@'%' IDENTIFIED BY 'runtime_expand'; GRANT SELECT, INSERT, UPDATE, DELETE ON leaderbot_artifact_expand.* TO 'runtime_expand'@'%'; CREATE USER 'runtime_legacy_credit'@'%' IDENTIFIED BY 'runtime_legacy_credit'; GRANT SELECT, INSERT, UPDATE, DELETE ON leaderbot_artifact_credit_checkout.* TO 'runtime_legacy_credit'@'%'; CREATE USER 'runtime_credit'@'%' IDENTIFIED BY 'runtime_credit';"
+          NODE_ENV=test \
+            LEADERBOT_ALLOW_TEST_SCHEMA_FIXTURE=1 \
+            LEADERBOT_TEST_SCHEMA_PHASE=0019_credit_offer_v2 \
+            DATABASE_URL=mysql://root:root@127.0.0.1:3306/leaderbot_artifact_credit_offer \
+            node apps/image-gen/scripts/prepare-artifact-schema-fixture.mjs
+          mysql -h127.0.0.1 -uroot -proot -e "CREATE USER 'runtime_base'@'%' IDENTIFIED BY 'runtime_base'; GRANT SELECT, INSERT, UPDATE, DELETE ON leaderbot_artifact_base.* TO 'runtime_base'@'%'; CREATE USER 'runtime_expand'@'%' IDENTIFIED BY 'runtime_expand'; GRANT SELECT, INSERT, UPDATE, DELETE ON leaderbot_artifact_expand.* TO 'runtime_expand'@'%'; CREATE USER 'runtime_legacy_credit'@'%' IDENTIFIED BY 'runtime_legacy_credit'; GRANT SELECT, INSERT, UPDATE, DELETE ON leaderbot_artifact_credit_checkout.* TO 'runtime_legacy_credit'@'%'; CREATE USER 'runtime_credit'@'%' IDENTIFIED BY 'runtime_credit'; CREATE USER 'runtime_credit_offer'@'%' IDENTIFIED BY 'runtime_credit_offer';"
           pnpm --dir apps/image-gen exec node --input-type=module <<'NODE'
           import mysql from "mysql2/promise";
           import {
@@ -290,25 +295,36 @@ jobs:
             productionRuntimeWritableTableNames,
           } from "./scripts/production-schema-contract.mjs";
 
-          const connection = await mysql.createConnection(
-            "mysql://root:root@127.0.0.1:3306/leaderbot_artifact_credit_checkout"
-          );
-          const database = "`leaderbot_artifact_credit_checkout`";
-          const account = "'runtime_credit'@'%'";
-          try {
-            await connection.query(`GRANT SELECT ON ${database}.* TO ${account}`);
-            for (const table of productionRuntimeWritableTableNames) {
-              await connection.query(
-                `GRANT INSERT, UPDATE, DELETE ON ${database}.\`${table}\` TO ${account}`
-              );
+          for (const fixture of [
+            {
+              database: "leaderbot_artifact_credit_checkout",
+              account: "runtime_credit",
+            },
+            {
+              database: "leaderbot_artifact_credit_offer",
+              account: "runtime_credit_offer",
+            },
+          ]) {
+            const connection = await mysql.createConnection(
+              `mysql://root:root@127.0.0.1:3306/${fixture.database}`
+            );
+            const database = `\`${fixture.database}\``;
+            const account = `'${fixture.account}'@'%'`;
+            try {
+              await connection.query(`GRANT SELECT ON ${database}.* TO ${account}`);
+              for (const table of productionRuntimeWritableTableNames) {
+                await connection.query(
+                  `GRANT INSERT, UPDATE, DELETE ON ${database}.\`${table}\` TO ${account}`
+                );
+              }
+              for (const routine of creditWalletRoutineNames) {
+                await connection.query(
+                  `GRANT EXECUTE ON PROCEDURE ${database}.\`${routine}\` TO ${account}`
+                );
+              }
+            } finally {
+              await connection.end();
             }
-            for (const routine of creditWalletRoutineNames) {
-              await connection.query(
-                `GRANT EXECUTE ON PROCEDURE ${database}.\`${routine}\` TO ${account}`
-              );
-            }
-          } finally {
-            await connection.end();
           }
           NODE
 
@@ -342,8 +358,15 @@ jobs:
             echo "Bridge unexpectedly accepted legacy runtime rights on 0018" >&2
             exit 1
           fi
+          if docker run --rm --network host \
+            --env DATABASE_URL=mysql://runtime_credit_offer:runtime_credit_offer@127.0.0.1:3306/leaderbot_artifact_credit_offer \
+            --env LEADERBOT_PRODUCTION_MIGRATION_MODE=verify-artifact \
+            "$ARTIFACT_IMAGE" node dist/migrate-production.cjs; then
+            echo "Max-0018 bridge unexpectedly accepted the 0019 schema" >&2
+            exit 1
+          fi
 
-      - name: Prove runtime refuses pre-credit schemas and accepts exact 0018
+      - name: Prove runtime refuses pre-credit schemas and accepts exact 0019
         if: inputs.target == 'image-gen-runtime'
         run: |
           docker run --rm "$ARTIFACT_IMAGE" timeout -k 1s 1s true
@@ -362,8 +385,15 @@ jobs:
             echo "Runtime unexpectedly accepted the expand schema" >&2
             exit 1
           fi
-          docker run --rm --network host \
+          if docker run --rm --network host \
             --env DATABASE_URL=mysql://runtime_credit:runtime_credit@127.0.0.1:3306/leaderbot_artifact_credit_checkout \
+            --env LEADERBOT_PRODUCTION_MIGRATION_MODE=verify-artifact \
+            "$ARTIFACT_IMAGE" node dist/migrate-production.cjs; then
+            echo "Runtime unexpectedly accepted the 0018 schema" >&2
+            exit 1
+          fi
+          docker run --rm --network host \
+            --env DATABASE_URL=mysql://runtime_credit_offer:runtime_credit_offer@127.0.0.1:3306/leaderbot_artifact_credit_offer \
             --env LEADERBOT_PRODUCTION_MIGRATION_MODE=verify-artifact \
             "$ARTIFACT_IMAGE" node dist/migrate-production.cjs
 

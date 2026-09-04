@@ -1,10 +1,7 @@
 import { getMollieConfig, type MollieConfig } from "./config";
 import {
-  PREMIUM_IMAGE_CREDIT_OFFER_ID,
-  PREMIUM_IMAGE_CREDIT_OFFER_VERSION,
-  PREMIUM_IMAGE_CREDIT_REFUND_POLICY_ID,
-  PREMIUM_IMAGE_CREDIT_REFUND_POLICY_VERSION,
   getCreditOffer,
+  getCreditOfferForStoredSnapshot,
 } from "./creditCatalog";
 import {
   getCreditCheckoutPilotConfig,
@@ -214,6 +211,7 @@ function requireProviderScope(
   const financialSubjectRef = record.creditFinancialSubjectRef;
   const sessionNonceHash = record.checkoutCapabilitySessionNonceHash;
   const metadataHash = record.creditMetadataHash;
+  const offer = getCreditOfferForStoredSnapshot(record);
   if (
     !pilot.checkoutEnabled ||
     !pilot.paidCreditsEnabled ||
@@ -223,12 +221,8 @@ function requireProviderScope(
     session.intentId !== record.intentId ||
     !UUID_PATTERN.test(record.intentId) ||
     record.kind !== "credit_purchase" ||
-    record.planCode !== PREMIUM_IMAGE_CREDIT_OFFER_ID ||
-    record.expectedAmount !== "4.99" ||
-    record.currency !== "EUR" ||
+    !offer ||
     record.interval !== "oneoff" ||
-    record.mollieDescription !== "Leaderbot - 8 premium beeldcredits" ||
-    record.creditCount !== 8 ||
     record.billingProfileVersion !== 0 ||
     !Number.isSafeInteger(record.authorizationEpoch) ||
     record.authorizationEpoch < 1 ||
@@ -253,15 +247,16 @@ function requireProviderScope(
     !SHA256_PATTERN.test(metadataHash) ||
     record.creditIdentityErasedAt !== null ||
     session.offer.mode !== record.mode ||
-    session.offer.amount !== "4.99" ||
-    session.offer.currency !== "EUR" ||
-    session.offer.creditCount !== 8 ||
-    session.offer.imageQuality !== "medium" ||
-    session.offer.expires ||
-    session.offer.automaticRenewal ||
-    session.offer.refundPolicyId !== PREMIUM_IMAGE_CREDIT_REFUND_POLICY_ID ||
-    session.offer.refundPolicyVersion !==
-      PREMIUM_IMAGE_CREDIT_REFUND_POLICY_VERSION
+    session.offer.offerId !== offer.offerId ||
+    session.offer.offerVersion !== offer.offerVersion ||
+    session.offer.amount !== offer.amount.value ||
+    session.offer.currency !== offer.amount.currency ||
+    session.offer.creditCount !== offer.creditCount ||
+    session.offer.imageQuality !== offer.providerPolicy.imageQuality ||
+    session.offer.expires !== offer.validity.expires ||
+    session.offer.automaticRenewal !== offer.paymentTerms.automaticRenewal ||
+    session.offer.refundPolicyId !== offer.refundPolicyId ||
+    session.offer.refundPolicyVersion !== offer.refundPolicyVersion
   ) {
     return fail();
   }
@@ -289,7 +284,7 @@ function requireProviderScope(
     authorizationEpoch: record.authorizationEpoch,
     sessionNonceHash,
     metadataHash,
-    offerId: PREMIUM_IMAGE_CREDIT_OFFER_ID,
-    offerVersion: PREMIUM_IMAGE_CREDIT_OFFER_VERSION,
+    offerId: offer.offerId,
+    offerVersion: offer.offerVersion,
   });
 }

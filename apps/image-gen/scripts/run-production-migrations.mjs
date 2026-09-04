@@ -34,6 +34,7 @@ const testOnlyBootstrapAllowed =
   !new Set([
     "apply-empty-bootstrap",
     "apply-empty-credit-wallet-bootstrap",
+    "apply-empty-credit-offer-bootstrap",
   ]).has(migrationMode) ||
   (process.env.NODE_ENV === "test" &&
     process.env.LEADERBOT_ALLOW_TEST_SCHEMA_BOOTSTRAP === "1");

@@ -3630,9 +3630,10 @@ function validateImageGenMigrationCi(rootDir) {
     "pnpm run db:test-production-migrator",
     "pnpm run db:rehearse-0017",
     "pnpm run db:rehearse-0018",
-    "LEADERBOT_PRODUCTION_MIGRATION_MODE: verify-credit-wallet",
-    "LEADERBOT_PRODUCTION_MIGRATION_MODE=apply-empty-credit-wallet-bootstrap",
-    "LEADERBOT_PRODUCTION_MIGRATION_MODE=verify-credit-wallet",
+    "pnpm run db:rehearse-0019",
+    "LEADERBOT_PRODUCTION_MIGRATION_MODE: verify-credit-offer",
+    "LEADERBOT_PRODUCTION_MIGRATION_MODE=apply-empty-credit-offer-bootstrap",
+    "LEADERBOT_PRODUCTION_MIGRATION_MODE=verify-credit-offer",
     "runtime_credit_smoke:runtime_credit_smoke@127.0.0.1:3306/test_image_gen",
     "runtime_credit_container:runtime_credit_container@127.0.0.1:3306/test_image_gen_container",
     "productionRuntimeWritableTableNames",
@@ -3656,8 +3657,8 @@ function validateImageGenMigrationCi(rootDir) {
       "migration smoke CI must build the exact definer-grant bundle before its MySQL integration test",
     );
   }
-  const exactRuntimeMinimum = `io.leaderbot.schema.minimum" }}' "$image")" = "0018_credit_checkout_reservation"`;
-  const exactRuntimeMaximum = `io.leaderbot.schema.maximum" }}' "$image")" = "0018_credit_checkout_reservation"`;
+  const exactRuntimeMinimum = `io.leaderbot.schema.minimum" }}' "$image")" = "0019_credit_offer_v2"`;
+  const exactRuntimeMaximum = `io.leaderbot.schema.maximum" }}' "$image")" = "0019_credit_offer_v2"`;
   for (const [source, sourcePath] of [
     [imageCi, imageCiPath],
     [migrationCi, migrationCiPath],
@@ -3670,7 +3671,7 @@ function validateImageGenMigrationCi(rootDir) {
       )
     ) {
       fail(
-        `${sourcePath} must assert the exact 0018_credit_checkout_reservation runtime image range`,
+        `${sourcePath} must assert the exact 0019_credit_offer_v2 runtime image range`,
       );
     }
   }
@@ -3810,7 +3811,15 @@ function validateTrustedArtifactWorkflow(rootDir) {
     ],
     [
       "CREATE USER 'runtime_credit'@'%' IDENTIFIED BY 'runtime_credit'",
-      "must create the final credit-schema verification principal",
+      "must create the 0018 credit-schema verification principal",
+    ],
+    [
+      "CREATE USER 'runtime_credit_offer'@'%' IDENTIFIED BY 'runtime_credit_offer'",
+      "must create the exact 0019 credit-offer verification principal",
+    ],
+    [
+      "LEADERBOT_TEST_SCHEMA_PHASE=0019_credit_offer_v2",
+      "must prepare an exact disposable 0019 schema fixture",
     ],
     [
       "productionRuntimeWritableTableNames",
@@ -3838,7 +3847,11 @@ function validateTrustedArtifactWorkflow(rootDir) {
     ],
     [
       "DATABASE_URL=mysql://runtime_credit:runtime_credit@127.0.0.1:3306/leaderbot_artifact_credit_checkout",
-      "must verify final runtime and bridge migration support with the credit principal",
+      "must prove the final runtime refuses 0018 while the bridge still supports it",
+    ],
+    [
+      "DATABASE_URL=mysql://runtime_credit_offer:runtime_credit_offer@127.0.0.1:3306/leaderbot_artifact_credit_offer",
+      "must verify the final runtime with the exact 0019 credit-offer principal",
     ],
     [
       "docker logout registry.fly.io",
@@ -3861,17 +3874,37 @@ function validateTrustedArtifactWorkflow(rootDir) {
       fail(`${TRUSTED_ARTIFACT_WORKFLOW_PATH} ${message}`);
     }
   }
+  const runtimeProofStart = workflow.indexOf(
+    "- name: Prove runtime refuses pre-credit schemas and accepts exact 0019",
+  );
+  const runtimeProofEnd = workflow.indexOf(
+    "- name: Prove gateway runtime and mounted-state rehearsal",
+    runtimeProofStart,
+  );
+  const runtimeProof =
+    runtimeProofStart >= 0 && runtimeProofEnd > runtimeProofStart
+      ? workflow.slice(runtimeProofStart, runtimeProofEnd)
+      : "";
+  if (
+    !runtimeProof.includes(
+      "DATABASE_URL=mysql://runtime_credit_offer:runtime_credit_offer@127.0.0.1:3306/leaderbot_artifact_credit_offer",
+    )
+  ) {
+    fail(
+      `${TRUSTED_ARTIFACT_WORKFLOW_PATH} must verify the final runtime with the exact 0019 credit-offer principal`,
+    );
+  }
   if (workflow.includes("pull_request:")) {
     fail(`${TRUSTED_ARTIFACT_WORKFLOW_PATH} must never build from a PR event`);
   }
   if (
-    !/kind="runtime"\s+schema_minimum="0018_credit_checkout_reservation"\s+schema_maximum="0018_credit_checkout_reservation"/.test(
+    !/kind="runtime"\s+schema_minimum="0019_credit_offer_v2"\s+schema_maximum="0019_credit_offer_v2"/.test(
       workflow,
     ) ||
     workflow.includes('schema_maximum="0017_contract"')
   ) {
     fail(
-      `${TRUSTED_ARTIFACT_WORKFLOW_PATH} runtime artifacts must remain exactly 0018_credit_checkout_reservation`,
+      `${TRUSTED_ARTIFACT_WORKFLOW_PATH} runtime artifacts must remain exactly 0019_credit_offer_v2`,
     );
   }
   if (occurrenceCount(workflow, `image: ${PINNED_MYSQL_IMAGE}`) !== 1) {
@@ -3895,6 +3928,7 @@ function validateTrustedArtifactWorkflow(rootDir) {
     occurrenceCount(workflow, "CREATE USER 'runtime_legacy_credit'@'%'") !==
       1 ||
     occurrenceCount(workflow, "CREATE USER 'runtime_credit'@'%'") !== 1 ||
+    occurrenceCount(workflow, "CREATE USER 'runtime_credit_offer'@'%'") !== 1 ||
     occurrenceCount(
       workflow,
       "GRANT SELECT, INSERT, UPDATE, DELETE ON leaderbot_artifact_base.* TO 'runtime_base'@'%'",
@@ -8773,7 +8807,7 @@ export function validateProductionRepository(rootDir = process.cwd()) {
         'io.leaderbot.artifact.kind="migration-bridge"',
         'io.leaderbot.schema.minimum="${MIGRATION_BRIDGE_SCHEMA_MINIMUM}"',
         'io.leaderbot.schema.maximum="0018_credit_checkout_reservation"',
-        'io.leaderbot.schema.minimum="0018_credit_checkout_reservation"',
+        'io.leaderbot.schema.minimum="0019_credit_offer_v2"',
         "'migration-bridge' > /app/.leaderbot-artifact-kind",
         "'runtime' > /app/.leaderbot-artifact-kind",
         "RUN test -s /app/dist/provision-whatsapp-binding.cjs",
@@ -8812,15 +8846,15 @@ export function validateProductionRepository(rootDir = process.cwd()) {
       const runtimeStage = dockerfile.split(" AS runtime", 2)[1] ?? "";
       if (
         !runtimeStage.includes(
-          'io.leaderbot.schema.minimum="0018_credit_checkout_reservation"',
+          'io.leaderbot.schema.minimum="0019_credit_offer_v2"',
         ) ||
         !runtimeStage.includes(
-          'io.leaderbot.schema.maximum="0018_credit_checkout_reservation"',
+          'io.leaderbot.schema.maximum="0019_credit_offer_v2"',
         ) ||
         runtimeStage.includes("0017_contract")
       ) {
         fail(
-          "image-gen runtime artifact must stay on the exact 0018_credit_checkout_reservation schema range",
+          "image-gen runtime artifact must stay on the exact 0019_credit_offer_v2 schema range",
         );
       }
       const imageGenCi = fs.readFileSync(

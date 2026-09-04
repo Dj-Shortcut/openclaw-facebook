@@ -25,10 +25,9 @@ import { getDatabaseOrThrow, type ImageGenTransaction } from "../../db";
 import type { MollieMode } from "./config";
 import { getMollieConfig } from "./config";
 import {
-  getCreditOffer,
-  PREMIUM_IMAGE_CREDIT_OFFER_ID,
-  PREMIUM_IMAGE_CREDIT_OFFER_VERSION,
   type CreditOffer,
+  getCreditOfferForStoredSnapshot,
+  listCreditOffers,
 } from "./creditCatalog";
 import { validateCreditPaymentContract } from "./creditPaymentContract";
 import { hashCanonicalSnapshot } from "./ids";
@@ -612,11 +611,8 @@ export async function enqueueDueCustomerlessCreditPaymentRecoveries(
       .for("update");
     const control = controls[0];
     if (!control?.commercialEnabled) return 0;
-    const offer = getCreditOffer(
-      PREMIUM_IMAGE_CREDIT_OFFER_ID,
-      PREMIUM_IMAGE_CREDIT_OFFER_VERSION
-    );
-    if (!offer) {
+    const offers = listCreditOffers();
+    if (offers.length === 0) {
       throw new Error("premium credit recovery offer is unavailable");
     }
 
@@ -637,7 +633,7 @@ export async function enqueueDueCustomerlessCreditPaymentRecoveries(
             workspaceId,
             mode,
             control.authorizationEpoch,
-            offer
+            offers
           ),
           dueCreditRecoveryOperationPredicate(
             workspaceId,
@@ -666,7 +662,7 @@ export async function enqueueDueCustomerlessCreditPaymentRecoveries(
                   workspaceId,
                   mode,
                   control.authorizationEpoch,
-                  offer
+                  offers
                 ),
                 inArray(billingIntents.intentId, intentIds)
               )
@@ -750,7 +746,7 @@ function dueCreditRecoveryIntentPredicate(
   workspaceId: number,
   mode: MollieMode,
   authorizationEpoch: number,
-  offer: CreditOffer
+  offers: readonly CreditOffer[]
 ) {
   return and(
     eq(billingIntents.workspaceId, workspaceId),
@@ -758,13 +754,19 @@ function dueCreditRecoveryIntentPredicate(
     eq(billingIntents.kind, "credit_purchase"),
     eq(billingIntents.authorizationEpoch, authorizationEpoch),
     eq(billingIntents.status, "api_unknown"),
-    eq(billingIntents.planCode, offer.offerId),
     eq(billingIntents.billingProfileVersion, 0),
     eq(billingIntents.interval, "oneoff"),
-    eq(billingIntents.expectedAmount, offer.amount.value),
-    eq(billingIntents.currency, offer.amount.currency),
-    eq(billingIntents.mollieDescription, offer.mollieDescription),
-    eq(billingIntents.creditCount, offer.creditCount),
+    or(
+      ...offers.map(offer =>
+        and(
+          eq(billingIntents.planCode, offer.offerId),
+          eq(billingIntents.expectedAmount, offer.amount.value),
+          eq(billingIntents.currency, offer.amount.currency),
+          eq(billingIntents.mollieDescription, offer.mollieDescription),
+          eq(billingIntents.creditCount, offer.creditCount)
+        )
+      )
+    ),
     isNotNull(billingIntents.creditWalletId),
     isNotNull(billingIntents.creditFinancialSubjectRef),
     isNotNull(billingIntents.creditMetadataHash),
@@ -1202,7 +1204,7 @@ function isExactKnownOperation(
 function exactCreditIntentOffer(
   intent: typeof billingIntents.$inferSelect
 ): CreditOffer | null {
-  const offer = getCreditOffer(intent.planCode, 1);
+  const offer = getCreditOfferForStoredSnapshot(intent);
   if (
     !offer ||
     intent.kind !== "credit_purchase" ||

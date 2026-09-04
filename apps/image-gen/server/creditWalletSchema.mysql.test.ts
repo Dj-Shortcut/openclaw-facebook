@@ -70,7 +70,7 @@ type Scope = {
   workspaceId: number;
 };
 
-suite("0018 credit wallet MySQL 8.4 procedure boundary", () => {
+suite("0019 credit wallet MySQL 8.4 procedure boundary", () => {
   let connection: Connection;
 
   beforeAll(async () => {
@@ -150,7 +150,7 @@ suite("0018 credit wallet MySQL 8.4 procedure boundary", () => {
     )}`;
     const capabilityHash = hash(`checkout-capability:${suffix}`);
     const [rows] = await connection.query<RowDataPacket[][]>(
-      "CALL `credit_reserve_checkout_intent`(?, ?, ?, 'test', ?, 1, 1, ?, ?, 2, 'premium_images_8_medium_v1', '4.99', 8, 'Leaderbot - 8 premium beeldcredits', ?, ?, ?, ?, TIMESTAMPADD(MINUTE,10,CURRENT_TIMESTAMP))",
+      "CALL `credit_reserve_checkout_intent`(?, ?, ?, 'test', ?, 1, 1, ?, ?, 2, 'premium_images_9_medium_v2', '5.00', 9, 'Leaderbot - 9 premium beeldcredits', ?, ?, ?, ?, TIMESTAMPADD(MINUTE,10,CURRENT_TIMESTAMP))",
       [
         intentId,
         walletId,
@@ -359,7 +359,7 @@ suite("0018 credit wallet MySQL 8.4 procedure boundary", () => {
     )}`;
     const capabilityHash = hash(`checkout-capability:${suffix}`);
     const [rows] = await connection.query<RowDataPacket[][]>(
-      "CALL `credit_reserve_checkout_intent`(?, ?, ?, 'test', ?, 1, 1, ?, ?, 2, 'premium_images_8_medium_v1', '4.99', 8, 'Leaderbot - 8 premium beeldcredits', ?, ?, ?, ?, TIMESTAMPADD(MINUTE,10,CURRENT_TIMESTAMP))",
+      "CALL `credit_reserve_checkout_intent`(?, ?, ?, 'test', ?, 1, 1, ?, ?, 2, 'premium_images_9_medium_v2', '5.00', 9, 'Leaderbot - 9 premium beeldcredits', ?, ?, ?, ?, TIMESTAMPADD(MINUTE,10,CURRENT_TIMESTAMP))",
       [
         intentId,
         walletId,
@@ -666,7 +666,7 @@ suite("0018 credit wallet MySQL 8.4 procedure boundary", () => {
       ownerRef: intent.intentId,
     });
     const [walletReplay] = await connection.query<RowDataPacket[][]>(
-      "CALL `credit_reserve_checkout_intent`(?, ?, ?, 'test', ?, 1, 1, ?, ?, 2, 'premium_images_8_medium_v1', '4.99', 8, 'Leaderbot - 8 premium beeldcredits', ?, ?, ?, ?, TIMESTAMPADD(MINUTE,10,CURRENT_TIMESTAMP))",
+      "CALL `credit_reserve_checkout_intent`(?, ?, ?, 'test', ?, 1, 1, ?, ?, 2, 'premium_images_9_medium_v2', '5.00', 9, 'Leaderbot - 9 premium beeldcredits', ?, ?, ?, ?, TIMESTAMPADD(MINUTE,10,CURRENT_TIMESTAMP))",
       [
         scope.checkoutReservation.intentId,
         scope.walletId,
@@ -1139,7 +1139,7 @@ suite("0018 credit wallet MySQL 8.4 procedure boundary", () => {
         scope,
         scope.checkoutReservation,
         randomUUID(),
-        { grossAmount: "4.99" }
+        { grossAmount: "5.00" }
       );
       expect(
         (
@@ -1195,7 +1195,7 @@ suite("0018 credit wallet MySQL 8.4 procedure boundary", () => {
         [`credit_reservation_transport_review:${due.reservationId}`]
       );
 
-      expect(wallet).toMatchObject({ balance: 8, reserved: 1 });
+      expect(wallet).toMatchObject({ balance: 9, reserved: 1 });
       expect(reservation).toMatchObject({
         status: "reserved",
         transportState: "transport_started",
@@ -1380,7 +1380,7 @@ suite("0018 credit wallet MySQL 8.4 procedure boundary", () => {
         scope,
         scope.checkoutReservation,
         randomUUID(),
-        { grossAmount: "4.99" }
+        { grossAmount: "5.00" }
       );
       expect(
         (
@@ -1438,7 +1438,7 @@ suite("0018 credit wallet MySQL 8.4 procedure boundary", () => {
         scope,
         scope.checkoutReservation,
         randomUUID(),
-        { grossAmount: "4.99" }
+        { grossAmount: "5.00" }
       );
       expect(
         (
@@ -1534,7 +1534,7 @@ suite("0018 credit wallet MySQL 8.4 procedure boundary", () => {
         return { wallet, reservation, entryCount: Number(ledger.entryCount) };
       };
       expect(await readTerminalState()).toEqual({
-        wallet: expect.objectContaining({ balance: 8, reserved: 1 }),
+        wallet: expect.objectContaining({ balance: 9, reserved: 1 }),
         reservation: expect.objectContaining({
           status: "reserved",
           transportState: "known_accepted",
@@ -1550,7 +1550,7 @@ suite("0018 credit wallet MySQL 8.4 procedure boundary", () => {
         )
       ).resolves.toBe(1);
       expect(await readTerminalState()).toEqual({
-        wallet: expect.objectContaining({ balance: 8, reserved: 1 }),
+        wallet: expect.objectContaining({ balance: 9, reserved: 1 }),
         reservation: expect.objectContaining({
           status: "reserved",
           transportState: "known_accepted",
@@ -1730,13 +1730,13 @@ suite("0018 credit wallet MySQL 8.4 procedure boundary", () => {
       firstScope,
       firstScope.checkoutReservation,
       randomUUID(),
-      { grossAmount: "4.99" }
+      { grossAmount: "5.00" }
     );
     const secondPayment = await makeIntentPaid(
       secondScope,
       secondScope.checkoutReservation,
       randomUUID(),
-      { grossAmount: "4.99" }
+      { grossAmount: "5.00" }
     );
     await grant(
       firstScope,
@@ -2029,7 +2029,7 @@ suite("0018 credit wallet MySQL 8.4 procedure boundary", () => {
         scope,
         scope.checkoutReservation,
         randomUUID(),
-        { grossAmount: "4.99" }
+        { grossAmount: "5.00" }
       );
       await grant(
         scope,
@@ -2841,7 +2841,7 @@ suite("0018 credit wallet MySQL 8.4 procedure boundary", () => {
       scope,
       scope.checkoutReservation,
       randomUUID(),
-      { grossAmount: "4.99" }
+      { grossAmount: "5.00" }
     );
     const grantEntry = await grant(
       scope,
@@ -2856,7 +2856,7 @@ suite("0018 credit wallet MySQL 8.4 procedure boundary", () => {
       `aggregate-refund-malformed:${randomUUID()}`
     );
     await connection.query(
-      "UPDATE `payment_ledger` SET `refunds`=JSON_ARRAY(JSON_OBJECT('id',?,'status','refunded','amount',JSON_OBJECT('value','2.004','currency','EUR')),JSON_OBJECT('id',?,'status','refunded','amount',JSON_OBJECT('value','2.986','currency','EUR'))),`observed_snapshot_hash`=? WHERE `id`=?",
+      "UPDATE `payment_ledger` SET `refunds`=JSON_ARRAY(JSON_OBJECT('id',?,'status','refunded','amount',JSON_OBJECT('value','2.004','currency','EUR')),JSON_OBJECT('id',?,'status','refunded','amount',JSON_OBJECT('value','2.996','currency','EUR'))),`observed_snapshot_hash`=? WHERE `id`=?",
       [
         firstRefundId,
         secondRefundId,
@@ -2880,7 +2880,7 @@ suite("0018 credit wallet MySQL 8.4 procedure boundary", () => {
     ).rejects.toThrow("refund set is incomplete or mismatched");
     const evidenceA = hash(`aggregate-refund-a:${randomUUID()}`);
     await connection.query(
-      "UPDATE `payment_ledger` SET `refunds`=JSON_ARRAY(JSON_OBJECT('id',?,'status','refunded','amount',JSON_OBJECT('value','2.00','currency','EUR')),JSON_OBJECT('id',?,'status','refunded','amount',JSON_OBJECT('value','2.99','currency','EUR')),JSON_OBJECT('id',?,'status','failed','amount',JSON_OBJECT('value','1.00','currency','EUR'))),`observed_snapshot_hash`=? WHERE `id`=?",
+      "UPDATE `payment_ledger` SET `refunds`=JSON_ARRAY(JSON_OBJECT('id',?,'status','refunded','amount',JSON_OBJECT('value','2.00','currency','EUR')),JSON_OBJECT('id',?,'status','refunded','amount',JSON_OBJECT('value','3.00','currency','EUR')),JSON_OBJECT('id',?,'status','failed','amount',JSON_OBJECT('value','1.00','currency','EUR'))),`observed_snapshot_hash`=? WHERE `id`=?",
       [
         firstRefundId,
         secondRefundId,
@@ -2910,7 +2910,7 @@ suite("0018 credit wallet MySQL 8.4 procedure boundary", () => {
       [grantEntry.entryId]
     );
     expect(Number(adjustment.count)).toBe(1);
-    expect(String(adjustment.amount)).toBe("4.99");
+    expect(String(adjustment.amount)).toBe("5.00");
     expect(JSON.parse(String(adjustment.evidence))).toEqual([
       {
         amount: { currency: "EUR", value: "2.00" },
@@ -2918,7 +2918,7 @@ suite("0018 credit wallet MySQL 8.4 procedure boundary", () => {
         status: "refunded",
       },
       {
-        amount: { currency: "EUR", value: "2.99" },
+        amount: { currency: "EUR", value: "3.00" },
         id: secondRefundId,
         status: "refunded",
       },
@@ -2936,7 +2936,7 @@ suite("0018 credit wallet MySQL 8.4 procedure boundary", () => {
 
     const evidenceB = hash(`aggregate-refund-b:${randomUUID()}`);
     await connection.query(
-      "UPDATE `payment_ledger` SET `refunds`=JSON_ARRAY(JSON_OBJECT('id',?,'status','pending','amount',JSON_OBJECT('value','4.99','currency','EUR'))),`observed_snapshot_hash`=? WHERE `id`=?",
+      "UPDATE `payment_ledger` SET `refunds`=JSON_ARRAY(JSON_OBJECT('id',?,'status','pending','amount',JSON_OBJECT('value','5.00','currency','EUR'))),`observed_snapshot_hash`=? WHERE `id`=?",
       [`re_${randomUUID()}`, evidenceB, payment.paymentLedgerId]
     );
     const [replayed] = await connection.query<RowDataPacket[][]>(
@@ -3391,7 +3391,7 @@ suite("0018 credit wallet MySQL 8.4 procedure boundary", () => {
       scope,
       scope.checkoutReservation,
       randomUUID(),
-      { grossAmount: "4.99" }
+      { grossAmount: "5.00" }
     );
     await grant(
       scope,
@@ -3401,7 +3401,7 @@ suite("0018 credit wallet MySQL 8.4 procedure boundary", () => {
     );
     const adjustmentEvidence = hash(`freeze-adjustment:${randomUUID()}`);
     await connection.query(
-      "UPDATE `payment_ledger` SET `refunds`=JSON_ARRAY(JSON_OBJECT('id',?,'status','refunded','amount',JSON_OBJECT('value','4.99','currency','EUR'))),`observed_snapshot_hash`=? WHERE `id`=?",
+      "UPDATE `payment_ledger` SET `refunds`=JSON_ARRAY(JSON_OBJECT('id',?,'status','refunded','amount',JSON_OBJECT('value','5.00','currency','EUR'))),`observed_snapshot_hash`=? WHERE `id`=?",
       [`re_${randomUUID()}`, adjustmentEvidence, payment.paymentLedgerId]
     );
     const runtimeUser = `credit_rt_${randomUUID().replaceAll("-", "").slice(0, 16)}`;

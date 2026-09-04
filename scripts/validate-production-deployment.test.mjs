@@ -3189,52 +3189,79 @@ describe("production deployment contract", () => {
     );
   });
 
-  it("keeps runtime artifacts on the exact supported 0018 phase", () => {
+  it("keeps runtime artifacts on the exact supported 0019 phase", () => {
     const root = createRepositoryFixture();
     replaceFixtureText(
       root,
       ".github/workflows/build-production-artifacts.yml",
-      'kind="runtime"\n              schema_minimum="0018_credit_checkout_reservation"\n              schema_maximum="0018_credit_checkout_reservation"',
-      'kind="runtime"\n              schema_minimum="0018_credit_checkout_reservation"\n              schema_maximum="0017_contract"',
+      'kind="runtime"\n              schema_minimum="0019_credit_offer_v2"\n              schema_maximum="0019_credit_offer_v2"',
+      'kind="runtime"\n              schema_minimum="0019_credit_offer_v2"\n              schema_maximum="0018_credit_checkout_reservation"',
     );
 
     expect(() => validateProductionRepository(root)).toThrow(
-      "runtime artifacts must remain exactly 0018_credit_checkout_reservation",
+      "runtime artifacts must remain exactly 0019_credit_offer_v2",
     );
   });
 
-  it("rejects a Docker runtime that claims unsupported pre-0018 compatibility", () => {
+  it("requires the trusted builder to prepare an exact 0019 fixture", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/build-production-artifacts.yml",
+      "LEADERBOT_TEST_SCHEMA_PHASE=0019_credit_offer_v2",
+      "LEADERBOT_TEST_SCHEMA_PHASE=0018_credit_checkout_reservation",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must prepare an exact disposable 0019 schema fixture",
+    );
+  });
+
+  it("requires the trusted runtime build to verify the exact 0019 fixture", () => {
+    const root = createRepositoryFixture();
+    replaceLastFixtureText(
+      root,
+      ".github/workflows/build-production-artifacts.yml",
+      "DATABASE_URL=mysql://runtime_credit_offer:runtime_credit_offer@127.0.0.1:3306/leaderbot_artifact_credit_offer",
+      "DATABASE_URL=mysql://runtime_credit:runtime_credit@127.0.0.1:3306/leaderbot_artifact_credit_checkout",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must verify the final runtime with the exact 0019 credit-offer principal",
+    );
+  });
+
+  it("rejects a Docker runtime that claims unsupported pre-0019 compatibility", () => {
     const root = createRepositoryFixture();
     const dockerfilePath = path.join(root, "apps/image-gen/Dockerfile");
     const dockerfile = fs.readFileSync(dockerfilePath, "utf8");
-    const marker =
-      'io.leaderbot.schema.maximum="0018_credit_checkout_reservation"';
+    const marker = 'io.leaderbot.schema.maximum="0019_credit_offer_v2"';
     const runtimeMarkerIndex = dockerfile.lastIndexOf(marker);
     expect(runtimeMarkerIndex).toBeGreaterThan(0);
     fs.writeFileSync(
       dockerfilePath,
-      `${dockerfile.slice(0, runtimeMarkerIndex)}io.leaderbot.schema.maximum="0017_contract"${dockerfile.slice(runtimeMarkerIndex + marker.length)}`,
+      `${dockerfile.slice(0, runtimeMarkerIndex)}io.leaderbot.schema.maximum="0018_credit_checkout_reservation"${dockerfile.slice(runtimeMarkerIndex + marker.length)}`,
     );
 
     expect(() => validateProductionRepository(root)).toThrow(
-      "runtime artifact must stay on the exact 0018_credit_checkout_reservation schema range",
+      "runtime artifact must stay on the exact 0019_credit_offer_v2 schema range",
     );
   });
 
   it.each([
     ".github/workflows/image-gen-ci.yml",
     ".github/workflows/image-gen-migration-smoke.yml",
-  ])("keeps %s runtime label checks on exact 0018", (workflowPath) => {
+  ])("keeps %s runtime label checks on exact 0019", (workflowPath) => {
     const root = createRepositoryFixture();
     replaceFixtureText(
       root,
       workflowPath,
+      `io.leaderbot.schema.maximum" }}' "$image")" = "0019_credit_offer_v2"`,
       `io.leaderbot.schema.maximum" }}' "$image")" = "0018_credit_checkout_reservation"`,
-      `io.leaderbot.schema.maximum" }}' "$image")" = "0017_contract"`,
     );
 
     expect(() => validateProductionRepository(root)).toThrow(
-      `${workflowPath} must assert the exact 0018_credit_checkout_reservation runtime image range`,
+      `${workflowPath} must assert the exact 0019_credit_offer_v2 runtime image range`,
     );
   });
 

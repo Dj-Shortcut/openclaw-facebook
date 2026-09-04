@@ -104,7 +104,8 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
       "Stuur Leaderbot wat je wilt zien. Maak een nieuwe afbeelding of bewerk je eigen foto met een eenvoudige tekstbeschrijving.",
     heroPrimaryCta: "Open Leaderbot in Messenger",
     heroSecondaryCta: "Bekijk voorbeelden",
-    microLine: "Dagelijks gratis proberen • Geen abonnement • Veilig betalen via Mollie",
+    microLine:
+      "Dagelijks gratis proberen • Geen abonnement • Veilig betalen via Mollie",
     chat: {
       label: "Voorbeeldgesprek",
       prompt: "Vervang de achtergrond door een rustig kantoor met veel licht.",
@@ -130,7 +131,8 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
     examples: [
       {
         title: "Achtergrond vervangen",
-        instruction: "“Vervang de achtergrond door een rustig kantoor met veel licht.”",
+        instruction:
+          "“Vervang de achtergrond door een rustig kantoor met veel licht.”",
         beforeLabel: "Voor",
         afterLabel: "Na",
         resultCaption: "Nieuwe achtergrond, jij blijft jezelf",
@@ -187,10 +189,11 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
     },
     credits: {
       name: "Premiumbundel",
-      price: "€4,99",
+      price: "€5,00",
       suffix: "eenmalig",
       features: [
-        "8 premium beeldcredits",
+        "9 premium beeldcredits",
+        "1 bruikbaar geleverd premiumresultaat = 1 credit",
         "Medium beeldkwaliteit",
         "Credits vervallen niet",
         "Geen abonnement of automatische verlenging",
@@ -237,12 +240,12 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
       {
         question: "Hoe koop ik premiumcredits?",
         answer:
-          "Wanneer zowel je gratis dagtegoed als eventuele premiumcredits op zijn, stuurt Leaderbot je in Messenger een persoonlijke, beveiligde betaallink. Die link opent een eenmalige Mollie-checkout van €4,99 voor 8 premiumcredits.",
+          "Wanneer zowel je gratis dagtegoed als eventuele premiumcredits op zijn, stuurt Leaderbot je in Messenger een persoonlijke, beveiligde betaallink. Die link opent een eenmalige Mollie-checkout van €5,00 voor 9 premium beeld- of bewerkingscredits. Eén succesvol geleverd bruikbaar premiumresultaat verbruikt één credit.",
       },
       {
         question: "Vervallen mijn premiumcredits?",
         answer:
-          "Nee. Eenmaal aangekocht, blijven je 8 premiumcredits beschikbaar tot je ze gebruikt — zonder vervaldatum.",
+          "Nee. Eenmaal aangekocht, blijven je 9 premiumcredits beschikbaar tot je ze gebruikt — zonder vervaldatum.",
       },
       {
         question: "Kan ik mijn eigen foto bewerken?",
@@ -276,7 +279,8 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
       "Dites à Leaderbot ce que vous voulez voir. Créez une nouvelle image ou modifiez votre propre photo avec une simple description en texte.",
     heroPrimaryCta: "Ouvrir Leaderbot dans Messenger",
     heroSecondaryCta: "Voir des exemples",
-    microLine: "Essai gratuit chaque jour • Sans abonnement • Paiement sécurisé via Mollie",
+    microLine:
+      "Essai gratuit chaque jour • Sans abonnement • Paiement sécurisé via Mollie",
     chat: {
       label: "Exemple de conversation",
       prompt: "Remplace l'arrière-plan par un bureau lumineux et calme.",
@@ -289,7 +293,10 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
     howTitle: "Du message à l'image, en trois étapes",
     steps: [
       { title: "Ouvrez Messenger", body: "Ouvrez Leaderbot dans Messenger." },
-      { title: "Envoyez votre demande", body: "Envoyez une instruction ou une photo." },
+      {
+        title: "Envoyez votre demande",
+        body: "Envoyez une instruction ou une photo.",
+      },
       {
         title: "Recevez votre image",
         body: "Recevez votre image directement dans la conversation.",
@@ -302,7 +309,8 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
     examples: [
       {
         title: "Remplacer l'arrière-plan",
-        instruction: "« Remplace l'arrière-plan par un bureau lumineux et calme. »",
+        instruction:
+          "« Remplace l'arrière-plan par un bureau lumineux et calme. »",
         beforeLabel: "Avant",
         afterLabel: "Après",
         resultCaption: "Nouvel arrière-plan, vous restez vous-même",
@@ -318,7 +326,8 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
       },
       {
         title: "Améliorer une photo produit",
-        instruction: "« Améliore cette photo produit pour ma boutique en ligne. »",
+        instruction:
+          "« Améliore cette photo produit pour ma boutique en ligne. »",
         beforeLabel: "Avant",
         afterLabel: "Après",
         resultCaption: "Plus net, avec un fond neutre",
@@ -335,7 +344,8 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
       },
       {
         title: "Ajuster la lumière et les couleurs",
-        instruction: "« Rends la lumière plus chaude et les couleurs plus vives. »",
+        instruction:
+          "« Rends la lumière plus chaude et les couleurs plus vives. »",
         beforeLabel: "Avant",
         afterLabel: "Après",
         resultCaption: "Des teintes plus douces et chaleureuses",
@@ -359,10 +369,11 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
     },
     credits: {
       name: "Pack premium",
-      price: "4,99 €",
+      price: "5,00 €",
       suffix: "une fois",
       features: [
-        "8 crédits d'images premium",
+        "9 crédits d'images premium",
+        "1 résultat premium utilisable livré = 1 crédit",
         "Qualité d'image medium",
         "Les crédits n'expirent pas",
         "Pas d'abonnement ni de renouvellement automatique",
@@ -409,12 +420,12 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
       {
         question: "Comment acheter des crédits premium ?",
         answer:
-          "Quand votre crédit gratuit et vos éventuels crédits premium sont épuisés, Leaderbot vous envoie dans Messenger un lien de paiement personnel et sécurisé. Ce lien ouvre un paiement unique de 4,99 € via Mollie pour 8 crédits premium.",
+          "Quand votre crédit gratuit et vos éventuels crédits premium sont épuisés, Leaderbot vous envoie dans Messenger un lien de paiement personnel et sécurisé. Ce lien ouvre un paiement unique de 5,00 € via Mollie pour 9 crédits d'image ou de retouche premium. Un résultat premium utilisable livré avec succès consomme un crédit.",
       },
       {
         question: "Mes crédits premium expirent-ils ?",
         answer:
-          "Non. Une fois achetés, vos 8 crédits premium restent disponibles jusqu'à ce que vous les utilisiez — sans date d'expiration.",
+          "Non. Une fois achetés, vos 9 crédits premium restent disponibles jusqu'à ce que vous les utilisiez — sans date d'expiration.",
       },
       {
         question: "Puis-je modifier ma propre photo ?",
@@ -448,7 +459,8 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
       "Tell Leaderbot what you want to see. Create a new image or edit your own photo with a simple text description.",
     heroPrimaryCta: "Open Leaderbot in Messenger",
     heroSecondaryCta: "See examples",
-    microLine: "Free to try every day • No subscription • Secure payment via Mollie",
+    microLine:
+      "Free to try every day • No subscription • Secure payment via Mollie",
     chat: {
       label: "Example conversation",
       prompt: "Replace the background with a bright, calm office.",
@@ -530,10 +542,11 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
     },
     credits: {
       name: "Premium pack",
-      price: "€4.99",
+      price: "€5.00",
       suffix: "one-time",
       features: [
-        "8 premium image credits",
+        "9 premium image credits",
+        "1 usable delivered premium result = 1 credit",
         "Medium image quality",
         "Credits never expire",
         "No subscription or automatic renewal",
@@ -580,12 +593,12 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
       {
         question: "How do I buy premium credits?",
         answer:
-          "Once both your free daily credit and any premium credits are used up, Leaderbot sends you a personal, secure payment link in Messenger. That link opens a one-time €4.99 Mollie checkout for 8 premium credits.",
+          "Once both your free daily credit and any premium credits are used up, Leaderbot sends you a personal, secure payment link in Messenger. That link opens a one-time €5.00 Mollie checkout for 9 premium image or editing credits. One successfully delivered usable premium result uses one credit.",
       },
       {
         question: "Do my premium credits expire?",
         answer:
-          "No. Once purchased, your 8 premium credits stay available until you use them — with no expiry date.",
+          "No. Once purchased, your 9 premium credits stay available until you use them — with no expiry date.",
       },
       {
         question: "Can I edit my own photo?",
@@ -622,7 +635,8 @@ const unavailablePremiumCopies: Record<
     note: "De aankoopoptie verschijnt in Messenger zodra ze beschikbaar is.",
     faqAnswer:
       "Nog niet beschikbaar. Deze optie verschijnt in Messenger zodra ze actief is.",
-    microLine: "Dagelijks gratis proberen • Geen abonnement • Betalen komt eraan",
+    microLine:
+      "Dagelijks gratis proberen • Geen abonnement • Betalen komt eraan",
     mollieCardBody:
       "Betalen via Mollie is nog niet actief. Zodra dat wel zo is, verloopt elke aankoop via hun beveiligde betaalpagina.",
     creditsCardBody:
@@ -633,7 +647,8 @@ const unavailablePremiumCopies: Record<
     note: "L'option d'achat apparaîtra dans Messenger dès qu'elle sera disponible.",
     faqAnswer:
       "Pas encore disponible. Cette option apparaîtra dans Messenger dès qu'elle sera active.",
-    microLine: "Essai gratuit chaque jour • Sans abonnement • Paiement bientôt disponible",
+    microLine:
+      "Essai gratuit chaque jour • Sans abonnement • Paiement bientôt disponible",
     mollieCardBody:
       "Le paiement via Mollie n'est pas encore actif. Une fois actif, chaque achat passera par leur page de paiement sécurisée.",
     creditsCardBody:
@@ -642,7 +657,8 @@ const unavailablePremiumCopies: Record<
   en: {
     badge: "Not available yet",
     note: "The purchase option will appear in Messenger once it's live.",
-    faqAnswer: "Not available yet. This option will appear in Messenger once it's live.",
+    faqAnswer:
+      "Not available yet. This option will appear in Messenger once it's live.",
     microLine: "Free to try every day • No subscription • Payment coming soon",
     mollieCardBody:
       "Payment via Mollie isn't live yet. Once it is, every purchase will run through their secure payment page.",
@@ -697,7 +713,8 @@ function MessengerCta({
   variant?: "solid" | "ghost" | "onDark";
   size?: "md" | "lg";
 }) {
-  const sizeClasses = size === "lg" ? "min-h-14 px-7 text-base" : "min-h-11 px-5 text-sm";
+  const sizeClasses =
+    size === "lg" ? "min-h-14 px-7 text-base" : "min-h-11 px-5 text-sm";
   const variantClasses =
     variant === "solid"
       ? "bg-[linear-gradient(120deg,#2541C9,#8B2FE0)] text-white shadow-[0_14px_30px_-14px_rgba(37,65,201,0.6)] transition hover:brightness-110"
@@ -740,7 +757,7 @@ function AdminLink({
   );
 }
 
-/** Free-image dots plus a distinct "+8" credit badge — the whole
+/** Free-image dots plus a distinct "+9" credit badge — the whole
  * free/paid mechanic in one glance inside the hero chat mockup. */
 function QuotaMeter({ usedToday = 1 }: { usedToday?: number }) {
   return (
@@ -754,7 +771,7 @@ function QuotaMeter({ usedToday = 1 }: { usedToday?: number }) {
         />
       ))}
       <span className="ml-1 flex h-5 items-center rounded-full bg-gradient-to-r from-blue-100 to-violet-100 px-2 text-[10px] font-bold uppercase tracking-wide text-[#6D28D9]">
-        +8
+        +9
       </span>
     </div>
   );
@@ -868,13 +885,19 @@ export default function LandingPage({
 
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
         <header className="flex min-h-20 flex-wrap items-center justify-between gap-4 border-b border-[#14203D]/10 py-3">
-          <a className="flex items-center gap-3" href="/" aria-label="Leaderbot home">
+          <a
+            className="flex items-center gap-3"
+            href="/"
+            aria-label="Leaderbot home"
+          >
             <span className="grid h-10 w-10 place-items-center rounded-xl bg-[linear-gradient(135deg,#2541C9,#8B2FE0)] font-black text-white">
               L
             </span>
             <span>
               <strong className="block text-base">Leaderbot</strong>
-              <span className="block text-xs text-[#14203D]/50">leaderbot.live</span>
+              <span className="block text-xs text-[#14203D]/50">
+                leaderbot.live
+              </span>
             </span>
           </a>
           <nav
@@ -893,7 +916,11 @@ export default function LandingPage({
           </nav>
           <div className="flex items-center gap-4">
             <AdminLink copy={copy} loginConfigured={loginConfigured} />
-            <LanguagePicker copy={copy} locale={locale} onChange={onLocaleChange} />
+            <LanguagePicker
+              copy={copy}
+              locale={locale}
+              onChange={onLocaleChange}
+            />
             <MessengerCta label={copy.headerCta} variant="solid" />
           </div>
         </header>
@@ -913,7 +940,11 @@ export default function LandingPage({
               {copy.subtitle}
             </p>
             <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
-              <MessengerCta label={copy.heroPrimaryCta} variant="solid" size="lg" />
+              <MessengerCta
+                label={copy.heroPrimaryCta}
+                variant="solid"
+                size="lg"
+              />
               <a
                 className="inline-flex min-h-14 items-center justify-center gap-2 rounded-full border border-[#14203D]/15 px-7 text-base font-bold text-[#14203D] transition hover:border-[#14203D]/30 hover:bg-[#14203D]/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#2541C9]"
                 href="#examples"
@@ -953,7 +984,9 @@ export default function LandingPage({
                       <MessageCircle className="h-5 w-5" aria-hidden="true" />
                     </span>
                     <div>
-                      <div className="font-semibold text-[#14203D]">Leaderbot</div>
+                      <div className="font-semibold text-[#14203D]">
+                        Leaderbot
+                      </div>
                       <div className="text-xs text-emerald-700">
                         Messenger · online
                       </div>
@@ -980,11 +1013,17 @@ export default function LandingPage({
                           {copy.chat.resultCaption}
                         </div>
                       </div>
-                      <Sparkles className="h-7 w-7 text-white" aria-hidden="true" />
+                      <Sparkles
+                        className="h-7 w-7 text-white"
+                        aria-hidden="true"
+                      />
                     </div>
                     <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
                       <span className="flex items-center gap-2 text-xs text-[#14203D]/60">
-                        <Check className="h-4 w-4 text-[#2541C9]" aria-hidden="true" />
+                        <Check
+                          className="h-4 w-4 text-[#2541C9]"
+                          aria-hidden="true"
+                        />
                         {copy.chat.quotaCaption}
                       </span>
                       <QuotaMeter usedToday={1} />
@@ -1219,7 +1258,10 @@ export default function LandingPage({
                           key={link.href}
                         >
                           {link.label}
-                          <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />
+                          <ArrowRight
+                            className="h-3.5 w-3.5"
+                            aria-hidden="true"
+                          />
                         </a>
                       ))}
                     </div>

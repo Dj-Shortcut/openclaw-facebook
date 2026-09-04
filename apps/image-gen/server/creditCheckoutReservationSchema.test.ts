@@ -108,7 +108,9 @@ describe("0018 credit checkout reservation migration", () => {
     expect(snapshot.tables).toEqual(expectedTables);
     expect(snapshot.enums).toEqual(previous.enums);
     expect(snapshot.schemas).toEqual(previous.schemas);
-    expect(journal.entries.at(-1)).toMatchObject({
+    expect(
+      journal.entries.find((entry: { idx?: number }) => entry.idx === 18)
+    ).toMatchObject({
       idx: 18,
       tag: "0018_credit_checkout_reservation",
       breakpoints: true,

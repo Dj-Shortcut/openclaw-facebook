@@ -1654,18 +1654,21 @@ async function sendCreditCheckoutNotice(input: {
   );
   const offerText =
     input.lang === "nl"
-      ? "Koop eenmalig 8 premiumcredits voor € 4,99. Elke credit geeft één afbeelding in medium kwaliteit en vervalt nooit. Geen abonnement of automatische verlenging. Of wacht tot je gratis tegoed opnieuw beschikbaar is."
-      : "Buy 8 premium credits once for €4.99. Each credit gives one medium-quality image and never expires. No subscription or automatic renewal. Or wait until your free allowance is available again.";
+      ? "Koop eenmalig 9 premiumcredits voor € 5,00. Eén succesvol geleverde bruikbare premium afbeelding of bewerking verbruikt één credit. Credits vervallen niet. Geen abonnement of automatische verlenging. Of wacht tot je gratis tegoed opnieuw beschikbaar is."
+      : "Buy 9 premium credits once for €5.00. One successfully delivered usable premium image or edit uses one credit. Credits never expire. No subscription or automatic renewal. Or wait until your free allowance is available again.";
   await sendQuotaOrCheckoutNotice({
     ...input,
     text: `${quotaResponse.text ?? t(input.lang, "outOfFreeCredits")}\n\n${offerText}`,
     actions: [
       {
         id: "buy_premium_image_credits",
-        label: input.lang === "nl" ? "Koop 8 credits" : "Buy 8 credits",
+        label: input.lang === "nl" ? "Koop 9 credits" : "Buy 9 credits",
         url: input.checkout.actionUrl,
       },
     ],
+    // This is a transport-idempotency namespace, not an offer-copy version.
+    // Keep it stable when catalog versions change so the same durable message
+    // cannot send a second commercial CTA after a rolling deployment.
     providerAttemptKey: "premium-credit-checkout-offer-v1",
   });
 }

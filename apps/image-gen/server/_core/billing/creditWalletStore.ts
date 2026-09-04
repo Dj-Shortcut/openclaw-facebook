@@ -3,6 +3,12 @@ import { and, eq, sql, type SQL } from "drizzle-orm";
 import { creditWallets } from "../../../drizzle/schema";
 import { getDatabaseOrThrow, type ImageGenTransaction } from "../../db";
 import type { MollieMode } from "./config";
+import {
+  type CreditOffer,
+  getCreditOffer,
+  PREMIUM_IMAGE_CREDIT_OFFER_ID,
+  PREMIUM_IMAGE_CREDIT_OFFER_VERSION,
+} from "./creditCatalog";
 
 const MAX_DATABASE_ID = 2_147_483_647;
 const UUID_PATTERN =
@@ -13,10 +19,6 @@ const PRIVACY_SUBJECT_USER_KEY_PATTERN =
 const PROVIDER_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 const PAYMENT_ID_PATTERN = /^tr_[A-Za-z0-9]{1,60}$/;
 const CHECKOUT_SCOPE_KEY_PATTERN = /^credit-checkout:v1:[0-9a-f]{64}$/;
-const CREDIT_OFFER_SNAPSHOT_CODE = "premium_images_8_medium_v1";
-const CREDIT_OFFER_AMOUNT = "4.99";
-const CREDIT_OFFER_COUNT = 8;
-const CREDIT_OFFER_DESCRIPTION = "Leaderbot - 8 premium beeldcredits";
 
 export class CreditWalletStoreError extends Error {
   constructor(message: string) {
@@ -320,10 +322,10 @@ export async function reserveCreditCheckoutIntent(input: {
   userKey: string;
   financialSubjectRef: string;
   authorizationEpoch: number;
-  offerSnapshotCode: typeof CREDIT_OFFER_SNAPSHOT_CODE;
-  expectedAmount: typeof CREDIT_OFFER_AMOUNT;
-  creditCount: typeof CREDIT_OFFER_COUNT;
-  description: typeof CREDIT_OFFER_DESCRIPTION;
+  offerSnapshotCode: CreditOffer["offerId"];
+  expectedAmount: CreditOffer["amount"]["value"];
+  creditCount: CreditOffer["creditCount"];
+  description: string;
   metadataHash: string;
   idempotencyKey: string;
   checkoutScopeKey: string;
@@ -333,16 +335,20 @@ export async function reserveCreditCheckoutIntent(input: {
   assertCurrentScope(input);
   assertUuid(input.intentId, "intent ID");
   assertDatabaseId(input.authorizationEpoch, "authorization epoch");
-  if (input.offerSnapshotCode !== CREDIT_OFFER_SNAPSHOT_CODE) {
+  const offer = getCreditOffer(
+    PREMIUM_IMAGE_CREDIT_OFFER_ID,
+    PREMIUM_IMAGE_CREDIT_OFFER_VERSION
+  );
+  if (!offer || input.offerSnapshotCode !== offer.offerId) {
     invalid("offer snapshot code");
   }
-  if (input.expectedAmount !== CREDIT_OFFER_AMOUNT) {
+  if (input.expectedAmount !== offer.amount.value) {
     invalid("expected amount");
   }
-  if (input.creditCount !== CREDIT_OFFER_COUNT) {
+  if (input.creditCount !== offer.creditCount) {
     invalid("credit count");
   }
-  if (input.description !== CREDIT_OFFER_DESCRIPTION) {
+  if (input.description !== offer.mollieDescription) {
     invalid("description");
   }
   assertSha256(input.metadataHash, "metadata hash");

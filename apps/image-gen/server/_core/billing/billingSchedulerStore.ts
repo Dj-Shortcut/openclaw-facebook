@@ -15,7 +15,7 @@ import {
 import { getDatabaseOrThrow } from "../../db";
 import type { MollieMode } from "./config";
 import { getBillingSchedulerRollout } from "./config";
-import { getCreditOffer } from "./creditCatalog";
+import { getCreditOfferForStoredSnapshot } from "./creditCatalog";
 
 const TENANT_LEASE_MS = 15 * 60_000;
 const UUID_PATTERN =
@@ -732,7 +732,7 @@ function isExactRevokedCreditIntent(
   operation: RevokedOperation,
   input: DisableBoundary
 ): boolean {
-  const offer = getCreditOffer(intent.planCode, 1);
+  const offer = getCreditOfferForStoredSnapshot(intent);
   return Boolean(
     offer &&
     intent.kind === "credit_purchase" &&

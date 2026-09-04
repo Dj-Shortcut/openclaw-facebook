@@ -19,9 +19,8 @@ import {
 import { getDatabaseOrThrow, type ImageGenTransaction } from "../../db";
 import type { MollieMode } from "./config";
 import {
-  PREMIUM_IMAGE_CREDIT_OFFER_ID,
-  PREMIUM_IMAGE_CREDIT_OFFER_VERSION,
-  getCreditOffer,
+  type CreditOffer,
+  getCreditOfferForStoredSnapshot,
 } from "./creditCatalog";
 import { validateCreditPaymentContract } from "./creditPaymentContract";
 import { freezeCreditWalletForReview } from "./creditWalletStore";
@@ -217,6 +216,27 @@ export async function isCreditPaymentGrantComplete(
     return false;
   }
   const database = await getDatabaseOrThrow();
+  const intents = await database
+    .select({
+      planCode: billingIntents.planCode,
+      expectedAmount: billingIntents.expectedAmount,
+      currency: billingIntents.currency,
+      creditCount: billingIntents.creditCount,
+      mollieDescription: billingIntents.mollieDescription,
+    })
+    .from(billingIntents)
+    .where(
+      and(
+        eq(billingIntents.intentId, input.intentId),
+        eq(billingIntents.workspaceId, input.workspaceId),
+        eq(billingIntents.mode, input.mode),
+        eq(billingIntents.kind, "credit_purchase")
+      )
+    )
+    .limit(2);
+  const offer =
+    intents.length === 1 ? getCreditOfferForStoredSnapshot(intents[0]) : null;
+  if (!offer) return false;
   const rows = await database
     .select({ entryId: creditLedger.entryId })
     .from(paymentLedger)
@@ -249,14 +269,11 @@ export async function isCreditPaymentGrantComplete(
         eq(creditLedger.providerPaymentId, input.providerPaymentId),
         eq(creditLedger.grantPaymentId, input.providerPaymentId),
         eq(creditLedger.entryKind, "purchase_grant"),
-        eq(creditLedger.offerId, PREMIUM_IMAGE_CREDIT_OFFER_ID),
-        eq(creditLedger.paymentAmount, "4.99"),
-        eq(creditLedger.currency, "EUR"),
-        eq(creditLedger.purchasedCreditCount, 8),
-        eq(
-          creditLedger.providerDescription,
-          "Leaderbot - 8 premium beeldcredits"
-        )
+        eq(creditLedger.offerId, offer.offerId),
+        eq(creditLedger.paymentAmount, offer.amount.value),
+        eq(creditLedger.currency, offer.amount.currency),
+        eq(creditLedger.purchasedCreditCount, offer.creditCount),
+        eq(creditLedger.providerDescription, offer.mollieDescription)
       )
     )
     .limit(2);
@@ -305,10 +322,7 @@ export async function persistCreditPaymentWebhookSnapshot(input: {
       throw new CreditPaymentWebhookStoreError();
     }
 
-    const offer = getCreditOffer(
-      PREMIUM_IMAGE_CREDIT_OFFER_ID,
-      PREMIUM_IMAGE_CREDIT_OFFER_VERSION
-    );
+    const offer = getCreditOfferForStoredSnapshot(intent);
     if (!offer) throw new CreditPaymentWebhookStoreError();
     const exactContract = validateCreditPaymentContract(
       input.payment,
@@ -498,6 +512,7 @@ export async function persistCreditPaymentWebhookSnapshot(input: {
               chargebacks: ledger.chargebacks,
               snapshotHash: ledger.observedSnapshotHash,
               adjustments: financial.adjustments,
+              offer,
             })
           : null;
         if (financial && decision?.actionable) {
@@ -840,12 +855,14 @@ export async function finishCreditPaymentAdjustment(
     }
 
     if (input.outcome !== "manual_review") {
+      const offer = getCreditOfferForStoredSnapshot(intent);
       const immutable = financial.adjustments.find(
         adjustment => adjustment.entryId === input.entryId
       );
       if (
+        !offer ||
         !immutable ||
-        !isExactImmutableAdjustment(immutable, input.adjustment)
+        !isExactImmutableAdjustment(immutable, input.adjustment, offer)
       ) {
         throw new CreditPaymentWebhookStoreError();
       }
@@ -1192,18 +1209,15 @@ function isExactCreditStructure(
   locked: CreditIntent,
   pre: CreditIntent
 ): boolean {
+  const offer = getCreditOfferForStoredSnapshot(locked);
   return (
+    offer !== null &&
     locked.intentId === pre.intentId &&
     locked.workspaceId === pre.workspaceId &&
     locked.mode === pre.mode &&
     locked.kind === "credit_purchase" &&
-    locked.planCode === PREMIUM_IMAGE_CREDIT_OFFER_ID &&
-    locked.expectedAmount === "4.99" &&
-    locked.currency === "EUR" &&
     locked.interval === "oneoff" &&
     isEmptyRecord(locked.entitlements) &&
-    locked.mollieDescription === "Leaderbot - 8 premium beeldcredits" &&
-    locked.creditCount === 8 &&
     locked.billingProfileVersion === 0 &&
     Number.isSafeInteger(locked.authorizationEpoch) &&
     locked.authorizationEpoch > 0 &&
@@ -1373,7 +1387,9 @@ async function lockCreditPaymentFinancialEvidence(
   paymentId: string
 ): Promise<LockedCreditPaymentFinancialEvidence | null> {
   const wallet = boundary.wallet;
+  const offer = getCreditOfferForStoredSnapshot(intent);
   if (
+    !offer ||
     !wallet ||
     wallet.walletId !== intent.creditWalletId ||
     wallet.channelConnectionId !== intent.messengerChannelConnectionId ||
@@ -1401,14 +1417,11 @@ async function lockCreditPaymentFinancialEvidence(
         eq(creditLedger.providerPaymentId, paymentId),
         eq(creditLedger.grantPaymentId, paymentId),
         eq(creditLedger.entryKind, "purchase_grant"),
-        eq(creditLedger.offerId, PREMIUM_IMAGE_CREDIT_OFFER_ID),
-        eq(creditLedger.paymentAmount, "4.99"),
-        eq(creditLedger.currency, "EUR"),
-        eq(creditLedger.purchasedCreditCount, 8),
-        eq(
-          creditLedger.providerDescription,
-          "Leaderbot - 8 premium beeldcredits"
-        )
+        eq(creditLedger.offerId, offer.offerId),
+        eq(creditLedger.paymentAmount, offer.amount.value),
+        eq(creditLedger.currency, offer.amount.currency),
+        eq(creditLedger.purchasedCreditCount, offer.creditCount),
+        eq(creditLedger.providerDescription, offer.mollieDescription)
       )
     )
     .limit(2)
@@ -1452,6 +1465,7 @@ export function classifyCreditPaymentAdjustment(
     refunds: unknown;
     chargebacks: unknown;
     snapshotHash: string;
+    offer: CreditOffer;
     adjustments?: readonly LockedCreditAdjustment[];
   }>
 ): CreditPaymentAdjustmentDecision {
@@ -1484,11 +1498,11 @@ export function classifyCreditPaymentAdjustment(
   }
 
   if (refunds.entries.length > 0) {
-    if (refunds.totalMinor !== 499 || slotTwo.length > 0) {
+    if (refunds.totalMinor !== input.offer.amountMinor || slotTwo.length > 0) {
       return { actionable: false, reason: "refund_not_full" };
     }
     const existing = slotOne[0];
-    if (existing && !isExactRefundReplay(existing, refunds)) {
+    if (existing && !isExactRefundReplay(existing, refunds, input.offer)) {
       return { actionable: false, reason: "refund_slot_conflict" };
     }
     return {
@@ -1510,18 +1524,26 @@ export function classifyCreditPaymentAdjustment(
     return { actionable: false, reason: "chargeback_count" };
   }
   const effect = chargebacks.entries[0];
-  if (effect.amountMinor !== 499) {
+  if (effect.amountMinor !== input.offer.amountMinor) {
     return { actionable: false, reason: "chargeback_not_full" };
   }
   const debit = slotOne[0];
   const restore = slotTwo[0];
   if (effect.reversed) {
-    if (!debit || !isExactChargebackReplay(debit, "chargeback_debit", effect)) {
+    if (
+      !debit ||
+      !isExactChargebackReplay(debit, "chargeback_debit", effect, input.offer)
+    ) {
       return { actionable: false, reason: "restore_without_debit" };
     }
     if (
       restore &&
-      !isExactChargebackReplay(restore, "chargeback_restore", effect)
+      !isExactChargebackReplay(
+        restore,
+        "chargeback_restore",
+        effect,
+        input.offer
+      )
     ) {
       return { actionable: false, reason: "restore_slot_conflict" };
     }
@@ -1542,7 +1564,10 @@ export function classifyCreditPaymentAdjustment(
   if (restore) {
     return { actionable: false, reason: "active_after_restore" };
   }
-  if (debit && !isExactChargebackReplay(debit, "chargeback_debit", effect)) {
+  if (
+    debit &&
+    !isExactChargebackReplay(debit, "chargeback_debit", effect, input.offer)
+  ) {
     return { actionable: false, reason: "chargeback_slot_conflict" };
   }
   return {
@@ -1562,7 +1587,8 @@ export function classifyCreditPaymentAdjustment(
 
 function isExactRefundReplay(
   adjustment: LockedCreditAdjustment,
-  current: ReturnType<typeof readCompletedRefundSet>
+  current: ReturnType<typeof readCompletedRefundSet>,
+  offer: CreditOffer
 ): boolean {
   if (
     adjustment.entryKind !== "refund_debit" ||
@@ -1572,7 +1598,7 @@ function isExactRefundReplay(
     !SHA256_PATTERN.test(adjustment.providerEffectId) ||
     adjustment.providerEffectType !== "refund" ||
     adjustment.providerEffectStatus !== "refunded" ||
-    adjustment.providerEffectAmount !== "4.99" ||
+    adjustment.providerEffectAmount !== offer.amount.value ||
     adjustment.providerEffectCurrency !== "EUR"
   ) {
     return false;
@@ -1580,7 +1606,7 @@ function isExactRefundReplay(
   const recorded = readCompletedRefundSet(adjustment.providerEffectEvidence);
   return (
     recorded.valid &&
-    recorded.totalMinor === 499 &&
+    recorded.totalMinor === offer.amountMinor &&
     sameProviderEffects(recorded.entries, current.entries)
   );
 }
@@ -1588,7 +1614,8 @@ function isExactRefundReplay(
 function isExactChargebackReplay(
   adjustment: LockedCreditAdjustment,
   kind: "chargeback_debit" | "chargeback_restore",
-  effect: Readonly<{ id: string; amountMinor: number; reversed: boolean }>
+  effect: Readonly<{ id: string; amountMinor: number; reversed: boolean }>,
+  offer: CreditOffer
 ): boolean {
   return (
     adjustment.entryKind === kind &&
@@ -1598,23 +1625,24 @@ function isExactChargebackReplay(
     adjustment.providerEffectType === "chargeback" &&
     adjustment.providerEffectStatus ===
       (kind === "chargeback_debit" ? "active" : "reversed") &&
-    adjustment.providerEffectAmount === "4.99" &&
+    adjustment.providerEffectAmount === offer.amount.value &&
     adjustment.providerEffectCurrency === "EUR" &&
     adjustment.providerEffectEvidence === null &&
-    effect.amountMinor === 499
+    effect.amountMinor === offer.amountMinor
   );
 }
 
 function isExactImmutableAdjustment(
   adjustment: LockedCreditAdjustment,
-  evidence: CreditPaymentAdjustmentEvidence
+  evidence: CreditPaymentAdjustmentEvidence,
+  offer: CreditOffer
 ): boolean {
   if (
     adjustment.entryKind !== evidence.kind ||
     adjustment.evidenceHash !== evidence.evidenceHash ||
     adjustment.rootAdjustmentSlot !==
       (evidence.kind === "chargeback_restore" ? 2 : 1) ||
-    adjustment.providerEffectAmount !== "4.99" ||
+    adjustment.providerEffectAmount !== offer.amount.value ||
     adjustment.providerEffectCurrency !== "EUR"
   ) {
     return false;
@@ -1627,7 +1655,7 @@ function isExactImmutableAdjustment(
       adjustment.providerEffectId !== null &&
       SHA256_PATTERN.test(adjustment.providerEffectId) &&
       recorded.valid &&
-      recorded.totalMinor === 499 &&
+      recorded.totalMinor === offer.amountMinor &&
       sameProviderEffectIds(
         recorded.entries.map(entry => entry.id),
         evidence.providerEffectIds

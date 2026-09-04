@@ -113,8 +113,8 @@ function ReturnMessage({ status }: { status: string }) {
           Je betaling is ontvangen
         </h1>
         <p className="mt-4 text-slate-700">
-          Je 8 premium beeldcredits staan klaar. Ga terug naar Messenger om ze
-          te gebruiken.
+          Je premium beeldcredits staan klaar. Ga terug naar Messenger om ze te
+          gebruiken.
         </p>
       </>
     );
@@ -235,9 +235,11 @@ export default function CreditCheckout() {
                 : "Leaderbot premiumcredits"}
             </p>
             <h1 className="mt-2 text-3xl font-semibold text-slate-950">
-              8 premium beeldcredits
+              {state.offer.creditCount} premium beeldcredits
             </h1>
-            <p className="mt-3 text-4xl font-bold text-slate-950">€ 4,99</p>
+            <p className="mt-3 text-4xl font-bold text-slate-950">
+              € {state.offer.amount.replace(".", ",")}
+            </p>
             <div
               className={`mt-5 rounded-2xl p-4 text-sm ${
                 state.offer.mode === "test"
@@ -248,7 +250,14 @@ export default function CreditCheckout() {
               {creditCheckoutModeDisclosure(state.offer)}
             </div>
             <ul className="mt-6 space-y-2 text-slate-700">
-              <li>8 afbeeldingen in medium kwaliteit</li>
+              <li>
+                {state.offer.creditCount} afbeeldingen of fotobewerkingen in
+                medium kwaliteit
+              </li>
+              <li>
+                Eén succesvol geleverde bruikbare premium generatie of bewerking
+                verbruikt één credit
+              </li>
               <li>Je credits vervallen niet</li>
               <li>Eén betaling, zonder abonnement</li>
               <li>Geen automatische verlenging of extra kosten</li>

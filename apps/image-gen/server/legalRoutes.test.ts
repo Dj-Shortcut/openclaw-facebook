@@ -100,7 +100,7 @@ describe("legal routes", () => {
 
     expect(privacy).toContain(`Mollie processes one ${displayedPrice} payment`);
     expect(terms).toContain(
-      `cost ${displayedPrice} as a single payment for eight medium-quality image generations`
+      `cost ${displayedPrice} as a single payment for nine medium-quality image generations or edits`
     );
     expect(terms).toContain("signed checkout link opened from Messenger");
     expect(terms).toContain("Credits do not expire");
@@ -108,10 +108,12 @@ describe("legal routes", () => {
       "Provider, publication, or delivery failures do not consume a credit"
     );
     expect(billingPolicy).toContain(
-      `${displayedPrice} once in ${offer.amount.currency}`
+      "exact one-time price, number of credits and offer version"
     );
     expect(billingPolicy).toContain("requires explicit confirmation");
-    expect(billingPolicy).toContain("eight medium-quality image credits");
+    expect(billingPolicy).toContain(
+      "number of medium-quality image or editing credits shown in checkout"
+    );
     expect(billingPolicy).toContain("Credits do not expire");
     expect(billingPolicy).toContain("No renewal, top-up or overage");
     expect(billingPolicy).toContain(
@@ -122,6 +124,8 @@ describe("legal routes", () => {
     expect(billingPolicy).not.toContain("one workspace");
     expect(billingPolicy).not.toContain("billing@leaderbot.live");
     expect(billingPolicy).not.toContain("Bijzondere vrijstellingsregeling");
+    expect(billingPolicy).not.toContain(displayedPrice);
+    expect(billingPolicy).not.toContain("nine included");
   });
 
   it("retains the exact legacy Startpilot terms while that separate offer still exists", () => {
@@ -148,7 +152,7 @@ describe("legal routes", () => {
 
   it("keeps legal routes available when premium-credit pricing cannot be loaded", () => {
     expect(getPremiumCreditPricingDisplay(() => null)).toEqual({
-      premiumCreditPrice: "€4.99",
+      premiumCreditPrice: "€5.00",
       premiumCreditCurrency: "EUR",
     });
     expect(
@@ -156,7 +160,7 @@ describe("legal routes", () => {
         throw new Error("billing catalog unavailable");
       })
     ).toEqual({
-      premiumCreditPrice: "€4.99",
+      premiumCreditPrice: "€5.00",
       premiumCreditCurrency: "EUR",
     });
   });

@@ -52,7 +52,7 @@ export async function loadAndVerifyMigrationManifest() {
   if (manifest.baseSchemaSnapshot !== "meta/0014_snapshot.json") {
     throw new Error("migration manifest base snapshot path is unsupported");
   }
-  if (manifest.schemaSnapshot !== "meta/0018_snapshot.json") {
+  if (manifest.schemaSnapshot !== "meta/0019_snapshot.json") {
     throw new Error("migration manifest schema snapshot path is unsupported");
   }
   if (manifest.productionSchemaContract !== "production-schema-contract.json") {
@@ -130,6 +130,9 @@ export async function loadAndVerifyMigrationManifest() {
     !productionContract.partial0018CreditCheckout ||
     !productionContract.final0018 ||
     !productionContract.history0018 ||
+    !productionContract.partial0019CreditOffer ||
+    !productionContract.final0019 ||
+    !productionContract.history0019 ||
     Object.hasOwn(productionContract, "partial0017BillingConstraints") ||
     Object.hasOwn(productionContract, "finalHistory")
   ) {
@@ -146,6 +149,10 @@ export async function loadAndVerifyMigrationManifest() {
   assert0018StatementHashes(
     productionContract.partial0018CreditCheckout,
     migrationSqlByTag.get(migrationPlan.creditCheckout0018.tag)
+  );
+  assert0019StatementHashes(
+    productionContract.partial0019CreditOffer,
+    migrationSqlByTag.get(migrationPlan.creditOffer0019.tag)
   );
   return {
     migrations: manifest.migrations,
@@ -176,6 +183,7 @@ export function assertProductionSchemaContractManifest(contract, migrations) {
   const expected0016Rows = expectedRows.slice(0, plan.through0016.length);
   const expected0017Rows = expectedRows.slice(0, plan.through0017.length);
   const expected0018Rows = expectedRows.slice(0, plan.through0018.length);
+  const expected0019Rows = expectedRows.slice(0, plan.through0019.length);
   if (
     contract.legacyHistory.nextId !== 9 ||
     canonicalJson(contract.legacyHistory.rows) !== canonicalJson(legacyRows) ||
@@ -184,6 +192,7 @@ export function assertProductionSchemaContractManifest(contract, migrations) {
     contract.history0016.nextId !== plan.through0016.length + 1 ||
     contract.history0017.nextId !== plan.through0017.length + 1 ||
     contract.history0018.nextId !== plan.through0018.length + 1 ||
+    contract.history0019.nextId !== plan.through0019.length + 1 ||
     canonicalJson(contract.baseHistory.rows) !==
       canonicalJson(expected0014Rows) ||
     canonicalJson(contract.history0015.rows) !==
@@ -192,7 +201,9 @@ export function assertProductionSchemaContractManifest(contract, migrations) {
       canonicalJson(expected0016Rows) ||
     canonicalJson(contract.history0017.rows) !==
       canonicalJson(expected0017Rows) ||
-    canonicalJson(contract.history0018.rows) !== canonicalJson(expected0018Rows)
+    canonicalJson(contract.history0018.rows) !==
+      canonicalJson(expected0018Rows) ||
+    canonicalJson(contract.history0019.rows) !== canonicalJson(expected0019Rows)
   ) {
     throw new Error(
       "production schema contract history does not match manifest"
@@ -200,6 +211,7 @@ export function assertProductionSchemaContractManifest(contract, migrations) {
   }
   assertPartial0017Contract(contract.partial0017CreditWallet);
   assertPartial0018Contract(contract.partial0018CreditCheckout);
+  assertPartial0019Contract(contract.partial0019CreditOffer);
   const addedTables = Object.keys(contract.final0017.tables).filter(
     name => !Object.hasOwn(contract.final0016.tables, name)
   );
@@ -246,6 +258,22 @@ export function assertProductionSchemaContractManifest(contract, migrations) {
       canonicalJson(contract.final0018)
   ) {
     throw new Error("production 0018 object inventory is unsupported");
+  }
+  const unchanged0019Sections = ["tables", "views", "triggers"].every(
+    section =>
+      canonicalJson(contract.final0019[section]) ===
+      canonicalJson(contract.final0018[section])
+  );
+  if (
+    !unchanged0019Sections ||
+    JSON.stringify(Object.keys(contract.final0019.routines).sort()) !==
+      JSON.stringify(expected0018Routines) ||
+    canonicalJson(contract.partial0019CreditOffer.states[0].schema) !==
+      canonicalJson(contract.final0018) ||
+    canonicalJson(contract.partial0019CreditOffer.states.at(-1).schema) !==
+      canonicalJson(contract.final0019)
+  ) {
+    throw new Error("production 0019 object inventory is unsupported");
   }
 }
 
@@ -421,6 +449,71 @@ export function assert0018StatementHashes(partial, sql) {
     )
   ) {
     throw new Error("production 0018 statement fingerprint mismatch");
+  }
+}
+
+export function assertPartial0019Contract(partial) {
+  if (
+    partial?.statementCount !== 4 ||
+    !Array.isArray(partial.statementSha256) ||
+    partial.statementSha256.length !== partial.statementCount ||
+    partial.statementSha256.some(hash => !/^[a-f0-9]{64}$/.test(hash)) ||
+    !Array.isArray(partial.boundaries) ||
+    partial.boundaries.length !== partial.statementCount + 1 ||
+    !Array.isArray(partial.states) ||
+    partial.states.length !== partial.statementCount + 1
+  ) {
+    throw new Error("production 0019 partial schema contract is unsupported");
+  }
+  for (let boundary = 0; boundary <= partial.statementCount; boundary += 1) {
+    const state = partial.states[boundary];
+    const entry = partial.boundaries[boundary];
+    if (
+      state?.resumeFrom !== boundary ||
+      entry?.boundary !== boundary ||
+      entry?.resumeFrom !== boundary ||
+      entry?.schemaSha256 !== state?.schemaSha256 ||
+      !/^[a-f0-9]{64}$/.test(state?.schemaSha256 ?? "") ||
+      state.schemaSha256 !==
+        crypto
+          .createHash("sha256")
+          .update(canonicalJson(state.schema))
+          .digest("hex")
+    ) {
+      throw new Error("production 0019 partial schema contract is unsupported");
+    }
+  }
+}
+
+export function assert0019StatementHashes(partial, sql) {
+  const statements = String(sql ?? "")
+    .split("--> statement-breakpoint")
+    .map(statement => statement.trim())
+    .filter(Boolean);
+  if (
+    statements.length !== 4 ||
+    statements[0] !==
+      "DROP PROCEDURE IF EXISTS `credit_reserve_checkout_intent`;" ||
+    !/^CREATE PROCEDURE `credit_reserve_checkout_intent`(?:\s|\()/i.test(
+      statements[1]
+    ) ||
+    !statements[1].includes("premium_images_8_medium_v1") ||
+    !statements[1].includes("premium_images_9_medium_v2") ||
+    statements[2] !==
+      "DROP PROCEDURE IF EXISTS `credit_freeze_wallet_for_review`;" ||
+    !/^CREATE PROCEDURE `credit_freeze_wallet_for_review`(?:\s|\()/i.test(
+      statements[3]
+    ) ||
+    !statements[3].includes(
+      "payment.`gross_amount`=intent.`expected_amount`"
+    ) ||
+    statements.some(
+      (statement, index) =>
+        crypto.createHash("sha256").update(statement).digest("hex") !==
+        partial.statementSha256[index]
+    )
+  ) {
+    throw new Error("production 0019 statement fingerprint mismatch");
   }
 }
 
@@ -607,7 +700,19 @@ async function inspectBeforeState(
   }
   if (rows.length === plan.through0018.length) {
     assertExactHistory(history, contract.history0018, "0018");
-    assertExactSchemaState(schema, contract.final0018, "0018");
+    const state = contract.partial0019CreditOffer.states.find(candidate =>
+      isExactSchemaState(schema, candidate.schema)
+    );
+    if (!state) {
+      throw new Error(
+        `0019 partial schema fingerprint mismatch (${schemaDifference(schema, contract.final0019)})`
+      );
+    }
+    return { kind: "resume-0019", nextStatement: state.resumeFrom };
+  }
+  if (rows.length === plan.through0019.length) {
+    assertExactHistory(history, contract.history0019, "0019");
+    assertExactSchemaState(schema, contract.final0019, "0019");
     return { kind: "complete" };
   }
   throw new Error("unsupported migration history length");
@@ -741,11 +846,42 @@ async function resume0018(
   assertExactHistory(history, contract.history0018, "resumed 0018");
 }
 
+async function resume0019(
+  connection,
+  contract,
+  migration,
+  nextStatement,
+  schemaCaptureOptions
+) {
+  const statements = await readMigrationStatements(migration);
+  if (
+    statements.length !== contract.partial0019CreditOffer.statementCount ||
+    nextStatement < 0 ||
+    nextStatement > statements.length
+  ) {
+    throw new Error("0019 statement contract is unsupported");
+  }
+  assert0019StatementHashes(
+    contract.partial0019CreditOffer,
+    statements.join("\n--> statement-breakpoint\n")
+  );
+  await applyStatements(connection, statements.slice(nextStatement));
+  const schema = await captureProductionSchemaState(
+    connection,
+    schemaCaptureOptions
+  );
+  assertExactSchemaState(schema, contract.final0019, "resumed 0019");
+  await insertMigrationHistory(connection, migration);
+  const history = await captureMigrationHistory(connection);
+  assertExactHistory(history, contract.history0019, "resumed 0019");
+}
+
 export const productionSchemaPhases = Object.freeze([
   "0015_base",
   "0016_expand",
   "0017_credit_wallet_expand",
   "0018_credit_checkout_reservation",
+  "0019_credit_offer_v2",
 ]);
 
 export const productionDatabasePrivilegeProfiles = Object.freeze([
@@ -798,6 +934,11 @@ const productionMigrationModes = Object.freeze({
     target: "credit-wallet",
     privilegeProfile: "credit-runtime",
   },
+  "verify-credit-offer": {
+    verifyOnly: true,
+    target: "credit-offer",
+    privilegeProfile: "credit-runtime",
+  },
   "apply-empty-bootstrap": {
     verifyOnly: false,
     target: "expand",
@@ -806,6 +947,12 @@ const productionMigrationModes = Object.freeze({
   "apply-empty-credit-wallet-bootstrap": {
     verifyOnly: false,
     target: "credit-wallet",
+    allowEmptyBootstrap: true,
+    privilegeProfile: "credit-bootstrap",
+  },
+  "apply-empty-credit-offer-bootstrap": {
+    verifyOnly: false,
+    target: "credit-offer",
     allowEmptyBootstrap: true,
     privilegeProfile: "credit-bootstrap",
   },
@@ -851,7 +998,7 @@ export function productionMigrationOptionsForMode(mode, artifactKind = "") {
     if (artifactKind === "runtime") {
       return {
         verifyOnly: true,
-        target: "credit-wallet",
+        target: "credit-offer",
         privilegeProfile: "credit-runtime",
       };
     }
@@ -869,7 +1016,10 @@ function stableSchemaPhase(state) {
   if (state.kind === "resume-0018" && state.nextStatement === 0) {
     return "0017_credit_wallet_expand";
   }
-  if (state.kind === "complete") return "0018_credit_checkout_reservation";
+  if (state.kind === "resume-0019" && state.nextStatement === 0) {
+    return "0018_credit_checkout_reservation";
+  }
+  if (state.kind === "complete") return "0019_credit_offer_v2";
   return null;
 }
 
@@ -908,9 +1058,13 @@ export function transitionInspectionPhase(state, options = {}) {
 }
 
 function assertMigrationTarget(target, verifyOnly) {
-  if (!new Set(["compatible", "expand", "credit-wallet"]).has(target)) {
+  if (
+    !new Set(["compatible", "expand", "credit-wallet", "credit-offer"]).has(
+      target
+    )
+  ) {
     throw new Error(
-      "migration target must be compatible, expand, or credit-wallet"
+      "migration target must be compatible, expand, credit-wallet, or credit-offer"
     );
   }
   if (target === "compatible" && !verifyOnly) {
@@ -955,7 +1109,8 @@ export function assertVerifiedPhase(
       (phase === "0015_base" || phase === "0016_expand")) ||
     (target === "expand" && phase === "0016_expand") ||
     (target === "credit-wallet" &&
-      phase === "0018_credit_checkout_reservation");
+      phase === "0018_credit_checkout_reservation") ||
+    (target === "credit-offer" && phase === "0019_credit_offer_v2");
   if (!accepted) {
     throw new Error(
       `schema is at ${phase ?? "an interrupted migration"}; ${target} verification refused`
@@ -1034,22 +1189,34 @@ async function verifyFinalState(
 ) {
   const history = await captureMigrationHistory(connection);
   assertAppliedMigrationPrefix(history?.rows ?? [], plan.all);
-  const creditWallet = target === "credit-wallet";
-  assertExactHistory(
-    history,
-    creditWallet ? contract.history0018 : contract.history0016,
-    creditWallet ? "0018 credit checkout reservation" : "0016 expand"
-  );
+  const finalState =
+    target === "credit-offer"
+      ? {
+          history: contract.history0019,
+          schema: contract.final0019,
+          label: "0019 credit offer v2",
+          appliedCount: plan.through0019.length,
+        }
+      : target === "credit-wallet"
+        ? {
+            history: contract.history0018,
+            schema: contract.final0018,
+            label: "0018 credit checkout reservation",
+            appliedCount: plan.through0018.length,
+          }
+        : {
+            history: contract.history0016,
+            schema: contract.final0016,
+            label: "0016 expand",
+            appliedCount: plan.through0016.length,
+          };
+  assertExactHistory(history, finalState.history, finalState.label);
   const schema = await captureProductionSchemaState(
     connection,
     schemaCaptureOptions
   );
-  assertExactSchemaState(
-    schema,
-    creditWallet ? contract.final0018 : contract.final0016,
-    creditWallet ? "0018 credit checkout reservation" : "0016 expand"
-  );
-  return creditWallet ? plan.through0018.length : plan.through0016.length;
+  assertExactSchemaState(schema, finalState.schema, finalState.label);
+  return finalState.appliedCount;
 }
 
 async function bootstrapExactProductionPlan(connection, plan, target) {
@@ -1057,7 +1224,11 @@ async function bootstrapExactProductionPlan(connection, plan, target) {
     "CREATE TABLE `__drizzle_migrations` (`id` serial PRIMARY KEY,`hash` text NOT NULL,`created_at` bigint)"
   );
   const migrations =
-    target === "credit-wallet" ? plan.through0018 : plan.through0016;
+    target === "credit-offer"
+      ? plan.through0019
+      : target === "credit-wallet"
+        ? plan.through0018
+        : plan.through0016;
   for (const migration of migrations) {
     await applyStatements(connection, await readMigrationStatements(migration));
     await insertMigrationHistory(connection, migration);
@@ -1255,7 +1426,9 @@ export async function runProductionMigrations(options = {}) {
                 ? migrationPlan.through0016.length
                 : initialStablePhase === "0017_credit_wallet_expand"
                   ? migrationPlan.through0017.length
-                  : migrationPlan.through0018.length,
+                  : initialStablePhase === "0018_credit_checkout_reservation"
+                    ? migrationPlan.through0018.length
+                    : migrationPlan.through0019.length,
           schemaPhase: initialStablePhase,
           inspectionOnly:
             inspectExpandTransition || inspectCreditWalletTransition,
@@ -1266,7 +1439,7 @@ export async function runProductionMigrations(options = {}) {
       if (beforeState.kind === "fresh") {
         if (
           !allowEmptyBootstrap ||
-          !new Set(["expand", "credit-wallet"]).has(target)
+          !new Set(["expand", "credit-wallet", "credit-offer"]).has(target)
         ) {
           throw new Error(
             "empty database bootstrap requires an explicit bounded bootstrap"
@@ -1275,16 +1448,20 @@ export async function runProductionMigrations(options = {}) {
         await assertPreparedStatementCapacity(connection);
         await bootstrapExactProductionPlan(connection, migrationPlan, target);
       } else if (beforeState.kind === "complete") {
-        if (target !== "credit-wallet") {
+        if (target !== "credit-offer") {
           throw new Error("schema is ahead of the requested migration target");
         }
         result = {
-          appliedCount: migrationPlan.through0018.length,
-          schemaPhase: "0018_credit_checkout_reservation",
+          appliedCount: migrationPlan.through0019.length,
+          schemaPhase: "0019_credit_offer_v2",
           lockWaitMs: Date.now() - startedAt,
         };
       } else if (beforeState.kind === "resume-0016") {
-        if (target === "expand" || target === "credit-wallet") {
+        if (
+          target === "expand" ||
+          target === "credit-wallet" ||
+          target === "credit-offer"
+        ) {
           await resume0016(
             connection,
             contract,
@@ -1300,7 +1477,8 @@ export async function runProductionMigrations(options = {}) {
         }
       } else if (
         beforeState.kind !== "resume-0017" &&
-        beforeState.kind !== "resume-0018"
+        beforeState.kind !== "resume-0018" &&
+        beforeState.kind !== "resume-0019"
       ) {
         throw new Error(
           "expand migration requires the completed 0015 base schema"
@@ -1308,7 +1486,7 @@ export async function runProductionMigrations(options = {}) {
       }
       if (
         !result &&
-        target === "credit-wallet" &&
+        (target === "credit-wallet" || target === "credit-offer") &&
         beforeState.kind === "resume-0017"
       ) {
         await resume0017(
@@ -1322,13 +1500,27 @@ export async function runProductionMigrations(options = {}) {
       }
       if (
         !result &&
-        target === "credit-wallet" &&
+        (target === "credit-wallet" || target === "credit-offer") &&
         beforeState.kind === "resume-0018"
       ) {
         await resume0018(
           connection,
           contract,
           migrationPlan.creditCheckout0018,
+          beforeState.nextStatement,
+          schemaCaptureOptions
+        );
+        beforeState = { kind: "resume-0019", nextStatement: 0 };
+      }
+      if (
+        !result &&
+        target === "credit-offer" &&
+        beforeState.kind === "resume-0019"
+      ) {
+        await resume0019(
+          connection,
+          contract,
+          migrationPlan.creditOffer0019,
           beforeState.nextStatement,
           schemaCaptureOptions
         );
@@ -1344,9 +1536,11 @@ export async function runProductionMigrations(options = {}) {
         result = {
           appliedCount,
           schemaPhase:
-            target === "credit-wallet"
-              ? "0018_credit_checkout_reservation"
-              : "0016_expand",
+            target === "credit-offer"
+              ? "0019_credit_offer_v2"
+              : target === "credit-wallet"
+                ? "0018_credit_checkout_reservation"
+                : "0016_expand",
           lockWaitMs: Date.now() - startedAt,
         };
       }

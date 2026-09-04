@@ -19,7 +19,7 @@ type LegalPage = {
 };
 
 const FALLBACK_PREMIUM_CREDIT_PRICING = Object.freeze({
-  premiumCreditPrice: "€4.99",
+  premiumCreditPrice: "€5.00",
   premiumCreditCurrency: "EUR",
 });
 
@@ -73,7 +73,7 @@ export function registerLegalRoutes(app: express.Express) {
           },
           {
             heading: "Payments",
-            html: `<p>A premium-credit purchase starts only from a signed checkout link opened from Messenger. Mollie processes one ${premiumCreditPrice} payment after the customer reviews and confirms checkout. The purchase adds eight medium-quality image credits that do not expire. It does not create a subscription, automatic renewal, direct-debit mandate, automatic top-up or overage charge.</p>`,
+            html: `<p>A premium-credit purchase starts only from a signed checkout link opened from Messenger. Mollie processes one ${premiumCreditPrice} payment after the customer reviews and confirms checkout. The purchase adds nine medium-quality image or editing credits that do not expire. It does not create a subscription, automatic renewal, direct-debit mandate, automatic top-up or overage charge.</p>`,
           },
         ],
       })
@@ -90,7 +90,7 @@ export function registerLegalRoutes(app: express.Express) {
         sections: [
           {
             heading: "Premium image credits",
-            html: `<p>Leaderbot premium credits cost ${premiumCreditPrice} as a single payment for eight medium-quality image generations. Credits do not expire. One credit is consumed only after a usable generated image is successfully delivered through Messenger. Provider, publication, or delivery failures do not consume a credit. Purchase starts only from a signed checkout link opened from Messenger and requires explicit confirmation before continuing to Mollie.</p>`,
+            html: `<p>Leaderbot premium credits cost ${premiumCreditPrice} as a single payment for nine medium-quality image generations or edits. Credits do not expire. One credit is consumed only after one usable premium result is successfully delivered through Messenger. Provider, publication, or delivery failures do not consume a credit. Purchase starts only from a signed checkout link opened from Messenger and requires explicit confirmation before continuing to Mollie.</p>`,
           },
           {
             heading: "No subscription or overage",
@@ -122,8 +122,6 @@ export function registerLegalRoutes(app: express.Express) {
   });
 
   app.get("/billing-policy", (_req, res) => {
-    const { premiumCreditPrice, premiumCreditCurrency } =
-      getPremiumCreditPricingDisplay();
     res.type("html").send(
       renderLegalPage({
         title: "Premium Credit Pricing and Billing Information",
@@ -132,11 +130,11 @@ export function registerLegalRoutes(app: express.Express) {
         sections: [
           {
             heading: "One-time price",
-            html: `<p>One premium credit pack costs ${premiumCreditPrice} once in ${premiumCreditCurrency}. The checkout page shows the exact amount and package before the customer continues to Mollie.</p>`,
+            html: "<p>The checkout page shows the exact one-time price, number of credits and offer version before the customer continues to Mollie. That displayed offer snapshot remains the record for the purchase.</p>",
           },
           {
             heading: "Included usage",
-            html: "<p>The pack adds eight medium-quality image credits. Credits do not expire. One credit is permanently consumed only after a usable generated image is successfully delivered through Messenger. Provider, publication, or delivery failures do not consume a credit, and a retry of the same delivered request does not consume another credit.</p>",
+            html: "<p>The pack adds the number of medium-quality image or editing credits shown in checkout. Credits do not expire. One credit is permanently consumed only after one usable premium result is successfully delivered through Messenger. Provider, publication, or delivery failures do not consume a credit, and a retry of the same delivered request does not consume another credit.</p>",
           },
           {
             heading: "No renewal, top-up or overage",
@@ -148,7 +146,7 @@ export function registerLegalRoutes(app: express.Express) {
           },
           {
             heading: "Before payment",
-            html: `<p>Before any payment, Leaderbot shows the ${premiumCreditPrice} total price, eight included medium-quality credits, that credits do not expire, the absence of renewal and overage, and applicable cancellation and refund terms.</p>`,
+            html: "<p>Before any payment, Leaderbot shows the exact total price, exact number of included medium-quality credits, offer and refund-policy versions, that credits do not expire, the absence of renewal and overage, and applicable cancellation and refund terms.</p>",
           },
           {
             heading: "Questions",

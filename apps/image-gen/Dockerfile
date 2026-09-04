@@ -49,8 +49,8 @@ LABEL org.opencontainers.image.source="https://github.com/Dj-Shortcut/openclaw-f
       io.leaderbot.artifact.kind="runtime" \
       io.leaderbot.base.node="${NODE_BASE_IMAGE}" \
       io.leaderbot.runtime.ffmpeg="${FFMPEG_VERSION}" \
-      io.leaderbot.schema.minimum="0018_credit_checkout_reservation" \
-      io.leaderbot.schema.maximum="0018_credit_checkout_reservation"
+      io.leaderbot.schema.minimum="0019_credit_offer_v2" \
+      io.leaderbot.schema.maximum="0019_credit_offer_v2"
 RUN apk add --no-cache "ffmpeg=${FFMPEG_VERSION}"
 RUN printf '%s\n' 'runtime' > /app/.leaderbot-artifact-kind
 # Keep the runtime stage slim: copy only the bundled server entrypoint and the

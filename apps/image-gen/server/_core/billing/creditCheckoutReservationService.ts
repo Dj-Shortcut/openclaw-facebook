@@ -36,7 +36,7 @@ export type MessengerCreditCheckoutRequest = Readonly<{
 export type ReservedMessengerCreditCheckout = Readonly<{
   intentId: string;
   actionUrl: string;
-  label: "8 premiumcredits - € 4,99";
+  label: "9 premiumcredits - € 5,00";
   toJSON: () => Readonly<{ intentId: string; capability: "redacted" }>;
 }>;
 
@@ -220,7 +220,7 @@ export async function reserveMessengerCreditCheckout(
       offerSnapshotCode: offer.offerId,
       expectedAmount: offer.amount.value,
       creditCount: offer.creditCount,
-      description: "Leaderbot - 8 premium beeldcredits",
+      description: offer.mollieDescription,
       metadataHash: identity.metadataHash,
       idempotencyKey: identity.idempotencyKey,
       checkoutScopeKey: identity.checkoutScopeKey,
@@ -247,7 +247,7 @@ export async function reserveMessengerCreditCheckout(
   return Object.freeze({
     intentId: identity.intentId,
     actionUrl: checkoutUrl.toString(),
-    label: "8 premiumcredits - € 4,99" as const,
+    label: "9 premiumcredits - € 5,00" as const,
     toJSON: () => jsonView,
   });
 }

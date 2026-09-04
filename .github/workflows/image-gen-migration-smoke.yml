@@ -83,6 +83,7 @@ jobs:
           pnpm run db:rehearse-0016
           pnpm run db:rehearse-0017
           pnpm run db:rehearse-0018
+          pnpm run db:rehearse-0019
           pnpm run build:docker
           pnpm run db:test-production-migrator
           pnpm run db:generate-production-contract
@@ -92,7 +93,7 @@ jobs:
       - name: Verify migrated schema and history are exact and idempotent
         working-directory: apps/image-gen
         env:
-          LEADERBOT_PRODUCTION_MIGRATION_MODE: verify-credit-wallet
+          LEADERBOT_PRODUCTION_MIGRATION_MODE: verify-credit-offer
         run: |
           set -euo pipefail
           cleanup() {
@@ -151,13 +152,13 @@ jobs:
           image="leaderbot-image-gen-migration:${GITHUB_SHA}"
           docker build --build-arg SOURCE_REVISION="$GITHUB_SHA" --tag "$image" .
           test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$image")" = "$GITHUB_SHA"
-          test "$(docker image inspect --format '{{ index .Config.Labels "io.leaderbot.schema.minimum" }}' "$image")" = "0018_credit_checkout_reservation"
-          test "$(docker image inspect --format '{{ index .Config.Labels "io.leaderbot.schema.maximum" }}' "$image")" = "0018_credit_checkout_reservation"
+          test "$(docker image inspect --format '{{ index .Config.Labels "io.leaderbot.schema.minimum" }}' "$image")" = "0019_credit_offer_v2"
+          test "$(docker image inspect --format '{{ index .Config.Labels "io.leaderbot.schema.maximum" }}' "$image")" = "0019_credit_offer_v2"
           docker run --rm --network host \
             --env DATABASE_URL=mysql://root:root@127.0.0.1:3306/test_image_gen_container \
             --env NODE_ENV=test \
             --env LEADERBOT_ALLOW_TEST_SCHEMA_BOOTSTRAP=1 \
-            --env LEADERBOT_PRODUCTION_MIGRATION_MODE=apply-empty-credit-wallet-bootstrap \
+            --env LEADERBOT_PRODUCTION_MIGRATION_MODE=apply-empty-credit-offer-bootstrap \
             "$image" node dist/migrate-production.cjs
           cleanup() {
             mysql -h127.0.0.1 -uroot -proot \
@@ -199,7 +200,7 @@ jobs:
           NODE
           docker run --rm --network host \
             --env DATABASE_URL=mysql://runtime_credit_container:runtime_credit_container@127.0.0.1:3306/test_image_gen_container \
-            --env LEADERBOT_PRODUCTION_MIGRATION_MODE=verify-credit-wallet \
+            --env LEADERBOT_PRODUCTION_MIGRATION_MODE=verify-credit-offer \
             "$image" node dist/migrate-production.cjs
 
       - name: Verify dailyQuota composite index exists
