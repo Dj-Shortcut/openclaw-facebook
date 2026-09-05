@@ -85,10 +85,25 @@ Live payment enablement remains gated by the relevant P1 through P4 evidence.
       Mode, pass paid checkout, delayed/replayed webhook, cancellation, failure,
       refund, partially used wallet, provider failure, delivery failure,
       deletion, budget exhaustion, receipt, reconciliation, and rollback.
-  - [ ] Protected schema run `33300214073` stopped before any database change
-        because the dedicated migration role lacked exactly `CREATE`,
-        `TRIGGER`, `CREATE ROUTINE`, and `ALTER ROUTINE`. The reviewed
-        transition must first snapshot the encrypted database volume, add only
+  - [ ] Protected schema transition is not complete. Run `33910363498`
+        (attempt 1, source `00d00b6`) recorded a fresh encrypted credential-boundary
+        snapshot, then failed at the rights-repair step and its SUPER-cleanup
+        check; the restore test and all credit DDL steps were skipped. The
+        isolated Fly child omitted `HOME`, which makes the pinned CLI exit
+        before SSH. An independent operator read found no non-system SUPER
+        grants and no credit procedures, but this is not protected cleanup
+        completion. Land the tested child-environment fix, run the separately
+        approved cleanup-only proof bound to this failed run, and retire its
+        exact temporary token and unchanged secret before a new transition.
+        The original four-hour token is now absent from the complete Fly app
+        inventory; the original GitHub secret remains unchanged. The protected
+        cleanup uses a separate bounded credential, preserving both metadata
+        identities until its successful proof permits retirement. Expiry or
+        inventory absence alone is not database-cleanup evidence.
+        The earlier run `33300214073` established that the migration role lacked
+        `CREATE`, `TRIGGER`, `CREATE ROUTINE`, and `ALTER ROUTINE`; that repair
+        remains unproven. The reviewed transition must snapshot the encrypted
+        database volume, add only
         the missing subset through the fixed-output repair, prove the strict
         migration boundary, and then run the existing `0016 -> 0018` transition
         once. The repair must decide its exact delta under lock, recover an

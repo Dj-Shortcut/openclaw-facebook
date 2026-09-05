@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { assertProtectedCleanupWorkflow } from "./retire-image-gen-repair-exec-token.mjs";
 
 const MANIFEST_PATH = "deploy/production/apps.json";
 const PRODUCTION_WORKFLOW_PATH = ".github/workflows/deploy-production.yml";
@@ -12,6 +13,8 @@ const TRUSTED_ARTIFACT_WORKFLOW_PATH =
   ".github/workflows/build-production-artifacts.yml";
 const SCHEMA_TRANSITION_WORKFLOW_PATH =
   ".github/workflows/image-gen-schema-transition.yml";
+const MIGRATION_SUPER_CLEANUP_WORKFLOW_PATH =
+  ".github/workflows/cleanup-image-gen-migration-super.yml";
 const CREDIT_MIGRATION_DEFINER_GRANT_PATH =
   "apps/image-gen/scripts/credit-migration-definer-grants.mjs";
 const CREDIT_MIGRATION_DEFINER_GRANT_RUNNER_PATH =
@@ -88,6 +91,7 @@ const VERIFIED_FLYCTL_WORKFLOW_JOBS = Object.freeze({
     "deploy-storage-proxy",
   ],
   [SCHEMA_TRANSITION_WORKFLOW_PATH]: ["preflight", "expand"],
+  [MIGRATION_SUPER_CLEANUP_WORKFLOW_PATH]: ["cleanup"],
   [RUNTIME_PRINCIPAL_STAGING_WORKFLOW_PATH]: ["stage"],
   [RUNTIME_PRINCIPAL_CLEANUP_WORKFLOW_PATH]: ["preflight", "mutate"],
   [CREDIT_PROVISIONER_RETIREMENT_WORKFLOW_PATH]: ["mutate"],
@@ -5276,6 +5280,15 @@ function validateCreditProvisionerBootstrapHelper(rootDir) {
       fail(`${CREDIT_PROVISIONER_BOOTSTRAP_RUNNER_PATH} ${message}`);
     }
   }
+  if (
+    !/export const ROOT_MYSQL_REMOTE_COMMAND_FLYCTL_CSV\s*=\s*`"\$\{ROOT_MYSQL_REMOTE_COMMAND\.replaceAll\(\s*'"'\s*,\s*'""'\s*\)\}"`;/u.test(
+      runner,
+    )
+  ) {
+    fail(
+      `${CREDIT_PROVISIONER_BOOTSTRAP_RUNNER_PATH} must expose the exact RFC 4180 flyctl StringSlice field`,
+    );
+  }
   const accountMutation = runner.indexOf(
     "await rootSession.execute(sql.createStatement",
   );
@@ -5422,6 +5435,9 @@ function validateCreditMigrationPrincipalRepair(rootDir) {
     CREDIT_MIGRATION_PRINCIPAL_REPAIR_TEST_PATH,
     REPAIR_EXEC_TOKEN_RETIREMENT_PATH,
     REPAIR_EXEC_TOKEN_RETIREMENT_TEST_PATH,
+    MIGRATION_SUPER_CLEANUP_WORKFLOW_PATH,
+    "scripts/image-gen-migration-super-cleanup-evidence.mjs",
+    "scripts/image-gen-migration-super-cleanup-evidence.test.mjs",
   ]) {
     if (!fs.existsSync(path.join(rootDir, relativePath))) {
       fail(`Missing ${relativePath}`);
@@ -5498,6 +5514,15 @@ function validateCreditMigrationPrincipalRepair(rootDir) {
     path.join(rootDir, CREDIT_MIGRATION_PRINCIPAL_REPAIR_RUNNER_PATH),
     "utf8",
   );
+  if (
+    !runner.includes("export function buildRootFlyctlEnvironment") ||
+    !runner.includes('["PATH", "HOME", "FLY_API_TOKEN"]') ||
+    occurrenceCount(runner, "env: buildRootFlyctlEnvironment(),") !== 2
+  ) {
+    fail(
+      `${CREDIT_MIGRATION_PRINCIPAL_REPAIR_RUNNER_PATH} must pass the existing HOME and explicit repair token through the shared root Fly child allowlist`,
+    );
+  }
   for (const [required, message] of [
     [
       "classifyCreditMigrationHistory",
@@ -5516,7 +5541,7 @@ function validateCreditMigrationPrincipalRepair(rootDir) {
       "must keep root access inside the exact reviewed database Machine",
     ],
     [
-      '["PATH", "FLY_API_TOKEN", "TMPDIR", "NO_COLOR"]',
+      '["TMPDIR", "NO_COLOR"]',
       "must pass only the minimal Fly child environment to the root session",
     ],
     [
@@ -5551,12 +5576,24 @@ function validateCreditMigrationPrincipalRepair(rootDir) {
   for (const testPath of [
     CREDIT_MIGRATION_PRINCIPAL_REPAIR_TEST_PATH,
     REPAIR_EXEC_TOKEN_RETIREMENT_TEST_PATH,
+    "scripts/image-gen-migration-super-cleanup-evidence.test.mjs",
   ]) {
     if (tokens.filter((token) => token === testPath).length !== 1) {
       fail(
         `package.json test:production-contracts must include exact ${testPath}`,
       );
     }
+  }
+  const cleanupWorkflow = fs.readFileSync(
+    path.join(rootDir, MIGRATION_SUPER_CLEANUP_WORKFLOW_PATH),
+    "utf8",
+  );
+  try {
+    assertProtectedCleanupWorkflow(cleanupWorkflow, cleanupWorkflow);
+  } catch {
+    fail(
+      `${MIGRATION_SUPER_CLEANUP_WORKFLOW_PATH} must preserve protected revoke-only cleanup evidence`,
+    );
   }
 }
 
@@ -8081,10 +8118,27 @@ export function validateProductionRepository(rootDir = process.cwd()) {
       "never from hardcoded counts",
       "must derive recovery scale only from validated interrupted data",
     ],
+    [
+      "ROOT_MYSQL_REMOTE_COMMAND_FLYCTL_CSV",
+      "must import the reviewed repair-command CSV field",
+    ],
+    [
+      '--expiry 4h --command "$root_mysql_command_csv" --json',
+      "must pass only the reviewed repair-command CSV field to flyctl",
+    ],
+    [
+      "parses\n`--command` as an RFC 4180 CSV field",
+      "must explain the pinned flyctl StringSlice transport encoding",
+    ],
   ]) {
     if (!productionRunbook.includes(needle)) {
       fail(`Production deployment runbook ${message}`);
     }
+  }
+  if (productionRunbook.includes('--command "$root_mysql_command"')) {
+    fail(
+      "Production deployment runbook must not pass the raw root command to flyctl StringSlice parsing",
+    );
   }
   if (
     productionRunbook.includes("IMAGE_GEN_DATABASE_RECOVERY_INSPECTION_URL") ||

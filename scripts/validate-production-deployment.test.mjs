@@ -73,6 +73,7 @@ function createRepositoryFixture() {
     "apps/image-gen/storage-proxy/index.ts",
     ".github/workflows/build-production-artifacts.yml",
     ".github/workflows/cleanup-image-gen-schema-probes.yml",
+    ".github/workflows/cleanup-image-gen-migration-super.yml",
     ".github/workflows/cleanup-image-gen-runtime-principals.yml",
     ".github/workflows/retire-image-gen-credit-provisioners.yml",
     ".github/workflows/deploy-production.yml",
@@ -93,6 +94,8 @@ function createRepositoryFixture() {
     "scripts/repair-image-gen-credit-migration-principal.mjs",
     "scripts/retire-image-gen-repair-exec-token.mjs",
     "scripts/retire-image-gen-repair-exec-token.test.mjs",
+    "scripts/image-gen-migration-super-cleanup-evidence.mjs",
+    "scripts/image-gen-migration-super-cleanup-evidence.test.mjs",
     "scripts/image-gen-credit-provisioner-bootstrap-contract.mjs",
     "scripts/image-gen-credit-provisioner-bootstrap-contract.test.mjs",
     "scripts/provision-image-gen-credit-provisioner.mjs",
@@ -1985,6 +1988,20 @@ describe("production deployment contract", () => {
     );
   });
 
+  it("requires the reviewed flyctl CSV field for repair-token creation", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      "docs/operations/production-deployments.md",
+      '--expiry 4h --command "$root_mysql_command_csv" --json',
+      '--expiry 4h --command "$root_mysql_command" --json',
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must pass only the reviewed repair-command CSV field to flyctl",
+    );
+  });
+
   it("rejects a broad automatic-recovery database inspection principal", () => {
     const root = createRepositoryFixture();
     replaceFixtureText(
@@ -3568,6 +3585,20 @@ describe("production deployment contract", () => {
     );
   });
 
+  it("requires the exact quoted flyctl StringSlice field", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      "scripts/provision-image-gen-credit-provisioner.mjs",
+      `\`"\${ROOT_MYSQL_REMOTE_COMMAND.replaceAll('"', '""')}"\``,
+      `ROOT_MYSQL_REMOTE_COMMAND.replaceAll('"', '""')`,
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must expose the exact RFC 4180 flyctl StringSlice field",
+    );
+  });
+
   it("requires protected-secret observation under the database lock", () => {
     const root = createRepositoryFixture();
     replaceFixtureText(
@@ -3971,6 +4002,20 @@ describe("production deployment contract", () => {
     );
   });
 
+  it("requires HOME in both root Fly child allowlists", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      "scripts/repair-image-gen-credit-migration-principal.mjs",
+      '["PATH", "HOME", "FLY_API_TOKEN"]',
+      '["PATH", "FLY_API_TOKEN"]',
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must pass the existing HOME and explicit repair token through the shared root Fly child allowlist",
+    );
+  });
+
   it("requires a live TCP database probe immediately before migration-role repair", () => {
     const root = createRepositoryFixture();
     const relativePath = ".github/workflows/image-gen-schema-transition.yml";
@@ -4101,6 +4146,8 @@ describe("production deployment contract", () => {
     "scripts/fly-restore-probe-status.test.mjs",
     "scripts/retire-image-gen-repair-exec-token.mjs",
     "scripts/retire-image-gen-repair-exec-token.test.mjs",
+    "scripts/image-gen-migration-super-cleanup-evidence.mjs",
+    "scripts/image-gen-migration-super-cleanup-evidence.test.mjs",
   ])("requires recovery safety file %s", (relativePath) => {
     const root = createRepositoryFixture();
     fs.unlinkSync(path.join(root, relativePath));
@@ -4108,6 +4155,21 @@ describe("production deployment contract", () => {
     expect(() => validateProductionRepository(root)).toThrow(
       `Missing ${relativePath}`,
     );
+  });
+
+  it.each([
+    ["    environment: production", "    environment: preview"],
+    ["--operation revoke-super)", "--operation prepare)"],
+    ["FLY_DATABASE_CLEANUP_EXEC_TOKEN", "FLY_DATABASE_REPAIR_EXEC_TOKEN"],
+  ])("rejects cleanup-only workflow authority drift", (before, after) => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/cleanup-image-gen-migration-super.yml",
+      before,
+      after,
+    );
+    expect(() => validateProductionRepository(root)).toThrow();
   });
 
   it.each(["missing", "substring", "duplicate"])(
