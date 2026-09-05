@@ -38,11 +38,6 @@ kill_timeout = 300
   BILLING_OPERATOR_NOTIFICATION_WEBHOOK_URL = "https://app.leaderbot.live/api/internal/billing/notifications/operator"
   BILLING_SUPPORT_EMAIL = "privacy@leaderbot.live"
   FB_PAGE_CONNECT_CONFIG_ID = "2097873054148678"
-  # Phase 1 of the Facebook connect-state storage rollout. The first reviewed
-  # runtime image containing the dual-reader must keep legacy writes throughout
-  # its rolling deploy. The separate schema migration bridge does not contain
-  # this code. Change only in a later config release after the runbook gates.
-  FACEBOOK_CONNECT_STORAGE_MODE = "legacy_compat"
   MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD = "5.00"
   MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD = "25.00"
   MESSENGER_FREE_DAILY_LIMIT = "5"
@@ -89,7 +84,6 @@ kill_timeout = 300
   NODE_ENV = "production"
   OPENAI_IMAGE_MAX_RETRIES = "0"
   PORT = "8080"
-  PORTAL_BASE_URL = "https://app.leaderbot.live"
   # Temporary storage migration bridge for existing and non-Messenger objects.
   # New Messenger writes are scoped even while this read/delete bridge is on.
   STORAGE_ALLOW_LEGACY_KEYS = "true"

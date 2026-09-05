@@ -8,7 +8,7 @@ personal OpenClaw Page is separate, pairing-only and outside the Leaderbot
 customer review path. Keep this file aligned with customer Messenger runtime
 behavior before enabling broader public traffic or adding capabilities.
 The personal Page uses a separate Meta app, callback and credential set; do not
-mix it into the customer app review or subscription.
+mix it into the owner-bot review or subscription behavior.
 
 ## Permission posture
 
@@ -36,6 +36,11 @@ mix it into the customer app review or subscription.
 | Delete my data                 | User can send `delete my data` or `verwijder mijn data`; deletion also remains available by email.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Demo cost ledger, generated assets, retained source images, face-memory state, and completion marker deletion in production-equivalent state.                                                                                                                                                                                                                                                                                                                                      | Supports Meta data-deletion expectations; Meta-controlled Messenger history remains managed by Meta.                                                                     |
 
 ## Review demo checklist
+
+Public quick-start actions contain only new image, edit photo and privacy.
+The video beta is not advertised in these shared actions. Natural-language
+video requests still require the enabled feature flag and the exact allowed
+user and Page binding before any provider work.
 
 Before requesting review or changing public access, record:
 

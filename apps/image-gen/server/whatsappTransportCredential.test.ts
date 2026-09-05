@@ -13,7 +13,7 @@ vi.mock("./db", () => ({
   getDatabaseOrThrow: mocks.getDatabaseOrThrow,
 }));
 
-vi.mock("./_core/facebookConnectStore", () => ({
+vi.mock("./_core/facebookPageToken", () => ({
   unsealFacebookPageToken: mocks.unsealFacebookPageToken,
 }));
 

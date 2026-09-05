@@ -190,13 +190,12 @@ gateway, pairing UI, admin content browser, or subscription management page.
 
 ## Transitional architecture
 
-The repository still contains:
+For safe decommissioning, the repository still retains:
 
 - a root OpenClaw Facebook channel and personal gateway;
-- a multi-tenant portal and customer desktop app;
-- workspace subscription and Startpilot billing code;
-- recurring Mollie workers and subscription tables;
-- optional WhatsApp and video paths.
+- historical portal handoff and workspace billing records;
+- recurring Mollie recovery workers and subscription tables;
+- optional WhatsApp compatibility and the owner-operated video path.
 
 These are implementation facts, not target product commitments. The generic
 OpenClaw channel is intended to move to a standalone project, preserving the

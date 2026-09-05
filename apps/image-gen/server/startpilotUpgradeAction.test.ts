@@ -9,15 +9,12 @@ import {
 } from "./_core/messengerActionRenderer";
 
 const originalBaseUrl = process.env.APP_BASE_URL;
-const originalPortalBaseUrl = process.env.PORTAL_BASE_URL;
 const originalLeaderbotPublicUrl = process.env.LEADERBOT_PUBLIC_URL;
 const originalNodeEnv = process.env.NODE_ENV;
 
 afterEach(() => {
   if (originalBaseUrl === undefined) delete process.env.APP_BASE_URL;
   else process.env.APP_BASE_URL = originalBaseUrl;
-  if (originalPortalBaseUrl === undefined) delete process.env.PORTAL_BASE_URL;
-  else process.env.PORTAL_BASE_URL = originalPortalBaseUrl;
   if (originalLeaderbotPublicUrl === undefined) {
     delete process.env.LEADERBOT_PUBLIC_URL;
   } else {
@@ -30,7 +27,6 @@ describe("Startpilot upgrade action", () => {
   it("does not expose the obsolete static Startpilot checkout", () => {
     process.env.NODE_ENV = "production";
     process.env.APP_BASE_URL = "https://leaderbot-fb-image-gen.fly.dev";
-    process.env.PORTAL_BASE_URL = "https://leaderbot.live";
 
     const response = buildStartpilotQuotaReachedResponse("nl");
     expect(response.actions).toEqual([]);
@@ -39,7 +35,6 @@ describe("Startpilot upgrade action", () => {
 
   it("distinguishes today's Startpilot limit from the total credit", () => {
     process.env.NODE_ENV = "production";
-    process.env.PORTAL_BASE_URL = "https://leaderbot.live";
 
     const daily = buildStartpilotQuotaReachedResponse("nl", "daily_exhausted");
     const total = buildStartpilotQuotaReachedResponse("nl", "total_exhausted");
@@ -52,7 +47,6 @@ describe("Startpilot upgrade action", () => {
 
   it("does not render an upgrade button before the scoped checkout exists", () => {
     process.env.NODE_ENV = "production";
-    process.env.PORTAL_BASE_URL = "https://leaderbot.live";
     const actions = buildStartpilotQuotaReachedResponse("en").actions;
 
     expect(renderMessengerQuickReplies(actions)).toEqual([]);
@@ -61,7 +55,6 @@ describe("Startpilot upgrade action", () => {
 
   it("keeps the free-quota message informational until credit checkout exists", () => {
     process.env.NODE_ENV = "production";
-    process.env.PORTAL_BASE_URL = "https://leaderbot.live";
 
     const response = buildFreeQuotaReachedResponse("nl");
     expect(response.text).toContain("gratis credits");
@@ -71,7 +64,6 @@ describe("Startpilot upgrade action", () => {
   it("omits the upgrade action when only the backend host is configured", () => {
     process.env.NODE_ENV = "production";
     process.env.APP_BASE_URL = "https://leaderbot-fb-image-gen.fly.dev";
-    delete process.env.PORTAL_BASE_URL;
     delete process.env.LEADERBOT_PUBLIC_URL;
 
     expect(buildStartpilotQuotaReachedResponse("en").actions).toEqual([]);
@@ -79,15 +71,15 @@ describe("Startpilot upgrade action", () => {
 
   it("falls back to quick replies for URL actions rejected as web buttons", () => {
     process.env.NODE_ENV = "production";
-    process.env.PORTAL_BASE_URL = "https://leaderbot.live";
+    process.env.APP_BASE_URL = "https://app.leaderbot.live";
     const actions = [
       { id: "evil", label: "Open", url: "https://evil.example/pay" },
       {
         id: "credentials",
         label: "Open",
-        url: "https://user:pass@leaderbot.live/pay",
+        url: "https://user:pass@app.leaderbot.live/pay",
       },
-      { id: "http", label: "Open", url: "http://leaderbot.live/pay" },
+      { id: "http", label: "Open", url: "http://app.leaderbot.live/pay" },
     ];
 
     expect(renderMessengerUrlButtons(actions)).toEqual([]);

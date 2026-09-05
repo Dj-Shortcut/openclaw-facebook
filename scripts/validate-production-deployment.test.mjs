@@ -3087,20 +3087,6 @@ describe("production deployment contract", () => {
     );
   });
 
-  it("requires the provider-silent WhatsApp provisioning command in the runtime artifact", () => {
-    const root = createRepositoryFixture();
-    replaceFixtureText(
-      root,
-      "apps/image-gen/package.json",
-      "--outfile=dist/provision-whatsapp-binding.cjs",
-      "--outfile=dist/missing-whatsapp-provisioning.cjs",
-    );
-
-    expect(() => validateProductionRepository(root)).toThrow(
-      "image-gen build:docker must bundle the provider-silent WhatsApp provisioning command",
-    );
-  });
-
   it("requires the reversible billing-trigger probe in the runtime artifact", () => {
     const root = createRepositoryFixture();
     replaceFixtureText(
@@ -3175,19 +3161,6 @@ describe("production deployment contract", () => {
     );
   });
 
-  it("requires CI to inspect the bundled WhatsApp provisioning command", () => {
-    const root = createRepositoryFixture();
-    replaceFixtureText(
-      root,
-      ".github/workflows/image-gen-ci.yml",
-      'docker run --rm "$image" test -s /app/dist/provision-whatsapp-binding.cjs',
-      'docker run --rm "$image" true',
-    );
-
-    expect(() => validateProductionRepository(root)).toThrow(
-      "image-gen CI must inspect the bundled WhatsApp provisioning command",
-    );
-  });
 
   it("keeps runtime artifacts on the exact supported 0018 phase", () => {
     const root = createRepositoryFixture();

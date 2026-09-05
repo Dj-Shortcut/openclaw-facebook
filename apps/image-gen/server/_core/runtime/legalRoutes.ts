@@ -49,15 +49,15 @@ export function registerLegalRoutes(app: express.Express) {
       renderLegalPage({
         title: "Privacy Policy",
         intro:
-          "Leaderbot is a workspace-based AI assistant portal. Customer settings, assistant context, knowledge records, channel data and privacy requests remain scoped to the owning workspace.",
+          "Leaderbot is an owner-operated Messenger image service. Conversation, quota, purchase and privacy state remain scoped to the owning Page and pseudonymous Messenger user.",
         sections: [
           {
             heading: "Data used to provide Leaderbot",
-            html: "<p>Leaderbot may process account and workspace details, assistant instructions, knowledge-source records, Messenger messages and metadata, images submitted for generation or editing, usage data, and export or deletion requests. We process only what is needed to operate, secure and support the service.</p>",
+            html: "<p>Leaderbot may process Messenger messages and metadata, images submitted for generation or editing, usage data, and deletion requests. We process only what is needed to operate, secure and support the service.</p>",
           },
           {
             heading: "Workspace separation",
-            html: "<p>Customer content is private by default and is not intentionally shared or searchable across customer workspaces. Operational logs should contain redacted identifiers and service metadata rather than raw messages, prompts, uploaded knowledge or access tokens.</p>",
+            html: "<p>Your content is private by default and is not intentionally shared with other users. Operational logs should contain redacted identifiers and service metadata rather than raw messages, prompts, uploaded media or access tokens.</p>",
           },
           {
             heading: "Images and optional photo memory",
@@ -69,7 +69,7 @@ export function registerLegalRoutes(app: express.Express) {
           },
           {
             heading: "Retention and your choices",
-            html: '<p>Retention depends on the feature and legal obligations. Where available, workspace members can request export or deletion through the portal. Messenger users can request deletion by sending <strong>delete my data</strong> or <strong>verwijder mijn data</strong>, or by contacting <a href="mailto:privacy@leaderbot.live">privacy@leaderbot.live</a>.</p>',
+          html: '<p>Retention depends on the feature and legal obligations. Messenger users can request deletion by sending <strong>delete my data</strong> or <strong>verwijder mijn data</strong>, or by contacting <a href="mailto:privacy@leaderbot.live">privacy@leaderbot.live</a>.</p>',
           },
           {
             heading: "Payments",
@@ -97,16 +97,12 @@ export function registerLegalRoutes(app: express.Express) {
             html: "<p>A credit pack does not renew automatically and does not create a subscription or direct-debit mandate. Usage stops when no free or paid credits remain. There are no automatic top-ups or additional usage charges. Every later purchase requires a separate, explicit choice.</p>",
           },
           {
-            heading: "Separate legacy Startpilot offer",
-            html: "<p>Leaderbot Startpilot is a separate legacy one-time offer for eligible Belgian consumers. It costs €19 once and provides 30 days of access for one workspace and one connected Facebook Page, with up to 300 AI answers and 20 image generations, limited to 5 images per day. It does not renew automatically and creates no subscription, direct-debit mandate, automatic top-up or overage charge. Startpilot access and quotas are separate from the Messenger premium-credit pack.</p>",
-          },
-          {
             heading: "AI-generated content",
             html: "<p>AI-generated images can be inaccurate, incomplete or unexpected. Review images before relying on, publishing or sharing them. Do not use Leaderbot for unlawful, harmful, deceptive or infringing content.</p>",
           },
           {
             heading: "Messenger connection and limits",
-            html: "<p>You may connect only a Facebook Page that you are authorized to manage. Quotas, rate limits, budget limits, abuse protection and temporary safety restrictions may apply and are shown in the portal where relevant.</p>",
+          html: "<p>You may connect only a Facebook Page that you are authorized to manage. Quotas, rate limits, budget limits, abuse protection and temporary safety restrictions may apply.</p>",
           },
           {
             heading: "Platform separation",
@@ -164,11 +160,11 @@ export function registerLegalRoutes(app: express.Express) {
       renderLegalPage({
         title: "User Data Deletion Instructions",
         intro:
-          "Leaderbot supports workspace export and deletion requests and Messenger deletion requests for service-controlled data.",
+          "Leaderbot supports Messenger deletion requests for service-controlled data.",
         sections: [
           {
-            heading: "Portal requests",
-            html: "<p>Signed-in workspace members can create export or deletion requests from the customer portal where those controls are available.</p>",
+            heading: "Data requests",
+            html: "<p>Messenger users can request deletion by sending <strong>delete my data</strong> or <strong>verwijder mijn data</strong>, or by contacting <a href=\"mailto:privacy@leaderbot.live\">privacy@leaderbot.live</a>.</p>",
           },
           {
             heading: "Messenger requests",

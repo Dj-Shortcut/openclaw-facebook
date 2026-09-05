@@ -191,9 +191,9 @@ async function tryHandleVideoAnimationIntent(
 function hasEditableImage(state: MessengerUserState): boolean {
   return Boolean(
     state.lastPhotoUrl ??
-      state.lastPhoto ??
-      state.lastGeneratedUrl ??
-      state.lastImageUrl
+    state.lastPhoto ??
+    state.lastGeneratedUrl ??
+    state.lastImageUrl
   );
 }
 

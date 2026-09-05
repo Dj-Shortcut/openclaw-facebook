@@ -1,4 +1,3 @@
-import { getLoginUrl } from "@/const";
 import { PUBLIC_BUSINESS_DETAILS } from "@shared/publicBusinessDetails";
 import {
   ArrowRight,
@@ -17,8 +16,10 @@ import {
   Image as ImageIcon,
   Trash2,
 } from "lucide-react";
-import { lazy, Suspense, useEffect, useRef } from "react";
-import { SUPPORTED_LOCALES, type AppLocale } from "./portalLocales";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
+
+const SUPPORTED_LOCALES = ["nl-BE", "fr-BE", "en"] as const;
+type AppLocale = (typeof SUPPORTED_LOCALES)[number];
 
 const HeroOrbCanvas = lazy(() => import("@/components/HeroOrbCanvas"));
 
@@ -28,7 +29,6 @@ type LandingCopy = {
     howItWorks: string;
     examples: string;
     pricing: string;
-    admin: string;
   };
   headerCta: string;
   eyebrow: string;
@@ -95,7 +95,6 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
       howItWorks: "Hoe werkt het?",
       examples: "Voorbeelden",
       pricing: "Prijzen",
-      admin: "Beheerder",
     },
     headerCta: "Probeer gratis in Messenger",
     eyebrow: "Foto's maken en bewerken via Messenger",
@@ -267,7 +266,6 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
       howItWorks: "Fonctionnement",
       examples: "Exemples",
       pricing: "Tarifs",
-      admin: "Administrateur",
     },
     headerCta: "Essayer gratuitement sur Messenger",
     eyebrow: "Créer et modifier des photos via Messenger",
@@ -439,7 +437,6 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
       howItWorks: "How it works",
       examples: "Examples",
       pricing: "Pricing",
-      admin: "Admin",
     },
     headerCta: "Try it free on Messenger",
     eyebrow: "Create and edit photos via Messenger",
@@ -717,29 +714,6 @@ function MessengerCta({
   );
 }
 
-function AdminLink({
-  copy,
-  loginConfigured,
-}: {
-  copy: LandingCopy;
-  loginConfigured: boolean;
-}) {
-  if (!loginConfigured) return null;
-  return (
-    <button
-      className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#14203D]/50 transition hover:text-[#14203D]"
-      type="button"
-      onClick={() => {
-        const loginUrl = getLoginUrl("/portal");
-        if (loginUrl) window.location.href = loginUrl;
-      }}
-    >
-      <Lock className="h-3.5 w-3.5" aria-hidden="true" />
-      {copy.nav.admin}
-    </button>
-  );
-}
-
 /** Free-image dots plus a distinct "+8" credit badge — the whole
  * free/paid mechanic in one glance inside the hero chat mockup. */
 function QuotaMeter({ usedToday = 1 }: { usedToday?: number }) {
@@ -810,17 +784,9 @@ function SectionEyebrow({ children }: { children: string }) {
   );
 }
 
-export default function LandingPage({
-  locale,
-  loginConfigured,
-  commercialBillingAvailable,
-  onLocaleChange,
-}: {
-  locale: AppLocale;
-  loginConfigured: boolean;
-  commercialBillingAvailable: boolean;
-  onLocaleChange: (locale: AppLocale) => void;
-}) {
+export default function LandingPage() {
+  const [locale, setLocale] = useState<AppLocale>("nl-BE");
+  const commercialBillingAvailable = false;
   const copy = landingCopies[locale];
   const unavailable = unavailablePremiumCopies[locale];
   const microLine = commercialBillingAvailable
@@ -892,8 +858,7 @@ export default function LandingPage({
             </a>
           </nav>
           <div className="flex items-center gap-4">
-            <AdminLink copy={copy} loginConfigured={loginConfigured} />
-            <LanguagePicker copy={copy} locale={locale} onChange={onLocaleChange} />
+            <LanguagePicker copy={copy} locale={locale} onChange={setLocale} />
             <MessengerCta label={copy.headerCta} variant="solid" />
           </div>
         </header>

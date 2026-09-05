@@ -1142,82 +1142,6 @@ describe("conversationalEditingFeature", () => {
 });
 
 describe("assistantCommandsFeature", () => {
-  it("requests a secure portal re-entry link for a linked Messenger user", async () => {
-    const requestPortalHandoff = vi.fn(async () => "sent" as const);
-    const sendText = vi.fn(async () => undefined);
-
-    const result = await assistantCommandsFeature.onText?.(
-      makeContext({
-        lang: "nl",
-        normalizedText: "klantenportaal",
-        messageText: "Klantenportaal",
-        requestPortalHandoff,
-        sendText,
-      })
-    );
-
-    expect(result).toEqual({ handled: true });
-    expect(requestPortalHandoff).toHaveBeenCalledOnce();
-    expect(sendText).toHaveBeenCalledWith(t("nl", "portalLinkSent"));
-  });
-
-  it("offers tenant-safe self-enrollment when Messenger is not linked", async () => {
-    const originalNodeEnv = process.env.NODE_ENV;
-    const originalPortalBaseUrl = process.env.PORTAL_BASE_URL;
-    process.env.NODE_ENV = "production";
-    process.env.PORTAL_BASE_URL = "https://app.leaderbot.live";
-    const requestPortalHandoff = vi.fn(async () => "not_linked" as const);
-    const sendText = vi.fn(async () => undefined);
-    const sendActions = vi.fn(async () => undefined);
-
-    try {
-      const result = await assistantCommandsFeature.onText?.(
-        makeContext({
-          lang: "nl",
-          normalizedText: "portal",
-          messageText: "Portal",
-          requestPortalHandoff,
-          sendActions,
-          sendText,
-        })
-      );
-
-      expect(result).toEqual({ handled: true });
-      expect(sendText).not.toHaveBeenCalled();
-      expect(sendActions).toHaveBeenCalledWith(t("nl", "portalJoinPrompt"), [
-        {
-          id: "open_customer_portal",
-          label: "Open klantenportaal",
-          url: "https://app.leaderbot.live/api/oauth/start?returnTo=%2Fportal",
-        },
-      ]);
-    } finally {
-      process.env.NODE_ENV = originalNodeEnv;
-      if (originalPortalBaseUrl === undefined) {
-        delete process.env.PORTAL_BASE_URL;
-      } else {
-        process.env.PORTAL_BASE_URL = originalPortalBaseUrl;
-      }
-    }
-  });
-
-  it("keeps unavailable portal handoff fail-closed", async () => {
-    const requestPortalHandoff = vi.fn(async () => "unavailable" as const);
-    const sendText = vi.fn(async () => undefined);
-
-    const result = await assistantCommandsFeature.onText?.(
-      makeContext({
-        normalizedText: "portal",
-        messageText: "Portal",
-        requestPortalHandoff,
-        sendText,
-      })
-    );
-
-    expect(result).toEqual({ handled: true });
-    expect(sendText).toHaveBeenCalledWith(t("en", "portalLinkUnavailable"));
-  });
-
   it("shows contextual help when user has not uploaded a photo yet", async () => {
     const sendText = vi.fn(async () => undefined);
     const sendActions = vi.fn(async () => undefined);
@@ -1237,9 +1161,7 @@ describe("assistantCommandsFeature", () => {
     expect(sendActions).toHaveBeenCalledWith(t("en", "flowExplanation"), [
       { id: "new_image", label: "New image", inputText: "new_image" },
       { id: "edit_photo", label: "Edit photo", inputText: "Edit photo" },
-      { id: "video", label: "Make video", inputText: "Make video" },
       { id: "privacy", label: "Privacy", inputText: "Privacy" },
-      { id: "portal", label: "Customer portal", inputText: "portal" },
     ]);
   });
 
@@ -1288,9 +1210,7 @@ describe("assistantCommandsFeature", () => {
     expect(sendActions).toHaveBeenCalledWith(t("en", "flowExplanation"), [
       { id: "new_image", label: "New image", inputText: "new_image" },
       { id: "edit_photo", label: "Edit photo", inputText: "Edit photo" },
-      { id: "video", label: "Make video", inputText: "Make video" },
       { id: "privacy", label: "Privacy", inputText: "Privacy" },
-      { id: "portal", label: "Customer portal", inputText: "portal" },
     ]);
   });
 
@@ -1569,9 +1489,7 @@ describe("assistantCommandsFeature", () => {
     expect(sendActions).toHaveBeenCalledWith(t("nl", "flowExplanation"), [
       { id: "new_image", label: "Nieuwe afbeelding", inputText: "new_image" },
       { id: "edit_photo", label: "Pas foto aan", inputText: "Pas foto aan" },
-      { id: "video", label: "Maak video", inputText: "Maak video" },
       { id: "privacy", label: "Privacy", inputText: "Privacy" },
-      { id: "portal", label: "Klantenportaal", inputText: "portal" },
     ]);
   });
 
@@ -1665,9 +1583,7 @@ describe("assistantCommandsFeature", () => {
     expect(sendActions).toHaveBeenCalledWith(t("en", "flowExplanation"), [
       { id: "new_image", label: "New image", inputText: "new_image" },
       { id: "edit_photo", label: "Edit photo", inputText: "Edit photo" },
-      { id: "video", label: "Make video", inputText: "Make video" },
       { id: "privacy", label: "Privacy", inputText: "Privacy" },
-      { id: "portal", label: "Customer portal", inputText: "portal" },
     ]);
   });
 });

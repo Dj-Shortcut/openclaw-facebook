@@ -15,10 +15,6 @@ function manualChunks(id: string): string | undefined {
     return "vendor-react";
   }
 
-  if (/[\\/]node_modules[\\/](@tanstack|@trpc|superjson)[\\/]/.test(id)) {
-    return "vendor-api";
-  }
-
   if (
     /[\\/]node_modules[\\/](@radix-ui|lucide-react|sonner|next-themes|class-variance-authority|clsx|tailwind-merge)[\\/]/.test(id)
   ) {

@@ -16,26 +16,22 @@ export type MollieConfig = Readonly<{
   liveBillingEnabled: boolean;
 }>;
 
-function assertPortalBaseUrl(mode: MollieMode): void {
-  const rawPortalBaseUrl =
-    process.env.PORTAL_BASE_URL?.trim() ||
-    process.env.APP_BASE_URL?.trim() ||
-    "https://leaderbot.live";
-  const portalBaseUrl = parseAbsoluteHttpUrl(
-    rawPortalBaseUrl,
-    "PORTAL_BASE_URL"
+function assertCheckoutBaseUrl(mode: MollieMode): void {
+  const checkoutBaseUrl = parseAbsoluteHttpUrl(
+    process.env.APP_BASE_URL?.trim() || "https://app.leaderbot.live",
+    "APP_BASE_URL"
   );
   if (
-    portalBaseUrl.pathname !== "/" ||
-    portalBaseUrl.search ||
-    portalBaseUrl.hash
+    checkoutBaseUrl.pathname !== "/" ||
+    checkoutBaseUrl.search ||
+    checkoutBaseUrl.hash
   ) {
     throw new Error(
-      "PORTAL_BASE_URL must be an origin without a path, query, or fragment"
+      "APP_BASE_URL must be an origin without a path, query, or fragment"
     );
   }
   if (process.env.NODE_ENV === "production" || mode === "live") {
-    requireHttps(portalBaseUrl, "PORTAL_BASE_URL");
+    requireHttps(checkoutBaseUrl, "APP_BASE_URL");
   }
 }
 
@@ -121,7 +117,7 @@ export function getMollieConfig(): MollieConfig {
     requireHttps(appBase, "APP_BASE_URL");
     requireHttps(webhook, "MOLLIE_PAYMENT_WEBHOOK_URL");
   }
-  assertPortalBaseUrl(mode);
+  assertCheckoutBaseUrl(mode);
   if (mode === "test" && liveBillingEnabled) {
     throw new Error("MOLLIE_LIVE_BILLING_ENABLED cannot be true in test mode");
   }

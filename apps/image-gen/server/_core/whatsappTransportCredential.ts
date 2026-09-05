@@ -3,7 +3,7 @@ import { channelConnections } from "../../drizzle/schema";
 import { getDatabaseOrThrow } from "../db";
 import { resolveWhatsAppEndpoint } from "./conversationEndpoint";
 import { getEnv } from "./env";
-import { unsealFacebookPageToken } from "./facebookConnectStore";
+import { unsealFacebookPageToken } from "./facebookPageToken";
 import {
   getMessengerRequestOwnership,
   getMessengerRequestPageId,

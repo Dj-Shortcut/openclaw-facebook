@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { MySqlDialect } from "drizzle-orm/mysql-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -15,6 +17,7 @@ import {
   CreditPaymentRecoveryError,
   enqueueDueCustomerlessCreditPaymentRecoveries,
   reconcileCustomerlessCreditPayment,
+  resolveDueCustomerlessCreditPaymentOperations,
 } from "./creditPaymentRecovery";
 import { MollieApiError, type MollieClient } from "./mollieClient";
 
@@ -80,6 +83,7 @@ function exactIntent(patch: Record<string, unknown> = {}) {
     mollieDescription: "Leaderbot - 8 premium beeldcredits",
     status: "contained",
     molliePaymentId: PAYMENT_ID,
+    idempotencyKey: "credit-intent-key",
     billingProfileVersion: 0,
     authorizationEpoch: 2,
     messengerChannelConnectionId: 7,
@@ -105,8 +109,12 @@ function exactOperation(patch: Record<string, unknown> = {}) {
     authorizationEpoch: 2,
     state: "contained",
     requestFingerprint: METADATA_HASH,
+    idempotencyKeyHash: createHash("sha256")
+      .update("credit-intent-key")
+      .digest("hex"),
     providerResourceId: PAYMENT_ID,
     providerCustomerId: null,
+    leaseToken: "provider-lease",
     credentialGenerationId: "credential-v1",
     firstStartedAt: STARTED_AT,
     ...patch,
@@ -811,3 +819,253 @@ describe("customerless credit Payment due recovery", () => {
     expect(inserts).toEqual([]);
   });
 });
+
+describe("customerless credit Payment provider-fence resolution", () => {
+  it("recovers expired pre-transport claims and advances started work before enqueue", async () => {
+    const states = ["reserved", "transport_started", "ambiguous"] as const;
+    const intents = states.map((state, index) => {
+      const suffix = String(index + 1).padStart(12, "0");
+      return exactIntent({
+        intentId: `22000000-0000-4000-8000-${suffix}`,
+        status: state === "ambiguous" ? "api_unknown" : "creating_payment",
+        molliePaymentId: null,
+        idempotencyKey: `credit-resolution-${index}`,
+        creditMetadataHash: index.toString(16).padStart(64, "a"),
+      });
+    });
+    const operations = states.map((state, index) => ({
+      operationId: `33000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
+      operationType: "create_payment",
+      operationKey: intents[index]!.intentId,
+      intentId: intents[index]!.intentId,
+      billingProfileVersion: 0,
+      authorizationEpoch: 2,
+      state,
+      requestFingerprint: intents[index]!.creditMetadataHash,
+      idempotencyKeyHash: createHash("sha256")
+        .update(intents[index]!.idempotencyKey)
+        .digest("hex"),
+      providerResourceId: null,
+      providerCustomerId: null,
+      leaseToken: `provider-lease-${index}`,
+      firstStartedAt: state === "reserved" ? null : STARTED_AT,
+    }));
+    const state = providerResolutionHarness(intents, operations);
+    getDatabaseOrThrowMock.mockResolvedValue(state.database);
+    schedulerFenceMock.mockImplementation(async () => {
+      state.lockOrder.push("scheduler");
+    });
+
+    await expect(
+      resolveDueCustomerlessCreditPaymentOperations(
+        WORKSPACE_ID,
+        "test",
+        STARTED_AT,
+        {
+          workspaceId: WORKSPACE_ID,
+          mode: "test",
+          kind: "reconciliation",
+          leaseToken: "scheduler-lease",
+          executionEpoch: 2,
+        }
+      )
+    ).resolves.toBe(3);
+
+    expect(state.lockOrder).toEqual([
+      "control",
+      "intent",
+      "scheduler",
+      "operation",
+    ]);
+    expect(
+      state.updates
+        .filter(update => update.table === billingProviderOperations)
+        .map(update => update.value.state)
+    ).toEqual(["known_failed", "reconciliation_only", "reconciliation_only"]);
+    expect(
+      state.updates
+        .filter(update => update.table === billingIntents)
+        .map(update => update.value.status)
+    ).toEqual(["created", "api_unknown", "api_unknown"]);
+
+    const dialect = new MySqlDialect();
+    const join = dialect.sqlToQuery(state.joins[0] as never);
+    expect(join.sql).toContain("operation_key");
+    expect(join.sql).toContain("idempotency_key_hash");
+    expect(join.sql).toContain("SHA2");
+    const due = dialect.sqlToQuery(state.predicates[1] as never);
+    expect(due.params).toEqual(
+      expect.arrayContaining([
+        "credit_purchase",
+        "creating_payment",
+        "api_unknown",
+        "create_payment",
+        "reserved",
+        "transport_started",
+        "ambiguous",
+      ])
+    );
+  });
+
+  it("does not resolve a selected row whose locked idempotency binding differs", async () => {
+    const intent = exactIntent({
+      status: "api_unknown",
+      molliePaymentId: null,
+      idempotencyKey: "exact-idempotency-key",
+    });
+    const state = providerResolutionHarness(
+      [intent],
+      [
+        {
+          ...exactOperation({
+            state: "ambiguous",
+            providerResourceId: null,
+            operationKey: INTENT_ID,
+          }),
+          idempotencyKeyHash: "f".repeat(64),
+          leaseToken: "provider-lease",
+        },
+      ]
+    );
+    getDatabaseOrThrowMock.mockResolvedValue(state.database);
+
+    await expect(
+      resolveDueCustomerlessCreditPaymentOperations(
+        WORKSPACE_ID,
+        "test",
+        STARTED_AT
+      )
+    ).resolves.toBe(0);
+    expect(state.updates).toEqual([]);
+  });
+
+  it("does not cross a disabled commercial authorization boundary", async () => {
+    const intent = exactIntent({
+      status: "api_unknown",
+      molliePaymentId: null,
+      idempotencyKey: "disabled-boundary-key",
+    });
+    const state = providerResolutionHarness(
+      [intent],
+      [
+        {
+          ...exactOperation({
+            state: "ambiguous",
+            providerResourceId: null,
+            operationKey: INTENT_ID,
+          }),
+          idempotencyKeyHash: createHash("sha256")
+            .update(intent.idempotencyKey)
+            .digest("hex"),
+          leaseToken: "provider-lease",
+        },
+      ],
+      false
+    );
+    getDatabaseOrThrowMock.mockResolvedValue(state.database);
+
+    await expect(
+      resolveDueCustomerlessCreditPaymentOperations(
+        WORKSPACE_ID,
+        "test",
+        STARTED_AT
+      )
+    ).resolves.toBe(0);
+    expect(state.lockOrder).toEqual(["control"]);
+    expect(state.updates).toEqual([]);
+  });
+});
+
+function providerResolutionHarness(
+  intents: readonly { intentId: string; [key: string]: unknown }[],
+  operations: readonly {
+    operationId: string;
+    intentId: string;
+    [key: string]: unknown;
+  }[],
+  commercialEnabled = true
+) {
+  const candidateKeys = operations.map(operation => ({
+    operationId: operation.operationId,
+    intentId: operation.intentId,
+  }));
+  const rows: readonly unknown[][] = [
+    [{ commercialEnabled, authorizationEpoch: 2 }],
+    candidateKeys,
+    intents,
+    operations,
+  ];
+  const joins: unknown[] = [];
+  const predicates: unknown[] = [];
+  const updates: Array<{ table: object; value: Record<string, unknown> }> = [];
+  const lockOrder: string[] = [];
+  let selected = 0;
+  const tx = {
+    select: vi.fn(() => {
+      const queryIndex = selected++;
+      const result = rows[queryIndex] ?? [];
+      return {
+        from: vi.fn(() => {
+          if (queryIndex === 0) {
+            return {
+              where: vi.fn((predicate: unknown) => {
+                predicates.push(predicate);
+                return {
+                  limit: vi.fn(() => ({
+                    for: vi.fn(async () => {
+                      lockOrder.push("control");
+                      return result;
+                    }),
+                  })),
+                };
+              }),
+            };
+          }
+          if (queryIndex === 1) {
+            return {
+              innerJoin: vi.fn((_table: unknown, join: unknown) => {
+                joins.push(join);
+                return {
+                  where: vi.fn((predicate: unknown) => {
+                    predicates.push(predicate);
+                    return {
+                      orderBy: vi.fn(() => ({
+                        limit: vi.fn(async () => result),
+                      })),
+                    };
+                  }),
+                };
+              }),
+            };
+          }
+          return {
+            where: vi.fn((predicate: unknown) => {
+              predicates.push(predicate);
+              return {
+                orderBy: vi.fn(() => ({
+                  for: vi.fn(async () => {
+                    lockOrder.push(queryIndex === 2 ? "intent" : "operation");
+                    return result;
+                  }),
+                })),
+              };
+            }),
+          };
+        }),
+      };
+    }),
+    update: vi.fn((table: object) => ({
+      set: vi.fn((value: Record<string, unknown>) => {
+        updates.push({ table, value });
+        return { where: vi.fn(async () => [{ affectedRows: 1 }]) };
+      }),
+    })),
+  };
+  return {
+    database: { transaction: vi.fn(async callback => callback(tx)) },
+    joins,
+    predicates,
+    updates,
+    lockOrder,
+  };
+}

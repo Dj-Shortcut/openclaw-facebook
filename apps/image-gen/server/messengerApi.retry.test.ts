@@ -14,7 +14,7 @@ import {
   sendText,
   sendVideo,
 } from "./_core/messengerApi";
-import { sealFacebookPageToken } from "./_core/facebookConnectStore";
+import { sealFacebookPageToken } from "./_core/facebookPageToken";
 import {
   getOrCreateState,
   resetStateStore,

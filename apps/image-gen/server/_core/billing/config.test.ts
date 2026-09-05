@@ -30,7 +30,6 @@ function useValidTestConfig(): void {
     MOLLIE_BILLING_SCHEDULER_MODE: "multi_tenant",
     PORTAL_HANDOFF_TOKEN_SECRET: "test-portal-handoff-secret-at-least-32",
   };
-  delete process.env.PORTAL_BASE_URL;
   delete process.env.MOLLIE_LIVE_BILLING_ENABLED;
   delete process.env.MOLLIE_BILLING_ENABLED;
   delete process.env.MOLLIE_BILLING_DRAIN_ENABLED;
@@ -269,23 +268,23 @@ describe("Mollie configuration", () => {
     );
   });
 
-  it("rejects a malformed portal origin before billing can be enabled", () => {
-    process.env.PORTAL_BASE_URL = "https://leaderbot.test/handoff?unsafe=1";
+  it("rejects a malformed checkout origin before billing can be enabled", () => {
+    process.env.APP_BASE_URL = "https://leaderbot.test/handoff?unsafe=1";
 
     expect(() => getMollieConfig()).toThrow(
-      "PORTAL_BASE_URL must be an origin without a path, query, or fragment"
+      "APP_BASE_URL must be an origin without a path, query, or fragment"
     );
   });
 
-  it("rejects an HTTP portal origin in production", () => {
+  it("rejects an HTTP checkout origin in production", () => {
     process.env.NODE_ENV = "production";
     process.env.APP_BASE_URL = "https://leaderbot.test";
     process.env.MOLLIE_PAYMENT_WEBHOOK_URL =
       "https://billing.test/api/webhooks/mollie/payments";
-    process.env.PORTAL_BASE_URL = "http://leaderbot.test";
+    process.env.APP_BASE_URL = "http://leaderbot.test";
 
     expect(() => getMollieConfig()).toThrow(
-      "PORTAL_BASE_URL must use HTTPS for production or live billing"
+      "APP_BASE_URL must use HTTPS for production or live billing"
     );
   });
 

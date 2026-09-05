@@ -315,10 +315,7 @@ export async function routeTrackedEvent(
 ): Promise<void> {
   const { psid, userId, reqId, lang, trackedCtx } = context;
   if (await routeConsentGate(context, event)) return;
-  await recordInboundUserActivity(psid, event, context.classification, {
-    entryId: context.entryId,
-    allowPaidRecovery: true,
-  });
+  await recordInboundUserActivity(psid, event, context.classification);
 
   if (
     await handlePostbackEvent(trackedCtx, {

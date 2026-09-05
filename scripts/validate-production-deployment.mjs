@@ -8723,16 +8723,6 @@ export function validateProductionRepository(rootDir = process.cwd()) {
           );
         }
       }
-      for (const requiredProvisioningFragment of [
-        "server/cli/provisionWhatsAppBinding.ts",
-        "--outfile=dist/provision-whatsapp-binding.cjs",
-      ]) {
-        if (!dockerBuild.includes(requiredProvisioningFragment)) {
-          fail(
-            "image-gen build:docker must bundle the provider-silent WhatsApp provisioning command",
-          );
-        }
-      }
       for (const requiredTriggerProbeFragment of [
         "scripts/run-billing-trigger-runtime-preflight.mjs",
         "--outfile=dist/billing-trigger-runtime-preflight.cjs",
@@ -8776,7 +8766,6 @@ export function validateProductionRepository(rootDir = process.cwd()) {
         'io.leaderbot.schema.minimum="0018_credit_checkout_reservation"',
         "'migration-bridge' > /app/.leaderbot-artifact-kind",
         "'runtime' > /app/.leaderbot-artifact-kind",
-        "RUN test -s /app/dist/provision-whatsapp-binding.cjs",
         "RUN test -s /app/dist/billing-trigger-runtime-preflight.cjs",
       ]) {
         if (!dockerfile.includes(requiredDockerFragment)) {
@@ -8827,15 +8816,6 @@ export function validateProductionRepository(rootDir = process.cwd()) {
         path.join(rootDir, ".github/workflows/image-gen-ci.yml"),
         "utf8",
       );
-      if (
-        !imageGenCi.includes(
-          'docker run --rm "$image" test -s /app/dist/provision-whatsapp-binding.cjs',
-        )
-      ) {
-        fail(
-          "image-gen CI must inspect the bundled WhatsApp provisioning command",
-        );
-      }
       if (
         !imageGenCi.includes(
           'docker run --rm "$image" test -s /app/dist/billing-trigger-runtime-preflight.cjs',
