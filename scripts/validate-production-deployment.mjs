@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { assertProtectedCleanupWorkflow } from "./retire-image-gen-repair-exec-token.mjs";
 
 const MANIFEST_PATH = "deploy/production/apps.json";
 const PRODUCTION_WORKFLOW_PATH = ".github/workflows/deploy-production.yml";
@@ -12,6 +13,8 @@ const TRUSTED_ARTIFACT_WORKFLOW_PATH =
   ".github/workflows/build-production-artifacts.yml";
 const SCHEMA_TRANSITION_WORKFLOW_PATH =
   ".github/workflows/image-gen-schema-transition.yml";
+const MIGRATION_SUPER_CLEANUP_WORKFLOW_PATH =
+  ".github/workflows/cleanup-image-gen-migration-super.yml";
 const CREDIT_MIGRATION_DEFINER_GRANT_PATH =
   "apps/image-gen/scripts/credit-migration-definer-grants.mjs";
 const CREDIT_MIGRATION_DEFINER_GRANT_RUNNER_PATH =
@@ -88,6 +91,7 @@ const VERIFIED_FLYCTL_WORKFLOW_JOBS = Object.freeze({
     "deploy-storage-proxy",
   ],
   [SCHEMA_TRANSITION_WORKFLOW_PATH]: ["preflight", "expand"],
+  [MIGRATION_SUPER_CLEANUP_WORKFLOW_PATH]: ["cleanup"],
   [RUNTIME_PRINCIPAL_STAGING_WORKFLOW_PATH]: ["stage"],
   [RUNTIME_PRINCIPAL_CLEANUP_WORKFLOW_PATH]: ["preflight", "mutate"],
   [CREDIT_PROVISIONER_RETIREMENT_WORKFLOW_PATH]: ["mutate"],
@@ -5431,6 +5435,9 @@ function validateCreditMigrationPrincipalRepair(rootDir) {
     CREDIT_MIGRATION_PRINCIPAL_REPAIR_TEST_PATH,
     REPAIR_EXEC_TOKEN_RETIREMENT_PATH,
     REPAIR_EXEC_TOKEN_RETIREMENT_TEST_PATH,
+    MIGRATION_SUPER_CLEANUP_WORKFLOW_PATH,
+    "scripts/image-gen-migration-super-cleanup-evidence.mjs",
+    "scripts/image-gen-migration-super-cleanup-evidence.test.mjs",
   ]) {
     if (!fs.existsSync(path.join(rootDir, relativePath))) {
       fail(`Missing ${relativePath}`);
@@ -5569,12 +5576,24 @@ function validateCreditMigrationPrincipalRepair(rootDir) {
   for (const testPath of [
     CREDIT_MIGRATION_PRINCIPAL_REPAIR_TEST_PATH,
     REPAIR_EXEC_TOKEN_RETIREMENT_TEST_PATH,
+    "scripts/image-gen-migration-super-cleanup-evidence.test.mjs",
   ]) {
     if (tokens.filter((token) => token === testPath).length !== 1) {
       fail(
         `package.json test:production-contracts must include exact ${testPath}`,
       );
     }
+  }
+  const cleanupWorkflow = fs.readFileSync(
+    path.join(rootDir, MIGRATION_SUPER_CLEANUP_WORKFLOW_PATH),
+    "utf8",
+  );
+  try {
+    assertProtectedCleanupWorkflow(cleanupWorkflow, cleanupWorkflow);
+  } catch {
+    fail(
+      `${MIGRATION_SUPER_CLEANUP_WORKFLOW_PATH} must preserve protected revoke-only cleanup evidence`,
+    );
   }
 }
 

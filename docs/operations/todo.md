@@ -95,6 +95,11 @@ Live payment enablement remains gated by the relevant P1 through P4 evidence.
         completion. Land the tested child-environment fix, run the separately
         approved cleanup-only proof bound to this failed run, and retire its
         exact temporary token and unchanged secret before a new transition.
+        The original four-hour token is now absent from the complete Fly app
+        inventory; the original GitHub secret remains unchanged. The protected
+        cleanup uses a separate bounded credential, preserving both metadata
+        identities until its successful proof permits retirement. Expiry or
+        inventory absence alone is not database-cleanup evidence.
         The earlier run `33300214073` established that the migration role lacked
         `CREATE`, `TRIGGER`, `CREATE ROUTINE`, and `ALTER ROUTINE`; that repair
         remains unproven. The reviewed transition must snapshot the encrypted

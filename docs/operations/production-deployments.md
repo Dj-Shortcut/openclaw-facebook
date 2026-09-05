@@ -100,6 +100,9 @@ these environment secrets:
   schema transition and is revoked after the transition. The repair child
   receives only this token and basic process-runtime variables; the database
   URL is not passed to `flyctl`;
+- `FLY_DATABASE_CLEANUP_EXEC_TOKEN`: optional, separate four-hour exact-command
+  token for the protected pre-DDL failure-cleanup workflow below. Never replace
+  the failed run's repair secret with this credential;
 - `IMAGE_GEN_DATABASE_MIGRATION_URL`: `127.0.0.1:13306` URL for the dedicated
   expand principal;
 - `IMAGE_GEN_DATABASE_PROVISIONER_URL`: `127.0.0.1:13306` URL for the separate
@@ -191,6 +194,50 @@ revokes only that token, and requires an authoritative nonempty `Revoked At`
 readback before deleting only `production/FLY_DATABASE_REPAIR_EXEC_TOKEN`.
 It then verifies the secret is absent. It never reads the secret value or adds
 revocation authority to workflow credentials.
+
+#### Cleanup after a failed pre-DDL repair
+
+Do not rerun a transition whose repair and SUPER cleanup both failed. The
+separate `cleanup-image-gen-migration-super.yml` workflow accepts only the
+latest exact failed transition attempt whose snapshot/tunnel setup succeeded
+and whose DDL steps were all skipped. It uses the same protected `production`
+environment and deployment concurrency, verifies the exact database Machine
+and encrypted volume, invokes only `revoke-super`, and records the unchanged
+`0016_expand` history. It never grants migration rights or applies DDL.
+
+Preserve the original four repair metadata values, even if the token expired.
+Create a separate four-hour Machine-exec token using the same pinned CLI and
+`ROOT_MYSQL_REMOTE_COMMAND_FLYCTL_CSV` recipe above, named
+`leaderbot-pr486-cleanup-<failed_run_id>`, and install it only as
+`production/FLY_DATABASE_CLEANUP_EXEC_TOKEN`. Capture its metadata as
+`cleanup_token_id` and `cleanup_secret_updated_at`; never overwrite the original
+repair metadata or print either token. Before creation, require that this exact
+cleanup name and secret do not already exist. Dispatch and approve the new
+workflow from reviewed, green `main`, supplying `failed_run_id`,
+`failed_run_attempt`, `failed_head_sha`, `database_machine_id`, `repair_token_id`,
+`repair_secret_updated_at`, `cleanup_token_id`, and `cleanup_secret_updated_at`.
+
+After the cleanup workflow succeeds, retire both credentials:
+
+```bash
+node scripts/retire-image-gen-repair-exec-token.mjs \
+  --run-id "$run_id" --run-attempt "$run_attempt" --token-id "$token_id" \
+  --secret-updated-at "$secret_updated_at" \
+  --cleanup-run-id "$cleanup_run_id" --cleanup-run-attempt "$cleanup_run_attempt" \
+  --cleanup-token-id "$cleanup_token_id" \
+  --cleanup-secret-updated-at "$cleanup_secret_updated_at" \
+  --database-machine-id "$database_machine_id"
+```
+
+Only `repair_and_cleanup_exec_tokens_retired` means completion. This path
+revalidates both runs, reviewed workflow bytes, the immutable cleanup artifact,
+and both unchanged secret timestamps before mutation. It reads every page of
+Fly's app-scoped metadata inventory without requesting token values. An active
+token still requires explicit revoked-at readback. Only after the recorded
+four-hour maximum window may a token absent from that complete inventory be
+treated as already absent; that is not claimed as an explicit revocation or as
+proof of database cleanup. The separate successful protected cleanup proof is
+always required. Original normal-transition retirement behavior is unchanged.
 
 On `repair_exec_token_retirement_failed` (exit one), retain these same four
 metadata values and retry only after the evidence or external operation is
