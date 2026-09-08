@@ -205,24 +205,110 @@ environment and deployment concurrency, verifies the exact database Machine
 and encrypted volume, invokes only `revoke-super`, and records the unchanged
 `0016_expand` history. It never grants migration rights or applies DDL.
 
-Preserve the original four repair metadata values, even if the token expired.
-Create a separate four-hour Machine-exec token using the same pinned CLI and
-`ROOT_MYSQL_REMOTE_COMMAND_FLYCTL_CSV` recipe above, named
-`leaderbot-pr486-cleanup-<failed_run_id>`, and install it only as
-`production/FLY_DATABASE_CLEANUP_EXEC_TOKEN`. Capture its metadata as
-`cleanup_token_id` and `cleanup_secret_updated_at`; never overwrite the original
-repair metadata or print either token. Before creation, require that this exact
-cleanup name and secret do not already exist. Dispatch and approve the new
-workflow from reviewed, green `main`, supplying `failed_run_id`,
-`failed_run_attempt`, `failed_head_sha`, `database_machine_id`, `repair_token_id`,
-`repair_secret_updated_at`, `cleanup_token_id`, and `cleanup_secret_updated_at`.
+Preserve the original repair metadata, even if the token expired. Run these
+cleanup-specific blocks from the reviewed, green `main` checkout with installed
+verification dependencies, authenticated GitHub CLI, and pinned Fly CLI
+`0.4.94`. Replace the six placeholders with the failed run's recorded metadata;
+do not copy the normal repair-token creation block above. The existing repair
+secret must remain present with its original timestamp.
+
+```bash
+set -euo pipefail
+set +x
+unset FLY_API_TOKEN GH_TOKEN GITHUB_TOKEN
+failed_run_id=REPLACE_WITH_FAILED_RUN_ID
+failed_run_attempt=REPLACE_WITH_FAILED_RUN_ATTEMPT
+failed_head_sha=REPLACE_WITH_FAILED_SOURCE_SHA
+database_machine_id=REPLACE_WITH_RECORDED_DATABASE_MACHINE_ID
+repair_token_id=REPLACE_WITH_RECORDED_REPAIR_TOKEN_ID
+repair_secret_updated_at=REPLACE_WITH_RECORDED_REPAIR_SECRET_UPDATED_AT
+[[ "$failed_run_id" =~ ^[1-9][0-9]*$ ]]
+[[ "$failed_run_attempt" =~ ^[1-9][0-9]*$ ]]
+[[ "$failed_head_sha" =~ ^[a-f0-9]{40}$ ]]
+[[ "$database_machine_id" =~ ^[a-f0-9]{14}$ ]]
+test -n "$repair_token_id"
+test -n "$repair_secret_updated_at"
+cleanup_head_sha="$(gh api repos/Dj-Shortcut/openclaw-facebook/commits/main --jq .sha)"
+test "$(git rev-parse HEAD)" = "$cleanup_head_sha"
+test -z "$(git status --porcelain)"
+GITHUB_TOKEN="$(gh auth token)" node scripts/validate-production-deployment.mjs \
+  --verify-source-ci "$cleanup_head_sha"
+test "$(gh api "repos/Dj-Shortcut/openclaw-facebook/actions/runs/$failed_run_id/attempts/$failed_run_attempt" \
+  --jq '[.head_sha,.status,.conclusion,.event,.head_branch] | join(" ")')" = \
+  "$failed_head_sha completed failure workflow_dispatch main"
+test "$(gh secret list --repo Dj-Shortcut/openclaw-facebook --env production \
+  --json name,updatedAt --jq '.[] | select(.name == "FLY_DATABASE_REPAIR_EXEC_TOKEN") | .updatedAt')" = \
+  "$repair_secret_updated_at"
+test "$(gh secret list --repo Dj-Shortcut/openclaw-facebook --env production \
+  --json name --jq '[.[] | select(.name == "FLY_DATABASE_CLEANUP_EXEC_TOKEN")] | length')" = 0
+fly_version="$(flyctl version)"
+[[ "$fly_version" =~ ^flyctl\ v0\.4\.94([[:space:]]|$) ]]
+flyctl tokens list --app leaderbot-portal-mysql --scope app | \
+  CLEANUP_FAILED_RUN_ID="$failed_run_id" node --input-type=module -e \
+  'import {parseFlyTokenInventory} from "./scripts/retire-image-gen-repair-exec-token.mjs"; let s=""; for await (const c of process.stdin) s+=c; if (parseFlyTokenInventory(s).some(t=>t.name===`leaderbot-pr486-cleanup-${process.env.CLEANUP_FAILED_RUN_ID}`)) process.exit(1)'
+root_mysql_command_csv="$(node --input-type=module -e \
+  'import {ROOT_MYSQL_REMOTE_COMMAND_FLYCTL_CSV} from "./scripts/provision-image-gen-credit-provisioner.mjs"; process.stdout.write(ROOT_MYSQL_REMOTE_COMMAND_FLYCTL_CSV)')"
+cleanup_token_json="$(flyctl tokens create machine-exec \
+  --app leaderbot-portal-mysql --name "leaderbot-pr486-cleanup-$failed_run_id" \
+  --expiry 4h --command "$root_mysql_command_csv" --json)"
+cleanup_token="$(printf '%s' "$cleanup_token_json" | node --input-type=module -e \
+  'try { let s=""; for await (const c of process.stdin) s+=c; const v=JSON.parse(s).token; if(typeof v!=="string" || !v.trim()) process.exit(1); process.stdout.write(v); } catch { process.exit(1); }')"
+unset cleanup_token_json root_mysql_command_csv
+printf '%s' "$cleanup_token" | gh secret set FLY_DATABASE_CLEANUP_EXEC_TOKEN \
+  --repo Dj-Shortcut/openclaw-facebook --env production
+unset cleanup_token
+cleanup_token_id="$(flyctl tokens list --app leaderbot-portal-mysql --scope app | \
+  CLEANUP_FAILED_RUN_ID="$failed_run_id" node --input-type=module -e \
+  'import {parseFlyTokenInventory} from "./scripts/retire-image-gen-repair-exec-token.mjs"; let s=""; for await (const c of process.stdin) s+=c; const t=parseFlyTokenInventory(s).filter(t=>t.name===`leaderbot-pr486-cleanup-${process.env.CLEANUP_FAILED_RUN_ID}`); if(t.length!==1 || t[0].revokedAt!==null) process.exit(1); process.stdout.write(t[0].id)')"
+cleanup_secret_updated_at="$(gh secret list --repo Dj-Shortcut/openclaw-facebook \
+  --env production --json name,updatedAt \
+  --jq '.[] | select(.name == "FLY_DATABASE_CLEANUP_EXEC_TOKEN") | .updatedAt')"
+test -n "$cleanup_token_id"
+test -n "$cleanup_secret_updated_at"
+test "$cleanup_token_id" != "$repair_token_id"
+```
+
+Record only the eight metadata values, never either credential. If creation,
+installation, or metadata capture is uncertain, stop and inspect that exact
+cleanup identity; do not rerun token creation or replace the repair secret.
+The cleanup also refuses to report success if any non-system MySQL account
+still has `SUPER`, including a former migration account after credential
+rotation. It does not revoke privileges from other accounts automatically.
+
+Dispatch once using GitHub CLI `2.95.0` or a version that returns the created
+run URL. Capture that exact URL, not the most recent run in a list. If dispatch
+returns no unambiguous URL, inspect Actions without dispatching again. Keep the
+same shell metadata for the retirement command below.
+
+```bash
+cleanup_dispatch_output="$(gh workflow run cleanup-image-gen-migration-super.yml \
+  --repo Dj-Shortcut/openclaw-facebook --ref main \
+  -f failed_run_id="$failed_run_id" -f failed_run_attempt="$failed_run_attempt" \
+  -f failed_head_sha="$failed_head_sha" -f database_machine_id="$database_machine_id" \
+  -f repair_token_id="$repair_token_id" -f repair_secret_updated_at="$repair_secret_updated_at" \
+  -f cleanup_token_id="$cleanup_token_id" -f cleanup_secret_updated_at="$cleanup_secret_updated_at")"
+cleanup_run_id="$(printf '%s' "$cleanup_dispatch_output" | node --input-type=module -e \
+  'let s=""; for await (const c of process.stdin) s+=c; const ids=[...new Set([...s.matchAll(/https:\/\/github\.com\/Dj-Shortcut\/openclaw-facebook\/actions\/runs\/([1-9][0-9]*)(?![0-9])/g)].map(m=>m[1]))]; if(ids.length!==1) process.exit(1); process.stdout.write(ids[0]);')"
+unset cleanup_dispatch_output
+cleanup_run_attempt="$(gh api "repos/Dj-Shortcut/openclaw-facebook/actions/runs/$cleanup_run_id" --jq .run_attempt)"
+test "$cleanup_run_attempt" = 1
+test "$(gh api "repos/Dj-Shortcut/openclaw-facebook/actions/runs/$cleanup_run_id" \
+  --jq '[.head_sha,.event,.head_branch,.path] | join(" ")')" = \
+  "$cleanup_head_sha workflow_dispatch main .github/workflows/cleanup-image-gen-migration-super.yml"
+gh run view "$cleanup_run_id" --repo Dj-Shortcut/openclaw-facebook \
+  --json databaseId,attempt,headSha,status,workflowName,url
+```
+
+Approve only this recorded run's protected production job after checking the
+eight inputs. The workflow independently verifies the full predecessor chain
+before database access. Record `cleanup_run_id` and `cleanup_run_attempt` too.
 
 After the cleanup workflow succeeds, retire both credentials:
 
 ```bash
 node scripts/retire-image-gen-repair-exec-token.mjs \
-  --run-id "$run_id" --run-attempt "$run_attempt" --token-id "$token_id" \
-  --secret-updated-at "$secret_updated_at" \
+  --run-id "$failed_run_id" --run-attempt "$failed_run_attempt" --token-id "$repair_token_id" \
+  --secret-updated-at "$repair_secret_updated_at" \
   --cleanup-run-id "$cleanup_run_id" --cleanup-run-attempt "$cleanup_run_attempt" \
   --cleanup-token-id "$cleanup_token_id" \
   --cleanup-secret-updated-at "$cleanup_secret_updated_at" \

@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
@@ -562,5 +563,89 @@ describe("cleanup-only workflow source", () => {
     expect(workflow).toContain("retention-days: 90");
     expect(workflow).not.toContain("gh secret");
     expect(workflow).not.toContain("secrets: write");
+  });
+});
+
+describe("cleanup-only operator commands", () => {
+  const runbook = readFileSync(
+    new URL("../docs/operations/production-deployments.md", import.meta.url),
+    "utf8",
+  );
+  const section = runbook
+    .split("#### Cleanup after a failed pre-DDL repair")[1]
+    .split("Create a second environment named")[0];
+  const blocks = [...section.matchAll(/```bash\n([\s\S]*?)```/g)].map(
+    (match) => match[1],
+  );
+
+  it("provides syntax-valid setup, dispatch capture, and retirement blocks", () => {
+    expect(blocks).toHaveLength(3);
+    for (const block of blocks) {
+      // Syntax check only: never execute runbook credentials or provider commands.
+      const result = spawnSync("bash", ["-n"], {
+        input: block,
+        encoding: "utf8",
+      });
+      expect(result.stderr).toBe("");
+      expect(result.status).toBe(0);
+    }
+  });
+
+  it("creates only the cleanup identity while preserving recorded repair metadata", () => {
+    const setup = blocks[0];
+    expect(setup).toContain(
+      'test "$(git rev-parse HEAD)" = "$cleanup_head_sha"',
+    );
+    expect(setup).toContain('--verify-source-ci "$cleanup_head_sha"');
+    expect(setup).toContain(
+      'select(.name == "FLY_DATABASE_REPAIR_EXEC_TOKEN") | .updatedAt',
+    );
+    expect(setup).toContain('"$repair_secret_updated_at"');
+    expect(setup).toContain(
+      'select(.name == "FLY_DATABASE_CLEANUP_EXEC_TOKEN")] | length',
+    );
+    expect(setup).toContain('--name "leaderbot-pr486-cleanup-$failed_run_id"');
+    expect(setup).toContain(
+      '--expiry 4h --command "$root_mysql_command_csv" --json',
+    );
+    expect(setup).toContain("ROOT_MYSQL_REMOTE_COMMAND_FLYCTL_CSV");
+    expect(setup).toContain("gh secret set FLY_DATABASE_CLEANUP_EXEC_TOKEN");
+    expect(setup).not.toContain("gh secret set FLY_DATABASE_REPAIR_EXEC_TOKEN");
+    expect(setup).not.toContain("gh secret delete");
+    expect(setup).not.toContain("--command-prefix");
+    expect(setup).toContain("unset cleanup_token");
+  });
+
+  it("binds every workflow input and captures the exact dispatch identity", () => {
+    const dispatch = blocks[1];
+    expect(dispatch).toContain(
+      "gh workflow run cleanup-image-gen-migration-super.yml",
+    );
+    expect(dispatch).toContain("--ref main");
+    for (const input of [
+      "failed_run_id",
+      "failed_run_attempt",
+      "failed_head_sha",
+      "database_machine_id",
+      "repair_token_id",
+      "repair_secret_updated_at",
+      "cleanup_token_id",
+      "cleanup_secret_updated_at",
+    ]) {
+      expect(dispatch).toContain(`-f ${input}="$${input}"`);
+    }
+    expect(dispatch).toContain('cleanup_run_id="$(printf');
+    expect(dispatch).toContain("ids.length!==1");
+    expect(dispatch).toContain('cleanup_run_attempt="$(gh api');
+    expect(dispatch).toContain(
+      "$cleanup_head_sha workflow_dispatch main .github/workflows/cleanup-image-gen-migration-super.yml",
+    );
+    expect(dispatch).not.toContain("gh run list");
+    expect(blocks[2]).toContain('--run-id "$failed_run_id"');
+    expect(blocks[2]).toContain('--token-id "$repair_token_id"');
+    expect(blocks[2]).toContain('--cleanup-run-id "$cleanup_run_id"');
+    expect(blocks[2]).toContain(
+      '--cleanup-secret-updated-at "$cleanup_secret_updated_at"',
+    );
   });
 });

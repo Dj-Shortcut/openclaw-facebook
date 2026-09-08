@@ -1988,13 +1988,39 @@ describe("production deployment contract", () => {
     );
   });
 
-  it("requires the reviewed flyctl CSV field for repair-token creation", () => {
+  it.each([
+    ["repair", replaceFixtureText],
+    ["cleanup", replaceLastFixtureText],
+  ])("rejects raw flyctl commands in %s-token creation", (_kind, replace) => {
     const root = createRepositoryFixture();
-    replaceFixtureText(
+    replace(
       root,
       "docs/operations/production-deployments.md",
       '--expiry 4h --command "$root_mysql_command_csv" --json',
       '--expiry 4h --command "$root_mysql_command" --json',
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must not pass the raw root command to flyctl StringSlice parsing",
+    );
+  });
+
+  it("requires the reviewed flyctl CSV field in the operator runbook", () => {
+    const root = createRepositoryFixture();
+    const filePath = path.join(
+      root,
+      "docs/operations/production-deployments.md",
+    );
+    const source = fs.readFileSync(filePath, "utf8");
+    const reviewedCommand =
+      '--expiry 4h --command "$root_mysql_command_csv" --json';
+    expect(source).toContain(reviewedCommand);
+    fs.writeFileSync(
+      filePath,
+      source.replaceAll(
+        reviewedCommand,
+        '--expiry 4h --command "$root_mysql_command" --json',
+      ),
     );
 
     expect(() => validateProductionRepository(root)).toThrow(
