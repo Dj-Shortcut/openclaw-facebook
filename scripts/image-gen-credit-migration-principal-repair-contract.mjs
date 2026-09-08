@@ -425,12 +425,24 @@ export async function revokeTemporaryCreditMigrationSuper({
     }
     assertCreditMigrationSuperCleanupBoundary(state);
   };
+  const assertNoRetainedApplicationSuper = async () => {
+    // The database credential can rotate between the failed run and cleanup.
+    // A clean current account alone cannot prove the former account is clean.
+    // Inspect only an aggregate under the same root lock; never revoke others.
+    const rows = await activeRoot.execute(
+      "SELECT COUNT(*) FROM mysql.user WHERE Super_priv='Y' AND User NOT IN ('root','mysql.infoschema','mysql.session','mysql.sys')",
+    );
+    if (rows.length !== 1 || rows[0] !== "0") {
+      throw new CreditMigrationPrincipalCleanupError();
+    }
+  };
   try {
     await acquireAndValidateLock();
     const current = await readState();
     assertCleanupBoundary(current);
     if (!hasCreditMigrationGlobalSuper(current.grants)) {
       await verify();
+      await assertNoRetainedApplicationSuper();
       return "already_revoked";
     }
     try {
@@ -469,6 +481,7 @@ export async function revokeTemporaryCreditMigrationSuper({
       throw new CreditMigrationPrincipalCleanupError();
     }
     await verify();
+    await assertNoRetainedApplicationSuper();
     return "revoked";
   } catch (error) {
     if (error instanceof CreditMigrationPrincipalCleanupError) throw error;

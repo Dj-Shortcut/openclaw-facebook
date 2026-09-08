@@ -100,6 +100,9 @@ these environment secrets:
   schema transition and is revoked after the transition. The repair child
   receives only this token and basic process-runtime variables; the database
   URL is not passed to `flyctl`;
+- `FLY_DATABASE_CLEANUP_EXEC_TOKEN`: optional, separate four-hour exact-command
+  token for the protected pre-DDL failure-cleanup workflow below. Never replace
+  the failed run's repair secret with this credential;
 - `IMAGE_GEN_DATABASE_MIGRATION_URL`: `127.0.0.1:13306` URL for the dedicated
   expand principal;
 - `IMAGE_GEN_DATABASE_PROVISIONER_URL`: `127.0.0.1:13306` URL for the separate
@@ -137,17 +140,17 @@ gh run view "$run_id" --repo Dj-Shortcut/openclaw-facebook \
   --json databaseId,attempt,event,headBranch,status,workflowName,url
 test "$(gh secret list --repo Dj-Shortcut/openclaw-facebook --env production \
   --json name --jq '[.[] | select(.name == "FLY_DATABASE_REPAIR_EXEC_TOKEN")] | length')" = 0
-root_mysql_command="$(node --input-type=module -e \
-  'import {ROOT_MYSQL_REMOTE_COMMAND} from "./scripts/provision-image-gen-credit-provisioner.mjs"; process.stdout.write(ROOT_MYSQL_REMOTE_COMMAND)')"
+root_mysql_command_csv="$(node --input-type=module -e \
+  'import {ROOT_MYSQL_REMOTE_COMMAND_FLYCTL_CSV} from "./scripts/provision-image-gen-credit-provisioner.mjs"; process.stdout.write(ROOT_MYSQL_REMOTE_COMMAND_FLYCTL_CSV)')"
 flyctl tokens list --app leaderbot-portal-mysql --scope app | \
   REPAIR_RUN_ID="$run_id" node --input-type=module -e \
   'import {parseFlyTokenInventory} from "./scripts/retire-image-gen-repair-exec-token.mjs"; let s=""; for await (const c of process.stdin) s+=c; if (parseFlyTokenInventory(s).some(t=>t.name===`leaderbot-pr486-repair-${process.env.REPAIR_RUN_ID}`)) process.exit(1)'
 repair_token_json="$(flyctl tokens create machine-exec \
   --app leaderbot-portal-mysql --name "leaderbot-pr486-repair-$run_id" \
-  --expiry 4h --command "$root_mysql_command" --json)"
+  --expiry 4h --command "$root_mysql_command_csv" --json)"
 repair_token="$(printf '%s' "$repair_token_json" | node --input-type=module -e \
   'try { let s=""; for await (const c of process.stdin) s+=c; const v=JSON.parse(s).token; if(typeof v!=="string" || !v.trim()) process.exit(1); process.stdout.write(v); } catch { process.exit(1); }')"
-unset repair_token_json root_mysql_command
+unset repair_token_json root_mysql_command_csv
 printf '%s' "$repair_token" | gh secret set FLY_DATABASE_REPAIR_EXEC_TOKEN \
   --repo Dj-Shortcut/openclaw-facebook --env production
 unset repair_token
@@ -162,11 +165,14 @@ test -n "$secret_updated_at"
 ```
 
 Record only `run_id`, `run_attempt`, `token_id`, and `secret_updated_at` in the
-operator evidence. Never record the token value. The command is imported from
-the reviewed root helper verbatim: do not substitute `--command-prefix`, omit
-`--command`, use a deploy/migration token, or extend the four-hour expiry. Fly's
-token inventory exposes ID/name/expiry/revocation metadata, not command
-caveats; the exact creation command above establishes the command restriction.
+operator evidence. Never record the token value. Fly CLI `0.4.94` parses
+`--command` as an RFC 4180 CSV field. The imported fixed encoding decodes to the
+reviewed root-helper command verbatim before Fly applies its exact command
+caveat; never pass the raw `ROOT_MYSQL_REMOTE_COMMAND` constant to this flag.
+Do not substitute `--command-prefix`, omit `--command`, use a deploy/migration
+token, or extend the four-hour expiry. Fly's token inventory exposes
+ID/name/expiry/revocation metadata, not command caveats; the exact creation
+command above establishes the command restriction.
 Only after successful installation and metadata capture may the operator
 approve the protected job. If installation fails or the token expires, do not
 approve the job or treat expiry as proof that temporary MySQL grants vanished.
@@ -188,6 +194,136 @@ revokes only that token, and requires an authoritative nonempty `Revoked At`
 readback before deleting only `production/FLY_DATABASE_REPAIR_EXEC_TOKEN`.
 It then verifies the secret is absent. It never reads the secret value or adds
 revocation authority to workflow credentials.
+
+#### Cleanup after a failed pre-DDL repair
+
+Do not rerun a transition whose repair and SUPER cleanup both failed. The
+separate `cleanup-image-gen-migration-super.yml` workflow accepts only the
+latest exact failed transition attempt whose snapshot/tunnel setup succeeded
+and whose DDL steps were all skipped. It uses the same protected `production`
+environment and deployment concurrency, verifies the exact database Machine
+and encrypted volume, invokes only `revoke-super`, and records the unchanged
+`0016_expand` history. It never grants migration rights or applies DDL.
+
+Preserve the original repair metadata, even if the token expired. Run these
+cleanup-specific blocks from the reviewed, green `main` checkout with installed
+verification dependencies, authenticated GitHub CLI, and pinned Fly CLI
+`0.4.94`. Replace the six placeholders with the failed run's recorded metadata;
+do not copy the normal repair-token creation block above. The existing repair
+secret must remain present with its original timestamp.
+
+```bash
+set -euo pipefail
+set +x
+unset FLY_API_TOKEN GH_TOKEN GITHUB_TOKEN
+failed_run_id=REPLACE_WITH_FAILED_RUN_ID
+failed_run_attempt=REPLACE_WITH_FAILED_RUN_ATTEMPT
+failed_head_sha=REPLACE_WITH_FAILED_SOURCE_SHA
+database_machine_id=REPLACE_WITH_RECORDED_DATABASE_MACHINE_ID
+repair_token_id=REPLACE_WITH_RECORDED_REPAIR_TOKEN_ID
+repair_secret_updated_at=REPLACE_WITH_RECORDED_REPAIR_SECRET_UPDATED_AT
+[[ "$failed_run_id" =~ ^[1-9][0-9]*$ ]]
+[[ "$failed_run_attempt" =~ ^[1-9][0-9]*$ ]]
+[[ "$failed_head_sha" =~ ^[a-f0-9]{40}$ ]]
+[[ "$database_machine_id" =~ ^[a-f0-9]{14}$ ]]
+test -n "$repair_token_id"
+test -n "$repair_secret_updated_at"
+cleanup_head_sha="$(gh api repos/Dj-Shortcut/openclaw-facebook/commits/main --jq .sha)"
+test "$(git rev-parse HEAD)" = "$cleanup_head_sha"
+test -z "$(git status --porcelain)"
+GITHUB_TOKEN="$(gh auth token)" node scripts/validate-production-deployment.mjs \
+  --verify-source-ci "$cleanup_head_sha"
+test "$(gh api "repos/Dj-Shortcut/openclaw-facebook/actions/runs/$failed_run_id/attempts/$failed_run_attempt" \
+  --jq '[.head_sha,.status,.conclusion,.event,.head_branch] | join(" ")')" = \
+  "$failed_head_sha completed failure workflow_dispatch main"
+test "$(gh secret list --repo Dj-Shortcut/openclaw-facebook --env production \
+  --json name,updatedAt --jq '.[] | select(.name == "FLY_DATABASE_REPAIR_EXEC_TOKEN") | .updatedAt')" = \
+  "$repair_secret_updated_at"
+test "$(gh secret list --repo Dj-Shortcut/openclaw-facebook --env production \
+  --json name --jq '[.[] | select(.name == "FLY_DATABASE_CLEANUP_EXEC_TOKEN")] | length')" = 0
+fly_version="$(flyctl version)"
+[[ "$fly_version" =~ ^flyctl\ v0\.4\.94([[:space:]]|$) ]]
+flyctl tokens list --app leaderbot-portal-mysql --scope app | \
+  CLEANUP_FAILED_RUN_ID="$failed_run_id" node --input-type=module -e \
+  'import {parseFlyTokenInventory} from "./scripts/retire-image-gen-repair-exec-token.mjs"; let s=""; for await (const c of process.stdin) s+=c; if (parseFlyTokenInventory(s).some(t=>t.name===`leaderbot-pr486-cleanup-${process.env.CLEANUP_FAILED_RUN_ID}`)) process.exit(1)'
+root_mysql_command_csv="$(node --input-type=module -e \
+  'import {ROOT_MYSQL_REMOTE_COMMAND_FLYCTL_CSV} from "./scripts/provision-image-gen-credit-provisioner.mjs"; process.stdout.write(ROOT_MYSQL_REMOTE_COMMAND_FLYCTL_CSV)')"
+cleanup_token_json="$(flyctl tokens create machine-exec \
+  --app leaderbot-portal-mysql --name "leaderbot-pr486-cleanup-$failed_run_id" \
+  --expiry 4h --command "$root_mysql_command_csv" --json)"
+cleanup_token="$(printf '%s' "$cleanup_token_json" | node --input-type=module -e \
+  'try { let s=""; for await (const c of process.stdin) s+=c; const v=JSON.parse(s).token; if(typeof v!=="string" || !v.trim()) process.exit(1); process.stdout.write(v); } catch { process.exit(1); }')"
+unset cleanup_token_json root_mysql_command_csv
+printf '%s' "$cleanup_token" | gh secret set FLY_DATABASE_CLEANUP_EXEC_TOKEN \
+  --repo Dj-Shortcut/openclaw-facebook --env production
+unset cleanup_token
+cleanup_token_id="$(flyctl tokens list --app leaderbot-portal-mysql --scope app | \
+  CLEANUP_FAILED_RUN_ID="$failed_run_id" node --input-type=module -e \
+  'import {parseFlyTokenInventory} from "./scripts/retire-image-gen-repair-exec-token.mjs"; let s=""; for await (const c of process.stdin) s+=c; const t=parseFlyTokenInventory(s).filter(t=>t.name===`leaderbot-pr486-cleanup-${process.env.CLEANUP_FAILED_RUN_ID}`); if(t.length!==1 || t[0].revokedAt!==null) process.exit(1); process.stdout.write(t[0].id)')"
+cleanup_secret_updated_at="$(gh secret list --repo Dj-Shortcut/openclaw-facebook \
+  --env production --json name,updatedAt \
+  --jq '.[] | select(.name == "FLY_DATABASE_CLEANUP_EXEC_TOKEN") | .updatedAt')"
+test -n "$cleanup_token_id"
+test -n "$cleanup_secret_updated_at"
+test "$cleanup_token_id" != "$repair_token_id"
+```
+
+Record only the eight metadata values, never either credential. If creation,
+installation, or metadata capture is uncertain, stop and inspect that exact
+cleanup identity; do not rerun token creation or replace the repair secret.
+The cleanup also refuses to report success if any non-system MySQL account
+still has `SUPER`, including a former migration account after credential
+rotation. It does not revoke privileges from other accounts automatically.
+
+Dispatch once using GitHub CLI `2.95.0` or a version that returns the created
+run URL. Capture that exact URL, not the most recent run in a list. If dispatch
+returns no unambiguous URL, inspect Actions without dispatching again. Keep the
+same shell metadata for the retirement command below.
+
+```bash
+cleanup_dispatch_output="$(gh workflow run cleanup-image-gen-migration-super.yml \
+  --repo Dj-Shortcut/openclaw-facebook --ref main \
+  -f failed_run_id="$failed_run_id" -f failed_run_attempt="$failed_run_attempt" \
+  -f failed_head_sha="$failed_head_sha" -f database_machine_id="$database_machine_id" \
+  -f repair_token_id="$repair_token_id" -f repair_secret_updated_at="$repair_secret_updated_at" \
+  -f cleanup_token_id="$cleanup_token_id" -f cleanup_secret_updated_at="$cleanup_secret_updated_at")"
+cleanup_run_id="$(printf '%s' "$cleanup_dispatch_output" | node --input-type=module -e \
+  'let s=""; for await (const c of process.stdin) s+=c; const ids=[...new Set([...s.matchAll(/https:\/\/github\.com\/Dj-Shortcut\/openclaw-facebook\/actions\/runs\/([1-9][0-9]*)(?![0-9])/g)].map(m=>m[1]))]; if(ids.length!==1) process.exit(1); process.stdout.write(ids[0]);')"
+unset cleanup_dispatch_output
+cleanup_run_attempt="$(gh api "repos/Dj-Shortcut/openclaw-facebook/actions/runs/$cleanup_run_id" --jq .run_attempt)"
+test "$cleanup_run_attempt" = 1
+test "$(gh api "repos/Dj-Shortcut/openclaw-facebook/actions/runs/$cleanup_run_id" \
+  --jq '[.head_sha,.event,.head_branch,.path] | join(" ")')" = \
+  "$cleanup_head_sha workflow_dispatch main .github/workflows/cleanup-image-gen-migration-super.yml"
+gh run view "$cleanup_run_id" --repo Dj-Shortcut/openclaw-facebook \
+  --json databaseId,attempt,headSha,status,workflowName,url
+```
+
+Approve only this recorded run's protected production job after checking the
+eight inputs. The workflow independently verifies the full predecessor chain
+before database access. Record `cleanup_run_id` and `cleanup_run_attempt` too.
+
+After the cleanup workflow succeeds, retire both credentials:
+
+```bash
+node scripts/retire-image-gen-repair-exec-token.mjs \
+  --run-id "$failed_run_id" --run-attempt "$failed_run_attempt" --token-id "$repair_token_id" \
+  --secret-updated-at "$repair_secret_updated_at" \
+  --cleanup-run-id "$cleanup_run_id" --cleanup-run-attempt "$cleanup_run_attempt" \
+  --cleanup-token-id "$cleanup_token_id" \
+  --cleanup-secret-updated-at "$cleanup_secret_updated_at" \
+  --database-machine-id "$database_machine_id"
+```
+
+Only `repair_and_cleanup_exec_tokens_retired` means completion. This path
+revalidates both runs, reviewed workflow bytes, the immutable cleanup artifact,
+and both unchanged secret timestamps before mutation. It reads every page of
+Fly's app-scoped metadata inventory without requesting token values. An active
+token still requires explicit revoked-at readback. Only after the recorded
+four-hour maximum window may a token absent from that complete inventory be
+treated as already absent; that is not claimed as an explicit revocation or as
+proof of database cleanup. The separate successful protected cleanup proof is
+always required. Original normal-transition retirement behavior is unchanged.
 
 On `repair_exec_token_retirement_failed` (exit one), retain these same four
 metadata values and retry only after the evidence or external operation is

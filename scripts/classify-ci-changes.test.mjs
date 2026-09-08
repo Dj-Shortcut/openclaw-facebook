@@ -46,10 +46,13 @@ describe("CI change classification", () => {
   });
 
   it.each([
+    ".github/workflows/cleanup-image-gen-migration-super.yml",
     ".github/workflows/retire-image-gen-credit-provisioners.yml",
     ".github/workflows/image-gen-schema-transition.yml",
     "scripts/fly-restore-probe-status.mjs",
     "scripts/fly-restore-probe-status.test.mjs",
+    "scripts/image-gen-migration-super-cleanup-evidence.mjs",
+    "scripts/image-gen-migration-super-cleanup-evidence.test.mjs",
     "scripts/image-gen-credit-migration-principal-repair-contract.mjs",
     "scripts/image-gen-credit-migration-principal-repair-contract.test.mjs",
     "scripts/repair-image-gen-credit-migration-principal.mjs",

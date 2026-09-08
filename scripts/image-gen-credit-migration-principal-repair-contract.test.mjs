@@ -1,3 +1,7 @@
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -16,6 +20,7 @@ import {
   revokeTemporaryCreditMigrationSuper,
 } from "./image-gen-credit-migration-principal-repair-contract.mjs";
 import {
+  buildRootFlyctlEnvironment,
   classifyCreditMigrationHistory,
   executeRepair,
   executeSuperCleanup,
@@ -36,6 +41,8 @@ const COMPLETE_SCHEMA_GRANT =
   "GRANT CREATE, TRIGGER, CREATE ROUTINE, ALTER ROUTINE ON `leaderbot`.* TO `credit_migrator`@`%`";
 const SUPER_GRANT = "GRANT SUPER ON *.* TO `credit_migrator`@`%`";
 const SUPER_REVOKE = "REVOKE SUPER ON *.* FROM `credit_migrator`@`%`";
+const NON_SYSTEM_SUPER_QUERY =
+  "SELECT COUNT(*) FROM mysql.user WHERE Super_priv='Y' AND User NOT IN ('root','mysql.infoschema','mysql.session','mysql.sys')";
 const REVOKED_SUPER_ORDERS = [
   ["GRANT then REVOKE", [SUPER_GRANT, SUPER_REVOKE]],
   ["REVOKE then GRANT", [SUPER_REVOKE, SUPER_GRANT]],
@@ -100,6 +107,7 @@ function rootHarness({
   failRevoke = false,
   initialGrants = BASE_GRANTS,
   requireSuper = false,
+  otherSuperAccounts = 0,
 } = {}) {
   const statements = [];
   let state = migrationState(initialGrants, requireSuper);
@@ -108,6 +116,14 @@ function rootHarness({
     execute: vi.fn(async (statement) => {
       statements.push(statement);
       if (statement.startsWith("SELECT GET_LOCK")) return ["1"];
+      if (statement === NON_SYSTEM_SUPER_QUERY) {
+        return [
+          String(
+            otherSuperAccounts +
+              Number(hasCreditMigrationGlobalSuper(state.grants)),
+          ),
+        ];
+      }
       if (statement.startsWith("SELECT COUNT(*) FROM mysql.user")) return ["1"];
       if (statement.startsWith("SELECT IS_USED_LOCK")) return ["1"];
       if (statement.startsWith("SELECT RELEASE_LOCK")) return ["1"];
@@ -178,6 +194,119 @@ function postDdlPrepareHarness(phase, rootOptions = {}) {
 }
 
 describe("credit migration principal repair contract", () => {
+  it("forwards the existing HOME and token to Fly without ambient secrets", () => {
+    const environment = buildRootFlyctlEnvironment({
+      PATH: "/opt/fly/bin:/usr/bin",
+      HOME: "/home/runner",
+      FLY_API_TOKEN: "synthetic-repair-token",
+      FLY_ACCESS_TOKEN: "unreviewed-fallback-token",
+      TMPDIR: "/runner/temp",
+      NO_COLOR: "1",
+      DATABASE_MIGRATION_URL: "mysql://private",
+      GH_TOKEN: "github-private",
+      UNRELATED_SECRET: "private",
+    });
+
+    expect(environment).toEqual({
+      PATH: "/opt/fly/bin:/usr/bin",
+      HOME: "/home/runner",
+      FLY_API_TOKEN: "synthetic-repair-token",
+      TMPDIR: "/runner/temp",
+      NO_COLOR: "1",
+    });
+    expect(Object.isFrozen(environment)).toBe(true);
+  });
+
+  it.each(["PATH", "HOME", "FLY_API_TOKEN"])(
+    "fails closed without required Fly child environment %s",
+    (missing) => {
+      const environment = {
+        PATH: "/opt/fly/bin:/usr/bin",
+        HOME: "/home/runner",
+        FLY_API_TOKEN: "synthetic-repair-token",
+      };
+      delete environment[missing];
+
+      expect(() => buildRootFlyctlEnvironment(environment)).toThrow(
+        "credit migration principal repair rejected",
+      );
+    },
+  );
+
+  it("opens the fake Fly child with HOME and no ambient credentials", async () => {
+    const directory = mkdtempSync(
+      path.join(os.tmpdir(), "leaderbot-fake-fly-"),
+    );
+    const executable = path.join(directory, "flyctl");
+    writeFileSync(
+      executable,
+      `#!${process.execPath}
+if (!process.env.HOME || !process.env.FLY_API_TOKEN || process.env.FLY_ACCESS_TOKEN || process.env.GH_TOKEN || process.env.UNRELATED_SECRET) process.exit(64);
+let buffer = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", chunk => {
+  buffer += chunk;
+  let newline;
+  while ((newline = buffer.indexOf("\\n")) >= 0) {
+    const line = buffer.slice(0, newline).replace(/\\r$/, "");
+    buffer = buffer.slice(newline + 1);
+    if (line.startsWith("SELECT '__lbcp_") && line.endsWith("';")) process.stdout.write(line.slice(8, -2) + "\\n");
+    else if (line === ${JSON.stringify(`${NON_SYSTEM_SUPER_QUERY};`)}) process.stdout.write("0\\n");
+    else if (line.startsWith("SELECT ")) process.stdout.write("1\\n");
+  }
+});
+`,
+      { mode: 0o700 },
+    );
+    chmodSync(executable, 0o700);
+    const names = [
+      "PATH",
+      "HOME",
+      "FLY_API_TOKEN",
+      "FLY_ACCESS_TOKEN",
+      "GH_TOKEN",
+      "UNRELATED_SECRET",
+    ];
+    const previous = Object.fromEntries(
+      names.map((name) => [name, process.env[name]]),
+    );
+    Object.assign(process.env, {
+      PATH: directory,
+      HOME: "/home/runner",
+      FLY_API_TOKEN: "synthetic-repair-token",
+      FLY_ACCESS_TOKEN: "unreviewed-fallback-token",
+      GH_TOKEN: "github-private",
+      UNRELATED_SECRET: "private",
+    });
+    const connection = { end: vi.fn(async () => undefined) };
+    try {
+      await expect(
+        executeSuperCleanup(
+          {
+            app: "leaderbot-portal-mysql",
+            machineId: "080d3ddb5099e8",
+            operation: "revoke-super",
+          },
+          {
+            migrationUrl:
+              "mysql://credit_migrator:secret@127.0.0.1:13306/leaderbot",
+            mysql: { createConnection: vi.fn(async () => connection) },
+            readPhase: vi.fn(async () => "0016_expand"),
+            readState: vi.fn(async () => migrationState()),
+            signal: new AbortController().signal,
+          },
+        ),
+      ).resolves.toBe("already_revoked");
+      expect(connection.end).toHaveBeenCalledOnce();
+    } finally {
+      for (const name of names) {
+        if (previous[name] === undefined) delete process.env[name];
+        else process.env[name] = previous[name];
+      }
+      rmSync(directory, { force: true, recursive: true });
+    }
+  });
+
   it("accepts only the exact private migration account shape", () => {
     expect(parseCreditMigrationAccount("credit_migrator@%")).toEqual(ACCOUNT);
     expect(() => parseCreditMigrationAccount("root@%")).toThrow();
@@ -856,7 +985,75 @@ describe("temporary migration SUPER cleanup", () => {
     expect(hasCreditMigrationGlobalSuper((await readState()).grants)).toBe(
       false,
     );
+    expect(statements.at(-2)).toBe(NON_SYSTEM_SUPER_QUERY);
+    expect(statements.at(-1)).toContain("RELEASE_LOCK");
   });
+
+  it.each(["already_revoked", "revoked", "recovered"])(
+    "refuses %s completion while another application account retains SUPER",
+    async (stage) => {
+      const { readState, root, statements } = rootHarness({
+        initialGrants:
+          stage === "already_revoked"
+            ? BASE_GRANTS
+            : [...BASE_GRANTS, SUPER_GRANT],
+        otherSuperAccounts: 1,
+      });
+      const firstRoot =
+        stage === "recovered"
+          ? {
+              execute: vi.fn(async (statement) => {
+                if (statement.startsWith("REVOKE")) {
+                  throw new Error("synthetic transport loss");
+                }
+                return root.execute(statement);
+              }),
+            }
+          : root;
+      const verify = vi.fn(async () => undefined);
+      await expect(
+        revokeTemporaryCreditMigrationSuper({
+          account: ACCOUNT,
+          databaseName: DATABASE,
+          readState,
+          recoverRoot: vi.fn(async () => root),
+          root: firstRoot,
+          verify,
+        }),
+      ).rejects.toBeInstanceOf(CreditMigrationPrincipalCleanupError);
+      expect(verify).toHaveBeenCalledOnce();
+      expect(statements.at(-2)).toBe(NON_SYSTEM_SUPER_QUERY);
+      expect(statements.at(-1)).toContain("RELEASE_LOCK");
+      expect(
+        statements.filter((statement) => /^(GRANT|REVOKE) /.test(statement)),
+      ).toEqual(
+        stage === "already_revoked"
+          ? []
+          : ["REVOKE SUPER ON *.* FROM 'credit_migrator'@'%'"],
+      );
+    },
+  );
+
+  it.each([[], [""], ["00"], ["1"], ["0", "0"], [0]])(
+    "rejects an uncertain aggregate SUPER result %j",
+    async (...rows) => {
+      const { readState, root } = rootHarness();
+      const execute = root.execute;
+      root.execute = vi.fn(async (statement) =>
+        statement === NON_SYSTEM_SUPER_QUERY ? rows : execute(statement),
+      );
+      await expect(
+        revokeTemporaryCreditMigrationSuper({
+          account: ACCOUNT,
+          databaseName: DATABASE,
+          readState,
+          recoverRoot: vi.fn(async () => root),
+          root,
+          verify: vi.fn(async () => undefined),
+        }),
+      ).rejects.toBeInstanceOf(CreditMigrationPrincipalCleanupError);
+    },
+  );
 
   it.each([false, true])(
     "is idempotent when SUPER is absent (required: %s)",
@@ -882,6 +1079,42 @@ describe("temporary migration SUPER cleanup", () => {
 });
 
 describe("credit migration principal repair resumability", () => {
+  it("rejects cleanup when a replacement credential hides the original account's SUPER", async () => {
+    const connection = { end: vi.fn(async () => undefined) };
+    const { root, statements } = rootHarness({ otherSuperAccounts: 1 });
+    const readState = vi.fn(async () => ({
+      ...migrationState(
+        BASE_GRANTS.map((grant) =>
+          grant.replaceAll("credit_migrator", "replacement_migrator"),
+        ),
+      ),
+      account: { username: "replacement_migrator", hostname: "%" },
+    }));
+    await expect(
+      executeSuperCleanup(
+        {
+          app: "leaderbot-portal-mysql",
+          machineId: "080d3ddb5099e8",
+          operation: "revoke-super",
+        },
+        {
+          migrationUrl:
+            "mysql://replacement_migrator:synthetic@127.0.0.1:13306/leaderbot",
+          mysql: { createConnection: vi.fn(async () => connection) },
+          openRoot: vi.fn(async () => root),
+          readPhase: vi.fn(async () => "0016_expand"),
+          readState,
+          signal: new AbortController().signal,
+        },
+      ),
+    ).rejects.toBeInstanceOf(CreditMigrationPrincipalCleanupError);
+    expect(statements).toContain(NON_SYSTEM_SUPER_QUERY);
+    expect(
+      statements.some((statement) => /^(GRANT|REVOKE) /.test(statement)),
+    ).toBe(false);
+    expect(connection.end).toHaveBeenCalledOnce();
+  });
+
   it.each(INVALID_CLEANUP_GRANTS)(
     "rejects a misconfigured cleanup secret with %s before opening root",
     async (_label, grants) => {
@@ -1284,6 +1517,37 @@ describe("credit migration principal repair CLI", () => {
     );
     expect(output).toHaveBeenLastCalledWith(
       `${CREDIT_MIGRATION_PRINCIPAL_FAILURE_MARKER}\n`,
+    );
+    output.mockRestore();
+  });
+
+  it("fails closed with a fixed marker when the Fly child has no HOME", async () => {
+    const output = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+    await expect(
+      runCli(
+        [
+          "--database-app",
+          "leaderbot-portal-mysql",
+          "--database-machine-id",
+          "080d3ddb5099e8",
+          "--operation",
+          "prepare",
+        ],
+        {
+          execute: vi.fn(async () =>
+            buildRootFlyctlEnvironment({
+              PATH: "/opt/fly/bin:/usr/bin",
+              FLY_API_TOKEN: "synthetic-repair-token",
+            }),
+          ),
+        },
+      ),
+    ).resolves.toBe(CREDIT_MIGRATION_PRINCIPAL_FAILURE_MARKER);
+    expect(output).toHaveBeenCalledExactlyOnceWith(
+      `${CREDIT_MIGRATION_PRINCIPAL_FAILURE_MARKER}\n`,
+    );
+    expect(JSON.stringify(output.mock.calls)).not.toContain(
+      "synthetic-repair-token",
     );
     output.mockRestore();
   });
