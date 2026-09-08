@@ -616,6 +616,49 @@ describe("cleanup-only operator commands", () => {
     expect(setup).toContain("unset cleanup_token");
   });
 
+  it("binds standalone source CI to the exact repository and canonical API", () => {
+    const commands = blocks[0]
+      .replace(/\\\n/g, "")
+      .split("\n")
+      .filter((line) => line.includes("--verify-source-ci"));
+    expect(commands).toHaveLength(1);
+    const command = commands[0].replace(/\s+/g, " ").trim();
+    expect(command).toBe(
+      "GITHUB_REPOSITORY=Dj-Shortcut/openclaw-facebook " +
+        "GITHUB_API_URL=https://api.github.com " +
+        'GITHUB_TOKEN="$(gh auth token)" node scripts/validate-production-deployment.mjs ' +
+        '--verify-source-ci "$cleanup_head_sha"',
+    );
+
+    // Execute only this exact command with stubs, never the provisioning block.
+    const result = spawnSync("bash", ["--noprofile", "--norc"], {
+      input: [
+        "set -eu",
+        'gh() { test "$*" = "auth token" || return 1; printf %s synthetic-token; }',
+        'node() { printf "%s\\n" "$GITHUB_REPOSITORY" "$GITHUB_API_URL" "$GITHUB_TOKEN" "$@"; }',
+        command,
+      ].join("\n"),
+      encoding: "utf8",
+      env: {
+        PATH: process.env.PATH,
+        GITHUB_REPOSITORY: "unrelated/ambient-repository",
+        GITHUB_API_URL: "https://unrelated.invalid",
+        GITHUB_TOKEN: "ambient-token",
+        cleanup_head_sha: cleanupSha,
+      },
+    });
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim().split("\n")).toEqual([
+      "Dj-Shortcut/openclaw-facebook",
+      "https://api.github.com",
+      "synthetic-token",
+      "scripts/validate-production-deployment.mjs",
+      "--verify-source-ci",
+      cleanupSha,
+    ]);
+  });
+
   it("binds every workflow input and captures the exact dispatch identity", () => {
     const dispatch = blocks[1];
     expect(dispatch).toContain(

@@ -231,6 +231,8 @@ test -n "$repair_secret_updated_at"
 cleanup_head_sha="$(gh api repos/Dj-Shortcut/openclaw-facebook/commits/main --jq .sha)"
 test "$(git rev-parse HEAD)" = "$cleanup_head_sha"
 test -z "$(git status --porcelain)"
+GITHUB_REPOSITORY=Dj-Shortcut/openclaw-facebook \
+GITHUB_API_URL=https://api.github.com \
 GITHUB_TOKEN="$(gh auth token)" node scripts/validate-production-deployment.mjs \
   --verify-source-ci "$cleanup_head_sha"
 test "$(gh api "repos/Dj-Shortcut/openclaw-facebook/actions/runs/$failed_run_id/attempts/$failed_run_attempt" \
