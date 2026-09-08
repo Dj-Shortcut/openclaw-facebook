@@ -92,8 +92,16 @@ Live payment enablement remains gated by the relevant P1 through P4 evidence.
         isolated Fly child omitted `HOME`, which makes the pinned CLI exit
         before SSH. An independent operator read found no non-system SUPER
         grants and no credit procedures, but this is not protected cleanup
-        completion. Land the tested child-environment fix, run the separately
-        approved cleanup-only proof bound to this failed run, and retire its
+        completion. The child-environment fix landed, but protected cleanup run
+        `34265308613` (attempt 1, source `ca07d6f`) failed before producing any
+        cleanup artifact. Its fixed failure marker does not identify the failing
+        stage or prove that no privilege changed. Source-level regression tests
+        found that cleanup incorrectly required later definer-table grants on
+        the exact old `0016` account; those checks now use the existing pregrant
+        boundary only for exact `0016`. The separate mismatch between the
+        command-scoped Machine Exec credential and SSH transport still needs a
+        tested, reviewed repair before retrying production. Run the separately
+        approved cleanup-only proof bound to the original failed run, and retire its
         exact temporary token and unchanged secret before a new transition.
         The original four-hour token is now absent from the complete Fly app
         inventory; the original GitHub secret remains unchanged. The protected
