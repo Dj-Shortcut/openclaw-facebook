@@ -275,6 +275,27 @@ The cleanup also refuses to report success if any non-system MySQL account
 still has `SUPER`, including a former migration account after credential
 rotation. It does not revoke privileges from other accounts automatically.
 
+The revoke-only runner sends one bounded Machines Exec API request to the
+exact verified database Machine. It keeps `ROOT_MYSQL_REMOTE_COMMAND` unchanged
+and supplies SQL through the API's `stdin` field; the pinned CLI's Exec command
+does not forward stdin. There is no SSH fallback, redirect, or automatic request
+retry. One root session holds the existing repair lock while the separate
+migration connection verifies the exact account, grants, and schema history
+before and after the revoke. Each approval must belong to that live verifier
+connection; disconnecting or releasing a wait lock is not approval. Success
+requires both local verifications, the request-specific output marker, a remote
+zero exit code, and empty stderr. The Exec/verification protocol has a 45-second
+local deadline and a 40-second remote execution bound; that deadline does not
+include the runner's preceding database connection and initial inspection.
+
+A timeout or lost response after approval can still mean that `SUPER` was
+revoked. It never means rollback or successful cleanup: preserve the exact
+credential metadata and investigate before another protected attempt. Local
+MySQL tests do not prove that Fly accepts the command-scoped token; only the
+protected run and its artifact establish production completion. This transport
+change applies only to `revoke-super`; prepare/bootstrap retain their existing
+transport and must be verified separately before resuming schema work.
+
 Dispatch once using GitHub CLI `2.95.0` or a version that returns the created
 run URL. Capture that exact URL, not the most recent run in a list. If dispatch
 returns no unambiguous URL, inspect Actions without dispatching again. Keep the
