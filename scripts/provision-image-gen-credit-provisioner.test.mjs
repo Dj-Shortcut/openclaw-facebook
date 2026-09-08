@@ -7,6 +7,7 @@ import {
   MANAGED_ACCOUNT_INVENTORY_QUERY,
   PINNED_FLYCTL_VERSION,
   ROOT_MYSQL_REMOTE_COMMAND,
+  ROOT_MYSQL_REMOTE_COMMAND_FLYCTL_CSV,
   RootMysqlSession,
   attachChildStdinFailureHandler,
   bootstrapCreditProvisioner,
@@ -421,6 +422,15 @@ describe("credit provisioner bootstrap runner", () => {
       "/bin/sh -lc 'exec env MYSQL_PWD=\"$MYSQL_ROOT_PASSWORD\" mysql --protocol=socket --batch --raw --skip-column-names --silent --unbuffered -uroot leaderbot'",
     );
     expect(ROOT_MYSQL_REMOTE_COMMAND).not.toContain("MYSQL_ROOT_PASSWORD=");
+    expect(ROOT_MYSQL_REMOTE_COMMAND_FLYCTL_CSV).toBe(
+      `"/bin/sh -lc 'exec env MYSQL_PWD=""$MYSQL_ROOT_PASSWORD"" mysql --protocol=socket --batch --raw --skip-column-names --silent --unbuffered -uroot leaderbot'"`,
+    );
+    expect(
+      ROOT_MYSQL_REMOTE_COMMAND_FLYCTL_CSV.slice(1, -1).replaceAll(
+        '""',
+        '"',
+      ),
+    ).toBe(ROOT_MYSQL_REMOTE_COMMAND);
     expect(
       buildRootMysqlSshArgs({
         app: CONTEXT.recovery.app,

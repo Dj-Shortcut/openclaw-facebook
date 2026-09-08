@@ -38,6 +38,8 @@ export const MANAGED_ACCOUNT_INVENTORY_QUERY =
   "SELECT CONCAT(User,0x09,Host) FROM mysql.user WHERE User LIKE 'lbcp\\\\_%' ESCAPE '\\\\' ORDER BY User,Host";
 export const ROOT_MYSQL_REMOTE_COMMAND =
   "/bin/sh -lc 'exec env MYSQL_PWD=\"$MYSQL_ROOT_PASSWORD\" mysql --protocol=socket --batch --raw --skip-column-names --silent --unbuffered -uroot leaderbot'";
+export const ROOT_MYSQL_REMOTE_COMMAND_FLYCTL_CSV =
+  `"${ROOT_MYSQL_REMOTE_COMMAND.replaceAll('"', '""')}"`;
 
 const scriptPath = fileURLToPath(import.meta.url);
 const repositoryRoot = path.dirname(path.dirname(scriptPath));

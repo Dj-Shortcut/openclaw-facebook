@@ -1,0 +1,401 @@
+name: Clean up failed image-gen migration SUPER
+
+on:
+  workflow_dispatch:
+    inputs:
+      failed_run_id:
+        description: Exact failed image-gen schema-transition run ID
+        required: true
+        type: string
+      failed_run_attempt:
+        description: Exact failed schema-transition run attempt
+        required: true
+        type: string
+      failed_head_sha:
+        description: Exact source SHA executed by the failed transition
+        required: true
+        type: string
+      database_machine_id:
+        description: Exact database Machine ID bound by the failed transition
+        required: true
+        type: string
+      repair_token_id:
+        description: Metadata ID of the existing bounded repair token
+        required: true
+        type: string
+      repair_secret_updated_at:
+        description: Exact UTC updatedAt metadata of the existing repair secret
+        required: true
+        type: string
+      cleanup_token_id:
+        description: Metadata ID of the separate bounded cleanup token
+        required: true
+        type: string
+      cleanup_secret_updated_at:
+        description: Exact UTC updatedAt metadata of the separate cleanup secret
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  FLYCTL_VERSION: 0.4.85
+
+concurrency:
+  group: production-deploy-image-gen
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  cleanup:
+    name: Revoke only temporary migration SUPER after a pre-DDL failure
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    environment: production
+    steps:
+      - name: Require protected main and exact source
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/main"
+
+      - name: Check out exact source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install exact verification dependencies
+        run: |
+          set -euo pipefail
+          npm ci
+          corepack enable
+          corepack prepare pnpm@10.28.1 --activate
+          pnpm --dir apps/image-gen install --frozen-lockfile
+
+      - name: Verify reviewed source and failed predecessor before approval mutation
+        timeout-minutes: 8
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          FAILED_RUN_ID: ${{ inputs.failed_run_id }}
+          FAILED_RUN_ATTEMPT: ${{ inputs.failed_run_attempt }}
+          FAILED_HEAD_SHA: ${{ inputs.failed_head_sha }}
+          DATABASE_MACHINE_ID: ${{ inputs.database_machine_id }}
+          REPAIR_TOKEN_ID: ${{ inputs.repair_token_id }}
+          REPAIR_SECRET_UPDATED_AT: ${{ inputs.repair_secret_updated_at }}
+          CLEANUP_TOKEN_ID: ${{ inputs.cleanup_token_id }}
+          CLEANUP_SECRET_UPDATED_AT: ${{ inputs.cleanup_secret_updated_at }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          work="$RUNNER_TEMP/leaderbot-migration-super-cleanup"
+          mkdir -p "$work"
+          jq -n \
+            --arg predecessorRunId "$FAILED_RUN_ID" \
+            --arg predecessorRunAttempt "$FAILED_RUN_ATTEMPT" \
+            --arg predecessorHeadSha "$FAILED_HEAD_SHA" \
+            --arg databaseMachineId "$DATABASE_MACHINE_ID" \
+            --arg repairTokenId "$REPAIR_TOKEN_ID" \
+            --arg repairSecretUpdatedAt "$REPAIR_SECRET_UPDATED_AT" \
+            --arg cleanupTokenId "$CLEANUP_TOKEN_ID" \
+            --arg cleanupSecretUpdatedAt "$CLEANUP_SECRET_UPDATED_AT" \
+            '{predecessorRunId:$predecessorRunId,predecessorRunAttempt:$predecessorRunAttempt,predecessorHeadSha:$predecessorHeadSha,databaseMachineId:$databaseMachineId,repairTokenId:$repairTokenId,repairSecretUpdatedAt:$repairSecretUpdatedAt,cleanupTokenId:$cleanupTokenId,cleanupSecretUpdatedAt:$cleanupSecretUpdatedAt}' \
+            > "$work/request.json"
+          REQUEST_PATH="$work/request.json" node --input-type=module <<'NODE'
+          import fs from "node:fs";
+          import { parseMigrationSuperCleanupRequest } from "./scripts/image-gen-migration-super-cleanup-evidence.mjs";
+          parseMigrationSuperCleanupRequest(JSON.parse(fs.readFileSync(process.env.REQUEST_PATH, "utf8")));
+          NODE
+          fetch() {
+            curl --fail --show-error --silent \
+              --header "Authorization: Bearer $GITHUB_TOKEN" \
+              --header "Accept: application/vnd.github+json" \
+              --header "X-GitHub-Api-Version: 2022-11-28" \
+              "$1" --output "$2"
+          }
+          api="$GITHUB_API_URL/repos/$GITHUB_REPOSITORY"
+          fetch "$api/actions/runs/$FAILED_RUN_ID/attempts/$FAILED_RUN_ATTEMPT" "$work/predecessor-run.json"
+          fetch "$api/actions/runs/$FAILED_RUN_ID/attempts/$FAILED_RUN_ATTEMPT/jobs?per_page=100" "$work/predecessor-jobs.json"
+          fetch "$api/actions/workflows/image-gen-schema-transition.yml/runs?branch=main&event=workflow_dispatch&per_page=1" "$work/predecessor-latest.json"
+          fetch "$api/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT" "$work/cleanup-run.json"
+          fetch "$api/actions/workflows/cleanup-image-gen-migration-super.yml/runs?branch=main&event=workflow_dispatch&per_page=1" "$work/cleanup-latest.json"
+          fetch "$api/contents/.github/workflows/image-gen-schema-transition.yml?ref=$FAILED_HEAD_SHA" "$work/predecessor-source.json"
+          WORK="$work" node --input-type=module <<'NODE'
+          import fs from "node:fs";
+          import {
+            assertFailedMigrationSuperPredecessor,
+            assertRunningMigrationSuperCleanup,
+          } from "./scripts/image-gen-migration-super-cleanup-evidence.mjs";
+          const read = name => JSON.parse(fs.readFileSync(`${process.env.WORK}/${name}`, "utf8"));
+          const request = read("request.json");
+          assertFailedMigrationSuperPredecessor({
+            run: read("predecessor-run.json"),
+            jobs: read("predecessor-jobs.json"),
+            latest: read("predecessor-latest.json"),
+          }, request);
+          assertRunningMigrationSuperCleanup({
+            run: read("cleanup-run.json"),
+            latest: read("cleanup-latest.json"),
+          }, {
+            id: process.env.GITHUB_RUN_ID,
+            attempt: process.env.GITHUB_RUN_ATTEMPT,
+            headSha: process.env.GITHUB_SHA,
+          });
+          const source = read("predecessor-source.json");
+          if (
+            source?.encoding !== "base64" ||
+            source.type !== "file" ||
+            source.path !== ".github/workflows/image-gen-schema-transition.yml" ||
+            !Number.isSafeInteger(source.size) ||
+            source.size < 1 ||
+            source.size > 1024 * 1024 ||
+            typeof source.content !== "string"
+          ) process.exit(1);
+          const decoded = Buffer.from(source.content, "base64");
+          if (decoded.length !== source.size || decoded.includes(13)) process.exit(1);
+          fs.writeFileSync(`${process.env.WORK}/predecessor-workflow.yml`, decoded, { mode: 0o600 });
+          NODE
+          cmp "$work/predecessor-workflow.yml" .github/workflows/image-gen-schema-transition.yml
+          npm run production:validate
+          node scripts/validate-production-deployment.mjs --verify-source-ci "$GITHUB_SHA"
+
+      - name: Install exact verified flyctl
+        timeout-minutes: 3
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$RUNNER_OS" = "Linux"
+          test "$RUNNER_ARCH" = "X64"
+          install_root="$(mktemp -d "$RUNNER_TEMP/leaderbot-flyctl.XXXXXX")"
+          archive="$install_root/flyctl_0.4.85_Linux_x86_64.tar.gz"
+          extract_dir="$install_root/extract"
+          bin_dir="$install_root/bin"
+          install -d -m 0700 "$extract_dir" "$bin_dir"
+          curl --fail --show-error --silent --location \
+            --proto '=https' --proto-redir '=https' --tlsv1.2 \
+            --retry 3 --retry-all-errors \
+            --output "$archive" \
+            "https://github.com/superfly/flyctl/releases/download/v0.4.85/flyctl_0.4.85_Linux_x86_64.tar.gz"
+          printf '%s  %s\n' \
+            "c3b5ed05319adf8a265d68171758ea7b37bd340c5c3dc4e09e17fb6344b8ff90" \
+            "$archive" | sha256sum --check --strict
+          tar --extract --gzip --file "$archive" --directory "$extract_dir" flyctl
+          test -f "$extract_dir/flyctl"
+          test ! -L "$extract_dir/flyctl"
+          install -m 0755 "$extract_dir/flyctl" "$bin_dir/flyctl"
+          ln -s flyctl "$bin_dir/fly"
+          version_output="$("$bin_dir/flyctl" version)"
+          [[ "$version_output" =~ ^flyctl\ v0\.4\.85([[:space:]]|$) ]]
+          printf '%s\n' "$bin_dir" >> "$GITHUB_PATH"
+
+      - name: Bind the exact live database Machine without changing it
+        timeout-minutes: 5
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_DATABASE_MIGRATION_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$FLY_API_TOKEN"
+          test "$(jq -er '.apps["image-gen"].databaseSchemaTransition.state' deploy/production/apps.json)" = "expand_pending"
+          test "$(jq -er '.apps["image-gen"].databaseSchemaTransition.from' deploy/production/apps.json)" = "0016_expand"
+          test "$(jq -er '.apps["image-gen"].databaseSchemaTransition.to' deploy/production/apps.json)" = "0018_credit_checkout_reservation"
+          test "$(jq -er '.apps["image-gen"].databaseSchemaPhase' deploy/production/apps.json)" = "0016_expand"
+          db_app="$(jq -er '.apps["image-gen"].databaseRecovery.app' deploy/production/apps.json)"
+          volume_id="$(jq -er '.apps["image-gen"].databaseRecovery.volumeId' deploy/production/apps.json)"
+          database_name="$(jq -er '.apps["image-gen"].databaseRecovery.databaseName' deploy/production/apps.json)"
+          test "$db_app" = "leaderbot-portal-mysql"
+          test "$database_name" = "leaderbot"
+          machines="$(flyctl machine list --app "$db_app" --json)"
+          volumes="$(flyctl volumes list --app "$db_app" --json)"
+          test "$(jq -r '[.[] | select(.state=="started")] | length' <<<"$machines")" = 1
+          machine="$(jq -cer --arg volume "$volume_id" '[.[] | select(.state=="started" and any(.config.mounts[]?; .volume==$volume and .path=="/var/lib/mysql"))] | if length==1 then .[0] else error("database Machine/volume binding mismatch") end' <<<"$machines")"
+          machine_id="$(jq -er '.id' <<<"$machine")"
+          test "$machine_id" = "$(jq -er '.databaseMachineId' "$RUNNER_TEMP/leaderbot-migration-super-cleanup/request.json")"
+          private_ip="$(jq -er '.private_ip' <<<"$machine")"
+          [[ "$machine_id" =~ ^[a-f0-9]{14}$ ]]
+          [[ "$private_ip" =~ ^fdaa:[0-9a-f:]+$ ]]
+          volume="$(jq -cer --arg id "$volume_id" '[.[] | select(.id==$id)] | if length==1 then .[0] else error("database volume mismatch") end' <<<"$volumes")"
+          test "$(jq -er '.attached_machine_id' <<<"$volume")" = "$machine_id"
+          test "$(jq -r '.encrypted' <<<"$volume")" = true
+          test "$(jq -r '.auto_backup_enabled' <<<"$volume")" = true
+          {
+            echo "MIGRATION_SUPER_CLEANUP_DATABASE_APP=$db_app"
+            echo "MIGRATION_SUPER_CLEANUP_DATABASE_NAME=$database_name"
+            echo "MIGRATION_SUPER_CLEANUP_DATABASE_MACHINE_ID=$machine_id"
+            echo "MIGRATION_SUPER_CLEANUP_DATABASE_PRIVATE_IP=$private_ip"
+          } >> "$GITHUB_ENV"
+
+      - name: Start isolated database migration tunnel
+        timeout-minutes: 5
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_DATABASE_MIGRATION_TOKEN }}
+          DATABASE_MIGRATION_URL: ${{ secrets.IMAGE_GEN_DATABASE_MIGRATION_URL }}
+        run: |
+          set -euo pipefail
+          test -n "$FLY_API_TOKEN"
+          test -n "$DATABASE_MIGRATION_URL"
+          echo "::add-mask::$DATABASE_MIGRATION_URL"
+          # shellcheck disable=SC2016
+          EXPECTED_DATABASE_NAME="$MIGRATION_SUPER_CLEANUP_DATABASE_NAME" node -e 'const u=new URL(process.env.DATABASE_MIGRATION_URL);if(!new Set(["mysql:","mysql2:"]).has(u.protocol)||u.hostname!=="127.0.0.1"||u.port!=="13306"||!u.username||!u.password||u.pathname!==`/${process.env.EXPECTED_DATABASE_NAME}`||u.search||u.hash)process.exit(1)'
+          work="$RUNNER_TEMP/leaderbot-migration-super-cleanup"
+          flyctl proxy 13306:3306 "$MIGRATION_SUPER_CLEANUP_DATABASE_PRIVATE_IP" \
+            --app "$MIGRATION_SUPER_CLEANUP_DATABASE_APP" --bind-addr 127.0.0.1 --quiet \
+            > "$work/proxy.log" 2>&1 &
+          proxy_pid="$!"
+          [[ "$proxy_pid" =~ ^[0-9]+$ ]]
+          printf '%s\n' "$proxy_pid" > "$work/proxy.pid"
+          for _ in $(seq 1 60); do
+            kill -0 "$proxy_pid"
+            node -e 'const n=require("node:net");const s=n.createConnection(13306,"127.0.0.1",()=>{s.destroy();process.exit(0)});s.setTimeout(500,()=>{s.destroy();process.exit(1)});s.on("error",()=>process.exit(1))' && break
+            sleep 1
+          done
+          node -e 'const n=require("node:net");const s=n.createConnection(13306,"127.0.0.1",()=>{s.destroy();process.exit(0)});s.setTimeout(1000,()=>{s.destroy();process.exit(1)});s.on("error",()=>process.exit(1))'
+          echo "MIGRATION_SUPER_CLEANUP_TUNNEL_STARTED=true" >> "$GITHUB_ENV"
+
+      - name: Reprove the failed predecessor immediately before cleanup
+        timeout-minutes: 3
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          FAILED_RUN_ID: ${{ inputs.failed_run_id }}
+          FAILED_RUN_ATTEMPT: ${{ inputs.failed_run_attempt }}
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/leaderbot-migration-super-cleanup"
+          api="$GITHUB_API_URL/repos/$GITHUB_REPOSITORY"
+          curl --fail --show-error --silent --header "Authorization: Bearer $GITHUB_TOKEN" --header "Accept: application/vnd.github+json" --header "X-GitHub-Api-Version: 2022-11-28" "$api/actions/runs/$FAILED_RUN_ID/attempts/$FAILED_RUN_ATTEMPT" --output "$work/predecessor-run.json"
+          curl --fail --show-error --silent --header "Authorization: Bearer $GITHUB_TOKEN" --header "Accept: application/vnd.github+json" --header "X-GitHub-Api-Version: 2022-11-28" "$api/actions/runs/$FAILED_RUN_ID/attempts/$FAILED_RUN_ATTEMPT/jobs?per_page=100" --output "$work/predecessor-jobs.json"
+          curl --fail --show-error --silent --header "Authorization: Bearer $GITHUB_TOKEN" --header "Accept: application/vnd.github+json" --header "X-GitHub-Api-Version: 2022-11-28" "$api/actions/workflows/image-gen-schema-transition.yml/runs?branch=main&event=workflow_dispatch&per_page=1" --output "$work/predecessor-latest.json"
+          WORK="$work" node --input-type=module <<'NODE'
+          import fs from "node:fs";
+          import { assertFailedMigrationSuperPredecessor } from "./scripts/image-gen-migration-super-cleanup-evidence.mjs";
+          const read = name => JSON.parse(fs.readFileSync(`${process.env.WORK}/${name}`, "utf8"));
+          assertFailedMigrationSuperPredecessor({run:read("predecessor-run.json"),jobs:read("predecessor-jobs.json"),latest:read("predecessor-latest.json")},read("request.json"));
+          NODE
+
+      - name: Revoke only temporary migration SUPER
+        timeout-minutes: 8
+        env:
+          DATABASE_MIGRATION_URL: ${{ secrets.IMAGE_GEN_DATABASE_MIGRATION_URL }}
+          # The failed run's repair credential remains untouched for retirement
+          # proof. It may already be expired; only this separate token executes.
+          FLY_API_TOKEN: ${{ secrets.FLY_DATABASE_CLEANUP_EXEC_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$DATABASE_MIGRATION_URL"
+          test -n "$FLY_API_TOKEN"
+          echo "::add-mask::$DATABASE_MIGRATION_URL"
+          proxy_pid="$(cat "$RUNNER_TEMP/leaderbot-migration-super-cleanup/proxy.pid")"
+          [[ "$proxy_pid" =~ ^[0-9]+$ ]]
+          kill -0 "$proxy_pid"
+          node -e 'const n=require("node:net");const s=n.createConnection(13306,"127.0.0.1",()=>{s.destroy();process.exit(0)});s.setTimeout(1000,()=>{s.destroy();process.exit(1)});s.on("error",()=>process.exit(1))'
+          set +e
+          output="$(node scripts/repair-image-gen-credit-migration-principal.mjs \
+            --database-app "$MIGRATION_SUPER_CLEANUP_DATABASE_APP" \
+            --database-machine-id "$MIGRATION_SUPER_CLEANUP_DATABASE_MACHINE_ID" \
+            --operation revoke-super)"
+          cleanup_status="$?"
+          set -e
+          if [[ "$cleanup_status" -ne 0 || "$output" != "credit_migration_principal_super_revoked" ]]; then
+            printf '%s\n' "credit_migration_principal_repair_cleanup_incomplete"
+            exit 1
+          fi
+          echo "MIGRATION_SUPER_REVOKED=true" >> "$GITHUB_ENV"
+
+      - name: Inspect immutable migration history after cleanup
+        timeout-minutes: 5
+        env:
+          DATABASE_MIGRATION_URL: ${{ secrets.IMAGE_GEN_DATABASE_MIGRATION_URL }}
+        run: |
+          set -euo pipefail
+          test "$MIGRATION_SUPER_REVOKED" = true
+          echo "::add-mask::$DATABASE_MIGRATION_URL"
+          phase="$(node --input-type=module <<'NODE'
+          import fs from "node:fs";
+          import mysql from "./apps/image-gen/node_modules/mysql2/promise.js";
+          import {
+            canonicalJson,
+            captureMigrationHistory,
+            configureProductionSchemaSession,
+          } from "./apps/image-gen/scripts/production-schema-contract.mjs";
+          const contract = JSON.parse(fs.readFileSync("./apps/image-gen/drizzle/production-schema-contract.json", "utf8"));
+          const connection = await mysql.createConnection(process.env.DATABASE_MIGRATION_URL);
+          try {
+            await configureProductionSchemaSession(connection);
+            const history = await captureMigrationHistory(connection);
+            if (contract.version !== 8 || canonicalJson(history) !== canonicalJson(contract.history0016)) process.exit(1);
+            process.stdout.write("0016_expand");
+          } finally {
+            await connection.end().catch(() => undefined);
+          }
+          NODE
+          )"
+          test "$phase" = "0016_expand"
+          echo "MIGRATION_SUPER_CLEANUP_SCHEMA_PHASE=$phase" >> "$GITHUB_ENV"
+
+      - name: Reprove the complete chain and record metadata-only cleanup evidence
+        timeout-minutes: 3
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          FAILED_RUN_ID: ${{ inputs.failed_run_id }}
+          FAILED_RUN_ATTEMPT: ${{ inputs.failed_run_attempt }}
+        run: |
+          set -euo pipefail
+          test "$MIGRATION_SUPER_REVOKED" = true
+          test "$MIGRATION_SUPER_CLEANUP_SCHEMA_PHASE" = "0016_expand"
+          work="$RUNNER_TEMP/leaderbot-migration-super-cleanup"
+          api="$GITHUB_API_URL/repos/$GITHUB_REPOSITORY"
+          fetch() {
+            curl --fail --show-error --silent --header "Authorization: Bearer $GITHUB_TOKEN" --header "Accept: application/vnd.github+json" --header "X-GitHub-Api-Version: 2022-11-28" "$1" --output "$2"
+          }
+          fetch "$api/actions/runs/$FAILED_RUN_ID/attempts/$FAILED_RUN_ATTEMPT" "$work/predecessor-run.json"
+          fetch "$api/actions/runs/$FAILED_RUN_ID/attempts/$FAILED_RUN_ATTEMPT/jobs?per_page=100" "$work/predecessor-jobs.json"
+          fetch "$api/actions/workflows/image-gen-schema-transition.yml/runs?branch=main&event=workflow_dispatch&per_page=1" "$work/predecessor-latest.json"
+          fetch "$api/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT" "$work/cleanup-run.json"
+          fetch "$api/actions/workflows/cleanup-image-gen-migration-super.yml/runs?branch=main&event=workflow_dispatch&per_page=1" "$work/cleanup-latest.json"
+          WORK="$work" EVIDENCE_PATH="$work/migration-super-cleanup-evidence.json" node --input-type=module <<'NODE'
+          import fs from "node:fs";
+          import {
+            assertFailedMigrationSuperPredecessor,
+            assertRunningMigrationSuperCleanup,
+            createMigrationSuperCleanupEvidence,
+          } from "./scripts/image-gen-migration-super-cleanup-evidence.mjs";
+          const read = name => JSON.parse(fs.readFileSync(`${process.env.WORK}/${name}`, "utf8"));
+          const request = read("request.json");
+          assertFailedMigrationSuperPredecessor({run:read("predecessor-run.json"),jobs:read("predecessor-jobs.json"),latest:read("predecessor-latest.json")},request);
+          const cleanupRun = assertRunningMigrationSuperCleanup({run:read("cleanup-run.json"),latest:read("cleanup-latest.json")},{id:process.env.GITHUB_RUN_ID,attempt:process.env.GITHUB_RUN_ATTEMPT,headSha:process.env.GITHUB_SHA});
+          const evidence = createMigrationSuperCleanupEvidence({
+            request,
+            cleanupRun: {id:cleanupRun.id,attempt:cleanupRun.attempt,headSha:cleanupRun.headSha},
+            databaseMachineId: process.env.MIGRATION_SUPER_CLEANUP_DATABASE_MACHINE_ID,
+            phase: process.env.MIGRATION_SUPER_CLEANUP_SCHEMA_PHASE,
+            result: "temporary_super_absent",
+            completedAt: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"),
+          });
+          fs.writeFileSync(process.env.EVIDENCE_PATH, `${JSON.stringify(evidence)}\n`, {mode:0o600,flag:"wx"});
+          NODE
+
+      - name: Upload immutable migration SUPER cleanup evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: image-gen-migration-super-cleanup-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/leaderbot-migration-super-cleanup/migration-super-cleanup-evidence.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Stop isolated database migration tunnel
+        if: always()
+        run: |
+          set -euo pipefail
+          pid_file="$RUNNER_TEMP/leaderbot-migration-super-cleanup/proxy.pid"
+          if test -f "$pid_file"; then
+            proxy_pid="$(cat "$pid_file")"
+            [[ "$proxy_pid" =~ ^[0-9]+$ ]]
+            kill "$proxy_pid" >/dev/null 2>&1 || true
+            wait "$proxy_pid" >/dev/null 2>&1 || true
+          fi
