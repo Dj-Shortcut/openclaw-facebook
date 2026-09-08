@@ -198,3 +198,72 @@ describe("credit count extraction", () => {
     expect(counts[0]).not.toBe(offer.creditCount);
   });
 });
+
+/**
+ * The free daily allowance is a balance, not a fixed number of images, and the
+ * page must not imply otherwise.
+ *
+ * `server/_core/quotaPolicy.ts` currently defaults to five free images a day
+ * (`DEFAULT_IMAGE_GENERATION_DAILY_LIMIT`, asserted in production), and that
+ * value is configurable per deployment. So the copy must neither promise a
+ * single daily credit — which the English wording used to do — nor pin a
+ * number that a configuration change would silently invalidate. These tests
+ * deliberately do not assert "five": naming any figure here would create a
+ * product promise the frontend cannot keep on its own.
+ */
+const singularDailyClaims: RegExp[] = [
+  /free image credit every day/i,
+  /\bdaily free credit\b/i,
+  /\bfree daily credit\b/i,
+  /\b(a|one) free (image )?credit\b/i,
+  /\bone image (a|per) day\b/i,
+  /\b(1|one|een|één) gratis beeld(credit)? per dag\b/i,
+  /\bun (seul )?cr\u00e9dit gratuit par jour\b/i,
+  /\bune (seule )?image gratuite par jour\b/i,
+];
+
+const dailyWord: Record<string, RegExp> = {
+  "nl-BE": /\bdag\b|\bdagelijks|\bdagtegoed\b/i,
+  "fr-BE": /\bjour\b|quotidien/i,
+  en: /\bday\b|\bdaily\b/i,
+};
+
+describe("landing page free daily allowance copy", () => {
+  for (const locale of SUPPORTED_LOCALES) {
+    describe(locale, () => {
+      const copy = landingCopies[locale];
+      const unavailable = unavailablePremiumCopies[locale];
+
+      // Everything that describes the free allowance. The premium FAQ answer is
+      // excluded on purpose: it legitimately names the bundle price and size.
+      const allowanceCopy = [
+        copy.microLine,
+        unavailable.microLine,
+        copy.pricingBody,
+        copy.free.suffix,
+        ...copy.free.features,
+        copy.credits.note,
+        unavailable.note,
+        copy.closing.body,
+      ].join(" ");
+
+      it("never claims a single free image per day", () => {
+        const haystack = [
+          JSON.stringify(copy),
+          JSON.stringify(unavailable),
+        ].join(" ");
+        for (const pattern of singularDailyClaims) {
+          expect(haystack).not.toMatch(pattern);
+        }
+      });
+
+      it("names no exact free daily quantity", () => {
+        expect(allowanceCopy).not.toMatch(/\d/);
+      });
+
+      it("still says the allowance returns every day", () => {
+        expect(allowanceCopy).toMatch(dailyWord[locale]);
+      });
+    });
+  }
+});

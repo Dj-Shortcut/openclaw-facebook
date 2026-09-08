@@ -453,7 +453,7 @@ export const landingCopies: Record<AppLocale, LandingCopy> = {
     heroPrimaryCta: "Open Leaderbot in Messenger",
     heroSecondaryCta: "See what you can ask",
     microLine:
-      "Free image credit every day • No subscription • Secure payment via Mollie",
+      "Free image credits every day • No subscription • Secure payment via Mollie",
     chat: {
       label: "Example conversation",
       prompt: "Replace the background with a bright, calm office.",
@@ -524,13 +524,13 @@ export const landingCopies: Record<AppLocale, LandingCopy> = {
     pricingEyebrow: "Free & premium",
     pricingTitle: "Start free, every day",
     pricingBody:
-      "You get a free image credit every day. Once it runs out, you can choose to buy once. It is never required.",
+      "You get free image credits every day. Once your daily allowance runs out, you can choose to buy once. It is never required.",
     free: {
       name: "Free",
       price: "€0",
       suffix: "resets daily",
       features: [
-        "Free image credit every day",
+        "Free image credits every day",
         "Create new images and edit your own photos",
         "Resets automatically, nothing to do",
       ],
@@ -546,7 +546,7 @@ export const landingCopies: Record<AppLocale, LandingCopy> = {
         "Credits never expire",
         "No subscription or automatic renewal",
       ],
-      note: "You'll only see the purchase option in Messenger once both your daily free credit and any premium credits are used up.",
+      note: "You'll only see the purchase option in Messenger once both your free daily allowance and any premium credits are used up.",
     },
     trustEyebrow: "Clear and honest",
     trustTitle: "What happens to your payment and your data",
@@ -578,17 +578,17 @@ export const landingCopies: Record<AppLocale, LandingCopy> = {
       {
         question: "Do I need a subscription?",
         answer:
-          "No. Leaderbot works without a subscription. You use a daily free credit, and only buy more if you choose to, through a one-time premium pack.",
+          "No. Leaderbot works without a subscription. You use a free daily allowance, and only buy more if you choose to, through a one-time premium pack.",
       },
       {
         question: "When do I get free images again?",
         answer:
-          "Your daily free credit refreshes automatically every day, up to a monthly maximum. Once you reach that monthly maximum, you'll need to wait until next month for free images to return.",
+          "Your free daily allowance refreshes automatically every day, up to a monthly maximum. Once you reach that monthly maximum, you'll need to wait until next month for free images to return.",
       },
       {
         question: "How do I buy premium credits?",
         answer:
-          "Once both your free daily credit and any premium credits are used up, Leaderbot sends you a personal, secure payment link in Messenger. That link opens a one-time €4.99 Mollie checkout for 8 premium credits.",
+          "Once both your free daily allowance and any premium credits are used up, Leaderbot sends you a personal, secure payment link in Messenger. That link opens a one-time €4.99 Mollie checkout for 8 premium credits.",
       },
       {
         question: "Do my premium credits expire?",
@@ -613,7 +613,7 @@ export const landingCopies: Record<AppLocale, LandingCopy> = {
     ],
     closing: {
       title: "Feel like trying it?",
-      body: "Open the chat and send your first request. Your free daily credit is waiting.",
+      body: "Open the chat and send your first request. Your free daily allowance is waiting.",
       cta: "Open Leaderbot in Messenger",
     },
   },
@@ -660,7 +660,7 @@ export const unavailablePremiumCopies: Record<
     faqAnswer:
       "There is no purchase option visible here right now. Once it is available, Leaderbot sends you a personal, secure payment link in Messenger.",
     microLine:
-      "Free image credit every day • No subscription • No new purchase right now",
+      "Free image credits every day • No subscription • No new purchase right now",
     mollieCardBody:
       "You cannot start a new purchase here right now. A purchase that does go ahead always runs through Mollie's secure payment page.",
     creditsCardBody:
