@@ -175,3 +175,42 @@
     }
   }
 }
+
+/**
+ * Anchor navigation on the public landing page scrolls under a sticky header,
+ * so headings need a scroll offset. Smooth scrolling and every decorative
+ * transition are opt-in: visitors who ask for reduced motion get an instant,
+ * still page instead.
+ */
+html {
+  scroll-padding-top: 6rem;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  html {
+    scroll-behavior: smooth;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/**
+ * The landing page pins a Messenger call to action to the bottom of small
+ * screens. The shared footer sits outside that page, so the reserved strip
+ * lives on `body` and is added only while the landing page is mounted.
+ */
+@media (max-width: 639px) {
+  body.has-mobile-cta {
+    background-color: #f6f2ea;
+    padding-bottom: calc(5rem + env(safe-area-inset-bottom));
+  }
+}
