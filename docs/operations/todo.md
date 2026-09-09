@@ -129,6 +129,18 @@ Live payment enablement remains gated by the relevant P1 through P4 evidence.
         exact bridge rollback and leave payment exposure unchanged.
         Do not enable checkout from schema/build success alone or repeat the
         completed expansion and repair.
+    - Rollout `34350372911/1` on merged PR #511 stopped in `Record rollback
+release`, before any deployment or restart. The app-level Fly config
+      returned no deployment identity, while all four started Machines still
+      proved `deploy-33297361675-1` and the reviewed bridge image; `/readyz`
+      remained 200. Capture rollback from the existing strict settled-live
+      Machine/release evidence, not the shadow app config. Require an unchanged
+      settlement tuple and the exact hash-reviewed restore file before retrying.
+    - Public address check (2026-09-09): `app.leaderbot.live` serves the bot app;
+      Fly lists its certificate as ready. `leaderbot.live` resolves to different
+      A/AAAA addresses and timed out from the operator Mac. Verify/correct that
+      separate public-domain route after this runtime rollout; do not claim the
+      apex serves the new frontend merely because the app subdomain is healthy.
     - Staging run `34345293602/1` stopped at `scheduler_update_trigger` before
       staging a secret or restarting a Machine. Read-only metadata proved the
       three legacy billing triggers still named the active runtime account,

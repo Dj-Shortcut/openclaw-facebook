@@ -7853,19 +7853,33 @@ describe("production deployment contract", () => {
     );
   });
 
-  it("requires the protected deploy to constrain first-bootstrap drift", () => {
-    const root = createRepositoryFixture();
-    replaceFixtureText(
-      root,
-      ".github/workflows/deploy-production.yml",
-      "--allow-first-trusted-bootstrap-drift",
-      "--allow-unreviewed-bootstrap-drift",
-    );
+  it.each([
+    ["--settled-live image-gen --output-json", "--live image-gen"],
+    ["'select(.expectedImage == $image) | .identity'", "'.identity'"],
+    [
+      'test "$(jq -cS . <<<"$settled_state")" = "$(jq -cS . <<<"$confirmed_settled_state")"',
+      "true",
+    ],
+    [
+      "GITHUB_TOKEN: ${{ github.token }}\n        run: |\n          mkdir -p",
+      "# token omitted\n        run: |\n          mkdir -p",
+    ],
+  ])(
+    "requires exact settlement evidence in rollback capture: %s",
+    (before, after) => {
+      const root = createRepositoryFixture();
+      replaceFixtureText(
+        root,
+        ".github/workflows/deploy-production.yml",
+        before,
+        after,
+      );
 
-    expect(() => validateProductionRepository(root)).toThrow(
-      "must narrowly reconcile the exact legacy image-gen predecessor",
-    );
-  });
+      expect(() => validateProductionRepository(root)).toThrow(
+        "must capture and reprove the exact settled image-gen rollback tuple",
+      );
+    },
+  );
 
   it("requires the canonical storage-proxy script to carry an allowlisted digest", () => {
     const root = createRepositoryFixture();
@@ -9934,6 +9948,95 @@ describe("settled production identity", () => {
     sleepImpl: async () => {},
   };
 
+  it.each(["stable", "wrong_image", "changed_watermark"])(
+    "executes rollback capture against %s settlement evidence",
+    (scenario) => {
+      const root = createRepositoryFixture();
+      const manifest = JSON.parse(
+        fs.readFileSync(path.join(root, "deploy/production/apps.json"), "utf8"),
+      );
+      const predecessor = manifest.apps["image-gen"].reviewedSettledPredecessor;
+      const initial = {
+        target: "image-gen",
+        app: "leaderbot-fb-image-gen",
+        identity: predecessor.identity,
+        expectedImage:
+          scenario === "wrong_image" ? "unreviewed-image" : predecessor.image,
+        releaseVersion: 374,
+        releaseWatermark: "a".repeat(64),
+      };
+      const confirmed = {
+        ...initial,
+        releaseWatermark: (scenario === "changed_watermark" ? "b" : "a").repeat(
+          64,
+        ),
+      };
+      const workflow = fs.readFileSync(
+        path.join(root, ".github/workflows/deploy-production.yml"),
+        "utf8",
+      );
+      const start = workflow.indexOf('          settled_state="$(node');
+      const end = workflow.indexOf(
+        "\n      - name: Verify settled image-gen predecessor",
+        start,
+      );
+      expect(start).toBeGreaterThan(-1);
+      expect(end).toBeGreaterThan(start);
+      const releaseDir = path.join(root, "leaderbot-release");
+      fs.mkdirSync(releaseDir);
+      // Stub transports only; execute the exact checked-in shell/jq/copy logic.
+      const script = `
+node() {
+  case "$2" in
+    --settled-live)
+      if test -e "$RUNNER_TEMP/settlement-read"; then
+        printf '%s\\n' "$CONFIRMED_STATE"
+      else
+        touch "$RUNNER_TEMP/settlement-read"
+        printf '%s\\n' "$INITIAL_STATE"
+      fi
+      ;;
+    --reviewed-restore-config)
+      test "$3" = "image-gen"
+      test "$4" = "$EXPECTED_IMAGE"
+      test "$5" = "$EXPECTED_IDENTITY"
+      printf '%s\\n' "$RESTORE_CONFIG"
+      ;;
+    *) return 1 ;;
+  esac
+}
+fly() { test "$1 $2" = "config validate"; }
+rollback_image="$EXPECTED_IMAGE"
+${workflow.slice(start, end)}
+`;
+      const run = () =>
+        execFileSync("bash", ["-euo", "pipefail", "-c", script], {
+          cwd: root,
+          env: {
+            PATH: process.env.PATH,
+            RUNNER_TEMP: root,
+            INITIAL_STATE: JSON.stringify(initial),
+            CONFIRMED_STATE: JSON.stringify(confirmed),
+            EXPECTED_IMAGE: predecessor.image,
+            EXPECTED_IDENTITY: predecessor.identity,
+            RESTORE_CONFIG: predecessor.path,
+          },
+          stdio: "pipe",
+        });
+      if (scenario !== "stable") {
+        expect(run).toThrow();
+        return;
+      }
+      expect(run).not.toThrow();
+      expect(
+        fs.readFileSync(path.join(releaseDir, "rollback-identity.txt"), "utf8"),
+      ).toBe(`${predecessor.identity}\n`);
+      expect(
+        fs.readFileSync(path.join(releaseDir, "before.fly.toml"), "utf8"),
+      ).toBe(fs.readFileSync(path.join(root, predecessor.path), "utf8"));
+    },
+  );
+
   it("accepts the exact reviewed predecessor for a runtime rotation", async () => {
     const root = createRepositoryFixture();
     const manifest = JSON.parse(
@@ -10068,6 +10171,24 @@ describe("settled production identity", () => {
         reconcilableDrift: [],
         releaseWatermark: expect.stringMatching(/^[a-f0-9]{64}$/),
       });
+      // The old workflow used the shadow config's identity and could not
+      // select the retained restore file, despite uniform healthy Machines.
+      expect(() =>
+        getReviewedRestoreConfig(
+          "image-gen",
+          predecessor.image,
+          shadowIdentity ?? "none",
+          root,
+        ),
+      ).toThrow("current image lacks an exact identity-bound restore config");
+      expect(
+        getReviewedRestoreConfig(
+          "image-gen",
+          result.expectedImage,
+          result.identity,
+          root,
+        ),
+      ).toBe(predecessor.path);
     },
   );
 

@@ -2499,10 +2499,6 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
       "must narrowly validate the pre-expand bootstrap rollback exception",
     ],
     [
-      "--allow-first-trusted-bootstrap-drift",
-      "must narrowly reconcile the exact legacy image-gen predecessor",
-    ],
-    [
       "FLY_IMAGE_GEN_REVIEWED_IMAGE: ${{ inputs.rollback_image }}",
       "must pass the reviewed manifest input to the canonical image-gen deploy command",
     ],
@@ -3007,15 +3003,33 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
     ) ?? -1;
   const capturedIdentityIndex =
     imageRollbackCaptureStep?.indexOf(
-      'rollback_identity="$(jq -er \'.env.LEADERBOT_DEPLOYMENT_IDENTITY // "none"\' <<<"$live_config")"',
+      'rollback_identity="$(jq -er --arg image "$rollback_image"',
     ) ?? -1;
   const restoreConfigIndex =
     imageRollbackCaptureStep?.indexOf(
       '--reviewed-restore-config image-gen "$rollback_image" \\\n            "$rollback_identity")',
     ) ?? -1;
   const restoredReleaseIndex =
-    imageRollbackCaptureStep?.indexOf("--verify-restored-release image-gen") ??
-    -1;
+    imageRollbackCaptureStep?.indexOf('confirmed_settled_state="$(node') ?? -1;
+  if (
+    !imageRollbackCaptureStep?.includes("GITHUB_TOKEN: ${{ github.token }}") ||
+    occurrenceCount(
+      imageRollbackCaptureStep,
+      "--settled-live image-gen --output-json",
+    ) !== 2 ||
+    !imageRollbackCaptureStep.includes(
+      "'select(.expectedImage == $image) | .identity' <<<\"$settled_state\"",
+    ) ||
+    !imageRollbackCaptureStep.includes(
+      'test "$(jq -cS . <<<"$settled_state")" = "$(jq -cS . <<<"$confirmed_settled_state")"',
+    ) ||
+    imageRollbackCaptureStep.includes("fly config show") ||
+    imageRollbackCaptureStep.includes(".env.LEADERBOT_DEPLOYMENT_IDENTITY")
+  ) {
+    fail(
+      `${PRODUCTION_WORKFLOW_PATH} must capture and reprove the exact settled image-gen rollback tuple, not the app-level shadow config`,
+    );
+  }
   if (
     rollbackCaptureSteps.length !== 3 ||
     rollbackCaptureSteps.some(
@@ -3043,7 +3057,9 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
         : `--reviewed-rollback-config ${target} "$rollback_image"`;
     const configIndex = workflow.indexOf(configCommand);
     const verifyIndex = workflow.indexOf(
-      `--verify-restored-release ${target} "$rollback_image"`,
+      target === "image-gen"
+        ? 'confirmed_settled_state="$(node'
+        : `--verify-restored-release ${target} "$rollback_image"`,
       configIndex,
     );
     const predecessorIndex = workflow.indexOf(

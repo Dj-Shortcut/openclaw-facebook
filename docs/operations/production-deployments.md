@@ -744,6 +744,13 @@ mutation and gateway quota enforcement stays off.
    reviewed manifest only after the rollback image is proven compatible with
    that phase. These artifacts contain no tenant content or secrets. A live Fly
    config is evidence only and is never trusted as rollback input.
+   Image-gen captures the deployment identity from strict settled-live
+   Machine/release evidence, then selects the exact identity/image-bound
+   checked-in restore config. A second settled-live check must return the same
+   tuple, including the release watermark, after the config is copied. The
+   app-level `fly config show` identity may describe a failed later release or
+   be absent; it must not select the rollback file. Post-rollback verification
+   remains strict and is not replaced by this pre-deployment capture rule.
 7. Complete the relevant live Messenger smoke test. For image generation, check
    both prompt-first generation and a source-photo edit while confirming quota
    enforcement remains active.
