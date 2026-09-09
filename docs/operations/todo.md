@@ -141,6 +141,18 @@ Live payment enablement remains gated by the relevant P1 through P4 evidence.
         one delivered premium edit. A green cleanup PR closes none of these
         downstream gates by itself. Keep live billing disabled and retain the
         existing offer; one edit is the consumption test, not a new bundle.
+        Isolated Fly transport proof completed 2026-09-09 at source `a50a95a`:
+        empty app `leaderbot-repair-proof-20260909`, Machine `e82340db573078`,
+        production MySQL 8.4.11 image digest, no mounted volume or public
+        service, MySQL networking disabled. A 15-minute full-wrapper-prefix
+        token accepted the actual `command` array with `SELECT 1` (HTTP 200,
+        exit 0, exact stdout). Changed shell source was denied by Fly (403);
+        missing/extra SQL arguments exited 64. The test token had explicit
+        revocation readback `2026-09-09T08:17:00Z`; the empty Machine was then
+        stopped. No credential values or identifiers are recorded here.
+        This proves the restricted transport boundary, not the full cleanup
+        handshake, credential replacement, prepare, schema transition or
+        payment journey. No production credential or database was changed.
         Run the separately
         approved cleanup-only proof bound to the original failed run, and retire its
         exact temporary token and unchanged secret before a new transition.
