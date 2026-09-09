@@ -61,7 +61,7 @@ export function assertAuthConfig(): void {
   void getFacebookConnectStorageMode();
 }
 
-export function assertPortalDatabaseConfig(): void {
+export function assertDatabaseConfig(): void {
   if (process.env.NODE_ENV !== "production") {
     return;
   }
@@ -69,7 +69,7 @@ export function assertPortalDatabaseConfig(): void {
   const databaseUrl = process.env.DATABASE_URL?.trim() ?? "";
   if (!databaseUrl) {
     throw new Error(
-      "DATABASE_URL is required for the production customer portal"
+      "DATABASE_URL is required for the production Messenger runtime"
     );
   }
 
@@ -77,11 +77,6 @@ export function assertPortalDatabaseConfig(): void {
   if (parsed.protocol !== "mysql:" && parsed.protocol !== "mysql2:") {
     throw new Error("DATABASE_URL must use a MySQL-compatible URL");
   }
-}
-
-export function assertWhatsAppConfig(): void {
-  getEnv("WHATSAPP_ACCESS_TOKEN");
-  getEnv("WHATSAPP_PHONE_NUMBER_ID");
 }
 
 function parseUrlOrThrow(rawUrl: string, envName: string): URL {

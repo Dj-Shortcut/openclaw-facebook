@@ -1,4 +1,4 @@
-import { getLoginUrl } from "@/const";
+import { getLoginUrl, isLoginConfigured } from "@/const";
 import { PUBLIC_BUSINESS_DETAILS } from "@shared/publicBusinessDetails";
 import {
   ArrowRight,
@@ -17,13 +17,13 @@ import {
   Image as ImageIcon,
   Trash2,
 } from "lucide-react";
-import { lazy, Suspense, useEffect, useRef } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import {
   landingCopies,
   unavailablePremiumCopies,
   type LandingCopy,
 } from "./landingCopy";
-import { SUPPORTED_LOCALES, type AppLocale } from "./portalLocales";
+import { SUPPORTED_LOCALES, type AppLocale } from "./appLocales";
 
 const HeroOrbCanvas = lazy(() => import("@/components/HeroOrbCanvas"));
 
@@ -124,7 +124,7 @@ function AdminLink({
       className={`inline-flex min-h-9 items-center gap-1.5 rounded-full px-2 text-xs font-semibold text-[#14203D]/70 transition hover:text-[#14203D] ${focusRing}`}
       type="button"
       onClick={() => {
-        const loginUrl = getLoginUrl("/portal");
+        const loginUrl = getLoginUrl("/");
         if (loginUrl) window.location.href = loginUrl;
       }}
     >
@@ -207,17 +207,13 @@ function SectionEyebrow({ children }: { children: string }) {
   );
 }
 
-export default function LandingPage({
-  locale,
-  loginConfigured,
-  commercialBillingAvailable,
-  onLocaleChange,
-}: {
-  locale: AppLocale;
-  loginConfigured: boolean;
-  commercialBillingAvailable: boolean;
-  onLocaleChange: (locale: AppLocale) => void;
-}) {
+export default function LandingPage() {
+  const [locale, setLocale] = useState<AppLocale>("nl-BE");
+  const loginConfigured = isLoginConfigured();
+  // The purchase option is offered inside Messenger, not from this page, and
+  // the router that used to report a catalogue here is retired. Saying "no
+  // purchase option is shown" is the only thing this page can prove.
+  const commercialBillingAvailable = false;
   // The fixed mobile call to action sits above the shared footer, so the page
   // itself has to reserve that strip. A body class keeps the reservation in
   // sync with this page only; other routes have no fixed bar.
@@ -319,11 +315,7 @@ export default function LandingPage({
           </nav>
           <div className="flex items-center gap-2 sm:gap-4">
             <AdminLink copy={copy} loginConfigured={loginConfigured} />
-            <LanguagePicker
-              copy={copy}
-              locale={locale}
-              onChange={onLocaleChange}
-            />
+            <LanguagePicker copy={copy} locale={locale} onChange={setLocale} />
             <MessengerCta
               label={copy.headerCta}
               variant="solid"

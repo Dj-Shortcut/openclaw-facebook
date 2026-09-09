@@ -1,4 +1,4 @@
-import type { AppLocale } from "./portalLocales";
+import type { AppLocale } from "./appLocales";
 
 /**
  * All public marketing copy for the landing page, kept out of the component

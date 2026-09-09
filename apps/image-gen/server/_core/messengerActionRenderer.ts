@@ -39,10 +39,7 @@ export function renderMessengerQuickReplies(
     return [];
   }
 
-  const orderedActions = [
-    ...actions.filter(action => action.id === "portal"),
-    ...actions.filter(action => action.id !== "portal"),
-  ];
+  const orderedActions = actions;
 
   return orderedActions.flatMap(action => {
     if (action.url && normalizeSafeActionUrl(action.url)) {
@@ -75,8 +72,6 @@ function isLocalDevelopmentUrl(url: URL): boolean {
 function configuredActionOrigins(): Set<string> {
   const origins = new Set<string>();
   for (const raw of [
-    process.env.PORTAL_BASE_URL,
-    process.env.LEADERBOT_PUBLIC_URL,
     process.env.APP_BASE_URL,
     process.env.BASE_URL,
     ...(process.env.MESSENGER_ACTION_ALLOWED_ORIGINS?.split(",") ?? []),

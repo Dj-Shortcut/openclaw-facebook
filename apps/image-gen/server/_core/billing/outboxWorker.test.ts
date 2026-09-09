@@ -10,19 +10,13 @@ import {
 } from "./mollieClient";
 
 const databaseMock = vi.hoisted(() => vi.fn());
-const handoffMock = vi.hoisted(() => vi.fn());
-const beginHandoffFenceMock = vi.hoisted(() => vi.fn());
-const advanceHandoffFenceMock = vi.hoisted(() => vi.fn());
 const retryCreditAdjustmentMock = vi.hoisted(() => vi.fn());
+const safeLogMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../db", () => ({
   getDatabaseOrThrow: databaseMock,
-  beginBillingHandoffDelivery: beginHandoffFenceMock,
-  advanceBillingHandoffDeliveryFence: advanceHandoffFenceMock,
 }));
-vi.mock("../portalHandoffDelivery", () => ({
-  sendPortalHandoffLink: handoffMock,
-}));
+vi.mock("../logger", () => ({ safeLog: safeLogMock }));
 vi.mock("./creditPaymentWebhook", () => {
   class CreditPaymentAdjustmentPendingError extends Error {}
   return {
@@ -56,14 +50,6 @@ beforeEach(() => {
   process.env.MOLLIE_PAYMENT_WEBHOOK_URL =
     "http://billing.test/api/webhooks/mollie/payments";
   process.env.BILLING_SUPPORT_EMAIL = "billing@leaderbot.test";
-  beginHandoffFenceMock.mockResolvedValue({
-    outboxId: 9,
-    workspaceId: 42,
-    mode: "test",
-    leaseToken: "lease-1",
-    deliveryEpoch: 1,
-  });
-  advanceHandoffFenceMock.mockResolvedValue(true);
   retryCreditAdjustmentMock.mockResolvedValue("duplicate");
 });
 
@@ -355,72 +341,13 @@ describe("billing outbox containment safeguards", () => {
       })
     );
   });
-  it("retries the same handoff operation with its original delivery identity", async () => {
-    handoffMock.mockResolvedValue({
-      ok: true,
-      sent: true,
-      expiresAt: new Date(),
-    });
+  it("contains a queued portal handoff without sending a retired link", async () => {
     const job = {
-      workspaceId: 42,
-      payload: {
-        intentId: "550e8400-e29b-41d4-a716-446655440000",
-        messengerSenderUserKey: "a".repeat(64),
-        messengerPageId: "page-42",
-        messengerChannelConnectionId: 12,
-        messengerPrivacyEpoch: 4,
-      },
-    } as BillingOutboxItem & { leaseToken: string };
-    await sendPaymentHandoff(job);
-    await sendPaymentHandoff(job);
-    expect(handoffMock).toHaveBeenCalledTimes(2);
-    expect(handoffMock).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        workspaceId: 42,
-        messengerSenderUserKey: "a".repeat(64),
-        expectedFacebookPageId: "page-42",
-        expectedChannelConnectionId: 12,
-        expectedPrivacyEpoch: 4,
-        deliveryIdempotencyKey: "550e8400-e29b-41d4-a716-446655440000",
-      })
-    );
-    expect(handoffMock).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        workspaceId: 42,
-        messengerSenderUserKey: "a".repeat(64),
-        expectedFacebookPageId: "page-42",
-        expectedChannelConnectionId: 12,
-        expectedPrivacyEpoch: 4,
-        deliveryIdempotencyKey: "550e8400-e29b-41d4-a716-446655440000",
-      })
-    );
-  });
-
-  it("fails closed for a handoff without an intent id before sending", async () => {
-    const job = {
-      workspaceId: 42,
-      payload: {
-        messengerSenderUserKey: "a".repeat(64),
-        messengerPageId: "page-42",
-        messengerChannelConnectionId: 12,
-        messengerPrivacyEpoch: 4,
-      },
-    } as BillingOutboxItem & { leaseToken: string };
-    await expect(sendPaymentHandoff(job)).rejects.toThrow(
-      "invalid_portal_handoff_target"
-    );
-    expect(handoffMock).not.toHaveBeenCalled();
-  });
-
-  it("fails closed before Messenger transport after handoff identity erasure", async () => {
-    beginHandoffFenceMock.mockRejectedValue(
-      new Error("portal_handoff_identity_unavailable")
-    );
-    const job = {
+      id: 9,
+      deliveryId: "11111111-1111-4111-8111-111111111111",
       workspaceId: 42,
       mode: "test",
+      eventType: "send_portal_handoff",
       payload: {
         intentId: "550e8400-e29b-41d4-a716-446655440000",
         messengerSenderUserKey: "a".repeat(64),
@@ -430,10 +357,22 @@ describe("billing outbox containment safeguards", () => {
       },
     } as BillingOutboxItem & { leaseToken: string };
 
-    await expect(sendPaymentHandoff(job)).rejects.toThrow(
-      "portal_handoff_identity_unavailable"
+    await expect(sendPaymentHandoff(job)).rejects.toMatchObject({
+      name: "PermanentOutboxError",
+      errorCode: "portal_handoff_route_retired",
+    });
+    expect(safeLogMock).toHaveBeenCalledWith(
+      "legacy_portal_handoff_delivery_contained",
+      {
+        level: "error",
+        workspaceId: 42,
+        mode: "test",
+        outboxId: 9,
+        deliveryId: "11111111-1111-4111-8111-111111111111",
+        errorCode: "portal_handoff_route_retired",
+      }
     );
-    expect(handoffMock).not.toHaveBeenCalled();
+    expect(databaseMock).not.toHaveBeenCalled();
   });
   it("preserves a unique provisioning remote when the valid mandate was not stored yet", () => {
     expect(mandateMatchesCurrentSubscription("mdt_valid123", null, true)).toBe(
@@ -986,7 +925,6 @@ describe("billing outbox containment safeguards", () => {
         fetchMock.mockRestore();
       }
 
-      expect(handoffMock).not.toHaveBeenCalled();
       if (expectsAdjustment) {
         expect(retryCreditAdjustmentMock).toHaveBeenCalledExactlyOnceWith(
           adjustment
@@ -998,26 +936,6 @@ describe("billing outbox containment safeguards", () => {
     }
   );
 });
-
-function handoffFenceDatabase(resultSets: unknown[][]) {
-  let index = 0;
-  const tx = {
-    select: vi.fn(() => ({
-      from: vi.fn(() => ({
-        where: vi.fn(() => ({
-          limit: vi.fn(() => ({
-            for: vi.fn(async () => resultSets[index++] ?? []),
-          })),
-        })),
-      })),
-    })),
-  };
-  return {
-    transaction: vi.fn(async (callback: (value: typeof tx) => unknown) =>
-      callback(tx)
-    ),
-  };
-}
 
 function transactionalDatabase(
   rowsByTransaction: BillingSubscription[][],

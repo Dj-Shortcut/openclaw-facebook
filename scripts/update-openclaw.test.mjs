@@ -20,9 +20,6 @@ function makeRepoFixture() {
   tempDirs.push(root);
   fs.mkdirSync(path.join(root, "deploy", "fly-gateway"), { recursive: true });
   fs.mkdirSync(path.join(root, "docs"), { recursive: true });
-  fs.mkdirSync(path.join(root, "apps", "customer-app", "src-tauri"), {
-    recursive: true,
-  });
   fs.writeFileSync(
     path.join(root, "package.json"),
     `${JSON.stringify(
@@ -116,18 +113,6 @@ function makeRepoFixture() {
       "    resolution: {integrity: fixture}",
       "",
     ].join("\n"),
-  );
-  fs.writeFileSync(
-    path.join(root, "apps", "customer-app", "package.json"),
-    '{"version":"1.2.3"}\n',
-  );
-  fs.writeFileSync(
-    path.join(root, "apps", "customer-app", "src-tauri", "tauri.conf.json"),
-    '{"version":"1.2.3"}\n',
-  );
-  fs.writeFileSync(
-    path.join(root, "apps", "customer-app", "src-tauri", "Cargo.toml"),
-    '[package]\nname = "fixture"\nversion = "1.2.3"\n',
   );
   return root;
 }

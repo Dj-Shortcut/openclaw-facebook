@@ -17,15 +17,15 @@ const legalCopy: Record<LegalPageKind, LegalPageCopy> = {
   privacy: {
     title: "Privacy Policy",
     intro:
-      "Leaderbot is a workspace-based AI assistant portal. Customer settings, assistant context, knowledge records, channel data and privacy requests remain scoped to the owning workspace.",
+      "Leaderbot is an owner-operated Messenger image service. Conversation, quota, purchase and privacy state remain scoped to the owning Page and pseudonymous Messenger user.",
     sections: [
       {
         heading: "Data used to provide Leaderbot",
-        body: "Leaderbot may process account and workspace details, assistant instructions, knowledge-source records, Messenger messages and metadata, images submitted for generation or editing, usage data, and export or deletion requests. We process only what is needed to operate, secure and support the service.",
+        body: "Leaderbot may process Messenger messages and metadata, images submitted for generation or editing, usage data, and deletion requests. We process only what is needed to operate, secure and support the service.",
       },
       {
-        heading: "Workspace separation",
-        body: "Customer content is private by default and is not intentionally shared or searchable across customer workspaces. Operational logs should contain redacted identifiers and service metadata rather than raw messages, prompts, uploaded knowledge or access tokens.",
+        heading: "Private service data",
+        body: "Your content is private by default and is not intentionally shared with other users. Operational logs should contain redacted identifiers and service metadata rather than raw messages, prompts, uploaded media or access tokens.",
       },
       {
         heading: "Messenger, Meta and service providers",
@@ -33,7 +33,7 @@ const legalCopy: Record<LegalPageKind, LegalPageCopy> = {
       },
       {
         heading: "Retention and your choices",
-        body: "Retention depends on the feature and legal obligations. Where available, workspace members can request export or deletion through the portal. Messenger users can request deletion by sending ‘delete my data’ or ‘verwijder mijn data’, or by contacting privacy@leaderbot.live.",
+      body: "Retention depends on the feature and legal obligations. Messenger users can request deletion by sending ‘delete my data’ or ‘verwijder mijn data’, or by contacting privacy@leaderbot.live.",
       },
       {
         heading: "Payments",
@@ -60,7 +60,7 @@ const legalCopy: Record<LegalPageKind, LegalPageCopy> = {
       },
       {
         heading: "Messenger connection",
-        body: "You may connect only a Facebook Page that you are authorized to manage. Usage limits, budget limits, abuse protection and temporary safety restrictions may apply and are shown in the portal where relevant.",
+      body: "You may connect only a Facebook Page that you are authorized to manage. Usage limits, budget limits, abuse protection and temporary safety restrictions may apply.",
       },
       {
         heading: "Platform separation",
@@ -80,11 +80,11 @@ const legalCopy: Record<LegalPageKind, LegalPageCopy> = {
   "data-deletion": {
     title: "Data Deletion",
     intro:
-      "Leaderbot supports workspace export and deletion requests and Messenger deletion requests for service-controlled data.",
+      "Leaderbot supports Messenger deletion requests for service-controlled data.",
     sections: [
       {
-        heading: "Portal requests",
-        body: "Signed-in workspace members can create export or deletion requests from the customer portal where those controls are available.",
+        heading: "Data requests",
+        body: "Messenger users can request deletion by sending ‘delete my data’ or ‘verwijder mijn data’, or by contacting privacy@leaderbot.live.",
       },
       {
         heading: "Messenger requests",

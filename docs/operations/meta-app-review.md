@@ -8,14 +8,22 @@ personal OpenClaw Page is separate, pairing-only and outside the Leaderbot
 customer review path. Keep this file aligned with customer Messenger runtime
 behavior before enabling broader public traffic or adding capabilities.
 The personal Page uses a separate Meta app, callback and credential set; do not
-mix it into the customer app review or subscription.
+mix it into the owner-bot review or subscription behavior.
 
 ## Permission posture
 
 - Required Messenger/Page capability: Facebook Page Messenger direct messages.
 - Expected permission family: Page messaging access such as `pages_messaging`.
-- Do not request Facebook Login, `user_posts`, `user_friends`, social graph
-  access, or profile scraping permissions for the current bot.
+- Messenger end users never sign in. There is no Facebook Login step in the
+  Messenger journey, and no login is a condition for using the bot or for a
+  purchase.
+- The separate operator web login exists so the business owner can reach the
+  billing admin procedures. It requests `public_profile` only. It connects no
+  Page, provisions no workspace, and is not a customer, SaaS or checkout
+  requirement. Signing in can still create or refresh that person's own user
+  record; the admin procedures stay gated on the admin role.
+- Do not request `user_posts`, `user_friends`, social graph access, or profile
+  scraping permissions for the current bot.
 - Do not expand Meta permission scope without explicit product and policy
   approval.
 
@@ -36,6 +44,11 @@ mix it into the customer app review or subscription.
 | Delete my data                 | User can send `delete my data` or `verwijder mijn data`; deletion also remains available by email.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Demo cost ledger, generated assets, retained source images, face-memory state, and completion marker deletion in production-equivalent state.                                                                                                                                                                                                                                                                                                                                      | Supports Meta data-deletion expectations; Meta-controlled Messenger history remains managed by Meta.                                                                     |
 
 ## Review demo checklist
+
+Public quick-start actions contain only new image, edit photo and privacy.
+The video beta is not advertised in these shared actions. Natural-language
+video requests still require the enabled feature flag and the exact allowed
+user and Page binding before any provider work.
 
 Before requesting review or changing public access, record:
 

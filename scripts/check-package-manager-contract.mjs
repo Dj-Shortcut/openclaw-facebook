@@ -7,7 +7,6 @@ const ROOT_NPM_RANGE = ">=11.12.1";
 const SUBAPP_PNPM_VERSION = "pnpm@10.28.1";
 const SUBAPPS = [
   "apps/image-gen",
-  "apps/customer-app",
   "apps/image-gen/storage-proxy",
 ];
 
@@ -177,23 +176,6 @@ export function validatePackageManagerContract(repoRoot = process.cwd()) {
     failures,
   );
 
-  const customerWorkflowPath = ".github/workflows/customer-app-ci.yml";
-  const customerWorkflow = path.join(repoRoot, customerWorkflowPath);
-  if (!fs.existsSync(customerWorkflow)) {
-    failures.push(`${customerWorkflowPath}: required file is missing`);
-  } else {
-    const source = fs.readFileSync(customerWorkflow, "utf8");
-    const versions = pnpmSetupVersions(source);
-    if (
-      versions.length !== 2 ||
-      versions.some((version) => version !== "10.28.1")
-    ) {
-      failures.push(
-        `${customerWorkflowPath}: both pnpm setup steps must use version 10.28.1`,
-      );
-    }
-  }
-
   const imageWorkflowPath = ".github/workflows/image-gen-ci.yml";
   const imageWorkflow = path.join(repoRoot, imageWorkflowPath);
   if (!fs.existsSync(imageWorkflow)) {
@@ -291,39 +273,6 @@ export function validatePackageManagerContract(repoRoot = process.cwd()) {
     }
   }
 
-  const legacyGatewayWorkflowPath = ".github/workflows/legacy-gateway-ci.yml";
-  const legacyGatewayWorkflow = path.join(repoRoot, legacyGatewayWorkflowPath);
-  if (!fs.existsSync(legacyGatewayWorkflow)) {
-    failures.push(`${legacyGatewayWorkflowPath}: required file is missing`);
-  } else {
-    const source = fs.readFileSync(legacyGatewayWorkflow, "utf8");
-    const missingSharedInput = [
-      "package.json",
-      "package-lock.json",
-      "scripts/run-vitest.mjs",
-      "vitest.config.mjs",
-      "vitest.node-polyfill.mjs",
-    ].some(
-      (input) =>
-        source.split(`      - "${input}"`).length - 1 !== 2,
-    );
-    if (missingSharedInput) {
-      failures.push(
-        `${legacyGatewayWorkflowPath}: pull requests and main pushes must include every shared root test input`,
-      );
-    }
-  }
-
-  const tauriConfigPath = "apps/customer-app/src-tauri/tauri.conf.json";
-  const tauriConfig = readJson(repoRoot, tauriConfigPath, failures);
-  if (
-    tauriConfig &&
-    (tauriConfig.build?.beforeDevCommand !== "pnpm run dev" ||
-      tauriConfig.build?.beforeBuildCommand !== "pnpm run build")
-  ) {
-    failures.push(`${tauriConfigPath}: Tauri hooks must use pnpm`);
-  }
-
   for (const docsPath of [
     "README.md",
     "docs/monorepo.md",
@@ -395,7 +344,6 @@ export function validatePackageManagerContract(repoRoot = process.cwd()) {
     if (!workflowRunsForAllPullRequestPaths(source)) {
       for (const trigger of [
         "pnpm-lock.yaml",
-        "apps/customer-app/pnpm-lock.yaml",
         "apps/image-gen/pnpm-lock.yaml",
         "apps/image-gen/storage-proxy/pnpm-lock.yaml",
         "apps/image-gen/storage-proxy/pnpm-workspace.yaml",

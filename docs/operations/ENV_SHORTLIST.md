@@ -23,21 +23,7 @@ These variables are the first things to verify when the bot does not reply or Me
 | `ENABLE_FACE_MEMORY`                        | Optional Messenger source-photo reuse                      | Keep `false` until legal approves consent, privacy, and deletion copy.                                                                                                                                                                                                        |
 | `FACE_MEMORY_RETENTION_DAYS`                | Optional face-memory retention window                      | Defaults to `30`; positive whole numbers only. Invalid values fall back to `30`; values above `30` are capped at `30`.                                                                                                                                                        |
 
-## 2. WhatsApp runtime
-
-These variables are required for the public Leaderbot WhatsApp number. See
-`whatsapp-setup.md` for the full verification checklist.
-
-| Variable                       | Required for                                          | Notes                                                                                                              |
-| ------------------------------ | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `WHATSAPP_ACCESS_TOKEN`        | Bootstrap input and sealed WhatsApp tenant credential | Must exactly match the sealed tenant binding; rotate it only through the protected provisioning action.            |
-| `WHATSAPP_PHONE_NUMBER_ID`     | Exact WhatsApp tenant-binding phone identity          | Must be the public number's phone-number ID, not the display number.                                               |
-| `META_VERIFY_TOKEN`            | Shared Meta webhook verification                      | Accepted on Messenger and WhatsApp routes.                                                                         |
-| `WHATSAPP_VERIFY_TOKEN`        | Dedicated WhatsApp webhook verification               | Accepted only on `/webhook/whatsapp`; useful when Meta's WhatsApp setup uses a channel-specific token.             |
-| `WHATSAPP_APP_SECRET`          | Optional dedicated WhatsApp POST signature validation | Set this when WhatsApp is configured under a different Meta app than Messenger; otherwise `FB_APP_SECRET` is used. |
-| `WHATSAPP_BUSINESS_ACCOUNT_ID` | Exact WhatsApp provider-account identity              | Required for provisioning, boot readiness, and WABA + phone tenant binding.                                        |
-
-## 3. OpenAI paths
+## 2. OpenAI paths
 
 These variables control whether the OpenAI-backed parts of the bot actually run.
 
@@ -117,18 +103,7 @@ current-account bucket, uniquely named `leaderbot-images`; it recorded no
 access-key or secret value and does not prove which credential is installed in
 Fly.
 
-## 5. Portal authentication
-
-| Variable                        | Required for                                   | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| ------------------------------- | ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `FACEBOOK_CONNECT_STORAGE_MODE` | Facebook OAuth state rolling-storage protocol  | Defaults to `legacy_compat`. Use `legacy_compat` for the first dual-reader runtime deploy, `sealed_compat` only after every old instance drains, and `sealed_only` only after a further 600-second TTL wait. Invalid values fail startup. Follow [`facebook-connect-storage-rollout.md`](facebook-connect-storage-rollout.md); combining the first dual-reader runtime deploy with sealed writes is unsafe. The schema migration bridge is a separate artifact. |
-| `OAUTH_PORTAL_URL`              | Public Manus WebDev OAuth authorization origin | Optional only when browser authorization and token exchange intentionally share the `OAUTH_SERVER_URL` origin. Returned through `/api/public/config`; HTTPS required except localhost. Never infer it from Meta URLs or include credentials, query secrets, or fragments.                                                                                                                                                                                       |
-| `OAUTH_SERVER_URL`              | Manus WebDev OAuth token exchange origin       | Separate from Meta/Facebook Graph and callback URLs; also used as the public portal fallback when `OAUTH_PORTAL_URL` is deliberately absent.                                                                                                                                                                                                                                                                                                                    |
-| `VITE_APP_ID`                   | Public Manus WebDev OAuth project id           | Read at server runtime and returned through `/api/public/config`; it is not a client secret and is not `FB_APP_ID`.                                                                                                                                                                                                                                                                                                                                             |
-| `VITE_OAUTH_PORTAL_URL`         | Optional browser build fallback                | Used only when `/api/public/config` is unavailable during local development or a build that deliberately embeds public OAuth configuration. Production should use `OAUTH_PORTAL_URL` through the runtime endpoint. HTTPS is required except localhost; never include credentials, query secrets, or fragments.                                                                                                                                                  |
-| `PORTAL_BASE_URL`               | Public Leaderbot portal origin                 | Controls generated `/handoff/:token` links and takes precedence over `APP_BASE_URL`. Use the correct public HTTPS origin in production.                                                                                                                                                                                                                                                                                                                         |
-
-## 6. Mollie billing (live remains disabled)
+## 5. Mollie billing (live remains disabled)
 
 | Variable                                 | Required for                          | Notes                                                                                                                                                                                                                                                                                    |
 | ---------------------------------------- | ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -145,8 +120,8 @@ Fly.
 | `BILLING_SUPPORT_EMAIL`                  | Customer billing support              | Public support address, not a secret.                                                                                                                                                                                                                                                    |
 | `MOLLIE_LIVE_BILLING_ENABLED`            | Independent live kill switch          | Defaults off; may be `true` only with `MOLLIE_MODE=live` after GO.                                                                                                                                                                                                                       |
 | `MOLLIE_RECONCILIATION_ENABLED`          | Daily state reconciliation            | Defaults enabled; disabling requires an incident/change record.                                                                                                                                                                                                                          |
-| `MOLLIE_BILLING_SCHEDULER_MODE`          | Tenant scheduler rollout              | Must be explicit: `pilot_pin` for one approved workspace or `multi_tenant` for the reviewed broader rollout. Readiness verifies control/lane epochs, heartbeats and dead letters.                                                                                                        |
-| `MOLLIE_BILLING_WORKER_WORKSPACE_ID`     | Isolated pilot workspace              | Required and positive only with `pilot_pin`; must be unset with `multi_tenant`.                                                                                                                                                                                                          |
+| `MOLLIE_BILLING_SCHEDULER_MODE`          | Retained billing-drain lane           | Must be explicit: `pilot_pin` for the internal owner boundary; `multi_tenant` is legacy compatibility only. Readiness verifies control/lane epochs, heartbeats and dead letters.                                                                                                        |
+| `MOLLIE_BILLING_WORKER_WORKSPACE_ID`     | Internal owner boundary               | Required and positive only with `pilot_pin`; must be unset with legacy `multi_tenant` compatibility mode.                                                                                                                                                                                |
 | `MOLLIE_WEBHOOK_RATE_LIMIT_PER_MINUTE`   | Dedicated classic-webhook protection  | Defaults to 6000 per source IP/minute so the shared app limiter cannot suppress Mollie delivery.                                                                                                                                                                                         |
 
 The direct premium-credit Test Mode flags have an additional single-tester
@@ -169,7 +144,7 @@ provider request starts; it is not an invoice or accounting amount. The initial
 Test Mode value is `1.00`. Re-review it whenever the image model, quality, size
 or source-image policy changes.
 
-## 7. Fast triage
+## 6. Fast triage
 
 When the bot seems broken, check in this order:
 
@@ -189,15 +164,7 @@ If face memory is involved, also check:
 3. `ADMIN_TOKEN`
 4. Storage proxy delete support: `DELETE /v1/storage/object`
 
-If WhatsApp is involved, also check:
-
-1. `WHATSAPP_ACCESS_TOKEN`
-2. `WHATSAPP_PHONE_NUMBER_ID`
-3. `WHATSAPP_BUSINESS_ACCOUNT_ID`
-4. `META_VERIFY_TOKEN` or `WHATSAPP_VERIFY_TOKEN`
-5. Meta callback URL: `https://leaderbot-fb-image-gen.fly.dev/webhook/whatsapp`
-
-## 8. Current local-dev gotchas
+## 7. Current local-dev gotchas
 
 Based on the current local `.env` in this repo:
 
@@ -206,7 +173,7 @@ Based on the current local `.env` in this repo:
 - `BUILT_IN_FORGE_API_URL` and `BUILT_IN_FORGE_API_KEY` are blank, so storage proxy features are unavailable.
 - `ENABLE_FACE_MEMORY=false`, so photo uploads skip the explicit face-memory consent prompt and ask for a natural-language edit prompt.
 
-## 9. What to ignore at first
+## 8. What to ignore at first
 
 Do not start debugging with these unless you are working on those specific subsystems:
 

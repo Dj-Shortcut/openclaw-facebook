@@ -15,7 +15,7 @@ import {
   messengerPrivacySubjects,
   messengerProviderAttemptFences,
 } from "../drizzle/schema";
-import { sealFacebookPageToken } from "./_core/facebookConnectStore";
+import { sealFacebookPageToken } from "./_core/facebookPageToken";
 import {
   runWithMessengerErasureControlDelivery,
   runWithMessengerRequestContext,

@@ -5,21 +5,16 @@ import type { Express, Request, Response } from "express";
 import { z } from "zod";
 import * as db from "../db";
 import { getSessionCookieOptions } from "./cookies";
-import {
-  getFacebookPagesForUserAccessToken,
-  startFacebookConnect,
-  storeFacebookPages,
-} from "./facebookConnectStore";
-import { connectAuthorizedFacebookPage } from "./facebookPageConnection";
 import { safeLog } from "./logger";
 import { isFacebookLoginMethod } from "./portalAuthPolicy";
 
 const OAUTH_STATE_COOKIE_NAME = "lb_oauth_state_nonce";
 const FACEBOOK_OAUTH_TIMEOUT_MS = 10_000;
-const FACEBOOK_LOGIN_PERMISSIONS = [
-  "public_profile",
-  "pages_show_list",
-] as const;
+// The operator web login only proves who is signing in. Page discovery was
+// removed from the callback, so no consumer of `pages_show_list` remains and
+// asking for it would request access the runtime never uses. The separate
+// Messenger Page token permissions are unaffected.
+const FACEBOOK_LOGIN_PERMISSIONS = ["public_profile"] as const;
 
 type OAuthStatePayload = {
   nonce: string;
@@ -43,20 +38,6 @@ function getSafeReturnTo(returnTo: string | undefined): string {
   if (!returnTo.startsWith("/") || returnTo.startsWith("//")) return "/";
   if (returnTo.includes("\\")) return "/";
   return returnTo;
-}
-
-function addFacebookConnectState(returnTo: string | undefined, state: string) {
-  const target = new URL(
-    getSafeReturnTo(returnTo),
-    "https://leaderbot.invalid"
-  );
-  target.searchParams.set("facebookConnectState", state);
-  return `${target.pathname}${target.search}${target.hash}`;
-}
-
-function isHandoffReturn(returnTo: string | undefined): boolean {
-  const safeReturnTo = getSafeReturnTo(returnTo);
-  return safeReturnTo === "/handoff" || safeReturnTo.startsWith("/handoff/");
 }
 
 function getQueryParam(req: Request, key: string): string | undefined {
@@ -392,95 +373,15 @@ export function registerOAuthRoutes(app: Express) {
           loginMethod: "facebook",
           lastSignedIn: new Date(),
         });
-        const portalUser = await db.getUserByOpenId(userInfo.openId);
-        if (!portalUser) {
-          throw new Error("portal customer was not persisted");
+        const signedInUser = await db.getUserByOpenId(userInfo.openId);
+        if (!signedInUser) {
+          throw new Error("operator account was not persisted");
         }
-        let redirectTarget = getSafeReturnTo(validatedState.returnTo);
-        let workspace: Awaited<
-          ReturnType<typeof db.getOrCreateUserWorkspace>
-        > | null = null;
-        if (!isHandoffReturn(validatedState.returnTo)) {
-          workspace = await db.getOrCreateUserWorkspace(portalUser);
-        }
-
-        if (facebookLogin && workspace) {
-          try {
-            const existingChannels = await db.listChannelConnections(
-              workspace.id
-            );
-            const alreadyConnected = existingChannels.some(
-              connection =>
-                connection.channel === "facebook_messenger" &&
-                connection.status === "connected" &&
-                Boolean(connection.externalId)
-            );
-            if (!alreadyConnected) {
-              const pages = await getFacebookPagesForUserAccessToken(
-                facebookLogin.accessToken
-              );
-              if (pages.length === 1) {
-                try {
-                  await connectAuthorizedFacebookPage({
-                    workspaceId: workspace.id,
-                    userId: portalUser.id,
-                    page: pages[0],
-                    source: "facebook_login",
-                  });
-                } catch (error) {
-                  const connectState = await startFacebookConnect({
-                    workspaceId: workspace.id,
-                    userId: portalUser.id,
-                  });
-                  await storeFacebookPages({
-                    state: connectState.state,
-                    pages,
-                  });
-                  redirectTarget = addFacebookConnectState(
-                    redirectTarget,
-                    connectState.state
-                  );
-                  safeLog("facebook_login_page_auto_connect_failed", {
-                    level: "warn",
-                    error:
-                      error instanceof Error ? error.message : String(error),
-                  });
-                }
-              } else if (pages.length > 1) {
-                const connectState = await startFacebookConnect({
-                  workspaceId: workspace.id,
-                  userId: portalUser.id,
-                });
-                await storeFacebookPages({
-                  state: connectState.state,
-                  pages,
-                });
-                redirectTarget = addFacebookConnectState(
-                  redirectTarget,
-                  connectState.state
-                );
-                await db.insertAuditLog({
-                  workspaceId: workspace.id,
-                  userId: portalUser.id,
-                  event: "facebook_login.page_selection_required",
-                  metadata: { pageCount: pages.length },
-                });
-              } else {
-                await db.insertAuditLog({
-                  workspaceId: workspace.id,
-                  userId: portalUser.id,
-                  event: "facebook_login.no_managed_pages",
-                  metadata: {},
-                });
-              }
-            }
-          } catch (error) {
-            safeLog("facebook_login_page_discovery_failed", {
-              level: "warn",
-              error: error instanceof Error ? error.message : String(error),
-            });
-          }
-        }
+        // Signing in establishes the operator identity and a session, nothing
+        // more. Creating a workspace or discovering and connecting the user's
+        // Facebook Pages here would re-enable customer provisioning through
+        // the login route; the owner Page is bound out of band instead.
+        const redirectTarget = getSafeReturnTo(validatedState.returnTo);
 
         const sessionToken = await sdk.createSessionToken(userInfo.openId, {
           name: userInfo.name || "",

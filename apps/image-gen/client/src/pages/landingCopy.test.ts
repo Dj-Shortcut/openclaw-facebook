@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { landingCopies, unavailablePremiumCopies } from "./landingCopy";
 import { parseCreditCheckoutOffer } from "./creditCheckoutOffer";
-import { SUPPORTED_LOCALES } from "./portalLocales";
+import { SUPPORTED_LOCALES } from "./appLocales";
 
 /**
  * The landing page is the only place where the premium bundle is described to

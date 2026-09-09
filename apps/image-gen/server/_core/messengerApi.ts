@@ -3,7 +3,7 @@ import { hasOpenMessengerResponseWindow } from "./messengerState";
 import { summarizeSensitiveUrl } from "./utils/urlSummarizer";
 import { safeLog } from "./logger";
 import { getConnectedFacebookPageConnection } from "../db";
-import { unsealFacebookPageToken } from "./facebookConnectStore";
+import { unsealFacebookPageToken } from "./facebookPageToken";
 import {
   getMessengerRequestOwnership,
   getMessengerRequestOperationId,

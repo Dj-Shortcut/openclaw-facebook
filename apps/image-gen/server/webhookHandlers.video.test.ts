@@ -51,13 +51,6 @@ vi.mock("./_core/messengerPrivacySubject", () => ({
   assertMessengerPrivacySubject: assertPrivacySubjectMock,
   MessengerPrivacyFenceError: class MessengerPrivacyFenceError extends Error {},
 }));
-vi.mock("./_core/webhookInternalImageRequest", () => ({
-  createInternalMessengerImageRequestHandler: vi.fn(() => ({
-    acceptInternalMessengerImageRequest: vi.fn(),
-    processInternalMessengerImageRequest: vi.fn(),
-  })),
-}));
-
 import { createWebhookHandlers } from "./_core/webhookHandlers";
 import { t } from "./_core/i18n";
 import {

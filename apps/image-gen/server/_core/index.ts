@@ -8,15 +8,14 @@ import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import path from "path";
 import { createServer } from "http";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
-import { assertAuthConfig, registerOAuthRoutes } from "./auth";
-import { isDirectFacebookLoginConfigured } from "./oauth";
-import { assertWhatsAppConfig } from "./env";
-import { assertWhatsAppTenantBindingReadiness } from "./whatsappBindingReadiness";
 import { captureBotWebhookRawBody, getBotStartupConfig } from "./bot";
 import { assertProductionImageStorageConfig } from "./image-generation/imageServiceConfig";
 import { assertProductionMessengerVideoConfig } from "./video-generation/videoConfig";
 import { appRouter } from "../routers";
+import { assertAuthConfig, registerOAuthRoutes } from "./auth";
 import { createContext } from "./context";
+import { isDirectFacebookLoginConfigured } from "./oauth";
+import { registerPublicConfigRoute } from "./runtime/publicConfig";
 import { serveStatic } from "./vite";
 import { assertPrivacyConfig } from "./privacy";
 import { assertConversationIdentityConfig } from "./conversationIdentityConfig";
@@ -53,7 +52,6 @@ import {
   registerFaceMemoryAdminRoutes,
   scheduleFaceMemoryExpiry,
 } from "./faceMemory";
-import { registerPortalRoutes } from "./portalRoutes";
 import {
   assertMessengerGenerationQueueConfig,
   ensureMessengerGenerationQueueReady,
@@ -93,7 +91,6 @@ import {
 } from "./runtime/debugRoutes";
 import { registerHealthRoutes } from "./runtime/healthRoutes";
 import { registerLegalRoutes } from "./runtime/legalRoutes";
-import { registerPublicConfigRoute } from "./runtime/publicConfig";
 import { registerWebhookRuntime } from "./runtime/webhookRuntime";
 import { registerMollieWebhookRoute } from "./billing/webhookRoutes";
 import { registerCreditCheckoutRoutes } from "./billing/creditCheckoutRoutes";
@@ -103,15 +100,18 @@ import {
   withCreditCheckoutHmacKeyring,
 } from "./billing/creditCheckoutConfig";
 import { startCreditReservationExpiryWorker } from "./billing/creditReservationExpiryWorker";
+import { startCreditPaymentReconciliationWorker } from "./billing/creditPaymentReconciliationWorker";
 import { assertCreditCheckoutDatabaseReadiness } from "./billing/creditCheckoutReadiness";
-import { registerBillingPortalRoutes } from "./billing/portalRoutes";
 import { startBillingOutboxWorker } from "./billing/outboxWorker";
-import { startDailyBillingReconciliation } from "./billing/reconciliation";
 import { startAiAnswerFinalizationWorker } from "./billing/aiAnswerFinalizationWorker";
 import { startBillingProfileExpiryWorker } from "./billing/billingProfileExpiryWorker";
 import { startBillingNotificationReceiverWorker } from "./billing/billingNotificationReceiverWorker";
-import { assertMollieBillingDrainLifecycle } from "./billing/billingDrainLifecycle";
+import {
+  assertMollieBillingDrainLifecycle,
+  assertOwnerMessengerBillingRuntimeCompatible,
+} from "./billing/billingDrainLifecycle";
 import { getMollieRuntimePolicy } from "./billing/billingRuntimePolicy";
+import { assertFacebookPageTokenConfig } from "./facebookPageToken";
 import {
   getMollieAccountingImportConfig,
   isMollieAccountingImportEnabled,
@@ -219,12 +219,8 @@ async function startServer() {
   safeLog("generator_startup_config", generatorStartupConfig);
   assertProductionImageStorageConfig();
   assertProductionMessengerVideoConfig();
+  assertFacebookPageTokenConfig();
   assertAuthConfig();
-  assertWhatsAppConfig();
-  // Keep /healthz as liveness, but refuse to expose webhook drains or workers
-  // until the legacy env credential has been sealed into one exact tenant
-  // binding. The one-off provisioning artifact must run before this runtime.
-  await assertWhatsAppTenantBindingReadiness();
   const mollieBillingEnabled = isMollieBillingEnabled();
   const mollieBillingDrainEnabled = isMollieBillingDrainEnabled();
   const mollieBillingPreflightEnabled = isMollieBillingPreflightEnabled();
@@ -254,6 +250,7 @@ async function startServer() {
   });
   if (!generationWorkerOnly) {
     await assertMollieBillingDrainLifecycle();
+    await assertOwnerMessengerBillingRuntimeCompatible();
   }
   if (notificationPlaneEnabled && !generationWorkerOnly) {
     assertBillingNotificationConfig();
@@ -386,14 +383,10 @@ async function startServer() {
   registerVersionRoute(app, () => buildVersionPayload(gitSha, bootTimestamp));
   registerMetricsRoute(app);
   registerFaceMemoryAdminRoutes(app);
-  registerPortalRoutes(app);
-  if (mollieRuntimePolicy.registerBillingHistory) {
-    registerBillingPortalRoutes(app);
-  }
+  registerPublicConfigRoute(app);
 
   registerDebugRoutes(app, gitSha);
 
-  registerPublicConfigRoute(app);
   registerLegalRoutes(app);
 
   scheduleFaceMemoryExpiry();
@@ -413,11 +406,11 @@ async function startServer() {
   if (mollieRuntimePolicy.startSafetyOutbox) {
     startBillingOutboxWorker();
   }
+  if (mollieRuntimePolicy.startReconciliation) {
+    startCreditPaymentReconciliationWorker();
+  }
   if (mollieBillingDrainEnabled) {
     startCreditReservationExpiryWorker();
-  }
-  if (mollieRuntimePolicy.startReconciliation) {
-    startDailyBillingReconciliation();
   }
 
   const oauthServerUrl = process.env.OAUTH_SERVER_URL;
@@ -426,6 +419,7 @@ async function startServer() {
   } else {
     safeLog("oauth_routes_skipped", { reason: "missing_oauth_server_url" });
   }
+
   app.use(
     "/api/trpc",
     createExpressMiddleware({

@@ -3246,9 +3246,9 @@ describe("messenger generation job safety", () => {
 
   it("uses the out-of-free-credits translation when quota is exhausted", async () => {
     const originalLimit = process.env.MESSENGER_FREE_DAILY_LIMIT;
-    const originalPortalBaseUrl = process.env.PORTAL_BASE_URL;
+    const originalAppBaseUrl = process.env.APP_BASE_URL;
     process.env.MESSENGER_FREE_DAILY_LIMIT = "0";
-    process.env.PORTAL_BASE_URL = "https://leaderbot.live";
+    process.env.APP_BASE_URL = "https://app.leaderbot.live";
     const { runner } = createContextBackedRunner();
 
     try {
@@ -3264,10 +3264,10 @@ describe("messenger generation job safety", () => {
       } else {
         process.env.MESSENGER_FREE_DAILY_LIMIT = originalLimit;
       }
-      if (originalPortalBaseUrl === undefined) {
-        delete process.env.PORTAL_BASE_URL;
+      if (originalAppBaseUrl === undefined) {
+        delete process.env.APP_BASE_URL;
       } else {
-        process.env.PORTAL_BASE_URL = originalPortalBaseUrl;
+        process.env.APP_BASE_URL = originalAppBaseUrl;
       }
     }
 

@@ -170,15 +170,6 @@ expectMatch(
   pluginVersion,
 );
 
-const customerApp = readJson("apps/customer-app/package.json");
-const tauriConfig = readJson("apps/customer-app/src-tauri/tauri.conf.json");
-expectEqual("customer app Tauri version", tauriConfig.version, customerApp.version);
-expectEqual(
-  "customer app Cargo package version",
-  readCargoPackageVersion("apps/customer-app/src-tauri/Cargo.toml"),
-  customerApp.version,
-);
-
 console.log(
   JSON.stringify(
     {
@@ -191,7 +182,6 @@ console.log(
         "Fly gateway Dockerfile",
         "manifest test expectations",
         "ClawHub listing copy",
-        "customer app package/Tauri/Cargo versions",
       ],
     },
     null,

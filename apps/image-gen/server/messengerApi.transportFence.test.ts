@@ -12,7 +12,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("./db", () => ({
   getConnectedFacebookPageConnection: mocks.getConnection,
 }));
-vi.mock("./_core/facebookConnectStore", () => ({
+vi.mock("./_core/facebookPageToken", () => ({
   unsealFacebookPageToken: vi.fn(() => "tenant-secret-token"),
 }));
 vi.mock("./_core/messengerPrivacySubject", () => ({

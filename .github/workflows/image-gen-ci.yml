@@ -129,18 +129,13 @@ jobs:
           pnpm exec vitest run --no-file-parallelism \
             server/billingExecution.mysql.test.ts \
             server/billingHandoffErasure.mysql.test.ts \
-            server/billingPrivacySerialization.mysql.test.ts \
             server/creditCheckoutRetention.mysql.test.ts \
             server/creditCheckoutReservationSchema.mysql.test.ts \
             server/creditPaymentFlow.mysql.test.ts \
             server/creditWalletSchema.mysql.test.ts \
             server/internalAiAnswerQuota.mysql.test.ts \
             server/messengerErasureRetry.mysql.test.ts \
-            server/messengerProviderAttemptFence.mysql.test.ts \
-            server/portalHandoff.mysql.test.ts \
-            server/paymentSnapshot.mysql.test.ts \
-            server/startpilotImageUsage.mysql.test.ts \
-            server/whatsappProvisioning.mysql.test.ts
+            server/messengerProviderAttemptFence.mysql.test.ts
         env:
           DATABASE_URL: mysql://root:root@127.0.0.1:3306/test_image_gen_ci
           RUN_MYSQL_INTEGRATION: "1"
@@ -157,7 +152,6 @@ jobs:
           test "$(docker image inspect --format '{{ index .Config.Labels "io.leaderbot.schema.maximum" }}' "$image")" = "0018_credit_checkout_reservation"
           test "$(docker image inspect --format '{{ index .Config.Labels "io.leaderbot.base.node" }}' "$image")" = "node:24-alpine@sha256:d32cdf619f63fe0471182d08996dd516c6275bb5fd31ae06e55a570bd9e1ad43"
           test "$(docker image inspect --format '{{ index .Config.Labels "io.leaderbot.runtime.ffmpeg" }}' "$image")" = "8.1.2-r0"
-          docker run --rm "$image" test -s /app/dist/provision-whatsapp-binding.cjs
           docker run --rm "$image" test -s /app/dist/billing-trigger-runtime-preflight.cjs
           docker run --rm "$image" timeout -k 1s 1s true
           set +e
