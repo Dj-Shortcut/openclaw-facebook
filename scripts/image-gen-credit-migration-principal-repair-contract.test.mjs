@@ -29,12 +29,49 @@ import {
 import {
   buildRootFlyctlEnvironment,
   classifyCreditMigrationHistory,
-  executeRepair,
+  executeRepair as executeRepairWithExec,
   executeSuperCleanup as executeSuperCleanupWithExec,
   parseCliArguments,
   readExactCreditMigrationPhase,
   runCli,
 } from "./repair-image-gen-credit-migration-principal.mjs";
+
+// Preserve the pure grant/history fixtures through an injected contract
+// runner. The production default uses the separately tested single-Exec
+// controller; no SSH compatibility path is retained in production.
+function executeRepair(input, options) {
+  if (!options?.openRoot) return executeRepairWithExec(input, options);
+  return executeRepairWithExec(input, {
+    ...options,
+    runPrepare: async ({ onStage, signal, ...contract }) => {
+      const roots = [];
+      const createRoot = async () => {
+        onStage("root_connect");
+        const root = await options.openRoot({ signal });
+        roots.push(root);
+        onStage("root_initialize");
+        await root.initialize(signal);
+        return root;
+      };
+      try {
+        return await repairCreditMigrationPrincipal({
+          ...contract,
+          root: await createRoot(),
+          recoverRoot: async (failedRoot) => {
+            await failedRoot.close({ releaseLock: false, signal });
+            return createRoot();
+          },
+        });
+      } finally {
+        for (const root of roots.reverse()) {
+          await root
+            .close({ releaseLock: false, signal })
+            .catch(() => undefined);
+        }
+      }
+    },
+  });
+}
 
 // Keep the pre-existing pure grant/history/failure-stage fixtures independent
 // of transport. The production default is exercised by the dedicated Exec
@@ -507,6 +544,101 @@ function postDdlPrepareHarness(phase, rootOptions = {}) {
 }
 
 describe("credit migration principal repair contract", () => {
+  it("routes production prepare through the verified live controller inputs", async () => {
+    const connection = { end: vi.fn(async () => undefined) };
+    const signal = new AbortController().signal;
+    const state = migrationState(PREGRANT_GRANTS);
+    const readPhase = vi.fn(async () => "0016_expand");
+    const readState = vi.fn(async () => state);
+    const onStage = vi.fn();
+    const runPrepare = vi.fn(async (input) => {
+      expect(input).toEqual(
+        expect.objectContaining({
+          app: "leaderbot-portal-mysql",
+          machineId: "080d3ddb5099e8",
+          connection,
+          account: ACCOUNT,
+          databaseName: DATABASE,
+          requireSuper: false,
+          superOnly: false,
+          allowIncompleteDefinerTablePrivileges: true,
+          signal,
+          onStage,
+        }),
+      );
+      await expect(input.readState()).resolves.toEqual(state);
+      readPhase.mockResolvedValueOnce("0018_credit_checkout_reservation");
+      await expect(input.readState()).rejects.toThrow();
+      return "repaired";
+    });
+    await expect(
+      executeRepairWithExec(
+        { app: "leaderbot-portal-mysql", machineId: "080d3ddb5099e8" },
+        {
+          migrationUrl:
+            "mysql://credit_migrator:synthetic@127.0.0.1:13306/leaderbot",
+          mysql: { createConnection: vi.fn(async () => connection) },
+          runPrepare,
+          readPhase,
+          readState,
+          onStage,
+          signal,
+        },
+      ),
+    ).resolves.toBe("repaired");
+    expect(runPrepare).toHaveBeenCalledOnce();
+    expect(connection.end).toHaveBeenCalledOnce();
+  });
+
+  it.each(["root_exec_request", "root_lock", "root_exec_response"])(
+    "keeps the prepare %s failure redacted and cleanup-incomplete",
+    async (stage) => {
+      const stdout = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+      const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+      const connection = { end: vi.fn(async () => undefined) };
+      try {
+        const marker = await runCli(
+          [
+            "--database-app",
+            "leaderbot-portal-mysql",
+            "--database-machine-id",
+            "080d3ddb5099e8",
+            "--operation",
+            "prepare",
+          ],
+          {
+            execute: (input, options) =>
+              executeRepairWithExec(input, {
+                ...options,
+                migrationUrl:
+                  "mysql://credit_migrator:synthetic@127.0.0.1:13306/leaderbot",
+                mysql: { createConnection: vi.fn(async () => connection) },
+                readPhase: async () => "0016_expand",
+                readState: async () => migrationState(PREGRANT_GRANTS),
+                runPrepare: async ({ onStage }) => {
+                  onStage(stage);
+                  throw new CreditMigrationPrincipalCleanupError();
+                },
+              }),
+          },
+        );
+        expect(marker).toBe(CREDIT_MIGRATION_PRINCIPAL_CLEANUP_FAILURE_MARKER);
+        expect(stdout).toHaveBeenCalledExactlyOnceWith(`${marker}\n`);
+        expect(stderr).toHaveBeenCalledExactlyOnceWith(
+          `${JSON.stringify({
+            event: "credit_migration_principal_operation_failed",
+            operation: "prepare",
+            stage,
+          })}\n`,
+        );
+        expect(connection.end).toHaveBeenCalledOnce();
+      } finally {
+        stdout.mockRestore();
+        stderr.mockRestore();
+      }
+    },
+  );
+
   it("forwards the existing HOME and token to Fly without ambient secrets", () => {
     const environment = buildRootFlyctlEnvironment({
       PATH: "/opt/fly/bin:/usr/bin",

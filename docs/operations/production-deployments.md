@@ -138,11 +138,10 @@ these environment secrets:
   restore-probe, reviewer-approved orphan cleanup, and the isolated database
   tunnel for `leaderbot-portal-mysql`; it has no SSH or Machine-exec authority;
 - `FLY_DATABASE_REPAIR_EXEC_TOKEN`: a short-lived Machine-exec token limited to
-  `leaderbot-portal-mysql` and the exact reviewed root-MySQL command used by the
-  fixed-output migration-principal repair. It exists only for the reviewed
-  schema transition and is revoked after the transition. The repair child
-  receives only this token and basic process-runtime variables; the database
-  URL is not passed to `flyctl`;
+  `leaderbot-portal-mysql` and the two complete reviewed root-MySQL wrappers
+  for prepare and revoke-super. It exists only for the reviewed schema
+  transition and is revoked after the transition. SQL is one positional
+  argument, never shell source. The database URL is not passed to `flyctl`;
 - `FLY_DATABASE_CLEANUP_EXEC_TOKEN`: optional, separate four-hour exact-command
   token for the protected pre-DDL failure-cleanup workflow below. Never replace
   the failed run's repair secret with this credential;
@@ -183,23 +182,26 @@ gh run view "$run_id" --repo Dj-Shortcut/openclaw-facebook \
   --json databaseId,attempt,event,headBranch,status,workflowName,url
 test "$(gh secret list --repo Dj-Shortcut/openclaw-facebook --env production \
   --json name --jq '[.[] | select(.name == "FLY_DATABASE_REPAIR_EXEC_TOKEN")] | length')" = 0
-root_mysql_command_csv="$(node --input-type=module -e \
-  'import {ROOT_MYSQL_REMOTE_COMMAND_FLYCTL_CSV} from "./scripts/provision-image-gen-credit-provisioner.mjs"; process.stdout.write(ROOT_MYSQL_REMOTE_COMMAND_FLYCTL_CSV)')"
+prepare_command_csv="$(node --input-type=module -e \
+  'import {PREPARE_ROOT_EXEC_COMMAND_FLYCTL_CSV} from "./scripts/provision-image-gen-credit-provisioner-exec.mjs"; process.stdout.write(PREPARE_ROOT_EXEC_COMMAND_FLYCTL_CSV)')"
+cleanup_command_csv="$(node --input-type=module -e \
+  'import {SUPER_CLEANUP_EXEC_COMMAND_FLYCTL_CSV} from "./scripts/image-gen-super-cleanup-exec.mjs"; process.stdout.write(SUPER_CLEANUP_EXEC_COMMAND_FLYCTL_CSV)')"
 flyctl tokens list --app leaderbot-portal-mysql --scope app | \
   REPAIR_RUN_ID="$run_id" node --input-type=module -e \
   'import {parseFlyTokenInventory} from "./scripts/retire-image-gen-repair-exec-token.mjs"; let s=""; for await (const c of process.stdin) s+=c; if (parseFlyTokenInventory(s).some(t=>t.name===`leaderbot-pr486-repair-${process.env.REPAIR_RUN_ID}`)) process.exit(1)'
 repair_token_json="$(flyctl tokens create machine-exec \
   --app leaderbot-portal-mysql --name "leaderbot-pr486-repair-$run_id" \
-  --expiry 4h --command "$root_mysql_command_csv" --json)"
+  --expiry 4h --command-prefix "$prepare_command_csv" --command-prefix "$cleanup_command_csv" --json)"
 repair_token="$(printf '%s' "$repair_token_json" | node --input-type=module -e \
   'try { let s=""; for await (const c of process.stdin) s+=c; const v=JSON.parse(s).token; if(typeof v!=="string" || !v.trim()) process.exit(1); process.stdout.write(v); } catch { process.exit(1); }')"
-unset repair_token_json root_mysql_command_csv
-printf '%s' "$repair_token" | gh secret set FLY_DATABASE_REPAIR_EXEC_TOKEN \
-  --repo Dj-Shortcut/openclaw-facebook --env production
-unset repair_token
+unset repair_token_json prepare_command_csv cleanup_command_csv
 token_id="$(flyctl tokens list --app leaderbot-portal-mysql --scope app | \
   REPAIR_RUN_ID="$run_id" node --input-type=module -e \
   'import {parseFlyTokenInventory} from "./scripts/retire-image-gen-repair-exec-token.mjs"; let s=""; for await (const c of process.stdin) s+=c; const t=parseFlyTokenInventory(s).filter(t=>t.name===`leaderbot-pr486-repair-${process.env.REPAIR_RUN_ID}`); if(t.length!==1 || t[0].revokedAt!==null) process.exit(1); process.stdout.write(t[0].id)')"
+test -n "$token_id"
+printf '%s' "$repair_token" | gh secret set FLY_DATABASE_REPAIR_EXEC_TOKEN \
+  --repo Dj-Shortcut/openclaw-facebook --env production
+unset repair_token
 secret_updated_at="$(gh secret list --repo Dj-Shortcut/openclaw-facebook \
   --env production --json name,updatedAt \
   --jq '.[] | select(.name == "FLY_DATABASE_REPAIR_EXEC_TOKEN") | .updatedAt')"
@@ -209,11 +211,15 @@ test -n "$secret_updated_at"
 
 Record only `run_id`, `run_attempt`, `token_id`, and `secret_updated_at` in the
 operator evidence. Never record the token value. Fly CLI `0.4.94` parses
-`--command` as an RFC 4180 CSV field. The imported fixed encoding decodes to the
-reviewed root-helper command verbatim before Fly applies its exact command
-caveat; never pass the raw `ROOT_MYSQL_REMOTE_COMMAND` constant to this flag.
-Do not substitute `--command-prefix`, omit `--command`, use a deploy/migration
-token, or extend the four-hour expiry. Fly's token inventory exposes
+`--command-prefix` as RFC 4180 CSV fields. Both imported encodings decode to
+complete reviewed wrappers, including their full shell source and fixed `$0`.
+Both wrappers enforce exactly one SQL argument. The isolated MySQL 8.4.11 proof
+accepted both prefixes with one short-lived token, rejected changed shell
+source and missing/extra arguments, and exercised actual grants, replay and
+verification-triggered rollback. Do not shorten either prefix, omit either
+wrapper, use a deploy/migration token, or extend the four-hour expiry.
+The two-prefix token uses the existing secret and retirement path; no additional
+production secret is introduced. Fly's token inventory exposes
 ID/name/expiry/revocation metadata, not command caveats; the exact creation
 command above establishes the command restriction.
 Only after successful installation and metadata capture may the operator
@@ -345,13 +351,13 @@ the bounded SQL batch as one positional argument to `mysql --execute`, using
 the API's `command` array rather than its shell-parsed `cmd` string. The token's
 CSV encoding is only for the Fly CLI credential-creation flag, not the API body.
 The fixed shell source never evaluates SQL as shell code and rejects additional
-arguments. Cleanup alone uses `--command-prefix` for the complete fixed wrapper:
+arguments. Both repair operations use `--command-prefix` for their complete fixed wrappers:
 Fly compares parsed argument lists, including the complete `-lc` script and
 its fixed `$0`. The sole trailing argument is the SQL batch. An exact
 `--command` for the wrapper would reject every batch; a shorter prefix (such
 as `/bin/sh`) would allow arbitrary shell source and is forbidden. The prepare
-credential above remains exact-command scoped; this is not a blanket permission
-to broaden other credentials. The cleanup token still permits root SQL, just
+credential above carries exactly the two reviewed wrappers; this is not a
+blanket permission to broaden other credentials. The cleanup token still permits root SQL, just
 as the former stdin transport did, so keep its four-hour expiry, protected-job
 approval, exact app binding, and verified retirement. Before using this revised
 credential on production, prove on an isolated target that the intended command
@@ -377,8 +383,24 @@ revoked. It never means rollback or successful cleanup: preserve the exact
 credential metadata and investigate before another protected attempt. Local
 MySQL tests do not prove that Fly accepts the command-scoped token; only the
 protected run and its artifact establish production completion. This transport
-change applies only to `revoke-super`; prepare/bootstrap retain their existing
-transport and must be verified separately before resuming schema work.
+applies to `revoke-super` and the migration-principal `prepare` command.
+Prepare uses one root batch and a separate live controller: the root holds the
+repair lock, the controller approves only missing rights, and failed
+verification compensates only that batch's delta. The root batch never retries
+or reconnects. A transport/SQL failure with an uncertain result is explicitly
+cleanup-incomplete, never success or proof of rollback. Bootstrap of a new
+definer-provisioner account remains a separate operator-only SSH path; it is
+not used by this schema-transition repair.
+
+Prepare's shared time budgets allow three eight-second controller waits and
+four five-second SQL lock waits, plus at least ten seconds for execution and
+response: the remote request is bounded to 55 seconds and the local protocol
+to 65 seconds. A server crash or SQL error after a GRANT can nevertheless leave
+rights applied before compensation runs. On cleanup-incomplete, retain the
+exact operation/credential metadata, inspect the effective rights, and use the
+reviewed recovery path; never retry a grant blindly or infer rollback from an
+absent response. The protected transition's unconditional SUPER-cleanup step
+still runs on failures.
 
 Dispatch once using GitHub CLI `2.95.0` or a version that returns the created
 run URL. Capture that exact URL, not the most recent run in a list. If dispatch
