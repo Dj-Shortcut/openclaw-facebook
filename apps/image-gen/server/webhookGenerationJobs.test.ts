@@ -41,6 +41,7 @@ const {
   faultInjection: {
     quotaMarkerError: null as Error | null,
     setLastGeneratedError: null as Error | null,
+    successNoticeMarkerError: null as Error | null,
   },
 }));
 
@@ -114,6 +115,18 @@ vi.mock("./_core/messengerGenerationCompletion", async importOriginal => {
         throw error;
       }
       return await actual.markMessengerGenerationQuotaCommitted(...args);
+    },
+    markMessengerGenerationSuccessNoticeSent: async (
+      ...args: Parameters<
+        typeof actual.markMessengerGenerationSuccessNoticeSent
+      >
+    ) => {
+      const error = faultInjection.successNoticeMarkerError;
+      if (error) {
+        faultInjection.successNoticeMarkerError = null;
+        throw error;
+      }
+      return await actual.markMessengerGenerationSuccessNoticeSent(...args);
     },
   };
 });
@@ -285,6 +298,7 @@ beforeEach(() => {
   sendTextMock.mockResolvedValue({ sent: true });
   faultInjection.quotaMarkerError = null;
   faultInjection.setLastGeneratedError = null;
+  faultInjection.successNoticeMarkerError = null;
   resetStateStore();
   resetRuntimeStatsForTests();
   process.env.MESSENGER_IMAGE_QUOTA_TIME_ZONE = "Europe/Brussels";
@@ -3374,6 +3388,117 @@ describe("messenger generation job safety", () => {
       "recoverable-user",
       "https://img.example/recovered.png"
     );
+  });
+
+  it("stays silent about generation when bookkeeping fails after delivery", async () => {
+    const psid = "delivered-then-marker-fault-user";
+    const userId = "delivered-then-marker-fault-user-key";
+    const reqId = "req-delivered-then-marker-fault";
+    const runner = createTestRunner();
+    executeGenerationFlowMock.mockResolvedValueOnce(successGenerationResult());
+    faultInjection.successNoticeMarkerError = new Error(
+      "success notice marker unavailable"
+    );
+
+    await runner.processMessengerGenerationJob({
+      psid,
+      userId,
+      reqId,
+      lang: "nl",
+    });
+
+    expect(sendImageMock).toHaveBeenCalledTimes(1);
+    expect(executeGenerationFlowMock).toHaveBeenCalledTimes(1);
+    expect(sendQuickRepliesMock).not.toHaveBeenCalledWith(
+      psid,
+      t("nl", "generationGenericFailure"),
+      expect.anything()
+    );
+    expect(getState(psid)?.stage).toBe("IDLE");
+    await expect(
+      getMessengerGenerationCompletion(reqId)
+    ).resolves.toMatchObject({ deliveryStatus: "delivered" });
+    await expect(
+      getMessengerImageQuotaStatus(quotaIdentityForUser(userId))
+    ).resolves.toEqual({
+      daily: { used: 1, limit: 5, remaining: 4 },
+      monthly: { used: 1, limit: 20, remaining: 19 },
+    });
+    expect(safeLogMock).toHaveBeenCalledWith(
+      "messenger_generation_failure_notice_suppressed",
+      expect.objectContaining({ reqId, deliveryStatus: "delivered" })
+    );
+  });
+
+  it("dead-letters a delivered generation without a generation failure message", async () => {
+    const psid = "delivered-dead-letter-user";
+    const userId = "delivered-dead-letter-user-key";
+    const pageId = "delivered-dead-letter-page";
+    const reqId = "req-delivered-dead-letter";
+    const sendLoggedText = vi.fn(
+      async (_psid: string, _text: string, _reqId: string) =>
+        ({ sent: true }) satisfies MessengerSendOutcome
+    );
+    const runner = createTestRunner({ sendLoggedText });
+    await seedLegacyCompletion({
+      reqId,
+      userId,
+      imageUrl: "https://img.example/dead-letter-delivered.png",
+      deliveryStatus: "delivered",
+    });
+
+    await runner.processMessengerGenerationJobDeadLetter({
+      psid,
+      userId,
+      pageId,
+      reqId,
+      lang: "nl",
+    });
+
+    const state = await runWithMessengerRequestContext(
+      pageId,
+      async () => await Promise.resolve(getState(psid))
+    );
+    expect(sendLoggedText).not.toHaveBeenCalled();
+    expect(executeGenerationFlowMock).not.toHaveBeenCalled();
+    expect(state?.stage).toBe("IDLE");
+  });
+
+  it("dead-letters an undelivered generation with the localized failure", async () => {
+    const psid = "undelivered-dead-letter-user";
+    const userId = "undelivered-dead-letter-user-key";
+    const pageId = "undelivered-dead-letter-page";
+    const reqId = "req-undelivered-dead-letter";
+    const sendLoggedText = vi.fn(
+      async (_psid: string, _text: string, _reqId: string) =>
+        ({ sent: true }) satisfies MessengerSendOutcome
+    );
+    const runner = createTestRunner({ sendLoggedText });
+    await seedLegacyCompletion({
+      reqId,
+      userId,
+      imageUrl: "https://img.example/dead-letter-pending.png",
+      deliveryStatus: "pending",
+    });
+
+    await runner.processMessengerGenerationJobDeadLetter({
+      psid,
+      userId,
+      pageId,
+      reqId,
+      lang: "nl",
+    });
+
+    const state = await runWithMessengerRequestContext(
+      pageId,
+      async () => await Promise.resolve(getState(psid))
+    );
+    expect(sendLoggedText).toHaveBeenCalledWith(
+      psid,
+      t("nl", "generationGenericFailure"),
+      reqId
+    );
+    expect(state?.stage).toBe("FAILURE");
   });
 });
 

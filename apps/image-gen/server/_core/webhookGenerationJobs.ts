@@ -943,6 +943,7 @@ export function createMessengerGenerationJobRunner(
         lang,
         resolvedGenerationKind,
         rememberSendOutcome,
+        deliveredStatus: await resolveConfirmedGenerationDelivery(job),
       });
       if (shouldPropagateInlineGenerationFailure()) throw error;
       return sendOutcome;
@@ -1068,6 +1069,24 @@ export function createMessengerGenerationJobRunner(
             return MESSENGER_SEND_SKIPPED;
           }
           throw error;
+        }
+        const deliveredStatus = await resolveConfirmedGenerationDelivery(input);
+        if (deliveredStatus) {
+          // Retries were exhausted after this image already reached the user.
+          // Only post-delivery bookkeeping can still be pending, so settle the
+          // conversation instead of denying a picture the user already has.
+          logMessengerGenerationRecoveryEvent(
+            "messenger_generation_failure_notice_suppressed",
+            {
+              reqId: input.reqId,
+              user: toLogUser(input.userId),
+              generationKind: input.generationKind ?? null,
+              deliveryStatus: deliveredStatus,
+              stage: "dead_letter",
+            }
+          );
+          await setFlowState(input.psid, "IDLE");
+          return MESSENGER_SEND_SKIPPED;
         }
         await setFlowState(input.psid, "FAILURE");
         return await deps.sendLoggedText(
@@ -1201,6 +1220,45 @@ async function sendGenerationStartedAck(input: {
   }
 }
 
+type ConfirmedGenerationDeliveryStatus = "receipt_pending" | "delivered";
+
+/**
+ * Reports the durable delivery state of this exact request when Messenger has
+ * already accepted its image. Recovery uses it to keep a delivered generation
+ * from being reported as a generation failure. It only reads completion
+ * metadata: it never regenerates, delivers, or charges anything, and an
+ * unreadable record keeps the conservative failure path.
+ */
+async function resolveConfirmedGenerationDelivery(
+  job: MessengerGenerationJob
+): Promise<ConfirmedGenerationDeliveryStatus | undefined> {
+  let completion: MessengerGenerationCompletion | null;
+  try {
+    completion = await Promise.resolve(
+      getMessengerGenerationCompletion(job.reqId, completionFenceForJob(job))
+    );
+  } catch (error) {
+    logMessengerGenerationRecoveryEvent(
+      "messenger_generation_delivery_state_unavailable",
+      {
+        level: "error",
+        reqId: job.reqId,
+        user: toLogUser(job.userId),
+        error,
+      }
+    );
+    return undefined;
+  }
+  if (!completion) return undefined;
+  if (completion.userKey && completion.userKey !== job.userId) {
+    return undefined;
+  }
+  return completion.deliveryStatus === "delivered" ||
+    completion.deliveryStatus === "receipt_pending"
+    ? completion.deliveryStatus
+    : undefined;
+}
+
 async function recoverUnexpectedGenerationError(input: {
   deps: GenerationJobRunnerDeps;
   error: unknown;
@@ -1210,9 +1268,11 @@ async function recoverUnexpectedGenerationError(input: {
   lang: MessengerGenerationJob["lang"];
   resolvedGenerationKind: GenerationKind;
   rememberSendOutcome: (outcome: MessengerSendOutcome) => MessengerSendOutcome;
+  /** Set only when this request already handed its image to the user. */
+  deliveredStatus?: ConfirmedGenerationDeliveryStatus;
 }): Promise<void> {
   try {
-    await setFlowState(input.psid, "FAILURE");
+    await setFlowState(input.psid, input.deliveredStatus ? "IDLE" : "FAILURE");
   } catch (stateError) {
     logMessengerGenerationRecoveryEvent(
       "messenger_generation_recovery_state_failed",
@@ -1232,9 +1292,28 @@ async function recoverUnexpectedGenerationError(input: {
     reqId: input.reqId,
     user: toLogUser(input.userId),
     generationKind: input.resolvedGenerationKind,
+    deliveryStatus: input.deliveredStatus ?? "undelivered",
     error: input.error,
   });
   recordGenerationError();
+
+  if (input.deliveredStatus) {
+    // The image is already in the conversation, so the failing step can only
+    // be post-delivery bookkeeping. Sending the generic generation failure
+    // here would contradict a picture the user is looking at. Staying silent
+    // starts no second generation and consumes no additional credit.
+    logMessengerGenerationRecoveryEvent(
+      "messenger_generation_failure_notice_suppressed",
+      {
+        reqId: input.reqId,
+        user: toLogUser(input.userId),
+        generationKind: input.resolvedGenerationKind,
+        deliveryStatus: input.deliveredStatus,
+        stage: "unexpected_error",
+      }
+    );
+    return;
+  }
 
   try {
     const failureResponse = buildGenerationFailureResponse(
