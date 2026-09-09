@@ -945,8 +945,24 @@ SUPER was revoked. The bound repair token and GitHub secret were retired with
 [34342883040/2](https://github.com/Dj-Shortcut/openclaw-facebook/actions/runs/34342883040)
 from `80703910131e227d1d683b1f5b6287c8bff241de`, with digest
 `sha256:1d80d6bce5fdbd7486f31d6223ca87ac7a50d075661ec48ae0f3d536eb8e5b36`.
-It rejects pre-credit schemas and accepts the exact 0018 contract. Application
-Machines still run the frozen bridge; resume at step 9, not by repeating the
+It rejects pre-credit schemas and accepts the exact 0018 contract. Restricted
+principal staging [34345293602/2](https://github.com/Dj-Shortcut/openclaw-facebook/actions/runs/34345293602)
+on manifest source `c784e496cf8e629b87dd8b31c28bfbbe989a70b6` passed the exact
+candidate privilege and trigger checks, then staged `DATABASE_URL` at
+`2026-09-09T11:53:32Z`. Its metadata artifact digest is
+`sha256:d3f807a17cc0e5d051e2d5aa476d600bbdf8395dc338c745073995f5930403e8`.
+Attempt 1 had stopped before staging because three unchanged legacy billing
+triggers named a runtime definer without `TRIGGER`. The separately reviewed
+DBA repair above completed at `2026-09-09T11:47:26Z`: exact canonical bodies,
+a separate locked definer, only the two prescribed table-grant sets, and all
+other 0018 triggers unchanged. Fresh encrypted snapshot
+`vs_zGGOJgmJAKGKfqMJklNp6` has digest
+`0e17cf05d01b0639756fc438d285735130edb03dd2d99b1df12562af1398c1b0`;
+this extra pre-repair snapshot was created, not independently restore-tested.
+Runtime grants and commercial flags were unchanged. Staging success does not
+prove the deployed frontend, credit grant, or a completed payment.
+The manifest remains deployment-disabled pending the separate staged-principal
+review. Application Machines still run the bridge; resume at step 10, not by repeating the
 completed schema expansion or runtime build. The protected schema workflow
 remains the only permitted path for the reviewed 0017/0018 migrations; no
 application deploy, shell command, or ad-hoc Machine may change the production
