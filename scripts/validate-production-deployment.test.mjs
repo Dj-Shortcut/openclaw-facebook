@@ -1203,7 +1203,7 @@ describe("production deployment contract", () => {
     });
   });
 
-  it("freezes the attested 0016-to-0018 bridge after its protected deploy", () => {
+  it("freezes the attested bridge while building the verified 0018 runtime", () => {
     const manifest = JSON.parse(
       fs.readFileSync(
         path.join(repoRoot, "deploy/production/apps.json"),
@@ -1212,11 +1212,11 @@ describe("production deployment contract", () => {
     );
     const app = manifest.apps["image-gen"];
 
-    expect(app.databaseSchemaPhase).toBe("0016_expand");
+    expect(app.databaseSchemaPhase).toBe("0018_credit_checkout_reservation");
     expect(app.databaseSchemaTransition).toMatchObject({
       from: "0016_expand",
       to: "0018_credit_checkout_reservation",
-      state: "expand_pending",
+      state: "runtime_build_pending",
       bridgeImage:
         "registry.fly.io/leaderbot-fb-image-gen@sha256:a37632c86a72a87cd94f5c030c8b88be330420289c553f4570e234c85df233b8",
       bridgeSourceCommit: "f26d80e1eb47361541b9812a1c0d47477afac535",

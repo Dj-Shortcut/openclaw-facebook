@@ -936,11 +936,16 @@ either failure marker.
 
 ### Image-gen database migration gate
 
-Production currently runs `0016_expand`. The only reviewed successor is the
-ordered credit transition through `0017_credit_wallet_expand` to the exact
-`0018_credit_checkout_reservation` runtime. The protected schema workflow may
-apply those two checked-in migrations only; no application deploy, shell
-command, or ad-hoc Machine may change the production schema.
+The production database is verified at `0018_credit_checkout_reservation` by
+protected run [34339825855/1](https://github.com/Dj-Shortcut/openclaw-facebook/actions/runs/34339825855)
+on source `ea680af1061901436fdae4e59397365ce6949f36`, completed
+`2026-09-09T10:41:12Z`. The pre-credit snapshot was restore-tested and temporary
+SUPER was revoked. The bound repair token and GitHub secret were retired with
+`repair_exec_token_retired`. Application Machines still run the frozen bridge;
+resume at step 8, not by repeating the completed schema expansion. The protected
+schema workflow remains the only permitted path for the reviewed 0017/0018
+migrations; no application deploy, shell command, or ad-hoc Machine may change
+the production schema.
 
 Use this exact sequence:
 
