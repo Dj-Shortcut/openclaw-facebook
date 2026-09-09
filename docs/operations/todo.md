@@ -88,6 +88,13 @@ Live payment enablement remains gated by the relevant P1 through P4 evidence.
       Mode, pass paid checkout, delayed/replayed webhook, cancellation, failure,
       refund, partially used wallet, provider failure, delivery failure,
       deletion, budget exhaustion, receipt, reconciliation, and rollback.
+  - [ ] **Bug: false failure message after a delivered image.** Owner report
+        (2026-09-09): the tester receives each photo, then also receives
+        "ik kon de afbeelding nu niet maken". Cause not yet verified. Investigate
+        the post-delivery success/failure handling and add regression coverage:
+        a successfully delivered image must not produce a contradictory failure
+        message; genuine failures must still be reported. Preserve retry
+        protection and exactly-once quota/credit accounting.
   - [x] **Credit schema installed in production.** Protected run
         [34339825855/1](https://github.com/Dj-Shortcut/openclaw-facebook/actions/runs/34339825855)
         on `ea680af1061901436fdae4e59397365ce6949f36` completed at
@@ -106,13 +113,34 @@ Live payment enablement remains gated by the relevant P1 through P4 evidence.
         and trusted provenance passed. Attempt 1 stopped at the initial
         exact-source CI gate while its last test was still running; it did
         not build or deploy an image. Attempt 2 ran after all main CI passed.
-  - [ ] **Stage and deploy the reviewed credit runtime.** The manifest is now
-        `runtime_principal_pending` on proven `0018`. Deploys remain frozen;
-        the running bridge still serves the old frontend and generic quota
-        link. Stage the restricted principal against the exact reviewed runtime,
-        then deploy and verify the new frontend and Messenger checkout route.
+  - [x] **Stage the reviewed credit runtime principal.** Protected run
+        [34345293602/2](https://github.com/Dj-Shortcut/openclaw-facebook/actions/runs/34345293602)
+        on `c784e496cf8e629b87dd8b31c28bfbbe989a70b6` verified the restricted
+        grants and exact candidate trigger preflight, then staged `DATABASE_URL`
+        at `2026-09-09T11:53:32Z` without restarting any Machine. Artifact digest:
+        `sha256:d3f807a17cc0e5d051e2d5aa476d600bbdf8395dc338c745073995f5930403e8`.
+  - [ ] **Review and deploy the staged credit runtime.** The manifest binds the
+        verified staged principal to `runtime_reviewed` on proven `0018`.
+        The running bridge still serves the old frontend and generic quota
+        link. After the separately reviewed manifest and exact-source CI pass,
+        deploy and verify every app/worker, the new frontend, and the Messenger
+        checkout route. The owner explicitly approved this rollout on
+        2026-09-09 after the earlier automatic approval rejection; retain the
+        exact bridge rollback and leave payment exposure unchanged.
         Do not enable checkout from schema/build success alone or repeat the
         completed expansion and repair.
+    - Staging run `34345293602/1` stopped at `scheduler_update_trigger` before
+      staging a secret or restarting a Machine. Read-only metadata proved the
+      three legacy billing triggers still named the active runtime account,
+      which had no `TRIGGER` privilege. The failed staging account was removed.
+      The reviewed DBA runbook repair completed at `2026-09-09T11:47:26Z`:
+      all three bodies and every other 0018 trigger remain unchanged, with one
+      locked, separate definer and exactly the prescribed two table-grant sets.
+      Snapshot `vs_zGGOJgmJAKGKfqMJklNp6` has digest
+      `0e17cf05d01b0639756fc438d285735130edb03dd2d99b1df12562af1398c1b0`.
+      Runtime grants and billing flags were not changed; `/readyz` stayed green.
+      Attempt 2 then passed the protected restricted-runtime reproof. The staged
+      fingerprint is not proof of application rollout or a completed payment.
     - At checkout activation, also replace the landing page's hard-coded
       `commercialBillingAvailable=false` / no-purchase badge with truthful
       Messenger-purchase guidance. The public landing page must not create an
