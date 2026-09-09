@@ -98,9 +98,13 @@ Live payment enablement remains gated by the relevant P1 through P4 evidence.
         stage or prove that no privilege changed. Source-level regression tests
         found that cleanup incorrectly required later definer-table grants on
         the exact old `0016` account; those checks now use the existing pregrant
-        boundary only for exact `0016`. The separate mismatch between the
-        command-scoped Machine Exec credential and SSH transport still needs a
-        tested, reviewed repair before retrying production. Run the separately
+        boundary only for exact `0016`. The cleanup-only transport now uses one
+        bounded Machine Exec API request with the unchanged reviewed command
+        and SQL on stdin, instead of SSH. Local protocol tests are not Fly
+        credential-caveat or production cleanup evidence; review and protected
+        execution remain open. Prepare/bootstrap still use their existing SSH
+        transport and need separate verification before a schema transition.
+        Run the separately
         approved cleanup-only proof bound to the original failed run, and retire its
         exact temporary token and unchanged secret before a new transition.
         The original four-hour token is now absent from the complete Fly app

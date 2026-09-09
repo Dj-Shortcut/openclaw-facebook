@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { RootMysqlSession } from "./provision-image-gen-credit-provisioner.mjs";
 
 import {
   CREDIT_MIGRATION_PRINCIPAL_CLEANUP_FAILURE_MARKER,
@@ -23,10 +24,49 @@ import {
   buildRootFlyctlEnvironment,
   classifyCreditMigrationHistory,
   executeRepair,
-  executeSuperCleanup,
+  executeSuperCleanup as executeSuperCleanupWithExec,
   parseCliArguments,
   runCli,
 } from "./repair-image-gen-credit-migration-principal.mjs";
+
+// Keep the pre-existing pure grant/history/failure-stage fixtures independent
+// of transport. The production default is exercised by the dedicated Exec
+// protocol/HTTP suite, including aborts and real one-request body validation.
+function executeSuperCleanup(input, options) {
+  if (!options?.openRoot) return executeSuperCleanupWithExec(input, options);
+  return executeSuperCleanupWithExec(input, {
+    ...options,
+    runCleanup: async ({ onStage, signal, ...contract }) => {
+      const roots = [];
+      const createRoot = async () => {
+        onStage("root_connect");
+        const root = await options.openRoot({ signal });
+        roots.push(root);
+        onStage("root_initialize");
+        await root.initialize(signal);
+        return root;
+      };
+      try {
+        const root = await createRoot();
+        onStage("super_cleanup");
+        return await revokeTemporaryCreditMigrationSuper({
+          ...contract,
+          root,
+          recoverRoot: async (failedRoot) => {
+            await failedRoot.close({ releaseLock: false, signal });
+            return createRoot();
+          },
+        });
+      } finally {
+        for (const root of roots.reverse()) {
+          await root
+            .close({ releaseLock: false, signal })
+            .catch(() => undefined);
+        }
+      }
+    },
+  });
+}
 
 describe("credit migration failure diagnostics", () => {
   const ARGS = [
@@ -499,7 +539,7 @@ describe("credit migration principal repair contract", () => {
     },
   );
 
-  it("opens the fake Fly child with HOME and no ambient credentials", async () => {
+  it("retains HOME isolation for the separate prepare/bootstrap Fly child", async () => {
     const directory = mkdtempSync(
       path.join(os.tmpdir(), "leaderbot-fake-fly-"),
     );
@@ -544,27 +584,18 @@ process.stdin.on("data", chunk => {
       GH_TOKEN: "github-private",
       UNRELATED_SECRET: "private",
     });
-    const connection = { end: vi.fn(async () => undefined) };
+    let root;
     try {
-      await expect(
-        executeSuperCleanup(
-          {
-            app: "leaderbot-portal-mysql",
-            machineId: "080d3ddb5099e8",
-            operation: "revoke-super",
-          },
-          {
-            migrationUrl:
-              "mysql://credit_migrator:secret@127.0.0.1:13306/leaderbot",
-            mysql: { createConnection: vi.fn(async () => connection) },
-            readPhase: vi.fn(async () => "0016_expand"),
-            readState: vi.fn(async () => migrationState()),
-            signal: new AbortController().signal,
-          },
-        ),
-      ).resolves.toBe("already_revoked");
-      expect(connection.end).toHaveBeenCalledOnce();
+      root = new RootMysqlSession({
+        app: "leaderbot-portal-mysql",
+        machineId: "080d3ddb5099e8",
+        signal: new AbortController().signal,
+        env: buildRootFlyctlEnvironment(),
+      });
+      await root.initialize();
+      await expect(root.execute("SELECT 1")).resolves.toEqual(["1"]);
     } finally {
+      await root?.close({ releaseLock: false });
       for (const name of names) {
         if (previous[name] === undefined) delete process.env[name];
         else process.env[name] = previous[name];

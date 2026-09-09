@@ -91,6 +91,8 @@ function createRepositoryFixture() {
     "scripts/fly-restore-probe-status.test.mjs",
     "scripts/image-gen-credit-migration-principal-repair-contract.mjs",
     "scripts/image-gen-credit-migration-principal-repair-contract.test.mjs",
+    "scripts/image-gen-super-cleanup-exec.mjs",
+    "scripts/image-gen-super-cleanup-exec.test.mjs",
     "scripts/repair-image-gen-credit-migration-principal.mjs",
     "scripts/retire-image-gen-repair-exec-token.mjs",
     "scripts/retire-image-gen-repair-exec-token.test.mjs",
@@ -4046,7 +4048,7 @@ describe("production deployment contract", () => {
     );
   });
 
-  it("requires HOME in both root Fly child allowlists", () => {
+  it("requires HOME in the retained prepare root Fly child allowlist", () => {
     const root = createRepositoryFixture();
     replaceFixtureText(
       root,
@@ -4059,6 +4061,182 @@ describe("production deployment contract", () => {
       "must pass the existing HOME and explicit repair token through the shared root Fly child allowlist",
     );
   });
+
+  it.each([
+    [
+      'const API_ORIGIN = "https://api.machines.dev";',
+      'const API_ORIGIN = "https://untrusted.invalid";',
+      "must use only the fixed Machines API origin",
+    ],
+    [
+      'const DATABASE_APP = "leaderbot-portal-mysql";',
+      'const DATABASE_APP = "another-app";',
+      "must target only the reviewed database app",
+    ],
+    [
+      "${DATABASE_APP}/machines/${machineId}/exec",
+      "${DATABASE_APP}/machines/different-machine/exec",
+      "must bind Exec to the exact database Machine endpoint",
+    ],
+    [
+      'redirect: "error",',
+      'redirect: "follow",',
+      "must refuse redirects and bind the single POST to cancellation",
+    ],
+    [
+      "cmd: ROOT_MYSQL_REMOTE_COMMAND,",
+      'cmd: "mysql -uroot",',
+      "must preserve the exact command caveat and deliver bounded SQL through stdin",
+    ],
+    [
+      "        stdin,\n        timeout: EXEC_SECONDS,",
+      '        stdin: "",\n        timeout: EXEC_SECONDS,',
+      "must preserve the exact command caveat and deliver bounded SQL through stdin",
+    ],
+    [
+      "Buffer.byteLength(stdin) > MAX_STDIN_BYTES",
+      "false",
+      "must bound the SQL request body before dispatch",
+    ],
+    [
+      "response.status !== 200 ||",
+      "false ||",
+      "must reject unsuccessful or redirected Exec responses",
+    ],
+    [
+      "if (bytes > MAX_RESPONSE_BYTES) fail();",
+      "if (false) fail();",
+      "must bound streamed response bytes",
+    ],
+    [
+      '!Object.hasOwn(value, "exit_code") ||',
+      "false ||",
+      "must reject missing exit status, remote failure, signals and SQL stderr",
+    ],
+    [
+      "value.exit_code !== 0 ||",
+      "Number(value.exit_code ?? 0) !== 0 ||",
+      "must reject missing exit status, remote failure, signals and SQL stderr",
+    ],
+    [
+      'value.stderr !== ""',
+      "false",
+      "must reject missing exit status, remote failure, signals and SQL stderr",
+    ],
+    [
+      "value.stdout === resultMarker(nonce, result)",
+      "value.stdout.includes(result)",
+      "must require the exact invocation-bound terminal marker",
+    ],
+    [
+      "const LOCK = CREDIT_MIGRATION_PRINCIPAL_REPAIR_LOCK;",
+      'const LOCK = "different-lock";',
+      "must retain the existing principal repair lock",
+    ],
+    [
+      'operation: "revoke",',
+      'operation: "grant",',
+      "must limit the batch mutation to revoking temporary SUPER",
+    ],
+    [
+      "completed.failed ||",
+      "false ||",
+      "must require both verifier approvals before accepting success",
+    ],
+    [
+      "!verifiedAfter ||",
+      "false ||",
+      "must require both verifier approvals before accepting success",
+    ],
+    [
+      "AbortSignal.timeout(DEADLINE_MS)",
+      "new AbortController().signal",
+      "must bound the complete handshake and response lifecycle",
+    ],
+    [
+      "    return parseSuperCleanupExecResponse(",
+      "    await fetchImpl(url, {});\n    return parseSuperCleanupExecResponse(",
+      "must make one Exec request without automatic retry or SSH fallback",
+    ],
+    [
+      "import { ROOT_MYSQL_REMOTE_COMMAND }",
+      "import { RootMysqlSession, ROOT_MYSQL_REMOTE_COMMAND }",
+      "must make one Exec request without automatic retry or SSH fallback",
+    ],
+  ])("rejects cleanup Exec boundary drift: %s", (before, after, message) => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      "scripts/image-gen-super-cleanup-exec.mjs",
+      before,
+      after,
+    );
+    expect(() => validateProductionRepository(root)).toThrow(message);
+  });
+
+  it.each([
+    [
+      "runCleanup = revokeTemporaryCreditMigrationSuperViaExec,",
+      "runCleanup = repairCreditMigrationPrincipal,",
+    ],
+    [
+      "      account: initial.account,\n      databaseName: initial.databaseName,",
+      '      account: { username: "another-user", hostname: "%" },\n      databaseName: initial.databaseName,',
+    ],
+    [
+      "      verify,\n      signal,\n      onStage,",
+      "      verify: async () => {},\n      signal,\n      onStage,",
+    ],
+    [
+      "      verify,\n      signal,\n      onStage,",
+      "      verify,\n      signal: new AbortController().signal,\n      onStage,",
+    ],
+  ])(
+    "binds revoke-only cleanup to its verified runner inputs: %s",
+    (before, after) => {
+      const root = createRepositoryFixture();
+      replaceLastFixtureText(
+        root,
+        "scripts/repair-image-gen-credit-migration-principal.mjs",
+        before,
+        after,
+      );
+      expect(() => validateProductionRepository(root)).toThrow(
+        "must bind revoke-only Exec to the current account, phase, verifier and signal without root SSH fallback",
+      );
+    },
+  );
+
+  it("does not remove the retained prepare SSH environment fence", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      "scripts/repair-image-gen-credit-migration-principal.mjs",
+      "env: buildRootFlyctlEnvironment(),",
+      "env: process.env,",
+    );
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must pass the existing HOME and explicit repair token through the shared root Fly child allowlist",
+    );
+  });
+
+  it.each(["missing", "substring", "duplicate"])(
+    "rejects %s cleanup Exec semantic test registration",
+    (kind) => {
+      const root = createRepositoryFixture();
+      const testPath = "scripts/image-gen-super-cleanup-exec.test.mjs";
+      const replacement =
+        kind === "missing"
+          ? ""
+          : kind === "substring"
+            ? ` prefixed/${testPath}`
+            : ` ${testPath} ${testPath}`;
+      replaceFixtureText(root, "package.json", ` ${testPath}`, replacement);
+      expect(() => validateProductionRepository(root)).toThrow(
+        `package.json test:production-contracts must include exact ${testPath}`,
+      );
+    },
+  );
 
   it("requires a live TCP database probe immediately before migration-role repair", () => {
     const root = createRepositoryFixture();
