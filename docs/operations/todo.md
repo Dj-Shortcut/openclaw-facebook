@@ -266,11 +266,15 @@ Live payment enablement remains gated by the relevant P1 through P4 evidence.
   live domain is stale deployment evidence rather than proof that the new
   checkout is live. Do not claim checkout launch until the protected image-gen
   deployment and browser smoke journey pass.
-- A source route audit on 2026-08-30 found no registered customer login,
-  customer portal, OAuth callback, or OpenClaw HTTP route in the active image-gen
-  server. The remaining `/api/trpc` surface is limited to internal operator
-  procedures; historical handoff and billing-drain workers remain only for
-  controlled retirement of durable records.
+- A source route audit on 2026-09-09 found no registered customer login,
+  customer portal, or OpenClaw HTTP route in the active image-gen server. One
+  OAuth callback remains on purpose: it is the internal operator login, the
+  only safe way to reach the billing admin procedures that recover held
+  credits. It is not advertised anywhere public, has no dashboard behind it,
+  and grants the admin role only to the configured owner account. The
+  remaining `/api/trpc` surface is limited to internal operator procedures;
+  historical handoff and billing-drain workers remain only for controlled
+  retirement of durable records.
 - Build run `33092823815` produced and attested immutable storage-proxy digest
   `sha256:99ea65710abb9a2294dcaf02cf76f57b240cb153a69e6020b68a470278103a8d`
   from exact reviewed source `6a7d0431e1e02076a2db7fcf12c8358d7fbf33cd`;

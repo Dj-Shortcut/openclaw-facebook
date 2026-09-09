@@ -1,6 +1,5 @@
 import { createRoot } from "react-dom/client";
 import App from "./App";
-import { loadPublicRuntimeConfig } from "./const";
 import "./index.css";
 
 const getOptionalEnvString = (value: unknown): string | undefined => {
@@ -30,13 +29,10 @@ const injectAnalytics = () => {
   document.head.appendChild(analyticsScript);
 };
 
-async function bootstrap() {
+function bootstrap() {
   injectAnalytics();
-
-  // Serves the owner login link only when OAuth is actually configured.
-  await loadPublicRuntimeConfig();
 
   createRoot(document.getElementById("root")!).render(<App />);
 }
 
-void bootstrap();
+bootstrap();
