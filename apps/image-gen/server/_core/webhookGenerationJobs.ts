@@ -934,6 +934,7 @@ export function createMessengerGenerationJobRunner(
         });
         throw error;
       }
+      const delivery = await resolveGenerationDeliveryState(job);
       await recoverUnexpectedGenerationError({
         deps,
         error,
@@ -943,8 +944,14 @@ export function createMessengerGenerationJobRunner(
         lang,
         resolvedGenerationKind,
         rememberSendOutcome,
-        deliveredStatus: await resolveConfirmedGenerationDelivery(job),
+        delivery,
       });
+      if (delivery.confirmed) {
+        // Rethrowing here would reach the webhook top-level catch, which sends
+        // the generic fallback text whenever no response was marked as sent.
+        // The delivered image is that response, so report it and settle.
+        return rememberSendOutcome({ sent: true });
+      }
       if (shouldPropagateInlineGenerationFailure()) throw error;
       return sendOutcome;
     } finally {
@@ -1070,8 +1077,8 @@ export function createMessengerGenerationJobRunner(
           }
           throw error;
         }
-        const deliveredStatus = await resolveConfirmedGenerationDelivery(input);
-        if (deliveredStatus) {
+        const delivery = await resolveGenerationDeliveryState(input);
+        if (delivery.confirmed) {
           // Retries were exhausted after this image already reached the user.
           // Only post-delivery bookkeeping can still be pending, so settle the
           // conversation instead of denying a picture the user already has.
@@ -1081,7 +1088,7 @@ export function createMessengerGenerationJobRunner(
               reqId: input.reqId,
               user: toLogUser(input.userId),
               generationKind: input.generationKind ?? null,
-              deliveryStatus: deliveredStatus,
+              deliveryStatus: delivery.status,
               stage: "dead_letter",
             }
           );
@@ -1220,18 +1227,34 @@ async function sendGenerationStartedAck(input: {
   }
 }
 
-type ConfirmedGenerationDeliveryStatus = "receipt_pending" | "delivered";
+type GenerationDeliveryState = {
+  /**
+   * True only for a durable `delivered` completion. `receipt_pending` records
+   * just that Meta accepted an outbound message ID, and a paid send is proven
+   * only once a delivery receipt upgrades that completion to `delivered`, so
+   * it must never silence a failure notice.
+   */
+  confirmed: boolean;
+  /** Metadata-only label for operational logs. */
+  status:
+    NonNullable<MessengerGenerationCompletion["deliveryStatus"]> | "unknown";
+};
+
+const UNKNOWN_GENERATION_DELIVERY: GenerationDeliveryState = Object.freeze({
+  confirmed: false,
+  status: "unknown",
+});
 
 /**
- * Reports the durable delivery state of this exact request when Messenger has
- * already accepted its image. Recovery uses it to keep a delivered generation
- * from being reported as a generation failure. It only reads completion
- * metadata: it never regenerates, delivers, or charges anything, and an
- * unreadable record keeps the conservative failure path.
+ * Reports the durable delivery state of this exact request. Recovery uses it
+ * to keep a generation whose image Messenger already delivered from being
+ * reported as a generation failure. It only reads completion metadata: it
+ * never regenerates, delivers, or charges anything, and a missing, unreadable,
+ * or foreign record keeps the conservative failure path.
  */
-async function resolveConfirmedGenerationDelivery(
+async function resolveGenerationDeliveryState(
   job: MessengerGenerationJob
-): Promise<ConfirmedGenerationDeliveryStatus | undefined> {
+): Promise<GenerationDeliveryState> {
   let completion: MessengerGenerationCompletion | null;
   try {
     completion = await Promise.resolve(
@@ -1247,16 +1270,14 @@ async function resolveConfirmedGenerationDelivery(
         error,
       }
     );
-    return undefined;
+    return UNKNOWN_GENERATION_DELIVERY;
   }
-  if (!completion) return undefined;
+  if (!completion) return UNKNOWN_GENERATION_DELIVERY;
   if (completion.userKey && completion.userKey !== job.userId) {
-    return undefined;
+    return UNKNOWN_GENERATION_DELIVERY;
   }
-  return completion.deliveryStatus === "delivered" ||
-    completion.deliveryStatus === "receipt_pending"
-    ? completion.deliveryStatus
-    : undefined;
+  const status = completion.deliveryStatus ?? "unknown";
+  return { confirmed: status === "delivered", status };
 }
 
 async function recoverUnexpectedGenerationError(input: {
@@ -1268,11 +1289,12 @@ async function recoverUnexpectedGenerationError(input: {
   lang: MessengerGenerationJob["lang"];
   resolvedGenerationKind: GenerationKind;
   rememberSendOutcome: (outcome: MessengerSendOutcome) => MessengerSendOutcome;
-  /** Set only when this request already handed its image to the user. */
-  deliveredStatus?: ConfirmedGenerationDeliveryStatus;
+  /** Durable delivery state of this request, when it could be read. */
+  delivery?: GenerationDeliveryState;
 }): Promise<void> {
+  const delivered = input.delivery?.confirmed === true;
   try {
-    await setFlowState(input.psid, input.deliveredStatus ? "IDLE" : "FAILURE");
+    await setFlowState(input.psid, delivered ? "IDLE" : "FAILURE");
   } catch (stateError) {
     logMessengerGenerationRecoveryEvent(
       "messenger_generation_recovery_state_failed",
@@ -1292,12 +1314,12 @@ async function recoverUnexpectedGenerationError(input: {
     reqId: input.reqId,
     user: toLogUser(input.userId),
     generationKind: input.resolvedGenerationKind,
-    deliveryStatus: input.deliveredStatus ?? "undelivered",
+    deliveryStatus: input.delivery?.status ?? "unknown",
     error: input.error,
   });
   recordGenerationError();
 
-  if (input.deliveredStatus) {
+  if (delivered) {
     // The image is already in the conversation, so the failing step can only
     // be post-delivery bookkeeping. Sending the generic generation failure
     // here would contradict a picture the user is looking at. Staying silent
@@ -1308,7 +1330,7 @@ async function recoverUnexpectedGenerationError(input: {
         reqId: input.reqId,
         user: toLogUser(input.userId),
         generationKind: input.resolvedGenerationKind,
-        deliveryStatus: input.deliveredStatus,
+        deliveryStatus: input.delivery?.status,
         stage: "unexpected_error",
       }
     );

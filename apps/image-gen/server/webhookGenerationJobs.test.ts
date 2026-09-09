@@ -3464,6 +3464,131 @@ describe("messenger generation job safety", () => {
     expect(state?.stage).toBe("IDLE");
   });
 
+  it("keeps the failure notice when only a pending receipt was recorded", async () => {
+    process.env.MESSENGER_FREE_DAILY_LIMIT = "0";
+    const job = paidCreditGenerationJob("paid-receipt-pending-failure");
+    const commitDeliveredOutput = vi.fn(async () => undefined);
+    reservePaidCreditGenerationMock.mockResolvedValueOnce({
+      available: true,
+      reservation: paidCreditReservationFixture({ commitDeliveredOutput }),
+    });
+    executeGenerationFlowMock.mockImplementationOnce(async input => {
+      await (await input.onProviderAttempt())?.markTransportStarted();
+      await input.onProviderSuccess?.();
+      return successGenerationResult();
+    });
+    sendImageMock.mockResolvedValueOnce({
+      sent: true,
+      messageId: "mid-paid-receipt-pending-failure",
+    });
+    faultInjection.successNoticeMarkerError = new Error(
+      "success notice marker unavailable"
+    );
+
+    await createTestRunner().processMessengerGenerationJob(job);
+
+    // Meta accepted a message ID, but no delivery receipt confirmed it, so the
+    // send is not proven and the user must still hear that it failed.
+    await expect(
+      getMessengerGenerationCompletion(
+        job.reqId,
+        paidCreditCompletionFence(job)
+      )
+    ).resolves.toMatchObject({ deliveryStatus: "receipt_pending" });
+    expect(sendQuickRepliesMock).toHaveBeenCalledWith(
+      job.psid,
+      t("nl", "generationGenericFailure"),
+      expect.anything()
+    );
+    expect(commitDeliveredOutput).not.toHaveBeenCalled();
+    expect(commitDeliveredPaidCreditGenerationMock).not.toHaveBeenCalled();
+    expect(executeGenerationFlowMock).toHaveBeenCalledTimes(1);
+    expect(sendImageMock).toHaveBeenCalledTimes(1);
+    await expect(readScopedFlowStage(job)).resolves.toBe("FAILURE");
+  });
+
+  it("settles inline production instead of escaping to the webhook fallback", async () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = "production";
+    // The free quota store is Redis-only in production; this scenario is about
+    // outer error handling, so keep the quota path out of it.
+    process.env.MESSENGER_QUOTA_BYPASS_IDS = "inline-production-delivered-psid";
+    const job = {
+      psid: "inline-production-delivered-psid",
+      userId: "b".repeat(64),
+      pageId: "inline-production-page",
+      workspaceId: 42,
+      channelConnectionId: 8,
+      bindingEpoch: 3,
+      privacyEpoch: 5,
+      reqId: "req-inline-production-delivered",
+      lang: "nl" as const,
+    };
+    const runner = createTestRunner();
+    executeGenerationFlowMock.mockResolvedValueOnce(successGenerationResult());
+    faultInjection.successNoticeMarkerError = new Error(
+      "success notice marker unavailable"
+    );
+
+    try {
+      // Inline production rethrows generation failures so the webhook fallback
+      // can answer. A delivered image is already that answer, so the runner
+      // must report it as sent instead of propagating.
+      await expect(runner.processMessengerGenerationJob(job)).resolves.toEqual({
+        sent: true,
+      });
+
+      expect(sendImageMock).toHaveBeenCalledTimes(1);
+      expect(executeGenerationFlowMock).toHaveBeenCalledTimes(1);
+      expect(sendQuickRepliesMock).not.toHaveBeenCalledWith(
+        job.psid,
+        t("nl", "generationGenericFailure"),
+        expect.anything()
+      );
+      await expect(readScopedFlowStage(job)).resolves.toBe("IDLE");
+    } finally {
+      process.env.NODE_ENV = originalNodeEnv;
+    }
+  });
+
+  it("still escalates an inline production failure that never delivered", async () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = "production";
+    process.env.MESSENGER_QUOTA_BYPASS_IDS =
+      "inline-production-undelivered-psid";
+    const job = {
+      psid: "inline-production-undelivered-psid",
+      userId: "c".repeat(64),
+      pageId: "inline-production-undelivered-page",
+      workspaceId: 42,
+      channelConnectionId: 8,
+      bindingEpoch: 3,
+      privacyEpoch: 5,
+      reqId: "req-inline-production-undelivered",
+      lang: "nl" as const,
+    };
+    const runner = createTestRunner();
+    executeGenerationFlowMock.mockRejectedValueOnce(
+      new Error("provider blew up before delivery")
+    );
+
+    try {
+      await expect(runner.processMessengerGenerationJob(job)).rejects.toThrow(
+        "provider blew up before delivery"
+      );
+
+      expect(sendImageMock).not.toHaveBeenCalled();
+      expect(sendQuickRepliesMock).toHaveBeenCalledWith(
+        job.psid,
+        t("nl", "generationGenericFailure"),
+        expect.anything()
+      );
+      await expect(readScopedFlowStage(job)).resolves.toBe("FAILURE");
+    } finally {
+      process.env.NODE_ENV = originalNodeEnv;
+    }
+  });
+
   it("dead-letters an undelivered generation with the localized failure", async () => {
     const psid = "undelivered-dead-letter-user";
     const userId = "undelivered-dead-letter-user-key";
@@ -3641,6 +3766,29 @@ function paidCreditGenerationJob(suffix: string) {
     reqId: `req-${suffix}`,
     lang: "nl" as const,
   };
+}
+
+async function readScopedFlowStage(job: {
+  psid: string;
+  userId: string;
+  pageId: string;
+  workspaceId: number;
+  channelConnectionId: number;
+  bindingEpoch: number;
+  privacyEpoch: number;
+}): Promise<string | undefined> {
+  return await runWithMessengerRequestContext(
+    job.pageId,
+    async () => await Promise.resolve(getState(job.psid)?.stage),
+    {
+      channel: "facebook_messenger",
+      workspaceId: job.workspaceId,
+      channelConnectionId: job.channelConnectionId,
+      bindingEpoch: job.bindingEpoch,
+      privacyEpoch: job.privacyEpoch,
+      userKey: job.userId,
+    }
+  );
 }
 
 function paidCreditCompletionFence(
