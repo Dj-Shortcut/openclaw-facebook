@@ -99,6 +99,71 @@ function executeCommand(command, args, options = {}) {
   }).trim();
 }
 
+function failureMarker(error) {
+  return /^runtime_database_host_[a-z_]+$/.test(error?.message ?? "")
+    ? error.message
+    : "runtime_database_host_repair_failed";
+}
+
+export async function cleanupRuntimeHostProbe({ name, probeId, runFly, wait }) {
+  const diagnostics = new Set();
+  let seenProbe = Boolean(probeId);
+  let absentReads = 0;
+  const list = () => {
+    try {
+      const rows = JSON.parse(
+        runFly(["machine", "list", "--app", APP, "--json"]),
+      );
+      if (!Array.isArray(rows)) throw new Error();
+      return rows;
+    } catch {
+      diagnostics.add("runtime_database_host_cleanup_list_failed");
+      return null;
+    }
+  };
+  // Allow delayed create visibility; require two separated absent reads after
+  // seeing/removing the probe. Unknown creation is never success evidence.
+  for (let attempt = 0; attempt < 25; attempt++) {
+    const rows = list();
+    const probes = rows?.filter(
+      (row) => row?.name === name || (probeId && row?.id === probeId),
+    );
+    for (const row of probes ?? []) {
+      if (
+        !/^[a-f0-9]{14}$/.test(row.id) ||
+        row.name !== name ||
+        row.config?.metadata?.leaderbot_database_host_probe !== name ||
+        (probeId && row.id !== probeId)
+      ) {
+        diagnostics.add("runtime_database_host_cleanup_rejected");
+        continue;
+      }
+      seenProbe = true;
+      probeId = row.id;
+      try {
+        runFly(["machine", "destroy", row.id, "--app", APP, "--force"]);
+      } catch {
+        diagnostics.add("runtime_database_host_cleanup_destroy_failed");
+      }
+    }
+    absentReads = probes?.length === 0 ? absentReads + 1 : 0;
+    if (seenProbe && absentReads >= 2) break;
+    if (attempt < 24) await wait(5000);
+  }
+  // Always make a final observation, even after rejected or failed rows.
+  const remaining = list();
+  if (
+    !seenProbe ||
+    absentReads < 2 ||
+    !remaining ||
+    remaining.some(
+      (row) => row?.name === name || (probeId && row?.id === probeId),
+    )
+  )
+    diagnostics.add("runtime_database_host_cleanup_incomplete");
+  return [...diagnostics];
+}
+
 export async function repairRuntimeDatabaseHost(
   { flyctl = "flyctl", stage = false } = {},
   dependencies = {},
@@ -211,6 +276,7 @@ export async function repairRuntimeDatabaseHost(
   const name = `dbhost-${randomBytes(6).toString("hex")}`;
   let probeId;
   let result;
+  let primaryFailure;
   try {
     // No app entrypoint, ports, volumes, workers or provider transport. The
     // deadline plus auto-destroy also bounds cleanup after operator interruption.
@@ -313,38 +379,22 @@ export async function repairRuntimeDatabaseHost(
       staged: stage,
       exclusiveSecretWindowConfirmed: true,
     };
-  } finally {
-    // A create response may be lost: identify only our exact random marker.
-    let seenProbe = Boolean(probeId);
-    let absentReads = 0;
-    // A lost create response can precede visibility in list. Observe for up to
-    // two minutes, and require two separated absent reads after seeing/removing
-    // our probe. Never claim cleanup success when creation remains unknown.
-    for (let attempt = 0; attempt < 25; attempt++) {
-      const rows = JSON.parse(
-        runFly(["machine", "list", "--app", APP, "--json"]),
-      );
-      const probes = rows.filter(
-        (row) => row.name === name || row.id === probeId,
-      );
-      for (const row of probes) {
-        if (
-          !/^[a-f0-9]{14}$/.test(row.id) ||
-          row.name !== name ||
-          row.config.metadata?.leaderbot_database_host_probe !== name ||
-          (probeId && row.id !== probeId)
-        )
-          throw new Error("runtime_database_host_cleanup_rejected");
-        seenProbe = true;
-        probeId = row.id;
-        runFly(["machine", "destroy", row.id, "--app", APP, "--force"]);
-      }
-      absentReads = probes.length ? 0 : absentReads + 1;
-      if (seenProbe && absentReads >= 2) break;
-      if (attempt < 24) await wait(5000);
-    }
-    if (!seenProbe || absentReads < 2)
-      throw new Error("runtime_database_host_cleanup_incomplete");
+  } catch (error) {
+    primaryFailure = failureMarker(error);
+  }
+  const cleanupDiagnostics = await cleanupRuntimeHostProbe({
+    name,
+    probeId,
+    runFly,
+    wait,
+  });
+  if (primaryFailure || cleanupDiagnostics.length) {
+    // Keep the primary category and attach only fixed cleanup markers. Raw
+    // child-process errors may contain captured credential stdout; never retain
+    // those as a public Error cause or diagnostic property.
+    throw Object.assign(new Error(primaryFailure ?? cleanupDiagnostics[0]), {
+      cleanupDiagnostics,
+    });
   }
   const after = await settled("image-gen", options);
   if (JSON.stringify(before) !== JSON.stringify(after))
@@ -367,12 +417,10 @@ if (
     })
       .then((result) => process.stdout.write(`${JSON.stringify(result)}\n`))
       .catch((error) => {
-        const marker = /^runtime_database_host_[a-z_]+$/.test(
-          error?.message ?? "",
-        )
-          ? error.message
-          : "runtime_database_host_repair_failed";
-        process.stderr.write(`${marker}\n`);
+        process.stderr.write(`${failureMarker(error)}\n`);
+        for (const marker of error.cleanupDiagnostics ?? []) {
+          process.stderr.write(`${failureMarker({ message: marker })}\n`);
+        }
         process.exitCode = 1;
       });
   }

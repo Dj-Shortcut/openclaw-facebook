@@ -4,6 +4,7 @@ import vm from "node:vm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildRuntimeHostProbe,
+  cleanupRuntimeHostProbe,
   normalizeRuntimeDatabaseUrl,
   repairRuntimeDatabaseHost,
 } from "./repair-image-gen-runtime-database-host.mjs";
@@ -213,7 +214,10 @@ describe("exact staged database hostname repair", () => {
     const { calls, dependencies } = repairHarness("unknown_creation");
     await expect(
       repairRuntimeDatabaseHost({ stage: true }, dependencies),
-    ).rejects.toThrow("cleanup_incomplete");
+    ).rejects.toMatchObject({
+      message: "runtime_database_host_repair_failed",
+      cleanupDiagnostics: ["runtime_database_host_cleanup_incomplete"],
+    });
     expect(dependencies.wait).toHaveBeenCalledTimes(24);
     expect(calls.some((call) => call.args[1] === "import")).toBe(false);
     expect(dependencies.checkSettled).toHaveBeenCalledTimes(1);
@@ -226,6 +230,81 @@ describe("exact staged database hostname repair", () => {
       repairRuntimeDatabaseHost({ stage: true }, dependencies),
     ).rejects.toThrow("transition_rejected");
     expect(calls).toHaveLength(0);
+  });
+
+  it("preserves the primary category with redacted cleanup diagnostics", async () => {
+    const { dependencies } = repairHarness("secret_changed");
+    const execute = dependencies.execute;
+    dependencies.execute = (command, args, options) => {
+      if (args[1] === "destroy") throw new Error(`sensitive ${password}`);
+      return execute(command, args, options);
+    };
+    const error = await repairRuntimeDatabaseHost(
+      { stage: true },
+      dependencies,
+    ).catch((error) => error);
+    expect(error.message).toBe("runtime_database_host_secret_changed");
+    expect(error.cleanupDiagnostics).toEqual([
+      "runtime_database_host_cleanup_destroy_failed",
+      "runtime_database_host_cleanup_incomplete",
+    ]);
+    expect(JSON.stringify(error)).not.toContain(password);
+    expect(error.cause).toBeUndefined();
+    expect(dependencies.checkSettled).toHaveBeenCalledTimes(1);
+  });
+
+  it("continues safe cleanup past rejected rows and still performs the final list", async () => {
+    const name = "dbhost-test";
+    let safeExists = true;
+    let lists = 0;
+    const destroyed = [];
+    const diagnostics = await cleanupRuntimeHostProbe({
+      name,
+      wait: async () => {},
+      runFly(args) {
+        if (args[1] === "list") {
+          lists++;
+          return JSON.stringify([
+            { name, id: "unsafe", config: {} },
+            ...(safeExists
+              ? [
+                  {
+                    name,
+                    id: "abcdef12345678",
+                    config: {
+                      metadata: { leaderbot_database_host_probe: name },
+                    },
+                  },
+                ]
+              : []),
+          ]);
+        }
+        destroyed.push(args[2]);
+        safeExists = false;
+        return "destroyed";
+      },
+    });
+    expect(destroyed).toEqual(["abcdef12345678"]);
+    expect(lists).toBe(26);
+    expect(diagnostics).toEqual([
+      "runtime_database_host_cleanup_rejected",
+      "runtime_database_host_cleanup_incomplete",
+    ]);
+  });
+
+  it("reports a cleanup failure when the primary operation succeeded", async () => {
+    const { dependencies } = repairHarness();
+    const execute = dependencies.execute;
+    dependencies.execute = (command, args, options) => {
+      if (args[1] === "destroy") throw new Error("destroy failed");
+      return execute(command, args, options);
+    };
+    await expect(
+      repairRuntimeDatabaseHost({}, dependencies),
+    ).rejects.toMatchObject({
+      message: "runtime_database_host_cleanup_destroy_failed",
+    });
+    expect(dependencies.checkSettled).toHaveBeenCalledTimes(1);
   });
 
   it("refuses execution outside the protected workflow before reading any secret", async () => {
