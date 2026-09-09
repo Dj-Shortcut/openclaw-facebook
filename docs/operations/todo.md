@@ -88,40 +88,23 @@ Live payment enablement remains gated by the relevant P1 through P4 evidence.
       Mode, pass paid checkout, delayed/replayed webhook, cancellation, failure,
       refund, partially used wallet, provider failure, delivery failure,
       deletion, budget exhaustion, receipt, reconciliation, and rollback.
-  - [ ] **Credit-schema installation remains the immediate blocker.** The
-        protected transition `33910363498/1` stopped before credit DDL on exact
-        `0016_expand`. No production credit-schema installation or new payment
-        is claimed.
-
-    - Cleanup is complete: protected run [34335377679](https://github.com/Dj-Shortcut/openclaw-facebook/actions/runs/34335377679)
-      at `6b88bb2` passed, proved temporary non-system SUPER absent and
-      unchanged exact `0016` history. Both bound temporary credentials were
-      retired with `repair_and_cleanup_exec_tokens_retired`; their GitHub
-      secrets are absent. Do not repeat that completed cleanup.
-    - The prepare repair now defaults to the single-Exec controller rather
-      than the unusable restricted-token SSH route. It approves only the
-      missing subset of `CREATE`, `TRIGGER`, `CREATE ROUTINE`, and
-      `ALTER ROUTINE`, plus conditional SUPER. The existing repair secret
-      uses two complete fixed command prefixes; no extra secret or shorter
-      shell prefix is needed. Review, CI, and the protected production
-      repair are still required.
-    - Isolated proof on the empty, unmounted MySQL 8.4.11 Fly Machine
-      `e82340db573078` passed at `2026-09-09T10:08:50Z` with the revised
-      shared 8-second handshake, 55-second remote and 65-second local limits:
-      both restricted wrapper prefixes, rejection of changed shell source
-      and wrong argument counts, actual four-right repair, no-op replay,
-      rollback of only three newly added rights while preserving pre-existing
-      CREATE, and conditional SUPER. Synthetic accounts were removed, the
-      proof token was explicitly revoked, and the Machine was stopped.
-      This proves the repair batch and transport, not production schema
-      installation or a credit grant.
-    - Next, run the reviewed protected transition once: record the
-      pre-repair snapshot, verify exact minimal migration rights, revoke
-      temporary SUPER before the separate restore-tested recovery snapshot,
-      then prove the exact `0016 -> 0018` expansion and rollback rehearsal.
-      Keep exact history and image fingerprints; no schema-rights repair
-      on a completed `0017/0018` resume. No `0019` deployment before its
-      separately reviewed transition.
+  - [x] **Credit schema installed in production.** Protected run
+        [34339825855/1](https://github.com/Dj-Shortcut/openclaw-facebook/actions/runs/34339825855)
+        on `ea680af1061901436fdae4e59397365ce6949f36` completed at
+        `2026-09-09T10:41:12Z`: exact `0016 -> 0018`, restored-snapshot integrity
+        proof, isolated restore resources removed, and temporary SUPER revoked.
+        The transition artifact digest is
+        `sha256:b86a0f76a4538bc580fd8f16698e4f6573312e1e3082c3ad3e784201c89b7ec5`.
+        The exact repair token and GitHub secret were retired with
+        `repair_exec_token_retired`. Do not repeat this installation or the
+        previously completed cleanup `34335377679`.
+  - [ ] **Build and deploy the final credit runtime.** The manifest is now
+        `runtime_build_pending` on the proven `0018` schema. Deploys remain
+        frozen on the attested bridge, which still serves the old frontend
+        and generic quota link. Build `image-gen-runtime`, review its digest,
+        stage the restricted principal, then deploy and verify the new frontend
+        and Messenger checkout route. Do not enable checkout from schema
+        success alone or repeat a rights repair on the completed expansion.
     - After schema/runtime readiness, complete the actual Messenger journey:
       signed checkout, verified Mollie webhook, credits on the correct
       user's balance, one delivered premium edit, and one debit. The
