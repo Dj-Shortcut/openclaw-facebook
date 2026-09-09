@@ -248,7 +248,9 @@ describe("OAuth callback security", () => {
     expect(authorizationUrl.searchParams.has("config_id")).toBe(false);
     expect(
       new Set(authorizationUrl.searchParams.get("scope")?.split(","))
-    ).toEqual(new Set(["public_profile", "pages_show_list"]));
+    // Operator login proves identity only. It must not request Page access it
+    // no longer consumes; Messenger Page tokens carry their own permissions.
+    ).toEqual(new Set(["public_profile"]));
     const pageConnectUrl = new URL(
       getFacebookOAuthUrl("page-connect-state") ?? "https://invalid"
     );
@@ -284,7 +286,9 @@ describe("OAuth callback security", () => {
         Authorization: "Bearer facebook-user-token",
       },
     });
-    // Login stops at identity. It never lists the signing-in user's Pages.
+    // Login stops at identity: a token exchange and a profile read, and no
+    // Page listing at all.
+    expect(fetchMock.mock.calls).toHaveLength(2);
     expect(
       fetchMock.mock.calls.some(call =>
         String(call?.[0]).includes("/me/accounts")

@@ -10,10 +10,11 @@ import { isFacebookLoginMethod } from "./portalAuthPolicy";
 
 const OAUTH_STATE_COOKIE_NAME = "lb_oauth_state_nonce";
 const FACEBOOK_OAUTH_TIMEOUT_MS = 10_000;
-const FACEBOOK_LOGIN_PERMISSIONS = [
-  "public_profile",
-  "pages_show_list",
-] as const;
+// The operator web login only proves who is signing in. Page discovery was
+// removed from the callback, so no consumer of `pages_show_list` remains and
+// asking for it would request access the runtime never uses. The separate
+// Messenger Page token permissions are unaffected.
+const FACEBOOK_LOGIN_PERMISSIONS = ["public_profile"] as const;
 
 type OAuthStatePayload = {
   nonce: string;

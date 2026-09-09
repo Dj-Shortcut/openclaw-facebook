@@ -14,8 +14,16 @@ mix it into the owner-bot review or subscription behavior.
 
 - Required Messenger/Page capability: Facebook Page Messenger direct messages.
 - Expected permission family: Page messaging access such as `pages_messaging`.
-- Do not request Facebook Login, `user_posts`, `user_friends`, social graph
-  access, or profile scraping permissions for the current bot.
+- Messenger end users never sign in. There is no Facebook Login step in the
+  Messenger journey, and no login is a condition for using the bot or for a
+  purchase.
+- The separate operator web login exists so the business owner can reach the
+  billing admin procedures. It requests `public_profile` only. It connects no
+  Page, provisions no workspace, and is not a customer, SaaS or checkout
+  requirement. Signing in can still create or refresh that person's own user
+  record; the admin procedures stay gated on the admin role.
+- Do not request `user_posts`, `user_friends`, social graph access, or profile
+  scraping permissions for the current bot.
 - Do not expand Meta permission scope without explicit product and policy
   approval.
 
