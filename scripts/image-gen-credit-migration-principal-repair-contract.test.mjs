@@ -2,7 +2,7 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   CREDIT_MIGRATION_PRINCIPAL_CLEANUP_FAILURE_MARKER,
@@ -28,11 +28,277 @@ import {
   runCli,
 } from "./repair-image-gen-credit-migration-principal.mjs";
 
+describe("credit migration failure diagnostics", () => {
+  const ARGS = [
+    "--database-app",
+    "leaderbot-portal-mysql",
+    "--database-machine-id",
+    "080d3ddb5099e8",
+    "--operation",
+    "revoke-super",
+  ];
+  const INPUT = {
+    app: "leaderbot-portal-mysql",
+    machineId: "080d3ddb5099e8",
+    operation: "revoke-super",
+  };
+  const BASE_GRANTS = [
+    "GRANT USAGE ON *.* TO `credit_migrator`@`%`",
+    "GRANT CREATE TEMPORARY TABLES, ALTER, INDEX, REFERENCES, SELECT, INSERT, UPDATE ON `leaderbot`.* TO `credit_migrator`@`%`",
+    "GRANT DELETE ON `leaderbot`.`billing_intents` TO `credit_migrator`@`%`",
+    "GRANT CREATE, DELETE ON `leaderbot`.`credit_wallets` TO `credit_migrator`@`%`",
+  ];
+  const PRIVATE = "synthetic-private-credential-or-user-content";
+  function privateFailure() {
+    return Object.assign(
+      new Error(PRIVATE, { cause: { credential: PRIVATE } }),
+      {
+        name: PRIVATE,
+        stage: PRIVATE,
+        payload: PRIVATE,
+      },
+    );
+  }
+
+  function harness() {
+    const connection = { end: vi.fn(async () => undefined) };
+    const root = {
+      initialize: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined),
+      execute: vi.fn(async (statement) =>
+        statement.includes("Super_priv") ? ["0"] : ["1"],
+      ),
+    };
+    return {
+      connection,
+      root,
+      options: {
+        migrationUrl:
+          "mysql://credit_migrator:synthetic@127.0.0.1:13306/leaderbot",
+        mysql: { createConnection: vi.fn(async () => connection) },
+        openRoot: vi.fn(async () => root),
+        readPhase: vi.fn(async () => "0016_expand"),
+        readState: vi.fn(async () => ({
+          account: { username: "credit_migrator", hostname: "%" },
+          databaseName: "leaderbot",
+          grants: BASE_GRANTS,
+          requireSuper: false,
+        })),
+      },
+    };
+  }
+
+  function captureOutput() {
+    return {
+      stdout: vi.spyOn(process.stdout, "write").mockReturnValue(true),
+      stderr: vi.spyOn(process.stderr, "write").mockReturnValue(true),
+    };
+  }
+  afterEach(() => vi.restoreAllMocks());
+
+  describe("redacted credit migration failure stage", () => {
+    it.each([
+      [
+        "migration_connect",
+        (h) =>
+          h.options.mysql.createConnection.mockRejectedValueOnce(
+            privateFailure(),
+          ),
+      ],
+      [
+        "migration_history",
+        (h) => h.options.readPhase.mockRejectedValueOnce(privateFailure()),
+      ],
+      [
+        "migration_identity",
+        (h) => h.options.readState.mockRejectedValueOnce(privateFailure()),
+      ],
+      [
+        "migration_grants",
+        (h) =>
+          h.options.readState.mockResolvedValueOnce({ databaseName: PRIVATE }),
+      ],
+      [
+        "root_connect",
+        (h) => h.options.openRoot.mockRejectedValueOnce(privateFailure()),
+      ],
+      [
+        "root_initialize",
+        (h) => h.root.initialize.mockRejectedValueOnce(privateFailure()),
+      ],
+      [
+        "super_cleanup",
+        (h) => h.root.execute.mockRejectedValueOnce(privateFailure()),
+      ],
+      [
+        "verification",
+        (h) =>
+          h.options.readState.mockImplementation(async () => {
+            if (h.options.readState.mock.calls.length === 3)
+              throw privateFailure();
+            return {
+              account: { username: "credit_migrator", hostname: "%" },
+              databaseName: "leaderbot",
+              grants: BASE_GRANTS,
+              requireSuper: false,
+            };
+          }),
+      ],
+      [
+        "connection_close",
+        (h) => h.connection.end.mockRejectedValueOnce(privateFailure()),
+      ],
+    ])("reports only the last entered %s boundary", async (stage, inject) => {
+      const h = harness();
+      inject(h);
+      const { stdout, stderr } = captureOutput();
+      const marker = await runCli(ARGS, {
+        cleanup: (input, options) =>
+          executeSuperCleanup(input, { ...h.options, ...options }),
+      });
+      expect([
+        CREDIT_MIGRATION_PRINCIPAL_FAILURE_MARKER,
+        CREDIT_MIGRATION_PRINCIPAL_CLEANUP_FAILURE_MARKER,
+      ]).toContain(marker);
+      expect(stdout).toHaveBeenCalledExactlyOnceWith(`${marker}\n`);
+      expect(stderr).toHaveBeenCalledExactlyOnceWith(
+        `${JSON.stringify({
+          event: "credit_migration_principal_operation_failed",
+          operation: "revoke-super",
+          stage,
+        })}\n`,
+      );
+      expect(
+        JSON.stringify([stdout.mock.calls, stderr.mock.calls]),
+      ).not.toContain(PRIVATE);
+    });
+
+    it.each([PRIVATE, { message: PRIVATE }, null, undefined])(
+      "does not accept a caller-provided diagnostic value %j",
+      async (value) => {
+        const { stdout, stderr } = captureOutput();
+        await runCli(ARGS, {
+          cleanup: async (_input, { onStage }) => {
+            onStage(value);
+            throw privateFailure();
+          },
+        });
+        expect(JSON.parse(stderr.mock.calls[0][0])).toEqual({
+          event: "credit_migration_principal_operation_failed",
+          operation: "revoke-super",
+          stage: "unknown",
+        });
+        expect(
+          JSON.stringify([stdout.mock.calls, stderr.mock.calls]),
+        ).not.toContain(PRIVATE);
+      },
+    );
+
+    it("does not claim an entered execution stage for default-initialization failures", async () => {
+      const { stderr } = captureOutput();
+      await runCli(ARGS, {
+        cleanup: async () => {
+          throw privateFailure();
+        },
+      });
+      expect(JSON.parse(stderr.mock.calls[0][0]).stage).toBe("unknown");
+    });
+
+    it("does not echo rejected arguments", async () => {
+      const { stdout, stderr } = captureOutput();
+      await runCli([PRIVATE]);
+      expect(JSON.parse(stderr.mock.calls[0][0])).toEqual({
+        event: "credit_migration_principal_operation_failed",
+        operation: "unknown",
+        stage: "arguments",
+      });
+      expect(
+        JSON.stringify([stdout.mock.calls, stderr.mock.calls]),
+      ).not.toContain(PRIVATE);
+    });
+
+    it.each([
+      ["prepare", CREDIT_MIGRATION_PRINCIPAL_READY_MARKER],
+      ["revoke-super", CREDIT_MIGRATION_PRINCIPAL_SUPER_REVOKED_MARKER],
+    ])(
+      "preserves exact %s success output and adds no success evidence",
+      async (operation, marker) => {
+        const { stdout, stderr } = captureOutput();
+        const args = [...ARGS.slice(0, -1), operation];
+        expect(
+          await runCli(args, {
+            execute: async () => undefined,
+            cleanup: async () => undefined,
+          }),
+        ).toBe(marker);
+        expect(stdout).toHaveBeenCalledExactlyOnceWith(`${marker}\n`);
+        expect(stderr).not.toHaveBeenCalled();
+      },
+    );
+
+    it("does not turn a post-revocation failure into success or absence-of-mutation evidence", async () => {
+      const h = harness();
+      let revoked = false;
+      h.options.readState.mockImplementation(async () => ({
+        account: { username: "credit_migrator", hostname: "%" },
+        databaseName: "leaderbot",
+        grants: revoked
+          ? BASE_GRANTS
+          : [...BASE_GRANTS, "GRANT SUPER ON *.* TO `credit_migrator`@`%`"],
+        requireSuper: false,
+      }));
+      h.root.execute.mockImplementation(async (statement) => {
+        if (statement.startsWith("REVOKE SUPER")) revoked = true;
+        return statement.includes("Super_priv") ? ["0"] : ["1"];
+      });
+      h.options.readPhase.mockImplementation(async () => {
+        if (revoked) throw privateFailure();
+        return "0016_expand";
+      });
+      const { stdout, stderr } = captureOutput();
+      expect(
+        await runCli(ARGS, {
+          cleanup: (input, options) =>
+            executeSuperCleanup(input, { ...h.options, ...options }),
+        }),
+      ).toBe(CREDIT_MIGRATION_PRINCIPAL_CLEANUP_FAILURE_MARKER);
+      expect(revoked).toBe(true);
+      expect(stdout).toHaveBeenCalledExactlyOnceWith(
+        `${CREDIT_MIGRATION_PRINCIPAL_CLEANUP_FAILURE_MARKER}\n`,
+      );
+      expect(JSON.parse(stderr.mock.calls[0][0])).toEqual({
+        event: "credit_migration_principal_operation_failed",
+        operation: "revoke-super",
+        stage: "super_cleanup",
+      });
+    });
+
+    it("preserves an earlier cleanup failure and its stage when closing also fails", async () => {
+      const h = harness();
+      h.root.execute.mockRejectedValueOnce(privateFailure());
+      h.connection.end.mockRejectedValueOnce(privateFailure());
+      const stages = [];
+      await expect(
+        executeSuperCleanup(INPUT, {
+          ...h.options,
+          signal: new AbortController().signal,
+          onStage: (stage) => stages.push(stage),
+        }),
+      ).rejects.toBeInstanceOf(CreditMigrationPrincipalCleanupError);
+      expect(stages.at(-1)).toBe("super_cleanup");
+    });
+  });
+});
+
 const ACCOUNT = Object.freeze({ hostname: "%", username: "credit_migrator" });
 const DATABASE = "leaderbot";
-const BASE_GRANTS = Object.freeze([
+// The deployed 0016 role has no credit procedure-definer table grants yet.
+const PREGRANT_GRANTS = Object.freeze([
   "GRANT USAGE ON *.* TO `credit_migrator`@`%`",
   "GRANT CREATE TEMPORARY TABLES, ALTER, INDEX, REFERENCES, SELECT, INSERT, UPDATE ON `leaderbot`.* TO `credit_migrator`@`%`",
+]);
+const BASE_GRANTS = Object.freeze([
+  ...PREGRANT_GRANTS,
   "GRANT DELETE ON `leaderbot`.`billing_intents` TO `credit_migrator`@`%`",
   "GRANT CREATE, DELETE ON `leaderbot`.`credit_wallets` TO `credit_migrator`@`%`",
 ]);
@@ -1079,6 +1345,193 @@ describe("temporary migration SUPER cleanup", () => {
 });
 
 describe("credit migration principal repair resumability", () => {
+  describe("exact 0016 pregrant boundary", () => {
+    it.each([
+      ["unrepaired schema", [...PREGRANT_GRANTS, SUPER_GRANT], "revoked"],
+      [
+        "repaired schema",
+        [...PREGRANT_GRANTS, COMPLETE_SCHEMA_GRANT, SUPER_GRANT],
+        "revoked",
+      ],
+      ["already absent SUPER", PREGRANT_GRANTS, "already_revoked"],
+    ])(
+      "cleans up %s without later definer grants",
+      async (_label, grants, outcome) => {
+        const { options, statements, readState } = postDdlPrepareHarness(
+          "0016_expand",
+          { initialGrants: grants },
+        );
+        await expect(
+          executeSuperCleanup(
+            { app: "leaderbot-portal-mysql", machineId: "080d3ddb5099e8" },
+            options,
+          ),
+        ).resolves.toBe(outcome);
+        expect(
+          statements.filter((sql) => /^(GRANT|REVOKE) /.test(sql)),
+        ).toEqual(
+          outcome === "revoked"
+            ? ["REVOKE SUPER ON *.* FROM 'credit_migrator'@'%'"]
+            : [],
+        );
+        expect((await readState()).grants).toEqual(
+          grants.filter((grant) => grant !== SUPER_GRANT),
+        );
+        expect(statements).toContain(NON_SYSTEM_SUPER_QUERY);
+      },
+    );
+
+    it("prepares only approved schema/SUPER rights before the later table-grant step", async () => {
+      const { prepare, options, statements, readState, connection } =
+        postDdlPrepareHarness("0016_expand", {
+          initialGrants: PREGRANT_GRANTS,
+        });
+      await expect(prepare()).resolves.toBe("repaired");
+      expect(statements.filter((sql) => /^(GRANT|REVOKE) /.test(sql))).toEqual([
+        "GRANT CREATE, TRIGGER, CREATE ROUTINE, ALTER ROUTINE ON `leaderbot`.* TO 'credit_migrator'@'%'",
+        "GRANT SUPER ON *.* TO 'credit_migrator'@'%'",
+      ]);
+      expect(options.verifyRuntime).toHaveBeenCalledExactlyOnceWith(
+        connection,
+        "credit-expand-pregrant",
+      );
+      expect((await readState()).grants).toEqual([
+        ...PREGRANT_GRANTS,
+        COMPLETE_SCHEMA_GRANT,
+        SUPER_GRANT,
+      ]);
+    });
+
+    it("rolls back a failed pregrant verification without adding definer rights", async () => {
+      const { prepare, options, statements, readState } = postDdlPrepareHarness(
+        "0016_expand",
+        {
+          initialGrants: PREGRANT_GRANTS,
+        },
+      );
+      options.verifyRuntime.mockRejectedValue(
+        new Error("synthetic pregrant verification failure"),
+      );
+      await expect(prepare()).rejects.toThrow(
+        "synthetic pregrant verification failure",
+      );
+      expect((await readState()).grants).toEqual(PREGRANT_GRANTS);
+      expect(statements.filter((sql) => /^(GRANT|REVOKE) /.test(sql))).toEqual([
+        "GRANT CREATE, TRIGGER, CREATE ROUTINE, ALTER ROUTINE ON `leaderbot`.* TO 'credit_migrator'@'%'",
+        "GRANT SUPER ON *.* TO 'credit_migrator'@'%'",
+        "REVOKE SUPER ON *.* FROM 'credit_migrator'@'%'",
+        "REVOKE CREATE, TRIGGER, CREATE ROUTINE, ALTER ROUTINE ON `leaderbot`.* FROM 'credit_migrator'@'%'",
+      ]);
+    });
+
+    describe.each(["prepare", "revoke-super"])("%s", (operation) => {
+      const execute = (options) =>
+        (operation === "prepare" ? executeRepair : executeSuperCleanup)(
+          {
+            app: "leaderbot-portal-mysql",
+            machineId: "080d3ddb5099e8",
+            operation,
+          },
+          options,
+        );
+
+      it.each([
+        ["a wrong database", { databaseName: "other_database" }],
+        [
+          "unexpected schema rights",
+          {
+            grants: [
+              ...PREGRANT_GRANTS,
+              "GRANT DELETE ON `leaderbot`.* TO `credit_migrator`@`%`",
+            ],
+          },
+        ],
+        [
+          "unexpected global rights",
+          {
+            grants: [
+              ...PREGRANT_GRANTS,
+              "GRANT PROCESS ON *.* TO `credit_migrator`@`%`",
+            ],
+          },
+        ],
+        [
+          "a missing base right",
+          {
+            grants: PREGRANT_GRANTS.map((grant) =>
+              grant.replace("REFERENCES, ", ""),
+            ),
+          },
+        ],
+        [
+          "an explicit definer-table revoke",
+          {
+            grants: [
+              ...PREGRANT_GRANTS,
+              "REVOKE DELETE ON `leaderbot`.`billing_intents` FROM `credit_migrator`@`%`",
+            ],
+          },
+        ],
+      ])("still rejects %s without mutation", async (_label, changes) => {
+        const { options, statements } = postDdlPrepareHarness("0016_expand", {
+          initialGrants: PREGRANT_GRANTS,
+        });
+        options.readState.mockResolvedValue({
+          ...migrationState(PREGRANT_GRANTS, true),
+          ...changes,
+        });
+        await expect(execute(options)).rejects.toThrow();
+        expect(statements.some((sql) => /^(GRANT|REVOKE) /.test(sql))).toBe(
+          false,
+        );
+        expect(options.verifyRuntime).not.toHaveBeenCalled();
+      });
+
+      it.each(["0015_base", "0017_partial_1", "unsupported", undefined])(
+        "rejects unsupported phase %s before opening root",
+        async (phase) => {
+          const { options } = postDdlPrepareHarness(phase, {
+            initialGrants: PREGRANT_GRANTS,
+          });
+          await expect(execute(options)).rejects.toThrow();
+          expect(options.openRoot).not.toHaveBeenCalled();
+          expect(options.readState).not.toHaveBeenCalled();
+        },
+      );
+
+      it.each([
+        "0017_credit_wallet_expand",
+        "0018_credit_checkout_reservation",
+      ])(
+        "keeps the full table-right boundary for completed phase %s",
+        async (phase) => {
+          const { options } = postDdlPrepareHarness(phase, {
+            initialGrants: [
+              ...PREGRANT_GRANTS,
+              COMPLETE_SCHEMA_GRANT,
+              SUPER_GRANT,
+            ],
+          });
+          await expect(execute(options)).rejects.toThrow();
+          expect(options.openRoot).not.toHaveBeenCalled();
+        },
+      );
+
+      it("refuses a changed phase before any locked privilege mutation", async () => {
+        const { options, statements } = postDdlPrepareHarness("0016_expand", {
+          initialGrants: [...PREGRANT_GRANTS, SUPER_GRANT],
+        });
+        options.readPhase
+          .mockResolvedValueOnce("0016_expand")
+          .mockResolvedValue("0017_credit_wallet_expand");
+        await expect(execute(options)).rejects.toThrow();
+        expect(statements.some((sql) => /^(GRANT|REVOKE) /.test(sql))).toBe(
+          false,
+        );
+      });
+    });
+  });
+
   it("rejects cleanup when a replacement credential hides the original account's SUPER", async () => {
     const connection = { end: vi.fn(async () => undefined) };
     const { root, statements } = rootHarness({ otherSuperAccounts: 1 });
