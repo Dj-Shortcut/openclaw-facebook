@@ -36,6 +36,26 @@ function fail() {
   throw new Error("credit migration principal repair rejected");
 }
 
+const FAILURE_STAGES = new Set([
+  "arguments",
+  "migration_url",
+  "migration_connect",
+  "migration_history",
+  "migration_identity",
+  "migration_grants",
+  "root_connect",
+  "root_initialize",
+  "principal_repair",
+  "super_cleanup",
+  "verification",
+  "rollback_verification",
+  "connection_close",
+]);
+
+function normalizeFailureStage(value) {
+  return FAILURE_STAGES.has(value) ? value : "unknown";
+}
+
 export function buildRootFlyctlEnvironment(environment = process.env) {
   if (
     !environment ||
@@ -162,6 +182,18 @@ async function readExactCreditMigrationPhase(connection) {
   );
 }
 
+function isPregrantPhase(phase) {
+  if (
+    !new Set([
+      "0016_expand",
+      "0017_credit_wallet_expand",
+      "0018_credit_checkout_reservation",
+    ]).has(phase)
+  )
+    fail();
+  return phase === "0016_expand";
+}
+
 async function closeConnection(connection) {
   if (!connection) return;
   let timeout;
@@ -196,28 +228,38 @@ export async function executeRepair(
     readPhase = readExactCreditMigrationPhase,
     readState = readCurrentState,
     verifyRuntime = assertProductionMigrationRuntime,
+    onStage = () => {},
     signal,
   } = {},
 ) {
+  onStage("arguments");
   if (!signal || signal.aborted || operation !== "prepare") fail();
+  onStage("migration_url");
   const url = assertMigrationUrl(migrationUrl);
   let connection;
   let operationError;
   const roots = [];
   let root;
   const createRoot = async () => {
+    onStage("root_connect");
     const next = await openRoot({ signal });
     if (!next || typeof next.initialize !== "function") fail();
     roots.push(next);
+    onStage("root_initialize");
     await next.initialize(signal);
     return next;
   };
   try {
+    onStage("migration_connect");
     connection = await mysql.createConnection(url);
+    onStage("migration_history");
     const initialPhase = await readPhase(connection);
+    const pregrant = isPregrantPhase(initialPhase);
+    onStage("migration_identity");
     const initial = await readState(connection);
-    const postDdl = initialPhase !== "0016_expand";
+    const postDdl = !pregrant;
     const verify = async (requireSuper = initial.requireSuper) => {
+      onStage("verification");
       const current = await readState(connection);
       if (
         current.account.username !== initial.account.username ||
@@ -231,10 +273,15 @@ export async function executeRepair(
         current.grants,
         current.databaseName,
         requireSuper,
+        pregrant,
       );
       await verifyRuntime(
         connection,
-        postDdl && !requireSuper ? "credit-expand-postddl" : "credit-expand",
+        pregrant
+          ? "credit-expand-pregrant"
+          : !requireSuper
+            ? "credit-expand-postddl"
+            : "credit-expand",
       );
       if ((await readPhase(connection)) !== initialPhase) fail();
     };
@@ -249,14 +296,16 @@ export async function executeRepair(
     }
 
     root = await createRoot();
+    onStage("principal_repair");
     return await repairCreditMigrationPrincipal({
       account: initial.account,
       databaseName: initial.databaseName,
       requireSuper: initial.requireSuper,
       superOnly: postDdl,
+      allowIncompleteDefinerTablePrivileges: pregrant,
       root,
       readState: async () => {
-        if (postDdl && (await readPhase(connection)) !== initialPhase) fail();
+        if ((await readPhase(connection)) !== initialPhase) fail();
         return readState(connection);
       },
       recoverRoot: async (failedRoot) => {
@@ -265,9 +314,12 @@ export async function executeRepair(
       },
       verify,
       verifyRollback: async (expectedMissing) => {
+        onStage("rollback_verification");
         const rolledBack = await readState(connection);
-        const observedMissing =
-          detectMissingCreditMigrationPrivileges(rolledBack);
+        const observedMissing = detectMissingCreditMigrationPrivileges({
+          ...rolledBack,
+          allowIncompleteDefinerTablePrivileges: pregrant,
+        });
         if (canonicalJson(observedMissing) !== canonicalJson(expectedMissing)) {
           fail();
         }
@@ -284,6 +336,7 @@ export async function executeRepair(
         .catch(() => undefined);
     }
     try {
+      if (!operationError) onStage("connection_close");
       await closeConnection(connection);
     } catch (closeError) {
       if (operationError instanceof CreditMigrationPrincipalCleanupError) {
@@ -315,28 +368,40 @@ export async function executeSuperCleanup(
       }),
     readPhase = readExactCreditMigrationPhase,
     readState = readCurrentState,
+    onStage = () => {},
     signal,
   } = {},
 ) {
+  onStage("arguments");
   if (!signal || signal.aborted || operation !== "revoke-super") fail();
+  onStage("migration_url");
   const url = assertMigrationUrl(migrationUrl);
   let connection;
   let operationError;
   const roots = [];
   let root;
   const createRoot = async () => {
+    onStage("root_connect");
     const next = await openRoot({ signal });
     if (!next || typeof next.initialize !== "function") fail();
     roots.push(next);
+    onStage("root_initialize");
     await next.initialize(signal);
     return next;
   };
   try {
+    onStage("migration_connect");
     connection = await mysql.createConnection(url);
+    onStage("migration_history");
     const initialPhase = await readPhase(connection);
+    const pregrant = isPregrantPhase(initialPhase);
+    onStage("migration_identity");
     const initial = await readState(connection);
-    assertCreditMigrationSuperCleanupBoundary(initial);
+    onStage("migration_grants");
+    // Definer table rights are granted only after the 0016 recovery proof.
+    assertCreditMigrationSuperCleanupBoundary(initial, pregrant);
     const verify = async () => {
+      onStage("verification");
       const current = await readState(connection);
       if (
         current.account.username !== initial.account.username ||
@@ -345,16 +410,21 @@ export async function executeSuperCleanup(
       ) {
         fail();
       }
-      assertCreditMigrationSuperCleanupBoundary(current);
+      assertCreditMigrationSuperCleanupBoundary(current, pregrant);
       if (hasCreditMigrationGlobalSuper(current.grants)) fail();
       if ((await readPhase(connection)) !== initialPhase) fail();
     };
     root = await createRoot();
+    onStage("super_cleanup");
     return await revokeTemporaryCreditMigrationSuper({
       account: initial.account,
       databaseName: initial.databaseName,
+      allowIncompleteDefinerTablePrivileges: pregrant,
       root,
-      readState: () => readState(connection),
+      readState: async () => {
+        if ((await readPhase(connection)) !== initialPhase) fail();
+        return readState(connection);
+      },
       recoverRoot: async (failedRoot) => {
         await failedRoot.close({ releaseLock: false, signal });
         return createRoot();
@@ -371,6 +441,7 @@ export async function executeSuperCleanup(
         .catch(() => undefined);
     }
     try {
+      if (!operationError) onStage("connection_close");
       await closeConnection(connection);
     } catch (closeError) {
       if (operationError instanceof CreditMigrationPrincipalCleanupError) {
@@ -408,19 +479,35 @@ export async function runCli(
   process.on("SIGINT", interrupt);
   process.on("SIGTERM", interrupt);
   let marker = CREDIT_MIGRATION_PRINCIPAL_FAILURE_MARKER;
+  let stage = "arguments";
+  let operation = "unknown";
+  const onStage = (value) => {
+    stage = normalizeFailureStage(value);
+  };
   try {
     const input = parseCliArguments(argv);
+    operation = input.operation;
+    stage = "unknown";
     if (input.operation === "prepare") {
-      await execute(input, { signal: controller.signal });
+      await execute(input, { signal: controller.signal, onStage });
       marker = CREDIT_MIGRATION_PRINCIPAL_READY_MARKER;
     } else {
-      await cleanup(input, { signal: controller.signal });
+      await cleanup(input, { signal: controller.signal, onStage });
       marker = CREDIT_MIGRATION_PRINCIPAL_SUPER_REVOKED_MARKER;
     }
   } catch (error) {
     if (error instanceof CreditMigrationPrincipalCleanupError) {
       marker = CREDIT_MIGRATION_PRINCIPAL_CLEANUP_FAILURE_MARKER;
     }
+    // Stage is the last entered boundary, not proof of the cause or of rollback.
+    // Never serialize the caught error, its cause, grants, identifiers or URLs.
+    process.stderr.write(
+      `${JSON.stringify({
+        event: "credit_migration_principal_operation_failed",
+        operation,
+        stage,
+      })}\n`,
+    );
   } finally {
     process.removeListener("SIGINT", interrupt);
     process.removeListener("SIGTERM", interrupt);

@@ -528,8 +528,12 @@ without that evidence cannot be used for resume or promoted from the untested
 pre-repair reference. After either a successful or failed DDL attempt, an `always` cleanup
 reopens only the same reviewed root command, revokes `SUPER`, and verifies that
 it is absent before success evidence is recorded or the isolated tunnel is
-stopped. Cleanup failure is terminal and emits only the fixed
-cleanup-incomplete marker. The normal
+stopped. Cleanup failure is terminal and preserves the fixed stdout
+cleanup-incomplete marker. The repair helper additionally emits the metadata-only
+stderr event `credit_migration_principal_operation_failed` with an allowlisted
+operation and last-entered stage. This is a diagnostic location, not proof of
+the root cause, absence of mutation, or successful rollback. Error details,
+identifiers, grants, and credentials are never included. The normal
 schema transition remains reviewer-gated and no credit DDL runs before this
 repair and inspection succeed.
 

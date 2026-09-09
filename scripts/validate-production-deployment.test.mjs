@@ -3885,6 +3885,24 @@ describe("production deployment contract", () => {
       "superOnly && false",
       "must reject schema-rights mutation when resuming completed credit history",
     ],
+    [
+      "scripts/image-gen-credit-migration-principal-repair-contract.mjs",
+      "(superOnly && allowIncompleteDefinerTablePrivileges)",
+      "false",
+      "must reject incomplete definer rights during SUPER-only resume",
+    ],
+    [
+      "scripts/repair-image-gen-credit-migration-principal.mjs",
+      'return phase === "0016_expand";',
+      "return true;",
+      "must allow incomplete definer rights only for the exact pregrant history",
+    ],
+    [
+      "scripts/repair-image-gen-credit-migration-principal.mjs",
+      "allowIncompleteDefinerTablePrivileges: pregrant,",
+      "allowIncompleteDefinerTablePrivileges: true,",
+      "must bind prepare, rollback, and cleanup definer checks to the observed phase",
+    ],
   ])(
     "preserves bounded SUPER-only resume in %s",
     (file, before, after, message) => {

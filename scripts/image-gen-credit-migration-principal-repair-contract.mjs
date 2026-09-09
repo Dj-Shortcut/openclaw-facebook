@@ -89,13 +89,15 @@ export function detectMissingCreditMigrationPrivileges({
   databaseName,
   grants,
   requireSuper = false,
+  allowIncompleteDefinerTablePrivileges = false,
 }) {
   if (
     databaseName !== "leaderbot" ||
     !Array.isArray(grants) ||
     grants.length === 0 ||
     grants.some((grant) => typeof grant !== "string") ||
-    typeof requireSuper !== "boolean"
+    typeof requireSuper !== "boolean" ||
+    typeof allowIncompleteDefinerTablePrivileges !== "boolean"
   ) {
     fail();
   }
@@ -114,6 +116,7 @@ export function detectMissingCreditMigrationPrivileges({
           grantsWithSyntheticRepair(grants, databaseName, privileges),
           databaseName,
           requireSuper,
+          allowIncompleteDefinerTablePrivileges,
         );
         accepted.push(privileges);
       } catch {
@@ -149,7 +152,10 @@ export function hasCreditMigrationGlobalSuper(grants) {
   return hasSuper && !revokedSuper;
 }
 
-export function assertCreditMigrationSuperCleanupBoundary(state) {
+export function assertCreditMigrationSuperCleanupBoundary(
+  state,
+  allowIncompleteDefinerTablePrivileges = false,
+) {
   quoteAccount(state?.account);
   // Permit only the exact migration role or its approved four-right repair
   // subset. SUPER's presence, not the current binlog policy, defines cleanup.
@@ -157,6 +163,7 @@ export function assertCreditMigrationSuperCleanupBoundary(state) {
     databaseName: state?.databaseName,
     grants: state?.grants,
     requireSuper: hasCreditMigrationGlobalSuper(state?.grants),
+    allowIncompleteDefinerTablePrivileges,
   });
 }
 
@@ -234,6 +241,7 @@ export async function repairCreditMigrationPrincipal({
   databaseName,
   requireSuper,
   superOnly = false,
+  allowIncompleteDefinerTablePrivileges = false,
   root,
   readState,
   recoverRoot,
@@ -242,6 +250,8 @@ export async function repairCreditMigrationPrincipal({
 }) {
   if (
     typeof superOnly !== "boolean" ||
+    typeof allowIncompleteDefinerTablePrivileges !== "boolean" ||
+    (superOnly && allowIncompleteDefinerTablePrivileges) ||
     !root ||
     typeof root.execute !== "function" ||
     typeof readState !== "function" ||
@@ -299,7 +309,10 @@ export async function repairCreditMigrationPrincipal({
     ) {
       fail();
     }
-    const missing = detectMissingCreditMigrationPrivileges(lockedState);
+    const missing = detectMissingCreditMigrationPrivileges({
+      ...lockedState,
+      allowIncompleteDefinerTablePrivileges,
+    });
     if (superOnly && missing.some((privilege) => privilege !== "SUPER")) {
       fail();
     }
@@ -336,7 +349,10 @@ export async function repairCreditMigrationPrincipal({
         ) {
           fail();
         }
-        const stillMissing = detectMissingCreditMigrationPrivileges(observed);
+        const stillMissing = detectMissingCreditMigrationPrivileges({
+          ...observed,
+          allowIncompleteDefinerTablePrivileges,
+        });
         if (
           stillMissing.some(
             (privilege) => !attemptedPrivileges.includes(privilege),
@@ -382,12 +398,14 @@ export async function repairCreditMigrationPrincipal({
 export async function revokeTemporaryCreditMigrationSuper({
   account,
   databaseName,
+  allowIncompleteDefinerTablePrivileges = false,
   root,
   readState,
   recoverRoot,
   verify,
 }) {
   if (
+    typeof allowIncompleteDefinerTablePrivileges !== "boolean" ||
     !root ||
     typeof root.execute !== "function" ||
     typeof readState !== "function" ||
@@ -423,7 +441,10 @@ export async function revokeTemporaryCreditMigrationSuper({
     ) {
       fail();
     }
-    assertCreditMigrationSuperCleanupBoundary(state);
+    assertCreditMigrationSuperCleanupBoundary(
+      state,
+      allowIncompleteDefinerTablePrivileges,
+    );
   };
   const assertNoRetainedApplicationSuper = async () => {
     // The database credential can rotate between the failed run and cleanup.

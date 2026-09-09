@@ -5461,8 +5461,12 @@ function validateCreditMigrationPrincipalRepair(rootDir) {
       "must reject schema-rights mutation when resuming completed credit history",
     ],
     [
-      "assertCreditMigrationSuperCleanupBoundary(state)",
+      "assertCreditMigrationSuperCleanupBoundary(\n      state,\n      allowIncompleteDefinerTablePrivileges,\n    )",
       "must revalidate the exact grant boundary before every cleanup mutation",
+    ],
+    [
+      "(superOnly && allowIncompleteDefinerTablePrivileges)",
+      "must reject incomplete definer rights during SUPER-only resume",
     ],
     [
       'operation: "revoke"',
@@ -5533,8 +5537,12 @@ function validateCreditMigrationPrincipalRepair(rootDir) {
       "must restrict completed 0017 and 0018 preparation to conditional SUPER only",
     ],
     [
-      'postDdl && !requireSuper ? "credit-expand-postddl" : "credit-expand"',
+      'pregrant\n          ? "credit-expand-pregrant"\n          : !requireSuper\n            ? "credit-expand-postddl"\n            : "credit-expand"',
       "must strictly verify both unprivileged resume and conditional inspection grants",
+    ],
+    [
+      'return phase === "0016_expand";',
+      "must allow incomplete definer rights only for the exact pregrant history",
     ],
     [
       "new RootMysqlSession",
@@ -5556,6 +5564,20 @@ function validateCreditMigrationPrincipalRepair(rootDir) {
     if (!runner.includes(required)) {
       fail(`${CREDIT_MIGRATION_PRINCIPAL_REPAIR_RUNNER_PATH} ${message}`);
     }
+  }
+  if (
+    occurrenceCount(
+      runner,
+      "const pregrant = isPregrantPhase(initialPhase);",
+    ) !== 2 ||
+    occurrenceCount(
+      runner,
+      "allowIncompleteDefinerTablePrivileges: pregrant,",
+    ) !== 3
+  ) {
+    fail(
+      `${CREDIT_MIGRATION_PRINCIPAL_REPAIR_RUNNER_PATH} must bind prepare, rollback, and cleanup definer checks to the observed phase`,
+    );
   }
   if (/console[.]|error[.](?:message|stack)|String\(error/.test(runner)) {
     fail(
