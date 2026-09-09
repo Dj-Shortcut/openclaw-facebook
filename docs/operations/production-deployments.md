@@ -3,14 +3,20 @@
 Production has one owner: the reviewed Git repository through the manually
 dispatched `Deploy production` GitHub Actions workflow. `fly deploy` may replace
 or update Machines. Operators never use `fly machine run` as a deployment or
-migration shortcut. Only the protected schema workflow may create its one
-temporary, no-DNS Machine to prove that a fresh database snapshot restores.
-The fixed integrity check runs as that isolated Machine's entrypoint with
+migration shortcut. Temporary Machines are permitted only in two protected
+workflows: the schema workflow's one no-DNS snapshot-restore Machine, and the
+bounded staged-hostname repair described below. Neither exception permits an
+ad-hoc application deployment or schema change.
+The schema workflow's fixed integrity check runs as its isolated Machine's entrypoint with
 networking disabled in MySQL and automatic restart disabled. The workflow reads
 structured exit evidence from the exact Machines API endpoint; a stopped
 Machine alone is not success. It retains the Machine until verification, then
 the existing unconditional cleanup removes the Machine and restored volume.
 This restore test uses no SSH or Machine-exec credential.
+The separate hostname-repair workflow may start one attested, sleep-only,
+auto-destroying Machine with no services or volumes and no DNS registration.
+Its bounded SSH probe and cleanup are restricted to the exact staged-hostname
+repair procedure; it must leave the running application baseline unchanged.
 
 ## Ownership model
 
