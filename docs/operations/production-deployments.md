@@ -978,6 +978,37 @@ remains the only permitted path for the reviewed 0017/0018 migrations; no
 application deploy, shell command, or ad-hoc Machine may change the production
 schema.
 
+### Repair a staged runtime database hostname
+
+Run `34353109061/1` (2026-09-09) failed before replacing any app/worker
+Machine. The attested runtime's mysql2 URL parser retained square brackets
+around the private IPv6 hostname, producing `getaddrinfo ENOTFOUND`. The earlier
+staging probe used the loopback tunnel instead of that production URL. Both
+the candidate and bridge release-command checks rejected the staged URL; all
+four original Machines retained the healthy bridge, and exact restored-config
+verification plus `/healthz` and `/readyz` passed.
+
+For this exact `runtime_reviewed` condition, use only the protected manual
+`repair-image-gen-runtime-database-host.yml` workflow from green reviewed main.
+It does not create or rotate a database principal, widen privileges, change
+schema, deploy the app, or enable payments. It starts one auto-destroying,
+ten-minute isolated Machine on the attested runtime with a sleep-only entrypoint,
+no services and no volumes. A bounded SSH command validates the staged account
+fingerprint, exact database Machine/private IP and database name, substitutes
+the exact `<machine-id>.vm.<database-app>.internal` hostname, and requires that
+DNS resolve to the same private IP. Both the exact artifact schema verifier
+and the synthetic, rolled-back billing-trigger probe must pass through that
+hostname. The resulting credential travels only in process memory from SSH
+stdout to `flyctl secrets import --stage` stdin, never in arguments, files,
+application logs or artifacts. A changed vault digest aborts before staging.
+The probe is removed even after failure, and the unchanged production baseline
+is reproved. Only metadata is retained. An interrupted/ambiguous stage requires
+inspection, not an automatic replay or a new credential.
+
+Future principal staging uses the same machine-specific internal hostname.
+This is an address-format correction, not completion of the runtime rollout
+or permission to expose a checkout. Resume step 10 after successful repair.
+
 Use this exact sequence:
 
 1. **Open the reviewed transition.** In a dedicated manifest PR, set the

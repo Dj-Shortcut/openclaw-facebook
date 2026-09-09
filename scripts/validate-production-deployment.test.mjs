@@ -82,6 +82,7 @@ function createRepositoryFixture() {
     ".github/workflows/image-gen-migration-smoke.yml",
     ".github/workflows/image-gen-schema-transition.yml",
     ".github/workflows/stage-image-gen-credit-runtime-principal.yml",
+    ".github/workflows/repair-image-gen-runtime-database-host.yml",
     ".github/workflows/main.yml",
     ".github/workflows/production-uptime.yml",
     ".github/workflows/recover-completed-production-deployment.yml",
@@ -1273,7 +1274,7 @@ describe("production deployment contract", () => {
       'runtime_verification_url="mysql://${runtime_principal}:${runtime_password}@127.0.0.1:13306/${RUNTIME_PRINCIPAL_DATABASE_NAME}"',
     );
     expect(workflow).toContain(
-      'runtime_database_url="mysql://${runtime_principal}:${runtime_password}@[${RUNTIME_PRINCIPAL_DATABASE_PRIVATE_IP}]:3306/${RUNTIME_PRINCIPAL_DATABASE_NAME}"',
+      'runtime_database_url="mysql://${runtime_principal}:${runtime_password}@${RUNTIME_PRINCIPAL_DATABASE_MACHINE_ID}.vm.${RUNTIME_PRINCIPAL_DATABASE_APP}.internal:3306/${RUNTIME_PRINCIPAL_DATABASE_NAME}"',
     );
     expect(workflow).toContain(
       'RUNTIME_DATABASE_URL="$runtime_verification_url"',
@@ -1351,7 +1352,7 @@ describe("production deployment contract", () => {
     replaceFixtureText(
       root,
       ".github/workflows/stage-image-gen-credit-runtime-principal.yml",
-      'runtime_database_url="mysql://${runtime_principal}:${runtime_password}@[${RUNTIME_PRINCIPAL_DATABASE_PRIVATE_IP}]:3306/${RUNTIME_PRINCIPAL_DATABASE_NAME}"',
+      'runtime_database_url="mysql://${runtime_principal}:${runtime_password}@${RUNTIME_PRINCIPAL_DATABASE_MACHINE_ID}.vm.${RUNTIME_PRINCIPAL_DATABASE_APP}.internal:3306/${RUNTIME_PRINCIPAL_DATABASE_NAME}"',
       'runtime_database_url="mysql://${runtime_principal}:${runtime_password}@127.0.0.1:13306/${RUNTIME_PRINCIPAL_DATABASE_NAME}"',
     );
 
@@ -9889,6 +9890,50 @@ describe("release-command recovery selector", () => {
 });
 
 describe("versioned recovery data contract", () => {
+  it("runs the exact copied recovery controller without repository sibling modules", () => {
+    const root = fs.mkdtempSync(
+      path.join(os.tmpdir(), "leaderbot-standalone-recovery-"),
+    );
+    tempDirs.push(root);
+    const controller = path.join(
+      fs.realpathSync(root),
+      "leaderbot-recovery-controller-v1.mjs",
+    );
+    const protocol = path.join(root, "recovery-protocol.txt");
+    fs.copyFileSync(
+      path.join(repoRoot, "scripts/validate-production-deployment.mjs"),
+      controller,
+    );
+    fs.writeFileSync(protocol, "v1\n");
+    expect(() =>
+      execFileSync(
+        process.execPath,
+        [
+          controller,
+          "--validate-recovery-protocol",
+          protocol,
+          "--root-dir",
+          repoRoot,
+        ],
+        { stdio: "pipe" },
+      ),
+    ).not.toThrow();
+    fs.writeFileSync(protocol, "v2\n");
+    expect(() =>
+      execFileSync(
+        process.execPath,
+        [
+          controller,
+          "--validate-recovery-protocol",
+          protocol,
+          "--root-dir",
+          repoRoot,
+        ],
+        { stdio: "pipe" },
+      ),
+    ).toThrow();
+  });
+
   it("supports exact recovery protocol v1 and rejects unknown encodings", () => {
     expect(validateRecoveryProtocol("v1\n")).toBe("v1");
     for (const invalid of ["", "v1", "v1\nextra\n", "v2\n"]) {

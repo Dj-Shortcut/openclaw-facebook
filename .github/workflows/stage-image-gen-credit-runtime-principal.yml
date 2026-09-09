@@ -250,7 +250,7 @@ jobs:
           runtime_password="Aa1!$(openssl rand -hex 48)"
           [[ "$runtime_password" =~ ^Aa1\![a-f0-9]{96}$ ]]
           runtime_verification_url="mysql://${runtime_principal}:${runtime_password}@127.0.0.1:13306/${RUNTIME_PRINCIPAL_DATABASE_NAME}"
-          runtime_database_url="mysql://${runtime_principal}:${runtime_password}@[${RUNTIME_PRINCIPAL_DATABASE_PRIVATE_IP}]:3306/${RUNTIME_PRINCIPAL_DATABASE_NAME}"
+          runtime_database_url="mysql://${runtime_principal}:${runtime_password}@${RUNTIME_PRINCIPAL_DATABASE_MACHINE_ID}.vm.${RUNTIME_PRINCIPAL_DATABASE_APP}.internal:3306/${RUNTIME_PRINCIPAL_DATABASE_NAME}"
           principal_fingerprint="$(printf '%s' "$runtime_principal" | sha256sum | cut -d ' ' -f1)"
           [[ "$principal_fingerprint" =~ ^[a-f0-9]{64}$ ]]
           echo "::add-mask::$runtime_principal"
