@@ -322,7 +322,9 @@ rotation. It does not revoke privileges from other accounts automatically.
 
 The revoke-only runner sends one bounded Machines Exec API request to the
 exact verified database Machine. It uses `SUPER_CLEANUP_EXEC_COMMAND` and passes
-the bounded SQL batch as one shell-quoted positional argument to `mysql --execute`.
+the bounded SQL batch as one positional argument to `mysql --execute`, using
+the API's `command` array rather than its shell-parsed `cmd` string. The token's
+CSV encoding is only for the Fly CLI credential-creation flag, not the API body.
 The fixed shell source never evaluates SQL as shell code and rejects additional
 arguments. Cleanup alone uses `--command-prefix` for the complete fixed wrapper:
 Fly compares parsed argument lists, including the complete `-lc` script and

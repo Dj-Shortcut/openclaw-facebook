@@ -8,6 +8,7 @@ import {
 import {
   buildSuperCleanupExecBatch,
   buildSuperCleanupExecCommand,
+  buildSuperCleanupExecArgv,
   SUPER_CLEANUP_EXEC_COMMAND,
   parseSuperCleanupExecResponse,
   requestSuperCleanupExec,
@@ -39,6 +40,26 @@ const response = (value = responseBody()) =>
 afterEach(() => vi.restoreAllMocks());
 
 describe("fixed one-request Fly cleanup transport", () => {
+  it.each([
+    "SELECT 'quote', \"double\", '$HOME', '$(exit 91)', '`exit 92`', '\\\\';\nDO 0;",
+    "SELECT 'één';\n",
+    "'".repeat(16_384),
+  ])("keeps SQL byte-identical in the actual argv transport", (sql) => {
+    const args = JSON.parse(JSON.stringify(buildSuperCleanupExecArgv(sql)));
+    expect(args[4]).toBe(sql);
+    expect(args).toHaveLength(5);
+    const command = args[0];
+    args[1] = "-c"; // Do not source the test host's login profile.
+    args[2] = args[2].replace(/exec env .*$/, 'printf "%s" "$1"');
+    expect(args[2]).not.toContain("mysql");
+    expect(execFileSync(command, args.slice(1), { encoding: "utf8" })).toBe(
+      sql,
+    );
+    expect(() =>
+      execFileSync(command, [...args.slice(1), "extra"], { stdio: "pipe" }),
+    ).toThrow();
+  });
+
   it("refuses a missing SQL argument without starting mysql", () => {
     const result = (() => {
       try {
@@ -106,15 +127,17 @@ describe("fixed one-request Fly cleanup transport", () => {
     expect(init.method).toBe("POST");
     expect(init.redirect).toBe("error");
     expect(JSON.parse(init.body)).toEqual({
-      cmd: buildSuperCleanupExecCommand("DO 0;\n"),
+      command: buildSuperCleanupExecArgv("DO 0;\n"),
       timeout: 40,
     });
     expect(init.body).not.toContain("synthetic-test-token");
     expect(JSON.parse(init.body)).not.toHaveProperty("stdin");
-    expect(JSON.parse(init.body).cmd).toMatch(/^\/bin\/sh -lc /);
-    expect(
-      JSON.parse(init.body).cmd.startsWith(`${SUPER_CLEANUP_EXEC_COMMAND} `),
-    ).toBe(true);
+    expect(JSON.parse(init.body)).not.toHaveProperty("cmd");
+    expect(JSON.parse(init.body).command).toHaveLength(5);
+    expect(JSON.parse(init.body).command.slice(0, 2)).toEqual([
+      "/bin/sh",
+      "-lc",
+    ]);
   });
 
   it.each([

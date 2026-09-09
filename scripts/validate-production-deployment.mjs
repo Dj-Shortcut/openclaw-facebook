@@ -5458,7 +5458,7 @@ function validateMigrationSuperCleanupExec(rootDir) {
       "must refuse redirects and bind the single POST to cancellation",
     ],
     [
-      "body: JSON.stringify({ cmd: buildSuperCleanupExecCommand(stdin), timeout: EXEC_SECONDS, }),",
+      "body: JSON.stringify({ command: buildSuperCleanupExecArgv(stdin), timeout: EXEC_SECONDS, }),",
       "must deliver bounded SQL as one quoted argument through the reviewed cleanup command",
     ],
     [

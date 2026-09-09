@@ -159,11 +159,17 @@ export function parseSuperCleanupExecResponse(value, nonce) {
 
 // The target Machine accepts Exec command arguments but drops API stdin.
 // SQL is one positional argument, never interpolated into shell source.
-export const SUPER_CLEANUP_EXEC_COMMAND =
-  '/bin/sh -lc \'test "$#" -eq 1 || exit 64; exec env MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql --protocol=socket --batch --raw --skip-column-names --silent --unbuffered -uroot leaderbot --execute="$1"\' leaderbot-super-cleanup';
+const CLEANUP_SHELL_SOURCE =
+  'test "$#" -eq 1 || exit 64; exec env MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql --protocol=socket --batch --raw --skip-column-names --silent --unbuffered -uroot leaderbot --execute="$1"';
+export const SUPER_CLEANUP_EXEC_COMMAND = `/bin/sh -lc '${CLEANUP_SHELL_SOURCE}' leaderbot-super-cleanup`;
 export const SUPER_CLEANUP_EXEC_COMMAND_FLYCTL_CSV = `"${SUPER_CLEANUP_EXEC_COMMAND.replaceAll('"', '""')}"`;
 
 export function buildSuperCleanupExecCommand(sql) {
+  buildSuperCleanupExecArgv(sql);
+  return `${SUPER_CLEANUP_EXEC_COMMAND} '${sql.replaceAll("'", "'\\''")}'`;
+}
+
+export function buildSuperCleanupExecArgv(sql) {
   if (
     typeof sql !== "string" ||
     !sql ||
@@ -171,7 +177,13 @@ export function buildSuperCleanupExecCommand(sql) {
     Buffer.byteLength(sql) > MAX_STDIN_BYTES
   )
     fail();
-  return `${SUPER_CLEANUP_EXEC_COMMAND} '${sql.replaceAll("'", "'\\''")}'`;
+  return [
+    "/bin/sh",
+    "-lc",
+    CLEANUP_SHELL_SOURCE,
+    "leaderbot-super-cleanup",
+    sql,
+  ];
 }
 
 export async function requestSuperCleanupExec(
@@ -205,7 +217,7 @@ export async function requestSuperCleanupExec(
         Accept: "application/json",
       },
       body: JSON.stringify({
-        cmd: buildSuperCleanupExecCommand(stdin),
+        command: buildSuperCleanupExecArgv(stdin),
         timeout: EXEC_SECONDS,
       }),
     });

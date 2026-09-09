@@ -4078,13 +4078,13 @@ describe("production deployment contract", () => {
       "must refuse redirects and bind the single POST to cancellation",
     ],
     [
-      "cmd: buildSuperCleanupExecCommand(stdin),",
+      "command: buildSuperCleanupExecArgv(stdin),",
       'cmd: "mysql -uroot",',
       "must deliver bounded SQL as one quoted argument through the reviewed cleanup command",
     ],
     [
-      "cmd: buildSuperCleanupExecCommand(stdin),",
-      'cmd: buildSuperCleanupExecCommand(""),',
+      "command: buildSuperCleanupExecArgv(stdin),",
+      'command: buildSuperCleanupExecArgv(""),',
       "must deliver bounded SQL as one quoted argument through the reviewed cleanup command",
     ],
     [
