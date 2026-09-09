@@ -3551,6 +3551,94 @@ describe("messenger generation job safety", () => {
     }
   });
 
+  it("settles inline production when the success notice fails after delivery", async () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = "production";
+    process.env.MESSENGER_QUOTA_BYPASS_IDS = "inline-production-notice-psid";
+    const job = {
+      psid: "inline-production-notice-psid",
+      userId: "d".repeat(64),
+      pageId: "inline-production-notice-page",
+      workspaceId: 42,
+      channelConnectionId: 8,
+      bindingEpoch: 3,
+      privacyEpoch: 5,
+      reqId: "req-inline-production-notice",
+      lang: "nl" as const,
+    };
+    const sendLoggedActions = vi.fn(async () => {
+      throw new Error("success notice send failed");
+    });
+    const runner = createTestRunner({ sendLoggedActions });
+    executeGenerationFlowMock.mockResolvedValueOnce(successGenerationResult());
+
+    try {
+      // The success notice failed, but the image itself was delivered, so the
+      // runner must not propagate into the webhook fallback.
+      await expect(runner.processMessengerGenerationJob(job)).resolves.toEqual({
+        sent: true,
+      });
+
+      expect(sendImageMock).toHaveBeenCalledTimes(1);
+      expect(executeGenerationFlowMock).toHaveBeenCalledTimes(1);
+      await expect(readScopedFlowStage(job)).resolves.toBe("IDLE");
+    } finally {
+      process.env.NODE_ENV = originalNodeEnv;
+    }
+  });
+
+  it("still escalates an inline production notice failure without delivery", async () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = "production";
+    process.env.MESSENGER_QUOTA_BYPASS_IDS =
+      "inline-production-quota-notice-psid";
+    const job = {
+      psid: "inline-production-quota-notice-psid",
+      userId: "e".repeat(64),
+      pageId: "inline-production-quota-notice-page",
+      workspaceId: 42,
+      channelConnectionId: 8,
+      bindingEpoch: 3,
+      privacyEpoch: 5,
+      reqId: "req-inline-production-quota-notice",
+      lang: "nl" as const,
+    };
+    const sendLoggedActions = vi.fn(async () => {
+      throw new Error("startpilot quota notice send failed");
+    });
+    const runner = createTestRunner({ sendLoggedActions });
+    resolveWorkspaceRuntimePolicyMock.mockResolvedValue({
+      kind: "startpilot",
+      workspaceId: 42,
+      entitlementId: 7,
+      mode: "test",
+      imageModel: "gpt-image-1",
+      imageQuality: "medium",
+    });
+    admitStartpilotImageProviderAttemptMock.mockResolvedValueOnce({
+      allowed: false,
+      reason: "daily_exhausted",
+    });
+    executeGenerationFlowMock.mockImplementationOnce(async input => {
+      const admission = await input.onProviderAttempt();
+      try {
+        await admission?.markTransportStarted();
+      } catch (error) {
+        return failureGenerationResult(error);
+      }
+      return successGenerationResult();
+    });
+
+    try {
+      await expect(runner.processMessengerGenerationJob(job)).rejects.toThrow();
+
+      // Nothing was delivered, so the error must still reach the webhook.
+      expect(sendImageMock).not.toHaveBeenCalled();
+    } finally {
+      process.env.NODE_ENV = originalNodeEnv;
+    }
+  });
+
   it("still escalates an inline production failure that never delivered", async () => {
     const originalNodeEnv = process.env.NODE_ENV;
     process.env.NODE_ENV = "production";

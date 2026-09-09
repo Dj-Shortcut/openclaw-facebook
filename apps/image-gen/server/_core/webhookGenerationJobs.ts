@@ -909,7 +909,14 @@ export function createMessengerGenerationJobRunner(
         });
         if (!isMessengerGenerationQueueEnabled()) {
           await setFlowState(psid, "IDLE");
-          if (shouldPropagateInlineGenerationFailure()) throw error;
+          if (shouldPropagateInlineGenerationFailure()) {
+            // A notice that fails after the image was delivered must not reach
+            // the webhook top-level catch: its fallback would answer the
+            // delivered image with the generic failure text.
+            const delivery = await resolveGenerationDeliveryState(job);
+            if (!delivery.confirmed) throw error;
+            return rememberSendOutcome({ sent: true });
+          }
           return sendOutcome;
         }
         throw error;
