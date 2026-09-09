@@ -343,6 +343,130 @@ export function assertCompletedMigrationSuperCleanup(
   return Object.freeze(identity);
 }
 
+// Credential replacement is not evidence of database cleanup. Only a terminal
+// failed run may release its own unusable credential; the original repair
+// credential and all database-proof requirements remain untouched.
+export function assertFailedCleanupCredentialReplacement(
+  { run, jobs, latest },
+  rawExpected,
+) {
+  const expected = exactKeys(rawExpected, ["id", "attempt", "headSha"]);
+  const identity = {
+    id: requireRunId(expected.id),
+    attempt: requireRunId(expected.attempt),
+    headSha: requireSha(expected.headSha),
+    workflowPath: MIGRATION_SUPER_CLEANUP_WORKFLOW_PATH,
+  };
+  requireRepositoryRun(run, identity, {
+    status: "completed",
+    conclusion: "failure",
+  });
+  requireLatestRun(latest, identity);
+  if (
+    !isObject(jobs) ||
+    !Array.isArray(jobs.jobs) ||
+    jobs.total_count !== jobs.jobs.length ||
+    jobs.jobs.length < 1 ||
+    jobs.jobs.length > 100
+  )
+    fail();
+  if (
+    jobs.jobs.some(
+      (job) =>
+        job.status !== "completed" ||
+        job.run_id !== run.id ||
+        job.head_sha !== run.head_sha ||
+        (job.run_attempt !== undefined && job.run_attempt !== run.run_attempt),
+    )
+  )
+    fail();
+  const matches = jobs.jobs.filter(
+    (job) => job.name === MIGRATION_SUPER_CLEANUP_JOB_NAME,
+  );
+  if (
+    matches.length !== 1 ||
+    matches[0].conclusion !== "failure" ||
+    !Array.isArray(matches[0].steps)
+  )
+    fail();
+  requireUniqueStep(
+    matches[0].steps,
+    "Revoke only temporary migration SUPER",
+    "failure",
+  );
+  return Object.freeze(identity);
+}
+
+// Read only the runner-rendered input metadata of the verified source-check
+// step, from GitHub's authenticated log endpoint for the exact attempt job.
+// Local CLI values alone must never bind an old failed run to a fresh token.
+export function assertCleanupCredentialLogBinding(log, job, rawRequest) {
+  const request = parseMigrationSuperCleanupRequest(rawRequest);
+  if (typeof log !== "string" || Buffer.byteLength(log) > 1024 * 1024) fail();
+  const steps = job?.steps?.filter(
+    (step) =>
+      step.name ===
+      "Verify reviewed source and failed predecessor before approval mutation",
+  );
+  if (
+    !Array.isArray(steps) ||
+    steps.length !== 1 ||
+    steps[0].status !== "completed" ||
+    steps[0].conclusion !== "success"
+  )
+    fail();
+  const start = Date.parse(steps[0].started_at);
+  const end = Date.parse(steps[0].completed_at) + 1000;
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start >= end) fail();
+  const fields = {
+    FAILED_RUN_ID: "predecessorRunId",
+    FAILED_RUN_ATTEMPT: "predecessorRunAttempt",
+    FAILED_HEAD_SHA: "predecessorHeadSha",
+    DATABASE_MACHINE_ID: "databaseMachineId",
+    REPAIR_TOKEN_ID: "repairTokenId",
+    REPAIR_SECRET_UPDATED_AT: "repairSecretUpdatedAt",
+    CLEANUP_TOKEN_ID: "cleanupTokenId",
+    CLEANUP_SECRET_UPDATED_AT: "cleanupSecretUpdatedAt",
+  };
+  const groups = [];
+  let group;
+  for (const line of log.split("\n")) {
+    const match =
+      /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{1,9}Z) (.*)\r?$/.exec(line);
+    if (!match) continue;
+    const time = Date.parse(match[1]);
+    if (time < start || time >= end) continue;
+    const text = match[2].replace(/\x1b\[[0-9;]*m/g, "");
+    if (text.startsWith("##[group]")) {
+      if (group) fail();
+      group = [text];
+    } else if (text === "##[endgroup]") {
+      if (group) groups.push(group);
+      group = undefined;
+    } else if (group) group.push(text);
+  }
+  const candidates = groups.filter((lines) =>
+    lines.some((line) => line.startsWith("  CLEANUP_TOKEN_ID:")),
+  );
+  if (candidates.length !== 1) fail();
+  const lines = candidates[0];
+  if (
+    lines[0] !== "##[group]Run set -euo pipefail" ||
+    !lines.includes(
+      'node scripts/validate-production-deployment.mjs --verify-source-ci "$GITHUB_SHA"',
+    ) ||
+    lines.filter((line) => line === "env:").length !== 1
+  )
+    fail();
+  const env = lines.slice(lines.indexOf("env:") + 1);
+  for (const [name, key] of Object.entries(fields)) {
+    const values = env.filter((line) => line.startsWith(`  ${name}: `));
+    if (values.length !== 1 || values[0] !== `  ${name}: ${request[key]}`)
+      fail();
+  }
+  return request;
+}
+
 function validateRunIdentity(value, workflowPath) {
   const run = exactKeys(value, ["id", "attempt", "headSha", "workflowPath"]);
   const result = {

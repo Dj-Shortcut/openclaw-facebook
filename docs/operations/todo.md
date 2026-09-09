@@ -115,6 +115,56 @@ Live payment enablement remains gated by the relevant P1 through P4 evidence.
         session initialization. Initialize the session before every exact
         history capture; retain the exact fingerprint comparison. This diagnosis
         is not successful protected cleanup or schema-transition evidence.
+        PR #505 fixed that ordering. Run `34324926620` subsequently passed
+        history inspection but stopped at `root_lock`, before approval to revoke.
+        Read-only Fly API probes showed that stdin reached neither MySQL nor
+        a standalone cat command. Passing `SELECT 1` through the fixed cleanup
+        wrapper as one quoted argument returned exactly `1\n`, HTTP 200, exit 0,
+        and empty stderr. The argument transport needs its own reviewed command
+        caveat and protected cleanup proof; no new schema transition has run.
+        **2026-09-09 pre-deployment audit:** PR #507 is deliberately draft even
+        though its CI passed. The pinned Fly CLI parses `--command` into an
+        exact argument list; its documented token permits the wrapper alone,
+        whereas the request appends the SQL argument. The operator-token probe
+        does not validate that restricted-token boundary. Do not mint the
+        documented replacement token or dispatch this revision. Correct and
+        review the transport and credential contract together; do not silently
+        broaden the credential to make the request pass.
+        Before another production attempt, close the whole-path evidence gaps:
+        (1) cleanup with the actual restricted credential, including rejection
+        of commands outside its boundary; (2) prepare and definer provisioning,
+        which still instantiate `RootMysqlSession` over SSH, with the actual
+        intended credential rather than an operator credential; (3) snapshot
+        restore, exact 0016-to-0018 transition and rollback rehearsal on an
+        isolated database; (4) the deployed Test Mode configuration and exact
+        tester binding, then signed checkout, trusted webhook, one grant and
+        one delivered premium edit. A green cleanup PR closes none of these
+        downstream gates by itself. Keep live billing disabled and retain the
+        existing offer; one edit is the consumption test, not a new bundle.
+        Isolated Fly transport proof completed 2026-09-09 at source `a50a95a`:
+        empty app `leaderbot-repair-proof-20260909`, Machine `e82340db573078`,
+        production MySQL 8.4.11 image digest, no mounted volume or public
+        service, MySQL networking disabled. A 15-minute full-wrapper-prefix
+        token accepted the actual `command` array with `SELECT 1` (HTTP 200,
+        exit 0, exact stdout). Changed shell source was denied by Fly (403);
+        missing/extra SQL arguments exited 64. The test token had explicit
+        revocation readback `2026-09-09T08:17:00Z`; the empty Machine was then
+        stopped. No credential values or identifiers are recorded here.
+        This proves the restricted transport boundary, not the full cleanup
+        handshake, credential replacement, prepare, schema transition or
+        payment journey. No production credential or database was changed.
+        Owner authorized failed-cleanup credential replacement on 2026-09-09.
+        The explicit `--failed-cleanup-credential-only` path preserves the
+        original repair credential, requires a terminal latest failed cleanup,
+        and retires only the exact cleanup identity. It is not successful
+        database cleanup evidence. Local failure-path and production-contract
+        tests pass; independent review and protected execution remain pending.
+        Review follow-up binds failed-only retirement to all eight request
+        metadata fields from GitHub's exact attempt job log, not CLI values
+        alone. Read-only verification matched the recorded original credential
+        against job `102379885050`; a fresh replacement paired with that old
+        failed run is rejected before mutation. No key has been retired by this
+        change and the production cleanup remains unproven.
         Run the separately
         approved cleanup-only proof bound to the original failed run, and retire its
         exact temporary token and unchanged secret before a new transition.

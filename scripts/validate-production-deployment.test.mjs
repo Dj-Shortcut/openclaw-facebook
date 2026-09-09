@@ -1991,21 +1991,43 @@ describe("production deployment contract", () => {
   });
 
   it.each([
-    ["repair", replaceFixtureText],
-    ["cleanup", replaceLastFixtureText],
-  ])("rejects raw flyctl commands in %s-token creation", (_kind, replace) => {
+    ["repair", "--command"],
+    ["cleanup", "--command-prefix"],
+  ])("rejects raw flyctl commands in %s-token creation", (_kind, flag) => {
     const root = createRepositoryFixture();
-    replace(
+    replaceFixtureText(
       root,
       "docs/operations/production-deployments.md",
-      '--expiry 4h --command "$root_mysql_command_csv" --json',
-      '--expiry 4h --command "$root_mysql_command" --json',
+      `${flag} "$root_mysql_command_csv"`,
+      `${flag} "$root_mysql_command"`,
     );
 
     expect(() => validateProductionRepository(root)).toThrow(
-      "must not pass the raw root command to flyctl StringSlice parsing",
+      _kind === "cleanup"
+        ? "must pass the complete reviewed cleanup-command prefix CSV field to flyctl"
+        : "must pass only the reviewed repair-command CSV field to flyctl",
     );
   });
+
+  it.each([
+    '--expiry 4h --command "$root_mysql_command_csv" --json',
+    '--expiry 4h --command-prefix "/bin/sh" --json',
+    "--expiry 4h --json",
+  ])(
+    "rejects an unusable or broadened cleanup credential: %s",
+    (replacement) => {
+      const root = createRepositoryFixture();
+      replaceFixtureText(
+        root,
+        "docs/operations/production-deployments.md",
+        '--expiry 4h --command-prefix "$root_mysql_command_csv" --json',
+        replacement,
+      );
+      expect(() => validateProductionRepository(root)).toThrow(
+        "must pass the complete reviewed cleanup-command prefix CSV field to flyctl",
+      );
+    },
+  );
 
   it("requires the reviewed flyctl CSV field in the operator runbook", () => {
     const root = createRepositoryFixture();
@@ -3206,7 +3228,6 @@ describe("production deployment contract", () => {
     );
   });
 
-
   it("keeps runtime artifacts on the exact supported 0018 phase", () => {
     const root = createRepositoryFixture();
     replaceFixtureText(
@@ -4057,14 +4078,14 @@ describe("production deployment contract", () => {
       "must refuse redirects and bind the single POST to cancellation",
     ],
     [
-      "cmd: ROOT_MYSQL_REMOTE_COMMAND,",
+      "command: buildSuperCleanupExecArgv(stdin),",
       'cmd: "mysql -uroot",',
-      "must preserve the exact command caveat and deliver bounded SQL through stdin",
+      "must deliver bounded SQL as one quoted argument through the reviewed cleanup command",
     ],
     [
-      "        stdin,\n        timeout: EXEC_SECONDS,",
-      '        stdin: "",\n        timeout: EXEC_SECONDS,',
-      "must preserve the exact command caveat and deliver bounded SQL through stdin",
+      "command: buildSuperCleanupExecArgv(stdin),",
+      'command: buildSuperCleanupExecArgv(""),',
+      "must deliver bounded SQL as one quoted argument through the reviewed cleanup command",
     ],
     [
       "Buffer.byteLength(stdin) > MAX_STDIN_BYTES",
@@ -4132,8 +4153,8 @@ describe("production deployment contract", () => {
       "must make one Exec request without automatic retry or SSH fallback",
     ],
     [
-      "import { ROOT_MYSQL_REMOTE_COMMAND }",
-      "import { RootMysqlSession, ROOT_MYSQL_REMOTE_COMMAND }",
+      'import { randomBytes } from "node:crypto";',
+      'import { randomBytes } from "node:crypto";\nimport { RootMysqlSession } from "./provision-image-gen-credit-provisioner.mjs";',
       "must make one Exec request without automatic retry or SSH fallback",
     ],
   ])("rejects cleanup Exec boundary drift: %s", (before, after, message) => {

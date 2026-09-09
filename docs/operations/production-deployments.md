@@ -290,21 +290,25 @@ fly_version="$(flyctl version)"
 [[ "$fly_version" =~ ^flyctl\ v0\.4\.94([[:space:]]|$) ]]
 flyctl tokens list --app leaderbot-portal-mysql --scope app | \
   CLEANUP_FAILED_RUN_ID="$failed_run_id" node --input-type=module -e \
-  'import {parseFlyTokenInventory} from "./scripts/retire-image-gen-repair-exec-token.mjs"; let s=""; for await (const c of process.stdin) s+=c; if (parseFlyTokenInventory(s).some(t=>t.name===`leaderbot-pr486-cleanup-${process.env.CLEANUP_FAILED_RUN_ID}`)) process.exit(1)'
+  'import {parseFlyTokenInventory} from "./scripts/retire-image-gen-repair-exec-token.mjs"; let s=""; for await (const c of process.stdin) s+=c; if (parseFlyTokenInventory(s).some(t=>t.name===`leaderbot-pr486-cleanup-${process.env.CLEANUP_FAILED_RUN_ID}` && t.revokedAt===null)) process.exit(1)'
 root_mysql_command_csv="$(node --input-type=module -e \
-  'import {ROOT_MYSQL_REMOTE_COMMAND_FLYCTL_CSV} from "./scripts/provision-image-gen-credit-provisioner.mjs"; process.stdout.write(ROOT_MYSQL_REMOTE_COMMAND_FLYCTL_CSV)')"
+  'import {SUPER_CLEANUP_EXEC_COMMAND_FLYCTL_CSV} from "./scripts/image-gen-super-cleanup-exec.mjs"; process.stdout.write(SUPER_CLEANUP_EXEC_COMMAND_FLYCTL_CSV)')"
 cleanup_token_json="$(flyctl tokens create machine-exec \
   --app leaderbot-portal-mysql --name "leaderbot-pr486-cleanup-$failed_run_id" \
-  --expiry 4h --command "$root_mysql_command_csv" --json)"
+  --expiry 4h --command-prefix "$root_mysql_command_csv" --json)"
 cleanup_token="$(printf '%s' "$cleanup_token_json" | node --input-type=module -e \
   'try { let s=""; for await (const c of process.stdin) s+=c; const v=JSON.parse(s).token; if(typeof v!=="string" || !v.trim()) process.exit(1); process.stdout.write(v); } catch { process.exit(1); }')"
 unset cleanup_token_json root_mysql_command_csv
+cleanup_token_id="$(flyctl tokens list --app leaderbot-portal-mysql --scope app | \
+  CLEANUP_FAILED_RUN_ID="$failed_run_id" node --input-type=module -e \
+  'import {parseFlyTokenInventory} from "./scripts/retire-image-gen-repair-exec-token.mjs"; let s=""; for await (const c of process.stdin) s+=c; const t=parseFlyTokenInventory(s).filter(t=>t.name===`leaderbot-pr486-cleanup-${process.env.CLEANUP_FAILED_RUN_ID}` && t.revokedAt===null); if(t.length!==1 || t[0].revokedAt!==null) process.exit(1); process.stdout.write(t[0].id)')"
+test -n "$cleanup_token_id"
+test "$cleanup_token_id" != "$repair_token_id"
+test "$(gh secret list --repo Dj-Shortcut/openclaw-facebook --env production \
+  --json name --jq '[.[] | select(.name == "FLY_DATABASE_CLEANUP_EXEC_TOKEN")] | length')" = 0
 printf '%s' "$cleanup_token" | gh secret set FLY_DATABASE_CLEANUP_EXEC_TOKEN \
   --repo Dj-Shortcut/openclaw-facebook --env production
 unset cleanup_token
-cleanup_token_id="$(flyctl tokens list --app leaderbot-portal-mysql --scope app | \
-  CLEANUP_FAILED_RUN_ID="$failed_run_id" node --input-type=module -e \
-  'import {parseFlyTokenInventory} from "./scripts/retire-image-gen-repair-exec-token.mjs"; let s=""; for await (const c of process.stdin) s+=c; const t=parseFlyTokenInventory(s).filter(t=>t.name===`leaderbot-pr486-cleanup-${process.env.CLEANUP_FAILED_RUN_ID}`); if(t.length!==1 || t[0].revokedAt!==null) process.exit(1); process.stdout.write(t[0].id)')"
 cleanup_secret_updated_at="$(gh secret list --repo Dj-Shortcut/openclaw-facebook \
   --env production --json name,updatedAt \
   --jq '.[] | select(.name == "FLY_DATABASE_CLEANUP_EXEC_TOKEN") | .updatedAt')"
@@ -316,14 +320,49 @@ test "$cleanup_token_id" != "$repair_token_id"
 Record only the eight metadata values, never either credential. If creation,
 installation, or metadata capture is uncertain, stop and inspect that exact
 cleanup identity; do not rerun token creation or replace the repair secret.
+For an explicitly authorized replacement after a terminal failed cleanup, use
+the retirement CLI with `--failed-cleanup-credential-only` followed by its
+existing nine metadata argument pairs. This mode requires the latest cleanup
+run to have failed and preserves the original repair secret unchanged. Before
+any mutation it fetches the exact attempt job log from GitHub and compares all
+eight runner-rendered request metadata fields in the successful source-check
+step with the requested identities. Missing, masked, ambiguous, or mismatched
+metadata fails closed; a later replacement cannot borrow the older failed run.
+Raw logs and credential identifiers must not be copied into repository evidence.
+It
+retires only the recorded cleanup token and secret, and never supplies database
+cleanup evidence. Successful database cleanup is still required by the normal
+retirement path. Retired same-name historical tokens may remain visible; active
+same-name collisions still block replacement, and identity is always bound to
+the recorded token ID and secret timestamp rather than its name alone.
 The cleanup also refuses to report success if any non-system MySQL account
 still has `SUPER`, including a former migration account after credential
 rotation. It does not revoke privileges from other accounts automatically.
 
 The revoke-only runner sends one bounded Machines Exec API request to the
-exact verified database Machine. It keeps `ROOT_MYSQL_REMOTE_COMMAND` unchanged
-and supplies SQL through the API's `stdin` field; the pinned CLI's Exec command
-does not forward stdin. There is no SSH fallback, redirect, or automatic request
+exact verified database Machine. It uses `SUPER_CLEANUP_EXEC_COMMAND` and passes
+the bounded SQL batch as one positional argument to `mysql --execute`, using
+the API's `command` array rather than its shell-parsed `cmd` string. The token's
+CSV encoding is only for the Fly CLI credential-creation flag, not the API body.
+The fixed shell source never evaluates SQL as shell code and rejects additional
+arguments. Cleanup alone uses `--command-prefix` for the complete fixed wrapper:
+Fly compares parsed argument lists, including the complete `-lc` script and
+its fixed `$0`. The sole trailing argument is the SQL batch. An exact
+`--command` for the wrapper would reject every batch; a shorter prefix (such
+as `/bin/sh`) would allow arbitrary shell source and is forbidden. The prepare
+credential above remains exact-command scoped; this is not a blanket permission
+to broaden other credentials. The cleanup token still permits root SQL, just
+as the former stdin transport did, so keep its four-hour expiry, protected-job
+approval, exact app binding, and verified retirement. Before using this revised
+credential on production, prove on an isolated target that the intended command
+succeeds while changed shell source and extra arguments fail. An operator-token
+probe alone does not satisfy this requirement.
+Read-only production probes returned empty stdout for both API stdin
+forms, while the explicit SQL argument returned its expected marker. Do not
+reuse a token restricted to the former stdin command: preserve its metadata and
+revoke it with verified readback before installing the separately recorded
+replacement cleanup credential. Keep the original repair secret unchanged.
+There is no SSH fallback, redirect, or automatic request
 retry. One root session holds the existing repair lock while the separate
 migration connection verifies the exact account, grants, and schema history
 before and after the revoke. Each approval must belong to that live verifier

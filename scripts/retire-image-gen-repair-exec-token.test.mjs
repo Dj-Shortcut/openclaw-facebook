@@ -258,6 +258,7 @@ function cleanupHarness() {
     total_count: 1,
     jobs: [
       {
+        id: run.id + 100,
         run_id: run.id,
         run_attempt: 1,
         head_sha: run.head_sha,
@@ -294,6 +295,23 @@ function cleanupHarness() {
     sourceRun,
     cleanupRun,
     evidence: structuredClone(evidence),
+    cleanupLog: [
+      "##[group]Run set -euo pipefail",
+      'node scripts/validate-production-deployment.mjs --verify-source-ci "$GITHUB_SHA"',
+      "shell: /usr/bin/bash -e {0}",
+      "env:",
+      `  FAILED_RUN_ID: ${request.predecessorRunId}`,
+      `  FAILED_RUN_ATTEMPT: ${request.predecessorRunAttempt}`,
+      `  FAILED_HEAD_SHA: ${request.predecessorHeadSha}`,
+      `  DATABASE_MACHINE_ID: ${request.databaseMachineId}`,
+      `  REPAIR_TOKEN_ID: ${request.repairTokenId}`,
+      `  REPAIR_SECRET_UPDATED_AT: ${request.repairSecretUpdatedAt}`,
+      `  CLEANUP_TOKEN_ID: ${request.cleanupTokenId}`,
+      `  CLEANUP_SECRET_UPDATED_AT: ${request.cleanupSecretUpdatedAt}`,
+      "##[endgroup]",
+    ]
+      .map((line) => `2026-09-05T05:01:00.1234567Z ${line}`)
+      .join("\n"),
     calls: [],
     sourceJobs: job(
       sourceRun,
@@ -309,6 +327,8 @@ function cleanupHarness() {
           number: index + 1,
           status: "completed",
           conclusion: "success",
+          started_at: "2026-09-05T05:01:00Z",
+          completed_at: "2026-09-05T05:01:01Z",
         }),
       ),
     ),
@@ -353,6 +373,24 @@ function cleanupHarness() {
       }
     }
     const endpoint = argv.at(-1);
+    if (
+      endpoint ===
+      `/repos/Dj-Shortcut/openclaw-facebook/actions/jobs/${state.cleanupJobs.jobs[0].id}/logs`
+    )
+      return state.cleanupLog;
+    if (
+      endpoint.endsWith(
+        "/environments/production/secrets/FLY_DATABASE_REPAIR_EXEC_TOKEN",
+      )
+    ) {
+      const original = state.secrets.find(
+        (item) => item.name === "FLY_DATABASE_REPAIR_EXEC_TOKEN",
+      );
+      return JSON.stringify({
+        name: original?.name,
+        updated_at: original?.updatedAt,
+      });
+    }
     if (endpoint.endsWith(`/actions/runs/${recovery.runId}`))
       return JSON.stringify(state.sourceRun);
     if (endpoint.endsWith(`/actions/runs/${recovery.cleanupRunId}`))
@@ -409,7 +447,7 @@ function cleanupHarness() {
   return {
     state,
     recovery,
-    run: () =>
+    run: (options = {}) =>
       retireAfterProtectedCleanup(recovery, {
         execute,
         reviewedWorkflow,
@@ -417,11 +455,130 @@ function cleanupHarness() {
         readInventory: async () => structuredClone(state.tokens),
         readArtifact: () => structuredClone(state.evidence),
         now: () => fixedNow,
+        ...options,
       }),
   };
 }
 
 describe("separate protected cleanup token retirement", () => {
+  it("ignores explicitly revoked historical names but keeps exact token identity", async () => {
+    const h = cleanupHarness();
+    h.state.tokens.push({
+      ...h.state.tokens[0],
+      id: "olderRevokedCleanupToken",
+      revokedAt: Date.parse("2026-09-05T05:01:00Z"),
+    });
+    await expect(h.run()).resolves.toBe(
+      "repair_and_cleanup_exec_tokens_retired",
+    );
+    expect(mutations(h.state).filter((call) => call[0] === "flyctl")).toEqual([
+      ["flyctl", ["tokens", "revoke", h.recovery.cleanupTokenId]],
+    ]);
+  });
+  function failedHarness() {
+    const h = cleanupHarness();
+    h.state.cleanupRun.conclusion = "failure";
+    h.state.cleanupJobs.jobs[0].conclusion = "failure";
+    h.state.cleanupJobs.jobs[0].steps.find(
+      (step) => step.name === "Revoke only temporary migration SUPER",
+    ).conclusion = "failure";
+    return h;
+  }
+  it("retires only a failed cleanup credential without claiming database success", async () => {
+    const h = failedHarness();
+    await expect(
+      h.run({
+        failedCleanupCredentialOnly: true,
+        readArtifact: () => {
+          throw Error("must not read success evidence");
+        },
+      }),
+    ).resolves.toBe("failed_cleanup_credential_retired_only");
+    expect(h.state.secrets).toEqual([
+      {
+        name: "FLY_DATABASE_REPAIR_EXEC_TOKEN",
+        updatedAt: h.recovery.secretUpdatedAt,
+      },
+    ]);
+    expect(
+      mutations(h.state).some((call) =>
+        call[1].includes("FLY_DATABASE_REPAIR_EXEC_TOKEN"),
+      ),
+    ).toBe(false);
+    expect(h.state.tokens[0].revokedAt).not.toBeNull();
+  });
+  it("does not retire a fresh replacement using the older failed run", async () => {
+    const h = failedHarness();
+    h.recovery.cleanupTokenId = "freshUnexercisedCleanupToken";
+    h.recovery.cleanupSecretUpdatedAt = "2026-09-05T05:45:00Z";
+    h.state.tokens[0].id = h.recovery.cleanupTokenId;
+    h.state.secrets[1].updatedAt = h.recovery.cleanupSecretUpdatedAt;
+    await expect(
+      h.run({ failedCleanupCredentialOnly: true }),
+    ).rejects.toThrow();
+    expect(mutations(h.state)).toEqual([]);
+  });
+  it.each([
+    (h) => {
+      h.state.cleanupLog = "";
+    },
+    (h) => {
+      h.state.cleanupLog += `\n${h.state.cleanupLog}`;
+    },
+    (h) => {
+      h.state.cleanupLog = h.state.cleanupLog.replaceAll(
+        "2026-09-05T05:01:00.1234567Z",
+        "2026-09-05T05:02:00.1234567Z",
+      );
+    },
+    (h) => {
+      h.state.cleanupLog = h.state.cleanupLog.replace("##[endgroup]", "");
+    },
+    (h) => {
+      h.state.cleanupLog = h.state.cleanupLog.replace(
+        "CLEANUP_TOKEN_ID: syntheticCleanupToken456",
+        "CLEANUP_TOKEN_ID: ***",
+      );
+    },
+    (h) => {
+      h.state.cleanupJobs.jobs[0].steps.find(
+        (step) =>
+          step.name ===
+          "Verify reviewed source and failed predecessor before approval mutation",
+      ).conclusion = "failure";
+    },
+  ])("rejects missing or unbound run credential evidence", async (change) => {
+    const h = failedHarness();
+    change(h);
+    await expect(
+      h.run({ failedCleanupCredentialOnly: true }),
+    ).rejects.toThrow();
+    expect(mutations(h.state)).toEqual([]);
+  });
+  it.each([
+    (h) => {
+      h.state.cleanupRun.status = "in_progress";
+    },
+    (h) => {
+      h.state.cleanupRun.conclusion = "success";
+    },
+    (h) => {
+      h.state.secrets[0].updatedAt = "2026-09-05T06:00:00Z";
+    },
+    (h) => {
+      h.state.secrets[1].updatedAt = "2026-09-05T06:00:00Z";
+    },
+  ])(
+    "refuses failed credential retirement when its boundaries change",
+    async (change) => {
+      const h = failedHarness();
+      change(h);
+      await expect(
+        h.run({ failedCleanupCredentialOnly: true }),
+      ).rejects.toThrow();
+      expect(mutations(h.state)).toEqual([]);
+    },
+  );
   it("removes the old absent credential only after protected cleanup and explicitly revokes the fresh cleanup token", async () => {
     const h = cleanupHarness();
     await expect(h.run()).resolves.toBe(
