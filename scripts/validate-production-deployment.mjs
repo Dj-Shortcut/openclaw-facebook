@@ -33,6 +33,10 @@ const CREDIT_MIGRATION_PRINCIPAL_REPAIR_RUNNER_PATH =
   "scripts/repair-image-gen-credit-migration-principal.mjs";
 const CREDIT_MIGRATION_PRINCIPAL_REPAIR_TEST_PATH =
   "scripts/image-gen-credit-migration-principal-repair-contract.test.mjs";
+const MIGRATION_SUPER_CLEANUP_EXEC_PATH =
+  "scripts/image-gen-super-cleanup-exec.mjs";
+const MIGRATION_SUPER_CLEANUP_EXEC_TEST_PATH =
+  "scripts/image-gen-super-cleanup-exec.test.mjs";
 const CREDIT_PROVISIONER_RETIREMENT_WORKFLOW_PATH =
   ".github/workflows/retire-image-gen-credit-provisioners.yml";
 const CREDIT_PROVISIONER_RETIREMENT_RUNNER_PATH =
@@ -5428,11 +5432,112 @@ function validateCreditProvisionerBootstrapHelper(rootDir) {
   }
 }
 
+function validateMigrationSuperCleanupExec(rootDir) {
+  const source = fs.readFileSync(
+    path.join(rootDir, MIGRATION_SUPER_CLEANUP_EXEC_PATH),
+    "utf8",
+  );
+  const compact = source.replace(/\s+/g, " ");
+  // These wiring checks complement the registered module's behavioral tests;
+  // they do not treat source-token presence as proof of a production cleanup.
+  for (const [required, message] of [
+    [
+      'const API_ORIGIN = "https://api.machines.dev";',
+      "must use only the fixed Machines API origin",
+    ],
+    [
+      'const DATABASE_APP = "leaderbot-portal-mysql";',
+      "must target only the reviewed database app",
+    ],
+    [
+      "const url = `${API_ORIGIN}/v1/apps/${DATABASE_APP}/machines/${machineId}/exec`;",
+      "must bind Exec to the exact database Machine endpoint",
+    ],
+    [
+      'method: "POST", redirect: "error", signal,',
+      "must refuse redirects and bind the single POST to cancellation",
+    ],
+    [
+      "body: JSON.stringify({ cmd: ROOT_MYSQL_REMOTE_COMMAND, stdin, timeout: EXEC_SECONDS, }),",
+      "must preserve the exact command caveat and deliver bounded SQL through stdin",
+    ],
+    [
+      "Buffer.byteLength(stdin) > MAX_STDIN_BYTES",
+      "must bound the SQL request body before dispatch",
+    ],
+    [
+      "response.status !== 200 || response.redirected || (response.url && response.url !== url)",
+      "must reject unsuccessful or redirected Exec responses",
+    ],
+    [
+      "if (bytes > MAX_RESPONSE_BYTES) fail();",
+      "must bound streamed response bytes",
+    ],
+    [
+      '!Object.hasOwn(value, "exit_code") || value.exit_code !== 0 || (Object.hasOwn(value, "exit_signal") && value.exit_signal !== 0) || value.stderr !== ""',
+      "must reject missing exit status, remote failure, signals and SQL stderr",
+    ],
+    [
+      "if (value.stdout === resultMarker(nonce, result)) return result;",
+      "must require the exact invocation-bound terminal marker",
+    ],
+    [
+      "const LOCK = CREDIT_MIGRATION_PRINCIPAL_REPAIR_LOCK;",
+      "must retain the existing principal repair lock",
+    ],
+    [
+      'operation: "revoke", privileges: ["SUPER"],',
+      "must limit the batch mutation to revoking temporary SUPER",
+    ],
+    [
+      "assertCreditMigrationSuperCleanupBoundary( current, allowIncompleteDefinerTablePrivileges, );",
+      "must recheck the observed grant boundary before approving mutation",
+    ],
+    [
+      "completed.failed || !verifiedBefore || !verifiedAfter ||",
+      "must require both verifier approvals before accepting success",
+    ],
+    [
+      "AbortSignal.timeout(DEADLINE_MS)",
+      "must bound the complete handshake and response lifecycle",
+    ],
+  ]) {
+    if (!compact.includes(required)) {
+      fail(`${MIGRATION_SUPER_CLEANUP_EXEC_PATH} ${message}`);
+    }
+  }
+  if (
+    occurrenceCount(source, "await fetchImpl(") !== 1 ||
+    occurrenceCount(
+      compact,
+      "request({ app, machineId, stdin, nonce, signal: combined })",
+    ) !== 1 ||
+    /node:child_process|RootMysqlSession|buildRootFlyctlEnvironment|recoverRoot\s*\(/.test(
+      source,
+    )
+  ) {
+    fail(
+      `${MIGRATION_SUPER_CLEANUP_EXEC_PATH} must make one Exec request without automatic retry or SSH fallback`,
+    );
+  }
+  if (
+    /console[.]|process[.](?:stdout|stderr)|error[.](?:message|stack)|String\(error/.test(
+      source,
+    )
+  ) {
+    fail(
+      `${MIGRATION_SUPER_CLEANUP_EXEC_PATH} must not expose transport bodies, stderr or credentials`,
+    );
+  }
+}
+
 function validateCreditMigrationPrincipalRepair(rootDir) {
   for (const relativePath of [
     CREDIT_MIGRATION_PRINCIPAL_REPAIR_CONTRACT_PATH,
     CREDIT_MIGRATION_PRINCIPAL_REPAIR_RUNNER_PATH,
     CREDIT_MIGRATION_PRINCIPAL_REPAIR_TEST_PATH,
+    MIGRATION_SUPER_CLEANUP_EXEC_PATH,
+    MIGRATION_SUPER_CLEANUP_EXEC_TEST_PATH,
     REPAIR_EXEC_TOKEN_RETIREMENT_PATH,
     REPAIR_EXEC_TOKEN_RETIREMENT_TEST_PATH,
     MIGRATION_SUPER_CLEANUP_WORKFLOW_PATH,
@@ -5518,15 +5623,49 @@ function validateCreditMigrationPrincipalRepair(rootDir) {
     path.join(rootDir, CREDIT_MIGRATION_PRINCIPAL_REPAIR_RUNNER_PATH),
     "utf8",
   );
+  const prepareStart = runner.indexOf("export async function executeRepair(");
+  const cleanupStart = runner.indexOf(
+    "export async function executeSuperCleanup(",
+  );
+  const cleanupEnd = runner.indexOf("function normalizeMarker(", cleanupStart);
+  const prepare = runner.slice(prepareStart, cleanupStart);
+  const cleanup = runner.slice(cleanupStart, cleanupEnd);
   if (
+    prepareStart < 0 ||
+    cleanupStart <= prepareStart ||
+    cleanupEnd <= cleanupStart ||
     !runner.includes("export function buildRootFlyctlEnvironment") ||
     !runner.includes('["PATH", "HOME", "FLY_API_TOKEN"]') ||
-    occurrenceCount(runner, "env: buildRootFlyctlEnvironment(),") !== 2
+    !prepare.includes("new RootMysqlSession") ||
+    occurrenceCount(prepare, "env: buildRootFlyctlEnvironment(),") !== 1 ||
+    occurrenceCount(runner, "env: buildRootFlyctlEnvironment(),") !== 1
   ) {
     fail(
       `${CREDIT_MIGRATION_PRINCIPAL_REPAIR_RUNNER_PATH} must pass the existing HOME and explicit repair token through the shared root Fly child allowlist`,
     );
   }
+  const compactCleanup = cleanup.replace(/\s+/g, " ");
+  if (
+    !runner.includes('from "./image-gen-super-cleanup-exec.mjs"') ||
+    !compactCleanup.includes(
+      "runCleanup = revokeTemporaryCreditMigrationSuperViaExec,",
+    ) ||
+    !compactCleanup.includes('operation !== "revoke-super"') ||
+    !compactCleanup.includes(
+      "return await runCleanup({ app, machineId, connection, account: initial.account, databaseName: initial.databaseName, allowIncompleteDefinerTablePrivileges: pregrant,",
+    ) ||
+    !compactCleanup.includes(
+      "readState: async () => { if ((await readPhase(connection)) !== initialPhase) fail(); return readState(connection); }, verify, signal, onStage,",
+    ) ||
+    /RootMysqlSession|openRoot|recoverRoot|buildRootFlyctlEnvironment/.test(
+      cleanup,
+    )
+  ) {
+    fail(
+      `${CREDIT_MIGRATION_PRINCIPAL_REPAIR_RUNNER_PATH} must bind revoke-only Exec to the current account, phase, verifier and signal without root SSH fallback`,
+    );
+  }
+  validateMigrationSuperCleanupExec(rootDir);
   for (const [required, message] of [
     [
       "classifyCreditMigrationHistory",
@@ -5597,6 +5736,7 @@ function validateCreditMigrationPrincipalRepair(rootDir) {
   ).split(/\s+/);
   for (const testPath of [
     CREDIT_MIGRATION_PRINCIPAL_REPAIR_TEST_PATH,
+    MIGRATION_SUPER_CLEANUP_EXEC_TEST_PATH,
     REPAIR_EXEC_TOKEN_RETIREMENT_TEST_PATH,
     "scripts/image-gen-migration-super-cleanup-evidence.test.mjs",
   ]) {

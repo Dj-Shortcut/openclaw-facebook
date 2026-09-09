@@ -11,6 +11,7 @@ import {
   configureProductionSchemaSession,
 } from "../apps/image-gen/scripts/production-schema-contract.mjs";
 import { RootMysqlSession } from "./provision-image-gen-credit-provisioner.mjs";
+import { revokeTemporaryCreditMigrationSuperViaExec } from "./image-gen-super-cleanup-exec.mjs";
 import {
   CREDIT_MIGRATION_PRINCIPAL_CLEANUP_FAILURE_MARKER,
   CREDIT_MIGRATION_PRINCIPAL_FAILURE_MARKER,
@@ -22,7 +23,6 @@ import {
   hasCreditMigrationGlobalSuper,
   parseCreditMigrationAccount,
   repairCreditMigrationPrincipal,
-  revokeTemporaryCreditMigrationSuper,
 } from "./image-gen-credit-migration-principal-repair-contract.mjs";
 
 const scriptPath = fileURLToPath(import.meta.url);
@@ -45,6 +45,9 @@ const FAILURE_STAGES = new Set([
   "migration_grants",
   "root_connect",
   "root_initialize",
+  "root_exec_request",
+  "root_lock",
+  "root_exec_response",
   "principal_repair",
   "super_cleanup",
   "verification",
@@ -359,13 +362,7 @@ export async function executeSuperCleanup(
   {
     migrationUrl = process.env.DATABASE_MIGRATION_URL?.trim(),
     mysql = loadMysqlPromiseClient(),
-    openRoot = ({ signal }) =>
-      new RootMysqlSession({
-        app,
-        machineId,
-        signal,
-        env: buildRootFlyctlEnvironment(),
-      }),
+    runCleanup = revokeTemporaryCreditMigrationSuperViaExec,
     readPhase = readExactCreditMigrationPhase,
     readState = readCurrentState,
     onStage = () => {},
@@ -378,17 +375,6 @@ export async function executeSuperCleanup(
   const url = assertMigrationUrl(migrationUrl);
   let connection;
   let operationError;
-  const roots = [];
-  let root;
-  const createRoot = async () => {
-    onStage("root_connect");
-    const next = await openRoot({ signal });
-    if (!next || typeof next.initialize !== "function") fail();
-    roots.push(next);
-    onStage("root_initialize");
-    await next.initialize(signal);
-    return next;
-  };
   try {
     onStage("migration_connect");
     connection = await mysql.createConnection(url);
@@ -414,32 +400,25 @@ export async function executeSuperCleanup(
       if (hasCreditMigrationGlobalSuper(current.grants)) fail();
       if ((await readPhase(connection)) !== initialPhase) fail();
     };
-    root = await createRoot();
-    onStage("super_cleanup");
-    return await revokeTemporaryCreditMigrationSuper({
+    return await runCleanup({
+      app,
+      machineId,
+      connection,
       account: initial.account,
       databaseName: initial.databaseName,
       allowIncompleteDefinerTablePrivileges: pregrant,
-      root,
       readState: async () => {
         if ((await readPhase(connection)) !== initialPhase) fail();
         return readState(connection);
       },
-      recoverRoot: async (failedRoot) => {
-        await failedRoot.close({ releaseLock: false, signal });
-        return createRoot();
-      },
       verify,
+      signal,
+      onStage,
     });
   } catch (error) {
     operationError = error;
     throw error;
   } finally {
-    for (const openedRoot of roots.reverse()) {
-      await openedRoot
-        .close({ releaseLock: false, signal })
-        .catch(() => undefined);
-    }
     try {
       if (!operationError) onStage("connection_close");
       await closeConnection(connection);
