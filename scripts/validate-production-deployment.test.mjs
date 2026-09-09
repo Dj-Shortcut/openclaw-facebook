@@ -1203,7 +1203,7 @@ describe("production deployment contract", () => {
     });
   });
 
-  it("freezes the attested bridge while building the verified 0018 runtime", () => {
+  it("freezes deployment while staging the attested 0018 runtime principal", () => {
     const manifest = JSON.parse(
       fs.readFileSync(
         path.join(repoRoot, "deploy/production/apps.json"),
@@ -1216,17 +1216,23 @@ describe("production deployment contract", () => {
     expect(app.databaseSchemaTransition).toMatchObject({
       from: "0016_expand",
       to: "0018_credit_checkout_reservation",
-      state: "runtime_build_pending",
+      state: "runtime_principal_pending",
       bridgeImage:
         "registry.fly.io/leaderbot-fb-image-gen@sha256:a37632c86a72a87cd94f5c030c8b88be330420289c553f4570e234c85df233b8",
       bridgeSourceCommit: "f26d80e1eb47361541b9812a1c0d47477afac535",
     });
     expect(app.deploymentEnabled).toBe(false);
-    expect(app.reviewedArtifactKind).toBe("migration-bridge");
-    expect(app.reviewedImage).toBe(app.databaseSchemaTransition.bridgeImage);
-    expect(app.reviewedSourceCommit).toBe(
-      app.databaseSchemaTransition.bridgeSourceCommit,
+    expect(app.reviewedArtifactKind).toBe("runtime");
+    expect(app.reviewedImage).toBe(
+      "registry.fly.io/leaderbot-fb-image-gen@sha256:1d80d6bce5fdbd7486f31d6223ca87ac7a50d075661ec48ae0f3d536eb8e5b36",
     );
+    expect(app.reviewedSourceCommit).toBe(
+      "80703910131e227d1d683b1f5b6287c8bff241de",
+    );
+    expect(app.reviewedImageSchemaPhases).toEqual([
+      "0018_credit_checkout_reservation",
+    ]);
+    expect(app.databaseSchemaTransition.runtimePrincipalSha256).toBeUndefined();
     expect(app.reviewedRollbackImages).toEqual([
       app.databaseSchemaTransition.bridgeImage,
     ]);
@@ -5894,6 +5900,17 @@ describe("production deployment contract", () => {
     expect(
       getReviewedArtifactSchemaSupport("image-gen", image, repoRoot),
     ).toEqual({
+      minimum: "0018_credit_checkout_reservation",
+      maximum: "0018_credit_checkout_reservation",
+      phases: ["0018_credit_checkout_reservation"],
+    });
+    expect(
+      getReviewedArtifactSchemaSupport(
+        "image-gen",
+        manifest.apps["image-gen"].databaseSchemaTransition.bridgeImage,
+        repoRoot,
+      ),
+    ).toEqual({
       minimum: "0016_expand",
       maximum: "0018_credit_checkout_reservation",
       phases: [
@@ -5921,6 +5938,16 @@ describe("production deployment contract", () => {
         repoRoot,
       ),
     ).toBe(app.databaseSchemaPhase);
+    for (const phase of ["0016_expand", "0017_credit_wallet_expand"]) {
+      expect(() =>
+        validateReviewedArtifactSchemaPhase(
+          "image-gen",
+          app.reviewedImage,
+          phase,
+          repoRoot,
+        ),
+      ).toThrow(`does not support database phase ${phase}`);
+    }
     expect(
       validateReviewedArtifactSchemaPhase(
         "image-gen",

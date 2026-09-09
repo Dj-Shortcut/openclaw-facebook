@@ -91,13 +91,13 @@
       "workingDirectory": "apps/image-gen",
       "deployScript": "deploy:image-gen",
       "deploymentEnabled": false,
-      "deploymentBlockReason": "The protected credit schema expansion is verified at 0018; application deploys remain frozen on the bridge until the final credit runtime is built and reviewed.",
+      "deploymentBlockReason": "The exact 0018 credit runtime is built and reviewed; application deploys remain frozen until its restricted database principal is staged and verified.",
       "sourceDeployEnabled": false,
       "sourceDeployBlockReason": "Production deploys require an immutable image built from reviewed source and recorded in this manifest before rollout.",
       "trustedBuilderWorkflow": ".github/workflows/build-production-artifacts.yml",
-      "reviewedImage": "registry.fly.io/leaderbot-fb-image-gen@sha256:a37632c86a72a87cd94f5c030c8b88be330420289c553f4570e234c85df233b8",
-      "reviewedArtifactKind": "migration-bridge",
-      "reviewedSourceCommit": "f26d80e1eb47361541b9812a1c0d47477afac535",
+      "reviewedImage": "registry.fly.io/leaderbot-fb-image-gen@sha256:1d80d6bce5fdbd7486f31d6223ca87ac7a50d075661ec48ae0f3d536eb8e5b36",
+      "reviewedArtifactKind": "runtime",
+      "reviewedSourceCommit": "80703910131e227d1d683b1f5b6287c8bff241de",
       "reviewedSettledPredecessor": {
         "identity": "deploy-33297361675-1",
         "image": "registry.fly.io/leaderbot-fb-image-gen@sha256:a37632c86a72a87cd94f5c030c8b88be330420289c553f4570e234c85df233b8",
@@ -123,7 +123,7 @@
       "databaseSchemaTransition": {
         "from": "0016_expand",
         "to": "0018_credit_checkout_reservation",
-        "state": "runtime_build_pending",
+        "state": "runtime_principal_pending",
         "legacyBaseImage": "registry.fly.io/leaderbot-fb-image-gen@sha256:01ccf154e0ac4c314f68775a0fd00fe925aaba92fee997a32f932c8d4c36d806",
         "bridgeImage": "registry.fly.io/leaderbot-fb-image-gen@sha256:a37632c86a72a87cd94f5c030c8b88be330420289c553f4570e234c85df233b8",
         "bridgeSourceCommit": "f26d80e1eb47361541b9812a1c0d47477afac535",
@@ -138,11 +138,7 @@
         "probeVmMemoryMb": 2048,
         "mysqlImage": "docker-hub-mirror.fly.io/library/mysql:8.4.11@sha256:1d6b6a8fcee8ff758ff151d017f5203cd06792a0e698f0a593c9dfcb14609cf0"
       },
-      "reviewedImageSchemaPhases": [
-        "0016_expand",
-        "0017_credit_wallet_expand",
-        "0018_credit_checkout_reservation"
-      ],
+      "reviewedImageSchemaPhases": ["0018_credit_checkout_reservation"],
       "reviewedRollbackImageSchemaPhases": {
         "registry.fly.io/leaderbot-fb-image-gen@sha256:a37632c86a72a87cd94f5c030c8b88be330420289c553f4570e234c85df233b8": [
           "0016_expand",
