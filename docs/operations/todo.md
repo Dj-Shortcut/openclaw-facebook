@@ -88,134 +88,47 @@ Live payment enablement remains gated by the relevant P1 through P4 evidence.
       Mode, pass paid checkout, delayed/replayed webhook, cancellation, failure,
       refund, partially used wallet, provider failure, delivery failure,
       deletion, budget exhaustion, receipt, reconciliation, and rollback.
-  - [ ] Protected schema transition is not complete. Run `33910363498`
-        (attempt 1, source `00d00b6`) recorded a fresh encrypted credential-boundary
-        snapshot, then failed at the rights-repair step and its SUPER-cleanup
-        check; the restore test and all credit DDL steps were skipped. The
-        isolated Fly child omitted `HOME`, which makes the pinned CLI exit
-        before SSH. An independent operator read found no non-system SUPER
-        grants and no credit procedures, but this is not protected cleanup
-        completion. The child-environment fix landed, but protected cleanup run
-        `34265308613` (attempt 1, source `ca07d6f`) failed before producing any
-        cleanup artifact. Its fixed failure marker does not identify the failing
-        stage or prove that no privilege changed. Source-level regression tests
-        found that cleanup incorrectly required later definer-table grants on
-        the exact old `0016` account; those checks now use the existing pregrant
-        boundary only for exact `0016`. The cleanup-only transport now uses one
-        bounded Machine Exec API request with the unchanged reviewed command
-        and SQL on stdin, instead of SSH. Local protocol tests are not Fly
-        credential-caveat or production cleanup evidence; review and protected
-        execution remain open. Prepare/bootstrap still use their existing SSH
-        transport and need separate verification before a schema transition.
-        Cleanup run `34322881181` (2026-09-09, source `78a9223`) reached
-        `migration_history` and stopped before the root Exec/revoke step.
-        Read-only inspection matched all 17 history rows and next ID 18;
-        enabling the contract's `show_create_table_verbosity=1` reproduced its
-        exact history-table fingerprint. The initial history read preceded
-        session initialization. Initialize the session before every exact
-        history capture; retain the exact fingerprint comparison. This diagnosis
-        is not successful protected cleanup or schema-transition evidence.
-        PR #505 fixed that ordering. Run `34324926620` subsequently passed
-        history inspection but stopped at `root_lock`, before approval to revoke.
-        Read-only Fly API probes showed that stdin reached neither MySQL nor
-        a standalone cat command. Passing `SELECT 1` through the fixed cleanup
-        wrapper as one quoted argument returned exactly `1\n`, HTTP 200, exit 0,
-        and empty stderr. The argument transport needs its own reviewed command
-        caveat and protected cleanup proof; no new schema transition has run.
-        **2026-09-09 pre-deployment audit:** PR #507 is deliberately draft even
-        though its CI passed. The pinned Fly CLI parses `--command` into an
-        exact argument list; its documented token permits the wrapper alone,
-        whereas the request appends the SQL argument. The operator-token probe
-        does not validate that restricted-token boundary. Do not mint the
-        documented replacement token or dispatch this revision. Correct and
-        review the transport and credential contract together; do not silently
-        broaden the credential to make the request pass.
-        Before another production attempt, close the whole-path evidence gaps:
-        (1) cleanup with the actual restricted credential, including rejection
-        of commands outside its boundary. **Closed 2026-09-09.** The protected
-        cleanup run on `main` `6b88bb2` succeeded: temporary SUPER is absent and
-        the exact `0016` history is unchanged. Both bound credentials were
-        retired through the reviewed helper, which reported
-        `repair_and_cleanup_exec_tokens_retired`. No schema DDL and no payment
-        ran. This closes the cleanup gap only; (2) prepare and definer
-        provisioning,
-        which still instantiate `RootMysqlSession` over SSH, with the actual
-        intended credential rather than an operator credential. The read-only
-        half of that gap now has a transport:
-        `provision-image-gen-credit-provisioner-exec.mjs` runs a single bounded
-        statement through the Machines Exec API under its own fixed wrapper
-        `leaderbot-prepare-root`, so a credential scoped to it can run neither
-        the cleanup wrapper nor SSH. The lock-holding and mutating phases stay
-        on SSH: `GET_LOCK` and `IS_USED_LOCK(...)=CONNECTION_ID()` are
-        connection-scoped, and one Exec request is one connection, so those
-        phases must first be restructured into a single-connection batch like
-        the cleanup batch before they can move. The mutating batch now exists:
-        one Exec request takes the repair lock, grants only what a second live
-        controller connection approved through per-privilege locks, and rolls
-        its own grants back when that controller withholds acceptance. It is
-        still unproven against a real restricted prepare credential, and the
-        repair CLI still defaults prepare to the SSH session. One short-lived
-        repair credential can carry both complete wrappers through repeated
-        `--command-prefix` values, so no second secret and no shorter shell
-        prefix is needed. Switching the CLI default additionally requires
-        migrating the redacted failure-stage diagnostics: the runner's
-        `root_connect` and `root_initialize` boundaries disappear with the SSH
-        session, and their shared test harness drives both operations;
-        (3) snapshot
-        restore, exact 0016-to-0018 transition and rollback rehearsal on an
-        isolated database; (4) the deployed Test Mode configuration and exact
-        tester binding, then signed checkout, trusted webhook, one grant and
-        one delivered premium edit. A green cleanup PR closes none of these
-        downstream gates by itself. Keep live billing disabled and retain the
-        existing offer; one edit is the consumption test, not a new bundle.
-        Isolated Fly transport proof completed 2026-09-09 at source `a50a95a`:
-        empty app `leaderbot-repair-proof-20260909`, Machine `e82340db573078`,
-        production MySQL 8.4.11 image digest, no mounted volume or public
-        service, MySQL networking disabled. A 15-minute full-wrapper-prefix
-        token accepted the actual `command` array with `SELECT 1` (HTTP 200,
-        exit 0, exact stdout). Changed shell source was denied by Fly (403);
-        missing/extra SQL arguments exited 64. The test token had explicit
-        revocation readback `2026-09-09T08:17:00Z`; the empty Machine was then
-        stopped. No credential values or identifiers are recorded here.
-        This proves the restricted transport boundary, not the full cleanup
-        handshake, credential replacement, prepare, schema transition or
-        payment journey. No production credential or database was changed.
-        Owner authorized failed-cleanup credential replacement on 2026-09-09.
-        The explicit `--failed-cleanup-credential-only` path preserves the
-        original repair credential, requires a terminal latest failed cleanup,
-        and retires only the exact cleanup identity. It is not successful
-        database cleanup evidence. Local failure-path and production-contract
-        tests pass; independent review and protected execution remain pending.
-        Review follow-up binds failed-only retirement to all eight request
-        metadata fields from GitHub's exact attempt job log, not CLI values
-        alone. Read-only verification matched the recorded original credential
-        against job `102379885050`; a fresh replacement paired with that old
-        failed run is rejected before mutation. No key has been retired by this
-        change and the production cleanup remains unproven.
-        Run the separately
-        approved cleanup-only proof bound to the original failed run, and retire its
-        exact temporary token and unchanged secret before a new transition.
-        The original four-hour token is now absent from the complete Fly app
-        inventory; the original GitHub secret remains unchanged. The protected
-        cleanup uses a separate bounded credential, preserving both metadata
-        identities until its successful proof permits retirement. Expiry or
-        inventory absence alone is not database-cleanup evidence.
-        The earlier run `33300214073` established that the migration role lacked
-        `CREATE`, `TRIGGER`, `CREATE ROUTINE`, and `ALTER ROUTINE`; that repair
-        remains unproven. The reviewed transition must snapshot the encrypted
-        database volume, add only
-        the missing subset through the fixed-output repair, prove the strict
-        migration boundary, and then run the existing `0016 -> 0018` transition
-        once. The repair must decide its exact delta under lock, recover an
-        uncertain `GRANT`, and never repair schema rights on exact 0017/0018
-        resumes (only conditional temporary `SUPER` for the bridge inspector).
-        Its pre-repair snapshot is a recorded recovery reference; the separate
-        restore-tested snapshot must be taken after verified temporary-SUPER
-        revocation and remains mandatory before DDL. Its probe must match the
-        actual reviewed image and command, not merely an exit code. Do not deploy a
-        `0019` runtime or start Mollie Test Mode before the exact `0018` runtime
-        and rollback evidence are settled; `0019` requires its own later
-        reviewed transition.
+  - [ ] **Credit-schema installation remains the immediate blocker.** The
+        protected transition `33910363498/1` stopped before credit DDL on exact
+        `0016_expand`. No production credit-schema installation or new payment
+        is claimed.
+
+    - Cleanup is complete: protected run [34335377679](https://github.com/Dj-Shortcut/openclaw-facebook/actions/runs/34335377679)
+      at `6b88bb2` passed, proved temporary non-system SUPER absent and
+      unchanged exact `0016` history. Both bound temporary credentials were
+      retired with `repair_and_cleanup_exec_tokens_retired`; their GitHub
+      secrets are absent. Do not repeat that completed cleanup.
+    - The prepare repair now defaults to the single-Exec controller rather
+      than the unusable restricted-token SSH route. It approves only the
+      missing subset of `CREATE`, `TRIGGER`, `CREATE ROUTINE`, and
+      `ALTER ROUTINE`, plus conditional SUPER. The existing repair secret
+      uses two complete fixed command prefixes; no extra secret or shorter
+      shell prefix is needed. Review, CI, and the protected production
+      repair are still required.
+    - Isolated proof on the empty, unmounted MySQL 8.4.11 Fly Machine
+      `e82340db573078` passed at `2026-09-09T10:08:50Z` with the revised
+      shared 8-second handshake, 55-second remote and 65-second local limits:
+      both restricted wrapper prefixes, rejection of changed shell source
+      and wrong argument counts, actual four-right repair, no-op replay,
+      rollback of only three newly added rights while preserving pre-existing
+      CREATE, and conditional SUPER. Synthetic accounts were removed, the
+      proof token was explicitly revoked, and the Machine was stopped.
+      This proves the repair batch and transport, not production schema
+      installation or a credit grant.
+    - Next, run the reviewed protected transition once: record the
+      pre-repair snapshot, verify exact minimal migration rights, revoke
+      temporary SUPER before the separate restore-tested recovery snapshot,
+      then prove the exact `0016 -> 0018` expansion and rollback rehearsal.
+      Keep exact history and image fingerprints; no schema-rights repair
+      on a completed `0017/0018` resume. No `0019` deployment before its
+      separately reviewed transition.
+    - After schema/runtime readiness, complete the actual Messenger journey:
+      signed checkout, verified Mollie webhook, credits on the correct
+      user's balance, one delivered premium edit, and one debit. The
+      owner's earlier Mollie test payment and refund did not prove the
+      credit grant. Keep the current offer unchanged. Live-pilot readiness
+      additionally requires the P5 gates below.
+
   - [ ] Before any Mollie Test Mode checkout, prove the restricted runtime,
         settle the manifest at `complete` with the bridge removed from rollback,
         then use the protected obsolete-principal flow to lock, retain the

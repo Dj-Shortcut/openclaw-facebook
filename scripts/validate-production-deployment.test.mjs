@@ -93,6 +93,9 @@ function createRepositoryFixture() {
     "scripts/image-gen-credit-migration-principal-repair-contract.test.mjs",
     "scripts/image-gen-super-cleanup-exec.mjs",
     "scripts/image-gen-super-cleanup-exec.test.mjs",
+    "scripts/image-gen-principal-prepare-driver.mjs",
+    "scripts/image-gen-principal-prepare-exec.mjs",
+    "scripts/provision-image-gen-credit-provisioner-exec.mjs",
     "scripts/repair-image-gen-credit-migration-principal.mjs",
     "scripts/retire-image-gen-repair-exec-token.mjs",
     "scripts/retire-image-gen-repair-exec-token.test.mjs",
@@ -1991,23 +1994,26 @@ describe("production deployment contract", () => {
   });
 
   it.each([
-    ["repair", "--command"],
-    ["cleanup", "--command-prefix"],
-  ])("rejects raw flyctl commands in %s-token creation", (_kind, flag) => {
-    const root = createRepositoryFixture();
-    replaceFixtureText(
-      root,
-      "docs/operations/production-deployments.md",
-      `${flag} "$root_mysql_command_csv"`,
-      `${flag} "$root_mysql_command"`,
-    );
+    ["repair", "prepare_command_csv", "prepare_command"],
+    ["cleanup", "root_mysql_command_csv", "root_mysql_command"],
+  ])(
+    "rejects raw flyctl commands in %s-token creation",
+    (_kind, variable, raw) => {
+      const root = createRepositoryFixture();
+      replaceFixtureText(
+        root,
+        "docs/operations/production-deployments.md",
+        `--command-prefix "${"$"}${variable}"`,
+        `--command-prefix "${"$"}${raw}"`,
+      );
 
-    expect(() => validateProductionRepository(root)).toThrow(
-      _kind === "cleanup"
-        ? "must pass the complete reviewed cleanup-command prefix CSV field to flyctl"
-        : "must pass only the reviewed repair-command CSV field to flyctl",
-    );
-  });
+      expect(() => validateProductionRepository(root)).toThrow(
+        _kind === "cleanup"
+          ? "must pass the complete reviewed cleanup-command prefix CSV field to flyctl"
+          : "must pass only the reviewed repair-command CSV field to flyctl",
+      );
+    },
+  );
 
   it.each([
     '--expiry 4h --command "$root_mysql_command_csv" --json',
@@ -2037,13 +2043,13 @@ describe("production deployment contract", () => {
     );
     const source = fs.readFileSync(filePath, "utf8");
     const reviewedCommand =
-      '--expiry 4h --command "$root_mysql_command_csv" --json';
+      '--expiry 4h --command-prefix "$prepare_command_csv" --command-prefix "$cleanup_command_csv" --json';
     expect(source).toContain(reviewedCommand);
     fs.writeFileSync(
       filePath,
       source.replaceAll(
         reviewedCommand,
-        '--expiry 4h --command "$root_mysql_command" --json',
+        '--expiry 4h --command-prefix "/bin/sh" --json',
       ),
     );
 
@@ -4042,19 +4048,47 @@ describe("production deployment contract", () => {
     );
   });
 
-  it("requires HOME in the retained prepare root Fly child allowlist", () => {
+  it("requires the single-Exec controller as the prepare default", () => {
     const root = createRepositoryFixture();
     replaceFixtureText(
       root,
       "scripts/repair-image-gen-credit-migration-principal.mjs",
-      '["PATH", "HOME", "FLY_API_TOKEN"]',
-      '["PATH", "FLY_API_TOKEN"]',
+      "runPrepare = prepareCreditMigrationPrincipalViaExec,",
+      "runPrepare = repairCreditMigrationPrincipal,",
     );
 
     expect(() => validateProductionRepository(root)).toThrow(
-      "must pass the existing HOME and explicit repair token through the shared root Fly child allowlist",
+      "must bind prepare to the single-Exec controller without root SSH fallback",
     );
   });
+
+  it.each([
+    [
+      "scripts/image-gen-principal-prepare-driver.mjs",
+      "if (!verificationFailed) await acquire(locks.accept);",
+      "await acquire(locks.accept);",
+      "must retain exact grant approval, verification and bounded failure handling",
+    ],
+    [
+      "scripts/image-gen-principal-prepare-exec.mjs",
+      'schemaStatementCases(parsed, databaseName, "revoke", "@added")',
+      'schemaStatementCases(parsed, databaseName, "revoke", "@before_mask")',
+      "must hold the same lock and compensate only its approved delta",
+    ],
+    [
+      "scripts/provision-image-gen-credit-provisioner-exec.mjs",
+      "value.exit_code !== 0",
+      "Number(value.exit_code ?? 0) !== 0",
+      "must use only one bounded fixed-wrapper Exec request",
+    ],
+  ])(
+    "rejects a weakened prepare boundary in %s",
+    (file, before, after, message) => {
+      const root = createRepositoryFixture();
+      replaceFixtureText(root, file, before, after);
+      expect(() => validateProductionRepository(root)).toThrow(message);
+    },
+  );
 
   it.each([
     [
@@ -4201,16 +4235,16 @@ describe("production deployment contract", () => {
     },
   );
 
-  it("does not remove the retained prepare SSH environment fence", () => {
+  it("does not permit an SSH fallback inside prepare", () => {
     const root = createRepositoryFixture();
     replaceFixtureText(
       root,
       "scripts/repair-image-gen-credit-migration-principal.mjs",
-      "env: buildRootFlyctlEnvironment(),",
-      "env: process.env,",
+      "    return await runPrepare({",
+      "    const fallback = new RootMysqlSession();\n    return await runPrepare({",
     );
     expect(() => validateProductionRepository(root)).toThrow(
-      "must pass the existing HOME and explicit repair token through the shared root Fly child allowlist",
+      "must bind prepare to the single-Exec controller without root SSH fallback",
     );
   });
 

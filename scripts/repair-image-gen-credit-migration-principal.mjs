@@ -10,8 +10,8 @@ import {
   captureMigrationHistory,
   configureProductionSchemaSession,
 } from "../apps/image-gen/scripts/production-schema-contract.mjs";
-import { RootMysqlSession } from "./provision-image-gen-credit-provisioner.mjs";
 import { revokeTemporaryCreditMigrationSuperViaExec } from "./image-gen-super-cleanup-exec.mjs";
+import { prepareCreditMigrationPrincipalViaExec } from "./image-gen-principal-prepare-driver.mjs";
 import {
   CREDIT_MIGRATION_PRINCIPAL_CLEANUP_FAILURE_MARKER,
   CREDIT_MIGRATION_PRINCIPAL_FAILURE_MARKER,
@@ -22,7 +22,6 @@ import {
   detectMissingCreditMigrationPrivileges,
   hasCreditMigrationGlobalSuper,
   parseCreditMigrationAccount,
-  repairCreditMigrationPrincipal,
 } from "./image-gen-credit-migration-principal-repair-contract.mjs";
 
 const scriptPath = fileURLToPath(import.meta.url);
@@ -224,13 +223,7 @@ export async function executeRepair(
   {
     migrationUrl = process.env.DATABASE_MIGRATION_URL?.trim(),
     mysql = loadMysqlPromiseClient(),
-    openRoot = ({ signal }) =>
-      new RootMysqlSession({
-        app,
-        machineId,
-        signal,
-        env: buildRootFlyctlEnvironment(),
-      }),
+    runPrepare = prepareCreditMigrationPrincipalViaExec,
     readPhase = readExactCreditMigrationPhase,
     readState = readCurrentState,
     verifyRuntime = assertProductionMigrationRuntime,
@@ -244,17 +237,6 @@ export async function executeRepair(
   const url = assertMigrationUrl(migrationUrl);
   let connection;
   let operationError;
-  const roots = [];
-  let root;
-  const createRoot = async () => {
-    onStage("root_connect");
-    const next = await openRoot({ signal });
-    if (!next || typeof next.initialize !== "function") fail();
-    roots.push(next);
-    onStage("root_initialize");
-    await next.initialize(signal);
-    return next;
-  };
   try {
     onStage("migration_connect");
     connection = await mysql.createConnection(url);
@@ -301,22 +283,19 @@ export async function executeRepair(
       if (!initial.requireSuper || superPresent) return "already_ready";
     }
 
-    root = await createRoot();
     onStage("principal_repair");
-    return await repairCreditMigrationPrincipal({
+    return await runPrepare({
+      app,
+      machineId,
+      connection,
       account: initial.account,
       databaseName: initial.databaseName,
       requireSuper: initial.requireSuper,
       superOnly: postDdl,
       allowIncompleteDefinerTablePrivileges: pregrant,
-      root,
       readState: async () => {
         if ((await readPhase(connection)) !== initialPhase) fail();
         return readState(connection);
-      },
-      recoverRoot: async (failedRoot) => {
-        await failedRoot.close({ releaseLock: false, signal });
-        return createRoot();
       },
       verify,
       verifyRollback: async (expectedMissing) => {
@@ -331,16 +310,13 @@ export async function executeRepair(
         }
         if ((await readPhase(connection)) !== initialPhase) fail();
       },
+      signal,
+      onStage,
     });
   } catch (error) {
     operationError = error;
     throw error;
   } finally {
-    for (const openedRoot of roots.reverse()) {
-      await openedRoot
-        .close({ releaseLock: false, signal })
-        .catch(() => undefined);
-    }
     try {
       if (!operationError) onStage("connection_close");
       await closeConnection(connection);

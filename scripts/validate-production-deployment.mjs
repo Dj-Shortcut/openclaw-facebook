@@ -37,6 +37,12 @@ const MIGRATION_SUPER_CLEANUP_EXEC_PATH =
   "scripts/image-gen-super-cleanup-exec.mjs";
 const MIGRATION_SUPER_CLEANUP_EXEC_TEST_PATH =
   "scripts/image-gen-super-cleanup-exec.test.mjs";
+const MIGRATION_PREPARE_DRIVER_PATH =
+  "scripts/image-gen-principal-prepare-driver.mjs";
+const MIGRATION_PREPARE_BATCH_PATH =
+  "scripts/image-gen-principal-prepare-exec.mjs";
+const MIGRATION_PREPARE_TRANSPORT_PATH =
+  "scripts/provision-image-gen-credit-provisioner-exec.mjs";
 const CREDIT_PROVISIONER_RETIREMENT_WORKFLOW_PATH =
   ".github/workflows/retire-image-gen-credit-provisioners.yml";
 const CREDIT_PROVISIONER_RETIREMENT_RUNNER_PATH =
@@ -5538,6 +5544,9 @@ function validateCreditMigrationPrincipalRepair(rootDir) {
     CREDIT_MIGRATION_PRINCIPAL_REPAIR_TEST_PATH,
     MIGRATION_SUPER_CLEANUP_EXEC_PATH,
     MIGRATION_SUPER_CLEANUP_EXEC_TEST_PATH,
+    MIGRATION_PREPARE_DRIVER_PATH,
+    MIGRATION_PREPARE_BATCH_PATH,
+    MIGRATION_PREPARE_TRANSPORT_PATH,
     REPAIR_EXEC_TOKEN_RETIREMENT_PATH,
     REPAIR_EXEC_TOKEN_RETIREMENT_TEST_PATH,
     MIGRATION_SUPER_CLEANUP_WORKFLOW_PATH,
@@ -5634,14 +5643,17 @@ function validateCreditMigrationPrincipalRepair(rootDir) {
     prepareStart < 0 ||
     cleanupStart <= prepareStart ||
     cleanupEnd <= cleanupStart ||
-    !runner.includes("export function buildRootFlyctlEnvironment") ||
-    !runner.includes('["PATH", "HOME", "FLY_API_TOKEN"]') ||
-    !prepare.includes("new RootMysqlSession") ||
-    occurrenceCount(prepare, "env: buildRootFlyctlEnvironment(),") !== 1 ||
-    occurrenceCount(runner, "env: buildRootFlyctlEnvironment(),") !== 1
+    !runner.includes('from "./image-gen-principal-prepare-driver.mjs"') ||
+    !prepare.includes("runPrepare = prepareCreditMigrationPrincipalViaExec,") ||
+    !prepare.includes("return await runPrepare({") ||
+    !prepare.includes("      app,\n      machineId,\n      connection,") ||
+    !prepare.includes("      signal,\n      onStage,") ||
+    /RootMysqlSession|openRoot|recoverRoot|buildRootFlyctlEnvironment/.test(
+      prepare,
+    )
   ) {
     fail(
-      `${CREDIT_MIGRATION_PRINCIPAL_REPAIR_RUNNER_PATH} must pass the existing HOME and explicit repair token through the shared root Fly child allowlist`,
+      `${CREDIT_MIGRATION_PRINCIPAL_REPAIR_RUNNER_PATH} must bind prepare to the single-Exec controller without root SSH fallback`,
     );
   }
   const compactCleanup = cleanup.replace(/\s+/g, " ");
@@ -5666,6 +5678,59 @@ function validateCreditMigrationPrincipalRepair(rootDir) {
     );
   }
   validateMigrationSuperCleanupExec(rootDir);
+  const prepareDriver = fs.readFileSync(
+    path.join(rootDir, MIGRATION_PREPARE_DRIVER_PATH),
+    "utf8",
+  );
+  const prepareBatch = fs.readFileSync(
+    path.join(rootDir, MIGRATION_PREPARE_BATCH_PATH),
+    "utf8",
+  );
+  const prepareTransport = fs.readFileSync(
+    path.join(rootDir, MIGRATION_PREPARE_TRANSPORT_PATH),
+    "utf8",
+  );
+  for (const required of [
+    "const LOCK = CREDIT_MIGRATION_PRINCIPAL_REPAIR_LOCK;",
+    "const state = await bounded(readState);",
+    "await acquire(locks[`delta${PRIVILEGES.indexOf(privilege)}`]);",
+    "await bounded(verify);",
+    "verifyRollback(missing)",
+    "if (!verificationFailed) await acquire(locks.accept);",
+    "if (completed.failed) fail();",
+    "AbortSignal.timeout(DEADLINE_MS)",
+  ]) {
+    if (!prepareDriver.includes(required))
+      fail(
+        `${MIGRATION_PREPARE_DRIVER_PATH} must retain exact grant approval, verification and bounded failure handling`,
+      );
+  }
+  for (const required of [
+    "CONNECTION_ID()=@root_id AND IS_USED_LOCK(",
+    "(@delta & @before_mask)=0",
+    'schemaStatementCases(parsed, databaseName, "grant", "@delta")',
+    'schemaStatementCases(parsed, databaseName, "revoke", "@added")',
+    "currentMask}=IF(@accepted=1,@before_mask | @delta,@before_mask)",
+  ]) {
+    if (!prepareBatch.includes(required))
+      fail(
+        `${MIGRATION_PREPARE_BATCH_PATH} must hold the same lock and compensate only its approved delta`,
+      );
+  }
+  if (
+    occurrenceCount(prepareTransport, "await fetchImpl(") !== 1 ||
+    !prepareTransport.includes('redirect: "error"') ||
+    !prepareTransport.includes('test "$#" -eq 1 || exit 64;') ||
+    !prepareTransport.includes('"leaderbot-prepare-root"') ||
+    !prepareTransport.includes('!Object.hasOwn(value, "exit_code")') ||
+    !prepareTransport.includes("value.exit_code !== 0") ||
+    /node:child_process|new RootMysqlSession|recoverRoot\s*\(/.test(
+      prepareDriver + prepareBatch + prepareTransport,
+    )
+  )
+    fail(
+      `${MIGRATION_PREPARE_TRANSPORT_PATH} must use only one bounded fixed-wrapper Exec request`,
+    );
   for (const [required, message] of [
     [
       "classifyCreditMigrationHistory",
@@ -5684,12 +5749,12 @@ function validateCreditMigrationPrincipalRepair(rootDir) {
       "must allow incomplete definer rights only for the exact pregrant history",
     ],
     [
-      "new RootMysqlSession",
+      "prepareCreditMigrationPrincipalViaExec",
       "must keep root access inside the exact reviewed database Machine",
     ],
     [
-      '["TMPDIR", "NO_COLOR"]',
-      "must pass only the minimal Fly child environment to the root session",
+      "runPrepare = prepareCreditMigrationPrincipalViaExec,",
+      "must use the restricted Exec transport by default",
     ],
     [
       "CREDIT_MIGRATION_PRINCIPAL_CLEANUP_FAILURE_MARKER",
@@ -8281,11 +8346,11 @@ export function validateProductionRepository(rootDir = process.cwd()) {
       "must derive recovery scale only from validated interrupted data",
     ],
     [
-      "ROOT_MYSQL_REMOTE_COMMAND_FLYCTL_CSV",
+      "PREPARE_ROOT_EXEC_COMMAND_FLYCTL_CSV",
       "must import the reviewed repair-command CSV field",
     ],
     [
-      '--expiry 4h --command "$root_mysql_command_csv" --json',
+      '--expiry 4h --command-prefix "$prepare_command_csv" --command-prefix "$cleanup_command_csv" --json',
       "must pass only the reviewed repair-command CSV field to flyctl",
     ],
     [
@@ -8293,7 +8358,7 @@ export function validateProductionRepository(rootDir = process.cwd()) {
       "must pass the complete reviewed cleanup-command prefix CSV field to flyctl",
     ],
     [
-      "parses\n`--command` as an RFC 4180 CSV field",
+      "parses\n`--command-prefix` as RFC 4180 CSV fields",
       "must explain the pinned flyctl StringSlice transport encoding",
     ],
   ]) {

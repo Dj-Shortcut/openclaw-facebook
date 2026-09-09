@@ -12,6 +12,13 @@ import {
   requestPrincipalPrepareExec,
 } from "./image-gen-principal-prepare-exec.mjs";
 import { prepareCreditMigrationPrincipalViaExec } from "./image-gen-principal-prepare-driver.mjs";
+import {
+  PREPARE_HANDSHAKE_SECONDS,
+  PREPARE_SQL_LOCK_WAIT_SECONDS,
+  PREPARE_EXEC_SECONDS,
+  PREPARE_DEADLINE_MS,
+  buildPrepareRootExecArgv,
+} from "./provision-image-gen-credit-provisioner-exec.mjs";
 
 const NONCE = "a".repeat(32);
 const ACCOUNT = Object.freeze({ username: "lbmigrate", hostname: "%" });
@@ -48,6 +55,26 @@ function batch(overrides = {}) {
 }
 
 describe("principal prepare batch", () => {
+  it("leaves compensation and response time beyond all bounded waits", () => {
+    expect(PREPARE_EXEC_SECONDS).toBeGreaterThanOrEqual(
+      3 * PREPARE_HANDSHAKE_SECONDS + 4 * PREPARE_SQL_LOCK_WAIT_SECONDS + 10,
+    );
+    expect(PREPARE_DEADLINE_MS).toBeGreaterThanOrEqual(
+      (PREPARE_EXEC_SECONDS + 5) * 1000,
+    );
+    const sql = batch();
+    expect(sql).toContain(
+      `SET SESSION lock_wait_timeout=${PREPARE_SQL_LOCK_WAIT_SECONDS}`,
+    );
+    for (const key of ["preWait", "decisionWait", "finishWait"]) {
+      expect(sql).toContain(
+        `GET_LOCK('${principalPrepareLockNames(NONCE)[key]}',${PREPARE_HANDSHAKE_SECONDS})`,
+      );
+    }
+    expect(() => buildPrepareRootExecArgv(sql)).not.toThrow();
+    expect(Buffer.byteLength(sql)).toBeLessThanOrEqual(16_384);
+  });
+
   it.each([
     ["a foreign database", { databaseName: "other" }],
     ["a zero controller id", { controllerId: 0 }],

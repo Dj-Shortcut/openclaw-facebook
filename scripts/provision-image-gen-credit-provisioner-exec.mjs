@@ -1,18 +1,22 @@
 import { parseManagedProvisionerAccounts } from "./image-gen-credit-provisioner-bootstrap-contract.mjs";
 import { MANAGED_ACCOUNT_INVENTORY_QUERY } from "./provision-image-gen-credit-provisioner.mjs";
 
-// Prepare and definer provisioning open `RootMysqlSession` over
-// `flyctl ssh console`. A machine-exec credential cannot reach SSH, so that
-// transport can only run under a broader operator credential. This module is
-// the Machines Exec equivalent for the statements that need no cross-request
-// session state, using the same fixed-command argument shape the cleanup path
-// already proved on an isolated Machine.
+// The prepare batch and read-only definer inventory use Machines Exec under
+// a command-restricted credential. Mutating definer bootstrap remains a
+// separate operator-only operation. Each request uses the fixed-command
+// argument shape the cleanup path already proved on an isolated Machine.
 //
 // The wrapper's `$0` is deliberately different from the cleanup wrapper, so a
 // credential scoped to one command prefix can never run the other.
 const DATABASE_APP = "leaderbot-portal-mysql";
 const API_ORIGIN = "https://api.machines.dev";
-const EXEC_SECONDS = 40;
+// Leave time for all three controller waits, four potentially blocking DCL
+// statements (grant and compensation), and a response margin. Keep these
+// budgets shared with the batch/controller so they cannot drift independently.
+export const PREPARE_HANDSHAKE_SECONDS = 8;
+export const PREPARE_SQL_LOCK_WAIT_SECONDS = 5;
+export const PREPARE_EXEC_SECONDS = 55;
+export const PREPARE_DEADLINE_MS = 65_000;
 const MAX_SQL_BYTES = 16_384;
 const MAX_RESPONSE_BYTES = 65_536;
 
@@ -120,24 +124,30 @@ export async function requestPrepareRootExec(
   assertTarget(app, machineId);
   const command = buildPrepareRootExecArgv(sql);
   if (
+    !(signal instanceof AbortSignal) ||
+    signal.aborted ||
     typeof token !== "string" ||
     !token.trim() ||
     typeof fetchImpl !== "function"
   )
     fail();
+  const combined = AbortSignal.any([
+    signal,
+    AbortSignal.timeout(PREPARE_DEADLINE_MS),
+  ]);
   const url = `${API_ORIGIN}/v1/apps/${DATABASE_APP}/machines/${machineId}/exec`;
   // One request only. An ambiguous transport rejection is never retried: a
   // second attempt could repeat a statement whose first outcome is unknown.
   const response = await fetchImpl(url, {
     method: "POST",
     redirect: "error",
-    signal,
+    signal: combined,
     headers: {
       Authorization: `Bearer ${token.trim()}`,
       "Content-Type": "application/json",
       Accept: "application/json",
     },
-    body: JSON.stringify({ command, timeout: EXEC_SECONDS }),
+    body: JSON.stringify({ command, timeout: PREPARE_EXEC_SECONDS }),
   });
   if (
     response.status !== 200 ||
@@ -150,9 +160,9 @@ export async function requestPrepareRootExec(
   );
 }
 
-// Read-only inventory needs no advisory lock, so it is safe to move off the
-// SSH session today. Lock-holding and mutating phases stay on RootMysqlSession
-// until they are restructured into one single-connection batch.
+// Read-only definer inventory needs no advisory lock. Principal prepare uses
+// the separate single-connection batch/controller protocol, while mutating
+// definer bootstrap is not authorized by this read-only helper.
 export async function listManagedProvisionerAccountsViaExec(target, options) {
   const stdout = await requestPrepareRootExec(
     { ...target, sql: MANAGED_ACCOUNT_INVENTORY_QUERY },

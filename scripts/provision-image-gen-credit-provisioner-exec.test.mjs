@@ -1,11 +1,12 @@
 import { execFileSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   buildPrepareRootExecArgv,
   listManagedProvisionerAccountsViaExec,
   parsePrepareRootExecResponse,
+  PREPARE_DEADLINE_MS,
   PREPARE_ROOT_EXEC_COMMAND,
   PREPARE_ROOT_EXEC_COMMAND_FLYCTL_CSV,
   RESTRICTED_EXEC_OPERATIONS,
@@ -137,6 +138,8 @@ describe("prepare root exec response", () => {
 });
 
 describe("prepare root exec request", () => {
+  afterEach(() => vi.restoreAllMocks());
+
   const input = (sql = "SELECT 1") => ({
     ...TARGET,
     sql,
@@ -181,6 +184,79 @@ describe("prepare root exec request", () => {
       requestPrepareRootExec(input(), { fetchImpl, token: "  " }),
     ).rejects.toThrow();
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, {}, AbortSignal.abort()])(
+    "refuses a missing, invalid or aborted signal before dispatch",
+    async (signal) => {
+      const fetchImpl = vi.fn(async () => ok());
+      await expect(
+        requestPrepareRootExec(
+          { ...input(), signal },
+          { fetchImpl, token: TOKEN },
+        ),
+      ).rejects.toThrow();
+      expect(fetchImpl).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["headers", "body"])(
+    "enforces its own deadline while awaiting %s",
+    async (stage) => {
+      const deadline = new AbortController();
+      const timeout = vi
+        .spyOn(AbortSignal, "timeout")
+        .mockReturnValue(deadline.signal);
+      const fetchImpl = vi.fn(async (_url, { signal }) => {
+        if (stage === "headers") {
+          return await new Promise((_, reject) => {
+            signal.addEventListener("abort", () => reject(signal.reason), {
+              once: true,
+            });
+            queueMicrotask(() => deadline.abort());
+          });
+        }
+        return {
+          ...ok(),
+          headers: new Headers(),
+          body: new ReadableStream({
+            start(controller) {
+              signal.addEventListener(
+                "abort",
+                () => controller.error(signal.reason),
+                { once: true },
+              );
+              queueMicrotask(() => deadline.abort());
+            },
+          }),
+        };
+      });
+      await expect(
+        requestPrepareRootExec(input(), { fetchImpl, token: TOKEN }),
+      ).rejects.toThrow();
+      expect(timeout).toHaveBeenCalledWith(PREPARE_DEADLINE_MS);
+      expect(fetchImpl).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("keeps caller cancellation active without retrying", async () => {
+    const caller = new AbortController();
+    const fetchImpl = vi.fn(async (_url, { signal }) => {
+      expect(signal).not.toBe(caller.signal);
+      return await new Promise((_, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason), {
+          once: true,
+        });
+        queueMicrotask(() => caller.abort());
+      });
+    });
+    await expect(
+      requestPrepareRootExec(
+        { ...input(), signal: caller.signal },
+        { fetchImpl, token: TOKEN },
+      ),
+    ).rejects.toThrow();
+    expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
   it("does not retry a rejected transport", async () => {
@@ -303,10 +379,13 @@ describe("managed account inventory over exec", () => {
       ok(`lbcp_${"a".repeat(16)}\t%\nlbcp_${"b".repeat(16)}\t%\n`),
     );
     await expect(
-      listManagedProvisionerAccountsViaExec(TARGET, {
-        fetchImpl,
-        token: TOKEN,
-      }),
+      listManagedProvisionerAccountsViaExec(
+        { ...TARGET, signal: new AbortController().signal },
+        {
+          fetchImpl,
+          token: TOKEN,
+        },
+      ),
     ).resolves.toHaveLength(2);
 
     const body = JSON.parse(fetchImpl.mock.calls[0][1].body);

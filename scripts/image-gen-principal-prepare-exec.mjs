@@ -1,15 +1,15 @@
-import { randomBytes } from "node:crypto";
-import { setTimeout as delay } from "node:timers/promises";
-
 import {
   buildCreditMigrationPrivilegeStatement,
   CREDIT_MIGRATION_PRINCIPAL_REPAIR_LOCK,
   CREDIT_MIGRATION_PRINCIPAL_REPAIR_PRIVILEGES,
   CreditMigrationPrincipalCleanupError,
-  detectMissingCreditMigrationPrivileges,
   parseCreditMigrationAccount,
 } from "./image-gen-credit-migration-principal-repair-contract.mjs";
-import { requestPrepareRootExec } from "./provision-image-gen-credit-provisioner-exec.mjs";
+import {
+  requestPrepareRootExec,
+  PREPARE_HANDSHAKE_SECONDS as WAIT_SECONDS,
+  PREPARE_SQL_LOCK_WAIT_SECONDS,
+} from "./provision-image-gen-credit-provisioner-exec.mjs";
 
 // Mutating prepare over a restricted machine-exec credential.
 //
@@ -23,8 +23,6 @@ import { requestPrepareRootExec } from "./provision-image-gen-credit-provisioner
 // by holding a lock the batch reads, so the batch can never grant a right the
 // controller did not ask for, and it can withhold acceptance to force the
 // batch to roll its own grants back.
-const WAIT_SECONDS = 12;
-const DEADLINE_MS = 60_000;
 const LOCK = CREDIT_MIGRATION_PRINCIPAL_REPAIR_LOCK;
 const PRIVILEGES = CREDIT_MIGRATION_PRINCIPAL_REPAIR_PRIVILEGES;
 const SCHEMA_COUNT = 4;
@@ -154,7 +152,7 @@ export function buildPrincipalPrepareExecBatch({
     `IS_USED_LOCK(${quote(locks[name])})=${controllerId}`;
   const statements = [
     "SET @root_id=CONNECTION_ID(), @allowed=0, @accepted=0, @passed=0, @delta=0, @before_mask=0, @added=0",
-    "SET SESSION lock_wait_timeout=5",
+    `SET SESSION lock_wait_timeout=${PREPARE_SQL_LOCK_WAIT_SECONDS}`,
     `SET @main=GET_LOCK(${quote(LOCK)},0)`,
     `SET @ready=IF(@main=1,GET_LOCK(${quote(locks.ready)},0),0)`,
     `SET @pre_wait=IF(@ready=1,GET_LOCK(${quote(locks.preWait)},${WAIT_SECONDS}),0)`,

@@ -13,6 +13,10 @@ import {
   principalPrepareLockNames,
   requestPrincipalPrepareExec,
 } from "./image-gen-principal-prepare-exec.mjs";
+import {
+  PREPARE_HANDSHAKE_SECONDS as WAIT_SECONDS,
+  PREPARE_DEADLINE_MS as DEADLINE_MS,
+} from "./provision-image-gen-credit-provisioner-exec.mjs";
 
 // The controller half of the single-connection prepare protocol.
 //
@@ -21,8 +25,6 @@ import {
 // decides which privileges may be granted by holding approval locks, watches
 // the batch pass each stage, verifies the result, and withholds acceptance to
 // force the batch to roll its own grants back.
-const WAIT_SECONDS = 12;
-const DEADLINE_MS = 60_000;
 const QUERY_TIMEOUT_MS = 2_000;
 const LOCK = CREDIT_MIGRATION_PRINCIPAL_REPAIR_LOCK;
 const PRIVILEGES = CREDIT_MIGRATION_PRINCIPAL_REPAIR_PRIVILEGES;
