@@ -103,8 +103,13 @@
     "vitest": "^4.1.11"
   },
   "overrides": {
-    "hono": "4.12.34",
+    "hono": "4.13.5",
     "nanoid@3": "3.3.18"
+  },
+  "pnpm": {
+    "overrides": {
+      "hono": "4.13.5"
+    }
   },
   "openclaw": {
     "compat": {
