@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   renewLease: vi.fn(),
   resolveDueOperations: vi.fn(),
   enqueueRecoveries: vi.fn(),
+  legacyDrain: vi.fn(),
   safeLog: vi.fn(),
 }));
 
@@ -22,6 +23,9 @@ vi.mock("./billingSchedulerStore", () => ({
 vi.mock("./creditPaymentRecovery", () => ({
   resolveDueCustomerlessCreditPaymentOperations: mocks.resolveDueOperations,
   enqueueDueCustomerlessCreditPaymentRecoveries: mocks.enqueueRecoveries,
+}));
+vi.mock("./legacyPaymentDrain", () => ({
+  reconcileRetainedLegacyPayments: mocks.legacyDrain,
 }));
 
 import {
@@ -47,6 +51,7 @@ beforeEach(() => {
   mocks.renewLease.mockResolvedValue(true);
   mocks.resolveDueOperations.mockResolvedValue(3);
   mocks.enqueueRecoveries.mockResolvedValue(2);
+  mocks.legacyDrain.mockResolvedValue(0);
 });
 
 describe("credit payment reconciliation worker", () => {
@@ -84,6 +89,7 @@ describe("credit payment reconciliation worker", () => {
       mocks.enqueueRecoveries.mock.invocationCallOrder[0]!
     );
     expect(mocks.assertLease).toHaveBeenCalledTimes(2);
+    expect(mocks.legacyDrain).toHaveBeenCalledExactlyOnceWith(LEASE, now);
     expect(mocks.releaseLease).toHaveBeenCalledWith(
       expect.objectContaining({
         ...LEASE,

@@ -194,7 +194,9 @@ For safe decommissioning, the repository still retains:
 
 - a root OpenClaw Facebook channel and personal gateway;
 - historical portal handoff and workspace billing records;
-- recurring Mollie recovery workers and subscription tables;
+- financial-only Mollie recovery for already-issued legacy payments, alongside
+  retained subscription and accounting tables; this drain never creates a
+  payment, renewal, entitlement, or customer message;
 - optional WhatsApp compatibility and the owner-operated video path.
 
 These are implementation facts, not target product commitments. The generic

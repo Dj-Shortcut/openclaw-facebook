@@ -11,6 +11,7 @@ import {
   enqueueDueCustomerlessCreditPaymentRecoveries,
   resolveDueCustomerlessCreditPaymentOperations,
 } from "./creditPaymentRecovery";
+import { reconcileRetainedLegacyPayments } from "./legacyPaymentDrain";
 
 const DISPATCH_INTERVAL_MS = 60_000;
 const INITIAL_DISPATCH_DELAY_MS = 30_000;
@@ -21,8 +22,8 @@ let workerTimer: NodeJS.Timeout | null = null;
 
 /**
  * Retains only the one-off credit-payment reconciliation needed by the active
- * owner-operated product. Legacy customer, subscription and entitlement
- * reconciliation stays retired and is fenced separately at startup.
+ * owner-operated product and financial-only reads of retained legacy Payments.
+ * Legacy creation and entitlement reconciliation remain retired.
  */
 export function startCreditPaymentReconciliationWorker(): void {
   if (
@@ -84,6 +85,7 @@ export async function runCreditPaymentReconciliationSchedulerOnce(
         claimNow,
         lease
       );
+      await reconcileRetainedLegacyPayments(lease, claimNow);
       await assertBillingTenantLeaseOwned(lease);
     } catch (error) {
       failed = true;

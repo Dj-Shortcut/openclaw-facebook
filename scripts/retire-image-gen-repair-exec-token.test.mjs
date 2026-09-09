@@ -6,15 +6,26 @@ import { describe, expect, it } from "vitest";
 import {
   assertRetirementRun,
   assertRetirementWorkflow,
+  assertProtectedCleanupWorkflow,
   operatorEnvironment,
   parseFlyTokenInventory,
   parseRetirementArguments,
   retireRepairExecToken,
+  retireAfterProtectedCleanup,
+  readCompleteFlyTokenInventory,
 } from "./retire-image-gen-repair-exec-token.mjs";
+import { createMigrationSuperCleanupEvidence } from "./image-gen-migration-super-cleanup-evidence.mjs";
 
 const reviewedWorkflow = readFileSync(
   new URL(
     "../.github/workflows/image-gen-schema-transition.yml",
+    import.meta.url,
+  ),
+  "utf8",
+);
+const reviewedCleanupWorkflow = readFileSync(
+  new URL(
+    "../.github/workflows/cleanup-image-gen-migration-super.yml",
     import.meta.url,
   ),
   "utf8",
@@ -203,6 +214,384 @@ const mutations = (state) =>
       (command === "flyctl" && argv[1] === "revoke") ||
       (command === "gh" && argv[1] === "delete"),
   );
+
+function cleanupHarness() {
+  const recovery = {
+    ...expected,
+    runAttempt: "1",
+    cleanupRunId: "123456790",
+    cleanupRunAttempt: "1",
+    cleanupTokenId: "syntheticCleanupToken456",
+    cleanupSecretUpdatedAt: "2026-09-05T05:00:00Z",
+    databaseMachineId: "abcdef12345678",
+  };
+  const fixedNow = Date.parse("2026-09-05T06:00:00Z");
+  const sourceRun = { ...fixture().run, run_attempt: 1, conclusion: "failure" };
+  const predecessorSteps = [
+    ...reviewedWorkflow.matchAll(/^      - name: (.+)$/gm),
+  ].map((match, index) => ({
+    name: match[1],
+    number: index + 1,
+    status: "completed",
+    conclusion: "skipped",
+  }));
+  const repairIndex = predecessorSteps.findIndex(
+    (step) =>
+      step.name ===
+      "Repair and verify only the approved migration-principal rights",
+  );
+  predecessorSteps.forEach((step, index) => {
+    if (index < repairIndex) step.conclusion = "success";
+  });
+  predecessorSteps[repairIndex].conclusion = "failure";
+  predecessorSteps.find(
+    (step) => step.name === "Revoke temporary migration SUPER privilege",
+  ).conclusion = "failure";
+  const cleanupRun = {
+    ...sourceRun,
+    id: Number(recovery.cleanupRunId),
+    head_sha: "b".repeat(40),
+    path: ".github/workflows/cleanup-image-gen-migration-super.yml",
+    conclusion: "success",
+  };
+  const job = (run, name, steps) => ({
+    total_count: 1,
+    jobs: [
+      {
+        run_id: run.id,
+        run_attempt: 1,
+        head_sha: run.head_sha,
+        name,
+        status: "completed",
+        conclusion: run.conclusion,
+        steps,
+      },
+    ],
+  });
+  const request = {
+    predecessorRunId: recovery.runId,
+    predecessorRunAttempt: "1",
+    predecessorHeadSha: sourceRun.head_sha,
+    databaseMachineId: recovery.databaseMachineId,
+    repairTokenId: recovery.tokenId,
+    repairSecretUpdatedAt: recovery.secretUpdatedAt,
+    cleanupTokenId: recovery.cleanupTokenId,
+    cleanupSecretUpdatedAt: recovery.cleanupSecretUpdatedAt,
+  };
+  const evidence = createMigrationSuperCleanupEvidence({
+    request,
+    cleanupRun: {
+      id: recovery.cleanupRunId,
+      attempt: "1",
+      headSha: cleanupRun.head_sha,
+    },
+    databaseMachineId: recovery.databaseMachineId,
+    phase: "0016_expand",
+    result: "temporary_super_absent",
+    completedAt: "2026-09-05T05:30:00Z",
+  });
+  const state = {
+    sourceRun,
+    cleanupRun,
+    evidence: structuredClone(evidence),
+    calls: [],
+    sourceJobs: job(
+      sourceRun,
+      "Snapshot, restore-test, and apply 0017 through 0018",
+      predecessorSteps,
+    ),
+    cleanupJobs: job(
+      cleanupRun,
+      "Revoke only temporary migration SUPER after a pre-DDL failure",
+      [...reviewedCleanupWorkflow.matchAll(/^      - name: (.+)$/gm)].map(
+        (match, index) => ({
+          name: match[1],
+          number: index + 1,
+          status: "completed",
+          conclusion: "success",
+        }),
+      ),
+    ),
+    tokens: [
+      {
+        id: recovery.cleanupTokenId,
+        name: `leaderbot-pr486-cleanup-${recovery.runId}`,
+        expiresAt: Date.parse("2026-09-05T09:00:00Z"),
+        revokedAt: null,
+      },
+    ],
+    secrets: [
+      {
+        name: "FLY_DATABASE_REPAIR_EXEC_TOKEN",
+        updatedAt: recovery.secretUpdatedAt,
+      },
+      {
+        name: "FLY_DATABASE_CLEANUP_EXEC_TOKEN",
+        updatedAt: recovery.cleanupSecretUpdatedAt,
+      },
+    ],
+  };
+  const execute = (command, argv) => {
+    state.calls.push([command, argv]);
+    if (command === "flyctl") {
+      if (argv[0] === "version") return "flyctl v0.4.94 linux/amd64\n";
+      if (argv[1] === "revoke") {
+        if (!state.revokeNoEffect)
+          state.tokens.find((token) => token.id === argv[2]).revokedAt =
+            fixedNow;
+        return "not authoritative";
+      }
+    }
+    if (command === "gh" && argv[0] === "secret") {
+      if (argv[1] === "list") return JSON.stringify(state.secrets);
+      if (argv[1] === "delete") {
+        if (!state.deleteNoEffect)
+          state.secrets = state.secrets.filter(
+            (secret) => secret.name !== argv[2],
+          );
+        return "";
+      }
+    }
+    const endpoint = argv.at(-1);
+    if (endpoint.endsWith(`/actions/runs/${recovery.runId}`))
+      return JSON.stringify(state.sourceRun);
+    if (endpoint.endsWith(`/actions/runs/${recovery.cleanupRunId}`))
+      return JSON.stringify(state.cleanupRun);
+    if (endpoint.includes(`/runs/${recovery.runId}/attempts/`))
+      return JSON.stringify(state.sourceJobs);
+    if (endpoint.includes(`/runs/${recovery.cleanupRunId}/attempts/`))
+      return JSON.stringify(state.cleanupJobs);
+    if (endpoint.includes("/actions/workflows/"))
+      return JSON.stringify({
+        workflow_runs: [
+          endpoint.includes("cleanup-image")
+            ? state.cleanupRun
+            : state.sourceRun,
+        ],
+      });
+    if (endpoint.includes("/contents/")) {
+      const cleanup = endpoint.includes("cleanup-image");
+      const text = cleanup
+        ? (state.cleanupSource ?? reviewedCleanupWorkflow)
+        : reviewedWorkflow;
+      return JSON.stringify({
+        encoding: "base64",
+        type: "file",
+        path: cleanup ? cleanupRun.path : sourceRun.path,
+        content: Buffer.from(text).toString("base64"),
+        size: Buffer.byteLength(text),
+      });
+    }
+    if (endpoint.endsWith("/environments/production"))
+      return JSON.stringify({
+        name: "production",
+        can_admins_bypass: false,
+        deployment_branch_policy: { protected_branches: true },
+        protection_rules: [{ type: "required_reviewers", reviewers: [{}] }],
+      });
+    if (endpoint.includes("/artifacts?"))
+      return JSON.stringify({
+        total_count: 1,
+        artifacts: [
+          {
+            id: 42,
+            size_in_bytes: 1024,
+            name: `image-gen-migration-super-cleanup-${recovery.cleanupRunId}-1`,
+            expired: false,
+            digest: `sha256:${"a".repeat(64)}`,
+            workflow_run: { id: cleanupRun.id, head_sha: cleanupRun.head_sha },
+            ...state.artifact,
+          },
+        ],
+      });
+    throw Error("unexpected cleanup test command");
+  };
+  return {
+    state,
+    recovery,
+    run: () =>
+      retireAfterProtectedCleanup(recovery, {
+        execute,
+        reviewedWorkflow,
+        reviewedCleanupWorkflow,
+        readInventory: async () => structuredClone(state.tokens),
+        readArtifact: () => structuredClone(state.evidence),
+        now: () => fixedNow,
+      }),
+  };
+}
+
+describe("separate protected cleanup token retirement", () => {
+  it("removes the old absent credential only after protected cleanup and explicitly revokes the fresh cleanup token", async () => {
+    const h = cleanupHarness();
+    await expect(h.run()).resolves.toBe(
+      "repair_and_cleanup_exec_tokens_retired",
+    );
+    expect(h.state.secrets).toEqual([]);
+    expect(mutations(h.state)).toEqual([
+      [
+        "gh",
+        [
+          "secret",
+          "delete",
+          "FLY_DATABASE_REPAIR_EXEC_TOKEN",
+          "--repo",
+          "Dj-Shortcut/openclaw-facebook",
+          "--env",
+          "production",
+        ],
+      ],
+      ["flyctl", ["tokens", "revoke", h.recovery.cleanupTokenId]],
+      [
+        "gh",
+        [
+          "secret",
+          "delete",
+          "FLY_DATABASE_CLEANUP_EXEC_TOKEN",
+          "--repo",
+          "Dj-Shortcut/openclaw-facebook",
+          "--env",
+          "production",
+        ],
+      ],
+    ]);
+  });
+  it.each([
+    (h) => {
+      h.state.sourceRun.run_attempt = 2;
+    },
+    (h) => {
+      h.state.cleanupRun.conclusion = "failure";
+    },
+    (h) => {
+      h.state.evidence.database.machineId = "11111111111111";
+    },
+    (h) => {
+      h.state.evidence.cleanupCredential.tokenId = "wrongCleanupToken";
+    },
+    (h) => {
+      h.state.artifact = { expired: true };
+    },
+    (h) => {
+      h.state.cleanupSource = `${reviewedCleanupWorkflow}\n`;
+    },
+    (h) => {
+      h.state.secrets[1].updatedAt = "2026-09-05T05:59:00Z";
+    },
+    (h) => {
+      h.state.tokens = [];
+    },
+    (h) => {
+      h.state.tokens[0].id = "differentCleanupToken";
+    },
+  ])(
+    "rejects mismatched proof or replacement credentials before any mutation",
+    async (mutate) => {
+      const h = cleanupHarness();
+      mutate(h);
+      await expect(h.run()).rejects.toThrow();
+      expect(mutations(h.state)).toEqual([]);
+    },
+  );
+  it("does not equate a successful-looking revoke exit with revocation", async () => {
+    const h = cleanupHarness();
+    h.state.revokeNoEffect = true;
+    await expect(h.run()).rejects.toThrow();
+    expect(h.state.secrets.map((secret) => secret.name)).toEqual([
+      "FLY_DATABASE_CLEANUP_EXEC_TOKEN",
+    ]);
+    h.state.revokeNoEffect = false;
+    await expect(h.run()).resolves.toBe(
+      "repair_and_cleanup_exec_tokens_retired",
+    );
+  });
+  it("fails closed when secret deletion has no effect", async () => {
+    const h = cleanupHarness();
+    h.state.deleteNoEffect = true;
+    await expect(h.run()).rejects.toThrow();
+    expect(h.state.secrets).toHaveLength(2);
+  });
+  it.each([
+    (text) =>
+      text.replace("    environment: production", "    environment: preview"),
+    (text) => text.replace("--operation revoke-super)", "--operation prepare)"),
+    (text) =>
+      text.replace("cancel-in-progress: false", "cancel-in-progress: true"),
+    (text) =>
+      text.replace(
+        "FLY_DATABASE_CLEANUP_EXEC_TOKEN",
+        "FLY_DATABASE_REPAIR_EXEC_TOKEN",
+      ),
+  ])(
+    "rejects cleanup authority drift even against matching local bytes",
+    (mutate) => {
+      const text = mutate(reviewedCleanupWorkflow);
+      expect(() => assertProtectedCleanupWorkflow(text, text)).toThrow();
+    },
+  );
+});
+
+describe("complete metadata-only Fly token inventory", () => {
+  it("follows every page without requesting token values", async () => {
+    const bodies = [];
+    const tokens = await readCompleteFlyTokenInventory(
+      () => "synthetic-auth",
+      async (_url, init) => {
+        const body = JSON.parse(init.body);
+        bodies.push(body);
+        return {
+          ok: true,
+          json: async () => ({
+            data: {
+              app: {
+                name: "leaderbot-portal-mysql",
+                limitedAccessTokens: {
+                  nodes: [
+                    {
+                      id: body.variables.after ? "secondToken" : "firstToken",
+                      name: "metadata",
+                      expiresAt: "2026-09-05T09:00:00Z",
+                      revokedAt: null,
+                    },
+                  ],
+                  pageInfo: {
+                    hasNextPage: !body.variables.after,
+                    endCursor: "cursor-1",
+                  },
+                },
+              },
+            },
+          }),
+        };
+      },
+    );
+    expect(tokens).toHaveLength(2);
+    expect(bodies[1].variables.after).toBe("cursor-1");
+    expect(bodies[0].query).not.toMatch(/\btoken\b/);
+  });
+  it.each([
+    { errors: [{ message: "not authorized" }] },
+    { data: { app: null } },
+    {
+      data: {
+        app: {
+          name: "other-app",
+          limitedAccessTokens: { nodes: [], pageInfo: { hasNextPage: false } },
+        },
+      },
+    },
+  ])(
+    "never turns inaccessible metadata into an empty inventory",
+    async (result) => {
+      await expect(
+        readCompleteFlyTokenInventory(
+          () => "synthetic-auth",
+          async () => ({ ok: true, json: async () => result }),
+        ),
+      ).rejects.toThrow();
+    },
+  );
+});
 
 describe("repair exec token identity and authoritative inventory", () => {
   it("parses only the exact bounded app table, retaining explicit revocation", () => {

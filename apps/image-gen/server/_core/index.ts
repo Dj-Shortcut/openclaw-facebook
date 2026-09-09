@@ -12,7 +12,11 @@ import { captureBotWebhookRawBody, getBotStartupConfig } from "./bot";
 import { assertProductionImageStorageConfig } from "./image-generation/imageServiceConfig";
 import { assertProductionMessengerVideoConfig } from "./video-generation/videoConfig";
 import { appRouter } from "../routers";
+import { assertAuthConfig, registerOAuthRoutes } from "./auth";
 import { createContext } from "./context";
+import { isDirectFacebookLoginConfigured } from "./oauth";
+import { registerPortalRoutes } from "./portalRoutes";
+import { registerPublicConfigRoute } from "./runtime/publicConfig";
 import { serveStatic } from "./vite";
 import { assertPrivacyConfig } from "./privacy";
 import { assertConversationIdentityConfig } from "./conversationIdentityConfig";
@@ -217,6 +221,7 @@ async function startServer() {
   assertProductionImageStorageConfig();
   assertProductionMessengerVideoConfig();
   assertFacebookPageTokenConfig();
+  assertAuthConfig();
   const mollieBillingEnabled = isMollieBillingEnabled();
   const mollieBillingDrainEnabled = isMollieBillingDrainEnabled();
   const mollieBillingPreflightEnabled = isMollieBillingPreflightEnabled();
@@ -379,6 +384,8 @@ async function startServer() {
   registerVersionRoute(app, () => buildVersionPayload(gitSha, bootTimestamp));
   registerMetricsRoute(app);
   registerFaceMemoryAdminRoutes(app);
+  registerPortalRoutes(app);
+  registerPublicConfigRoute(app);
 
   registerDebugRoutes(app, gitSha);
 
@@ -406,6 +413,13 @@ async function startServer() {
   }
   if (mollieBillingDrainEnabled) {
     startCreditReservationExpiryWorker();
+  }
+
+  const oauthServerUrl = process.env.OAUTH_SERVER_URL;
+  if (oauthServerUrl || isDirectFacebookLoginConfigured()) {
+    registerOAuthRoutes(app);
+  } else {
+    safeLog("oauth_routes_skipped", { reason: "missing_oauth_server_url" });
   }
 
   app.use(

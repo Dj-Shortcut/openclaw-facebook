@@ -119,7 +119,8 @@ npm run pack:dry
 
 CI classifies exact changed paths. Product contracts always run; expensive
 image-gen and migration suites run only when their source boundary changes;
-plugin packaging and the legacy gateway each have their own path-scoped lane.
+plugin packaging has its own path-scoped lane. Tests for retained gateway
+recovery run in Production contract CI without starting or deploying a gateway.
 
 ## Documentation
 

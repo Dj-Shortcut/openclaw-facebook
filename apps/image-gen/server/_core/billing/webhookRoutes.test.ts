@@ -11,6 +11,7 @@ import {
 
 const mocks = vi.hoisted(() => ({
   applyCreditPaymentWebhookSnapshot: vi.fn(),
+  applyLegacyPaymentDrainSnapshot: vi.fn(),
   getRedisClient: vi.fn(),
   isRedisEnabled: vi.fn(),
   safeLog: vi.fn(),
@@ -18,6 +19,9 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./creditPaymentWebhook", () => ({
   applyCreditPaymentWebhookSnapshot: mocks.applyCreditPaymentWebhookSnapshot,
+}));
+vi.mock("./legacyPaymentDrain", () => ({
+  applyLegacyPaymentDrainSnapshot: mocks.applyLegacyPaymentDrainSnapshot,
 }));
 
 vi.mock("../logger", () => ({
@@ -105,6 +109,7 @@ describe("classic Mollie payment webhook", () => {
       eval: vi.fn().mockResolvedValue(1),
     });
     mocks.applyCreditPaymentWebhookSnapshot.mockResolvedValue("unknown");
+    mocks.applyLegacyPaymentDrainSnapshot.mockResolvedValue("unknown");
   });
 
   afterEach(() => {
@@ -141,6 +146,48 @@ describe("classic Mollie payment webhook", () => {
       expectedMode: "test",
       payment,
     });
+    expect(mocks.applyLegacyPaymentDrainSnapshot).not.toHaveBeenCalled();
+  });
+
+  it.each(["processed", "duplicate", "mismatch"])(
+    "acknowledges %s retained legacy financial updates",
+    async result => {
+      const payment = providerPayment();
+      mocks.applyLegacyPaymentDrainSnapshot.mockResolvedValueOnce(result);
+      const response = await postWebhook({
+        body: "id=tr_payment123",
+        contentType: "application/x-www-form-urlencoded",
+        createClient: () =>
+          ({
+            getPayment: vi.fn().mockResolvedValue(payment),
+          }) as unknown as MollieClient,
+      });
+      expect(response.status).toBe(200);
+      expect(mocks.applyLegacyPaymentDrainSnapshot).toHaveBeenCalledWith({
+        webhookPaymentId: payment.id,
+        expectedMode: "test",
+        payment,
+      });
+    }
+  );
+
+  it("keeps a legacy accounting database failure retryable instead of acknowledging it as unknown", async () => {
+    mocks.applyLegacyPaymentDrainSnapshot.mockRejectedValueOnce(
+      new Error("private database detail")
+    );
+    const response = await postWebhook({
+      body: "id=tr_payment123",
+      contentType: "application/x-www-form-urlencoded",
+      createClient: () =>
+        ({
+          getPayment: vi.fn().mockResolvedValue(providerPayment()),
+        }) as unknown as MollieClient,
+    });
+    expect(response.status).toBe(503);
+    expect(response.body).toBe("Retry");
+    expect(JSON.stringify(mocks.safeLog.mock.calls)).not.toContain(
+      "private database detail"
+    );
   });
 
   it("acknowledges an early exact credit webhook without binding it to the legacy path", async () => {

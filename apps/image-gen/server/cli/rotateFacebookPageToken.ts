@@ -7,9 +7,11 @@ import {
 import { closeDatabasePool } from "../db";
 
 export async function runFacebookPageTokenRotationCli(): Promise<void> {
+  let rotationCommitted = false;
   try {
     const input = readFacebookPageTokenRotationEnv();
     const result = await rotateFacebookPageToken(input);
+    rotationCommitted = true;
     process.stdout.write(
       `${JSON.stringify({
         event: "facebook_page_token_rotated",
@@ -21,7 +23,20 @@ export async function runFacebookPageTokenRotationCli(): Promise<void> {
     );
   } finally {
     delete process.env.FACEBOOK_PAGE_TOKEN_ROTATE_ACCESS_TOKEN;
-    await closeDatabasePool();
+    try {
+      await closeDatabasePool();
+    } catch {
+      // Closing the pool cannot undo a committed rotation or replace an
+      // earlier refusal. Report cleanup separately without credential details.
+      process.stderr.write(
+        `${JSON.stringify({
+          event: "facebook_page_token_rotation_cleanup_failed",
+          reason: "database_pool_close_failed",
+          rotationCommitted,
+        })}\n`
+      );
+      process.exitCode = 1;
+    }
   }
 }
 

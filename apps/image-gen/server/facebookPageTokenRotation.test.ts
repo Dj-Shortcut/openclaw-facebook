@@ -34,6 +34,7 @@ const INPUT = Object.freeze({
   pageId: "123456789012345",
   accessToken: "private-rotated-page-token",
 });
+const ORIGINAL_EXIT_CODE = process.exitCode;
 
 function rotationEnv(): NodeJS.ProcessEnv {
   return {
@@ -52,12 +53,14 @@ describe("owner Facebook Page token rotation", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.stubEnv("JWT_SECRET", "x".repeat(32));
+    mocks.closeDatabasePool.mockResolvedValue(undefined);
     mocks.upsertChannelConnection.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
+    process.exitCode = ORIGINAL_EXIT_CODE;
   });
 
   it("seals a token for only the current Page binding and owner role", async () => {
@@ -197,5 +200,91 @@ describe("owner Facebook Page token rotation", () => {
 
     expect(mocks.closeDatabasePool).toHaveBeenCalledOnce();
     expect(process.env.FACEBOOK_PAGE_TOKEN_ROTATE_ACCESS_TOKEN).toBeUndefined();
+  });
+
+  it("reports cleanup failure without relabeling a committed rotation as failed", async () => {
+    for (const [name, value] of Object.entries(rotationEnv())) {
+      if (value !== undefined) vi.stubEnv(name, value);
+    }
+    mocks.closeDatabasePool.mockRejectedValueOnce(
+      new Error(`private database failure: ${INPUT.accessToken}`)
+    );
+    const output: string[] = [];
+    const diagnostics: string[] = [];
+    vi.spyOn(process.stdout, "write").mockImplementation(((
+      chunk: string | Uint8Array
+    ) => {
+      output.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write);
+    vi.spyOn(process.stderr, "write").mockImplementation(((
+      chunk: string | Uint8Array
+    ) => {
+      diagnostics.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write);
+
+    await expect(runFacebookPageTokenRotationCli()).resolves.toBeUndefined();
+
+    expect(mocks.upsertChannelConnection).toHaveBeenCalledOnce();
+    expect(mocks.closeDatabasePool).toHaveBeenCalledOnce();
+    expect(process.exitCode).toBe(1);
+    expect(process.env.FACEBOOK_PAGE_TOKEN_ROTATE_ACCESS_TOKEN).toBeUndefined();
+    expect(output.map(value => JSON.parse(value))).toEqual([
+      {
+        event: "facebook_page_token_rotated",
+        workspaceId: INPUT.workspaceId,
+        channelConnectionId: INPUT.channelConnectionId,
+        bindingEpoch: INPUT.bindingEpoch,
+        status: "connected",
+      },
+    ]);
+    expect(diagnostics.map(value => JSON.parse(value))).toEqual([
+      {
+        event: "facebook_page_token_rotation_cleanup_failed",
+        reason: "database_pool_close_failed",
+        rotationCommitted: true,
+      },
+    ]);
+    const serialized = [...output, ...diagnostics].join("");
+    expect(serialized).not.toContain(
+      '"event":"facebook_page_token_rotation_failed"'
+    );
+    expect(serialized).not.toContain(INPUT.accessToken);
+    expect(serialized).not.toContain(INPUT.approvalReference);
+    expect(serialized).not.toContain(INPUT.pageId);
+  });
+
+  it("preserves the original refusal when database cleanup also fails", async () => {
+    vi.stubEnv("FACEBOOK_PAGE_TOKEN_ROTATE_CONFIRM", "");
+    vi.stubEnv("FACEBOOK_PAGE_TOKEN_ROTATE_ACCESS_TOKEN", INPUT.accessToken);
+    mocks.closeDatabasePool.mockRejectedValueOnce(
+      new Error(`private database failure: ${INPUT.accessToken}`)
+    );
+    const output = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+    const diagnostics: string[] = [];
+    vi.spyOn(process.stderr, "write").mockImplementation(((
+      chunk: string | Uint8Array
+    ) => {
+      diagnostics.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write);
+
+    await expect(runFacebookPageTokenRotationCli()).rejects.toBeInstanceOf(
+      FacebookPageTokenRotationConfigurationError
+    );
+
+    expect(mocks.upsertChannelConnection).not.toHaveBeenCalled();
+    expect(mocks.closeDatabasePool).toHaveBeenCalledOnce();
+    expect(output).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(1);
+    expect(process.env.FACEBOOK_PAGE_TOKEN_ROTATE_ACCESS_TOKEN).toBeUndefined();
+    expect(diagnostics.map(value => JSON.parse(value))).toEqual([
+      {
+        event: "facebook_page_token_rotation_cleanup_failed",
+        reason: "database_pool_close_failed",
+        rotationCommitted: false,
+      },
+    ]);
   });
 });

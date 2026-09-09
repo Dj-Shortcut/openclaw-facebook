@@ -2,13 +2,11 @@ import express, { type Express } from "express";
 import { ipKeyGenerator } from "express-rate-limit";
 import { safeLog } from "../logger";
 import { createSharedRedisRateLimiter } from "../redisRateLimit";
-import {
-  getMollieConfig,
-  getMollieWebhookPath,
-} from "./config";
+import { getMollieConfig, getMollieWebhookPath } from "./config";
 import { safeBillingErrorCode } from "./errorCode";
 import { applyCreditPaymentWebhookSnapshot } from "./creditPaymentWebhook";
 import { MollieApiError, MollieClient } from "./mollieClient";
+import { applyLegacyPaymentDrainSnapshot } from "./legacyPaymentDrain";
 
 const WEBHOOK_BODY_LIMIT = "2kb";
 const PAYMENT_ID_PATTERN = /^tr_[A-Za-z0-9]{1,60}$/;
@@ -103,16 +101,19 @@ export async function handleMollieWebhook(
   if (payment.id !== paymentId || payment.mode !== config.mode) {
     return "unknown";
   }
-  // Only the owner-operated credit-wallet route is accepted here. Unknown
-  // payments remain harmless and are not dispatched to legacy workspace or
-  // subscription billing.
+  // New purchases remain credit-only. Exact retained legacy routes still
+  // drain financial snapshots, without reopening their retired products.
   const creditResult = await applyCreditPaymentWebhookSnapshot({
     webhookPaymentId: paymentId,
     expectedMode: config.mode,
     payment,
   });
   if (creditResult !== "unknown") return creditResult;
-  return "unknown";
+  return applyLegacyPaymentDrainSnapshot({
+    webhookPaymentId: paymentId,
+    expectedMode: config.mode,
+    payment,
+  });
 }
 
 function readPaymentId(body: unknown): string | null {

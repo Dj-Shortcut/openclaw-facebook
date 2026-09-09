@@ -11,8 +11,30 @@ export const ENV = {
 
 const MIN_SESSION_SECRET_LENGTH = 32;
 
+export const FACEBOOK_CONNECT_STORAGE_MODES = [
+  "legacy_compat",
+  "sealed_compat",
+  "sealed_only",
+] as const;
+
+export type FacebookConnectStorageMode =
+  (typeof FACEBOOK_CONNECT_STORAGE_MODES)[number];
+
 export function getConfiguredJwtSecret(): string {
   return process.env.JWT_SECRET?.trim() ?? "";
+}
+
+export function getFacebookConnectStorageMode(): FacebookConnectStorageMode {
+  const configured = process.env.FACEBOOK_CONNECT_STORAGE_MODE?.trim();
+  if (!configured) return "legacy_compat";
+  if (
+    (FACEBOOK_CONNECT_STORAGE_MODES as readonly string[]).includes(configured)
+  ) {
+    return configured as FacebookConnectStorageMode;
+  }
+  throw new Error(
+    `FACEBOOK_CONNECT_STORAGE_MODE must be one of ${FACEBOOK_CONNECT_STORAGE_MODES.join(", ")}`
+  );
 }
 
 export function getEnv(name: string): string {
@@ -34,6 +56,9 @@ export function assertAuthConfig(): void {
     );
   }
 
+  // This is a rolling-deploy safety boundary. An invalid value must stop the
+  // process before any instance can write a storage shape its peers cannot read.
+  void getFacebookConnectStorageMode();
 }
 
 export function assertDatabaseConfig(): void {
