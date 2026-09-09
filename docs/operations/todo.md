@@ -122,6 +122,25 @@ Live payment enablement remains gated by the relevant P1 through P4 evidence.
         wrapper as one quoted argument returned exactly `1\n`, HTTP 200, exit 0,
         and empty stderr. The argument transport needs its own reviewed command
         caveat and protected cleanup proof; no new schema transition has run.
+        **2026-09-09 pre-deployment audit:** PR #507 is deliberately draft even
+        though its CI passed. The pinned Fly CLI parses `--command` into an
+        exact argument list; its documented token permits the wrapper alone,
+        whereas the request appends the SQL argument. The operator-token probe
+        does not validate that restricted-token boundary. Do not mint the
+        documented replacement token or dispatch this revision. Correct and
+        review the transport and credential contract together; do not silently
+        broaden the credential to make the request pass.
+        Before another production attempt, close the whole-path evidence gaps:
+        (1) cleanup with the actual restricted credential, including rejection
+        of commands outside its boundary; (2) prepare and definer provisioning,
+        which still instantiate `RootMysqlSession` over SSH, with the actual
+        intended credential rather than an operator credential; (3) snapshot
+        restore, exact 0016-to-0018 transition and rollback rehearsal on an
+        isolated database; (4) the deployed Test Mode configuration and exact
+        tester binding, then signed checkout, trusted webhook, one grant and
+        one delivered premium edit. A green cleanup PR closes none of these
+        downstream gates by itself. Keep live billing disabled and retain the
+        existing offer; one edit is the consumption test, not a new bundle.
         Run the separately
         approved cleanup-only proof bound to the original failed run, and retire its
         exact temporary token and unchanged secret before a new transition.
