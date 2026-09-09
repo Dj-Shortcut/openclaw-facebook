@@ -177,7 +177,10 @@ export function classifyCreditMigrationHistory(contract, history) {
   fail();
 }
 
-async function readExactCreditMigrationPhase(connection) {
+export async function readExactCreditMigrationPhase(connection) {
+  // Fingerprint SHOW CREATE with the same session settings used to generate
+  // the reviewed contract, including explicit ROW_FORMAT and fresh statistics.
+  await configureProductionSchemaSession(connection);
   const contract = JSON.parse(await fs.readFile(contractPath, "utf8"));
   return classifyCreditMigrationHistory(
     contract,
