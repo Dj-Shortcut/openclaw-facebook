@@ -107,6 +107,14 @@ Live payment enablement remains gated by the relevant P1 through P4 evidence.
         credential-caveat or production cleanup evidence; review and protected
         execution remain open. Prepare/bootstrap still use their existing SSH
         transport and need separate verification before a schema transition.
+        Cleanup run `34322881181` (2026-09-09, source `78a9223`) reached
+        `migration_history` and stopped before the root Exec/revoke step.
+        Read-only inspection matched all 17 history rows and next ID 18;
+        enabling the contract's `show_create_table_verbosity=1` reproduced its
+        exact history-table fingerprint. The initial history read preceded
+        session initialization. Initialize the session before every exact
+        history capture; retain the exact fingerprint comparison. This diagnosis
+        is not successful protected cleanup or schema-transition evidence.
         Run the separately
         approved cleanup-only proof bound to the original failed run, and retire its
         exact temporary token and unchanged secret before a new transition.
