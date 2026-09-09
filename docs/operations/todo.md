@@ -115,6 +115,13 @@ Live payment enablement remains gated by the relevant P1 through P4 evidence.
         session initialization. Initialize the session before every exact
         history capture; retain the exact fingerprint comparison. This diagnosis
         is not successful protected cleanup or schema-transition evidence.
+        PR #505 fixed that ordering. Run `34324926620` subsequently passed
+        history inspection but stopped at `root_lock`, before approval to revoke.
+        Read-only Fly API probes showed that stdin reached neither MySQL nor
+        a standalone cat command. Passing `SELECT 1` through the fixed cleanup
+        wrapper as one quoted argument returned exactly `1\n`, HTTP 200, exit 0,
+        and empty stderr. The argument transport needs its own reviewed command
+        caveat and protected cleanup proof; no new schema transition has run.
         Run the separately
         approved cleanup-only proof bound to the original failed run, and retire its
         exact temporary token and unchanged secret before a new transition.

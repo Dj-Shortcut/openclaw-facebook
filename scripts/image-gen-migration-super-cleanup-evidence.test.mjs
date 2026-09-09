@@ -608,7 +608,7 @@ describe("cleanup-only operator commands", () => {
     expect(setup).toContain(
       '--expiry 4h --command "$root_mysql_command_csv" --json',
     );
-    expect(setup).toContain("ROOT_MYSQL_REMOTE_COMMAND_FLYCTL_CSV");
+    expect(setup).toContain("SUPER_CLEANUP_EXEC_COMMAND_FLYCTL_CSV");
     expect(setup).toContain("gh secret set FLY_DATABASE_CLEANUP_EXEC_TOKEN");
     expect(setup).not.toContain("gh secret set FLY_DATABASE_REPAIR_EXEC_TOKEN");
     expect(setup).not.toContain("gh secret delete");

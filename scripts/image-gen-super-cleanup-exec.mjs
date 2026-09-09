@@ -1,7 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 
-import { ROOT_MYSQL_REMOTE_COMMAND } from "./provision-image-gen-credit-provisioner.mjs";
 import {
   CREDIT_MIGRATION_PRINCIPAL_REPAIR_LOCK,
   CreditMigrationPrincipalCleanupError,
@@ -158,6 +157,23 @@ export function parseSuperCleanupExecResponse(value, nonce) {
   fail();
 }
 
+// The target Machine accepts Exec command arguments but drops API stdin.
+// SQL is one positional argument, never interpolated into shell source.
+export const SUPER_CLEANUP_EXEC_COMMAND =
+  '/bin/sh -lc \'test "$#" -eq 1 || exit 64; exec env MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql --protocol=socket --batch --raw --skip-column-names --silent --unbuffered -uroot leaderbot --execute="$1"\' leaderbot-super-cleanup';
+export const SUPER_CLEANUP_EXEC_COMMAND_FLYCTL_CSV = `"${SUPER_CLEANUP_EXEC_COMMAND.replaceAll('"', '""')}"`;
+
+export function buildSuperCleanupExecCommand(sql) {
+  if (
+    typeof sql !== "string" ||
+    !sql ||
+    sql.includes("\0") ||
+    Buffer.byteLength(sql) > MAX_STDIN_BYTES
+  )
+    fail();
+  return `${SUPER_CLEANUP_EXEC_COMMAND} '${sql.replaceAll("'", "'\\''")}'`;
+}
+
 export async function requestSuperCleanupExec(
   { app, machineId, stdin, nonce, signal },
   { fetchImpl = globalThis.fetch, token = process.env.FLY_API_TOKEN } = {},
@@ -177,8 +193,8 @@ export async function requestSuperCleanupExec(
     fail();
   const url = `${API_ORIGIN}/v1/apps/${DATABASE_APP}/machines/${machineId}/exec`;
   try {
-    // Keep the exact reviewed command string used to create the command caveat.
-    // The pinned flyctl machine-exec CLI drops stdin and cannot implement this.
+    // The command-scoped token must match SUPER_CLEANUP_EXEC_COMMAND, not the
+    // older stdin-based command. No fallback or second request is permitted.
     const response = await fetchImpl(url, {
       method: "POST",
       redirect: "error",
@@ -189,8 +205,7 @@ export async function requestSuperCleanupExec(
         Accept: "application/json",
       },
       body: JSON.stringify({
-        cmd: ROOT_MYSQL_REMOTE_COMMAND,
-        stdin,
+        cmd: buildSuperCleanupExecCommand(stdin),
         timeout: EXEC_SECONDS,
       }),
     });

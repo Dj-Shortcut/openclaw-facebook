@@ -1,12 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { execFileSync } from "node:child_process";
 
-import { ROOT_MYSQL_REMOTE_COMMAND } from "./provision-image-gen-credit-provisioner.mjs";
 import {
   CREDIT_MIGRATION_PRINCIPAL_REPAIR_LOCK as LOCK,
   CreditMigrationPrincipalCleanupError,
 } from "./image-gen-credit-migration-principal-repair-contract.mjs";
 import {
   buildSuperCleanupExecBatch,
+  buildSuperCleanupExecCommand,
+  SUPER_CLEANUP_EXEC_COMMAND,
   parseSuperCleanupExecResponse,
   requestSuperCleanupExec,
   revokeTemporaryCreditMigrationSuperViaExec,
@@ -37,6 +39,22 @@ const response = (value = responseBody()) =>
 afterEach(() => vi.restoreAllMocks());
 
 describe("fixed one-request Fly cleanup transport", () => {
+  it("passes SQL shell metacharacters literally as exactly one argument", () => {
+    const sql =
+      "SELECT 'quoted', \"double\", '$HOME', '$(exit 91)', '`exit 92`';\nDO 0;";
+    const cmd = buildSuperCleanupExecCommand(sql).replace(
+      'exec env MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql --protocol=socket --batch --raw --skip-column-names --silent --unbuffered -uroot leaderbot --execute="$1"',
+      'printf "%s" "$1"',
+    );
+    expect(cmd).not.toContain("mysql --protocol");
+    expect(execFileSync("/bin/sh", ["-c", cmd], { encoding: "utf8" })).toBe(
+      sql,
+    );
+    expect(() =>
+      execFileSync("/bin/sh", ["-c", `${cmd} extra`], { stdio: "pipe" }),
+    ).toThrow();
+  });
+
   function input() {
     return {
       ...TARGET,
@@ -46,7 +64,7 @@ describe("fixed one-request Fly cleanup transport", () => {
     };
   }
 
-  it("sends bounded stdin through the unchanged exact command and fixed API URL", async () => {
+  it("sends one bounded SQL argument through the fixed command and API URL", async () => {
     const fetchImpl = vi.fn(async () => response());
     await expect(
       requestSuperCleanupExec(input(), {
@@ -62,11 +80,15 @@ describe("fixed one-request Fly cleanup transport", () => {
     expect(init.method).toBe("POST");
     expect(init.redirect).toBe("error");
     expect(JSON.parse(init.body)).toEqual({
-      cmd: ROOT_MYSQL_REMOTE_COMMAND,
-      stdin: "DO 0;\n",
+      cmd: buildSuperCleanupExecCommand("DO 0;\n"),
       timeout: 40,
     });
     expect(init.body).not.toContain("synthetic-test-token");
+    expect(JSON.parse(init.body)).not.toHaveProperty("stdin");
+    expect(JSON.parse(init.body).cmd).toMatch(/^\/bin\/sh -lc /);
+    expect(
+      JSON.parse(init.body).cmd.startsWith(`${SUPER_CLEANUP_EXEC_COMMAND} `),
+    ).toBe(true);
   });
 
   it.each([
@@ -76,6 +98,7 @@ describe("fixed one-request Fly cleanup transport", () => {
     { machineId: [TARGET.machineId] },
     { machineId: "../different" },
     { stdin: "" },
+    { stdin: "DO 0;\0" },
     { stdin: "x".repeat(16_385) },
     { nonce: "wrong" },
   ])(

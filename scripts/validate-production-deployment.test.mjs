@@ -3206,7 +3206,6 @@ describe("production deployment contract", () => {
     );
   });
 
-
   it("keeps runtime artifacts on the exact supported 0018 phase", () => {
     const root = createRepositoryFixture();
     replaceFixtureText(
@@ -4057,14 +4056,14 @@ describe("production deployment contract", () => {
       "must refuse redirects and bind the single POST to cancellation",
     ],
     [
-      "cmd: ROOT_MYSQL_REMOTE_COMMAND,",
+      "cmd: buildSuperCleanupExecCommand(stdin),",
       'cmd: "mysql -uroot",',
-      "must preserve the exact command caveat and deliver bounded SQL through stdin",
+      "must deliver bounded SQL as one quoted argument through the reviewed cleanup command",
     ],
     [
-      "        stdin,\n        timeout: EXEC_SECONDS,",
-      '        stdin: "",\n        timeout: EXEC_SECONDS,',
-      "must preserve the exact command caveat and deliver bounded SQL through stdin",
+      "cmd: buildSuperCleanupExecCommand(stdin),",
+      'cmd: buildSuperCleanupExecCommand(""),',
+      "must deliver bounded SQL as one quoted argument through the reviewed cleanup command",
     ],
     [
       "Buffer.byteLength(stdin) > MAX_STDIN_BYTES",
@@ -4132,8 +4131,8 @@ describe("production deployment contract", () => {
       "must make one Exec request without automatic retry or SSH fallback",
     ],
     [
-      "import { ROOT_MYSQL_REMOTE_COMMAND }",
-      "import { RootMysqlSession, ROOT_MYSQL_REMOTE_COMMAND }",
+      'import { randomBytes } from "node:crypto";',
+      'import { randomBytes } from "node:crypto";\nimport { RootMysqlSession } from "./provision-image-gen-credit-provisioner.mjs";',
       "must make one Exec request without automatic retry or SSH fallback",
     ],
   ])("rejects cleanup Exec boundary drift: %s", (before, after, message) => {

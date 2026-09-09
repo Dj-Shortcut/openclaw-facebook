@@ -5458,8 +5458,8 @@ function validateMigrationSuperCleanupExec(rootDir) {
       "must refuse redirects and bind the single POST to cancellation",
     ],
     [
-      "body: JSON.stringify({ cmd: ROOT_MYSQL_REMOTE_COMMAND, stdin, timeout: EXEC_SECONDS, }),",
-      "must preserve the exact command caveat and deliver bounded SQL through stdin",
+      "body: JSON.stringify({ cmd: buildSuperCleanupExecCommand(stdin), timeout: EXEC_SECONDS, }),",
+      "must deliver bounded SQL as one quoted argument through the reviewed cleanup command",
     ],
     [
       "Buffer.byteLength(stdin) > MAX_STDIN_BYTES",

@@ -292,7 +292,7 @@ flyctl tokens list --app leaderbot-portal-mysql --scope app | \
   CLEANUP_FAILED_RUN_ID="$failed_run_id" node --input-type=module -e \
   'import {parseFlyTokenInventory} from "./scripts/retire-image-gen-repair-exec-token.mjs"; let s=""; for await (const c of process.stdin) s+=c; if (parseFlyTokenInventory(s).some(t=>t.name===`leaderbot-pr486-cleanup-${process.env.CLEANUP_FAILED_RUN_ID}`)) process.exit(1)'
 root_mysql_command_csv="$(node --input-type=module -e \
-  'import {ROOT_MYSQL_REMOTE_COMMAND_FLYCTL_CSV} from "./scripts/provision-image-gen-credit-provisioner.mjs"; process.stdout.write(ROOT_MYSQL_REMOTE_COMMAND_FLYCTL_CSV)')"
+  'import {SUPER_CLEANUP_EXEC_COMMAND_FLYCTL_CSV} from "./scripts/image-gen-super-cleanup-exec.mjs"; process.stdout.write(SUPER_CLEANUP_EXEC_COMMAND_FLYCTL_CSV)')"
 cleanup_token_json="$(flyctl tokens create machine-exec \
   --app leaderbot-portal-mysql --name "leaderbot-pr486-cleanup-$failed_run_id" \
   --expiry 4h --command "$root_mysql_command_csv" --json)"
@@ -321,9 +321,15 @@ still has `SUPER`, including a former migration account after credential
 rotation. It does not revoke privileges from other accounts automatically.
 
 The revoke-only runner sends one bounded Machines Exec API request to the
-exact verified database Machine. It keeps `ROOT_MYSQL_REMOTE_COMMAND` unchanged
-and supplies SQL through the API's `stdin` field; the pinned CLI's Exec command
-does not forward stdin. There is no SSH fallback, redirect, or automatic request
+exact verified database Machine. It uses `SUPER_CLEANUP_EXEC_COMMAND` and passes
+the bounded SQL batch as one shell-quoted positional argument to `mysql --execute`.
+The fixed shell source never evaluates SQL as shell code and rejects additional
+arguments. Read-only production probes returned empty stdout for both API stdin
+forms, while the explicit SQL argument returned its expected marker. Do not
+reuse a token restricted to the former stdin command: preserve its metadata and
+revoke it with verified readback before installing the separately recorded
+replacement cleanup credential. Keep the original repair secret unchanged.
+There is no SSH fallback, redirect, or automatic request
 retry. One root session holds the existing repair lock while the separate
 migration connection verifies the exact account, grants, and schema history
 before and after the revoke. Each approval must belong to that live verifier
