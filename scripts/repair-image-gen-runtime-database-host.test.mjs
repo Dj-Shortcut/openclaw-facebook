@@ -24,6 +24,7 @@ afterEach(() => vi.unstubAllEnvs());
 function repairHarness(failure) {
   const sha = "a".repeat(40);
   vi.stubEnv("GITHUB_ACTIONS", "true");
+  vi.stubEnv("EXCLUSIVE_SECRET_WINDOW", "true");
   vi.stubEnv("GITHUB_SHA", sha);
   vi.stubEnv(
     "GITHUB_WORKFLOW_REF",
@@ -66,9 +67,11 @@ function repairHarness(failure) {
   const calls = [];
   let probe;
   let secretReads = 0;
+  let delayedReads = 0;
   const dependencies = {
     manifest,
     verifyCi: vi.fn(async () => {}),
+    wait: vi.fn(async () => {}),
     checkSettled: vi.fn(async () => baseline),
     execute(command, args, options) {
       calls.push({ command, args, options });
@@ -105,6 +108,8 @@ function repairHarness(failure) {
               },
             },
           ]);
+        if (failure === "delayed_creation" && ++delayedReads <= 3) return "[]";
+        if (failure === "unknown_creation") return "[]";
         return JSON.stringify(probe ? [probe] : []);
       }
       if (args[0] === "machine" && args[1] === "run") {
@@ -120,7 +125,14 @@ function repairHarness(failure) {
             init: { entrypoint: ["/bin/sleep"], cmd: ["600"] },
           },
         };
-        if (failure === "create_response_lost") throw new Error("lost");
+        if (
+          [
+            "create_response_lost",
+            "delayed_creation",
+            "unknown_creation",
+          ].includes(failure)
+        )
+          throw new Error("lost");
         if (failure === "unexpected_service")
           probe.config.services.push({ port: 8080 });
         return "created";
@@ -179,6 +191,7 @@ describe("exact staged database hostname repair", () => {
 
   it.each([
     "create_response_lost",
+    "delayed_creation",
     "unexpected_service",
     "probe_failed",
     "secret_changed",
@@ -195,6 +208,25 @@ describe("exact staged database hostname repair", () => {
       );
     },
   );
+
+  it("does not claim cleanup success when a lost creation never becomes visible", async () => {
+    const { calls, dependencies } = repairHarness("unknown_creation");
+    await expect(
+      repairRuntimeDatabaseHost({ stage: true }, dependencies),
+    ).rejects.toThrow("cleanup_incomplete");
+    expect(dependencies.wait).toHaveBeenCalledTimes(24);
+    expect(calls.some((call) => call.args[1] === "import")).toBe(false);
+    expect(dependencies.checkSettled).toHaveBeenCalledTimes(1);
+  });
+
+  it("requires the operator-exclusive window before any probe or secret read", async () => {
+    const { calls, dependencies } = repairHarness();
+    vi.stubEnv("EXCLUSIVE_SECRET_WINDOW", "false");
+    await expect(
+      repairRuntimeDatabaseHost({ stage: true }, dependencies),
+    ).rejects.toThrow("transition_rejected");
+    expect(calls).toHaveLength(0);
+  });
 
   it("refuses execution outside the protected workflow before reading any secret", async () => {
     const { calls, dependencies } = repairHarness();

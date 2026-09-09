@@ -2,6 +2,12 @@ name: Repair staged image-gen database hostname
 
 on:
   workflow_dispatch:
+    inputs:
+      exclusive_secret_window:
+        description: "Operator confirms no direct Fly/API secret changes during this repair"
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   actions: read
@@ -68,6 +74,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           FLY_API_TOKEN: ${{ secrets.FLY_IMAGE_GEN_DEPLOY_TOKEN }}
           FLY_DATABASE_MIGRATION_TOKEN: ${{ secrets.FLY_DATABASE_MIGRATION_TOKEN }}
+          EXCLUSIVE_SECRET_WINDOW: ${{ inputs.exclusive_secret_window }}
         run: |
           set -euo pipefail
           test "$GITHUB_REF" = "refs/heads/main"
@@ -75,6 +82,7 @@ jobs:
           test -n "$GH_TOKEN"
           test -n "$FLY_API_TOKEN"
           test -n "$FLY_DATABASE_MIGRATION_TOKEN"
+          test "$EXCLUSIVE_SECRET_WINDOW" = "true"
           flyctl auth docker > /dev/null
           trap 'docker logout registry.fly.io > /dev/null 2>&1 || true' EXIT
           node scripts/repair-image-gen-runtime-database-host.mjs --stage > "$RUNNER_TEMP/runtime-database-host.json"

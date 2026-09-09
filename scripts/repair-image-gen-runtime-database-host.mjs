@@ -3,6 +3,7 @@ import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import { isIP } from "node:net";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import {
   checkSettledLiveFlyDrift,
@@ -105,6 +106,7 @@ export async function repairRuntimeDatabaseHost(
   const execute = dependencies.execute ?? executeCommand;
   const settled = dependencies.checkSettled ?? checkSettledLiveFlyDrift;
   const verifyCi = dependencies.verifyCi ?? verifySourceCi;
+  const wait = dependencies.wait ?? delay;
   const rootDir = process.cwd();
   const manifest =
     dependencies.manifest ??
@@ -112,6 +114,7 @@ export async function repairRuntimeDatabaseHost(
   const app = manifest.apps["image-gen"];
   if (
     process.env.GITHUB_ACTIONS !== "true" ||
+    process.env.EXCLUSIVE_SECRET_WINDOW !== "true" ||
     process.env.GITHUB_WORKFLOW_REF !==
       `${REPOSITORY}/.github/workflows/repair-image-gen-runtime-database-host.yml@refs/heads/main` ||
     app.app !== APP ||
@@ -284,12 +287,18 @@ export async function repairRuntimeDatabaseHost(
       { timeout: 150000 },
     );
     normalizeRuntimeDatabaseUrl(repaired, binding);
-    // Compare the vault digest immediately before staging; never overwrite a
-    // concurrently rotated credential. No secret appears in args, files or logs.
+    // Detect changes observed before staging. Fly's update API has no CAS:
+    // the required operator-exclusive window, not this read, excludes direct
+    // external writers between comparison and import. Repository workflows
+    // share the production-deploy-image-gen concurrency group.
     const current = JSON.parse(
       runFly(["secrets", "list", "--app", APP, "--json"]),
     ).filter((row) => row.name === "DATABASE_URL");
-    if (current.length !== 1 || current[0].digest !== secret[0].digest)
+    if (
+      current.length !== 1 ||
+      current[0].status !== "Staged" ||
+      current[0].digest !== secret[0].digest
+    )
       throw new Error("runtime_database_host_secret_changed");
     if (stage)
       runFly(["secrets", "import", "--app", APP, "--stage"], {
@@ -302,25 +311,39 @@ export async function repairRuntimeDatabaseHost(
       schemaProbePassed: true,
       triggerProbePassed: true,
       staged: stage,
+      exclusiveSecretWindowConfirmed: true,
     };
   } finally {
     // A create response may be lost: identify only our exact random marker.
-    const rows = JSON.parse(
-      runFly(["machine", "list", "--app", APP, "--json"]),
-    );
-    for (const row of rows.filter(
-      (item) =>
-        item.name === name &&
-        item.config.metadata?.leaderbot_database_host_probe === name,
-    )) {
-      if (!/^[a-f0-9]{14}$/.test(row.id) || (probeId && row.id !== probeId))
-        throw new Error("runtime_database_host_cleanup_rejected");
-      runFly(["machine", "destroy", row.id, "--app", APP, "--force"]);
+    let seenProbe = Boolean(probeId);
+    let absentReads = 0;
+    // A lost create response can precede visibility in list. Observe for up to
+    // two minutes, and require two separated absent reads after seeing/removing
+    // our probe. Never claim cleanup success when creation remains unknown.
+    for (let attempt = 0; attempt < 25; attempt++) {
+      const rows = JSON.parse(
+        runFly(["machine", "list", "--app", APP, "--json"]),
+      );
+      const probes = rows.filter(
+        (row) => row.name === name || row.id === probeId,
+      );
+      for (const row of probes) {
+        if (
+          !/^[a-f0-9]{14}$/.test(row.id) ||
+          row.name !== name ||
+          row.config.metadata?.leaderbot_database_host_probe !== name ||
+          (probeId && row.id !== probeId)
+        )
+          throw new Error("runtime_database_host_cleanup_rejected");
+        seenProbe = true;
+        probeId = row.id;
+        runFly(["machine", "destroy", row.id, "--app", APP, "--force"]);
+      }
+      absentReads = probes.length ? 0 : absentReads + 1;
+      if (seenProbe && absentReads >= 2) break;
+      if (attempt < 24) await wait(5000);
     }
-    const remaining = JSON.parse(
-      runFly(["machine", "list", "--app", APP, "--json"]),
-    );
-    if (remaining.some((row) => row.name === name || row.id === probeId))
+    if (!seenProbe || absentReads < 2)
       throw new Error("runtime_database_host_cleanup_incomplete");
   }
   const after = await settled("image-gen", options);

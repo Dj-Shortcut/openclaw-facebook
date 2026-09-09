@@ -990,6 +990,14 @@ verification plus `/healthz` and `/readyz` passed.
 
 For this exact `runtime_reviewed` condition, use only the protected manual
 `repair-image-gen-runtime-database-host.yml` workflow from green reviewed main.
+Before dispatch, the responsible operator must reserve an exclusive secret-change
+window through cleanup: no direct Fly CLI/API/dashboard credential changes or
+external rotation jobs may run against this app. The required
+`exclusive_secret_window=true` input records that operational confirmation;
+the protected production approval must verify it. Repository mutation workflows
+already share the same concurrency group. Fly's secret update API has no
+compare-and-set field, so this is an operator coordination requirement, not an
+atomic vault lock. Do not dispatch when other writers cannot be excluded.
 It does not create or rotate a database principal, widen privileges, change
 schema, deploy the app, or enable payments. It starts one auto-destroying,
 ten-minute isolated Machine on the attested runtime with a sleep-only entrypoint,
@@ -1000,9 +1008,14 @@ DNS resolve to the same private IP. Both the exact artifact schema verifier
 and the synthetic, rolled-back billing-trigger probe must pass through that
 hostname. The resulting credential travels only in process memory from SSH
 stdout to `flyctl secrets import --stage` stdin, never in arguments, files,
-application logs or artifacts. A changed vault digest aborts before staging.
-The probe is removed even after failure, and the unchanged production baseline
-is reproved. Only metadata is retained. An interrupted/ambiguous stage requires
+application logs or artifacts. A changed vault digest or deployment status
+observed immediately before staging aborts; that check alone cannot prevent a
+write racing the import. Cleanup polls for delayed probe creation for up to two
+minutes, removes only its exact random marker, and requires two separated absent
+observations. Unknown creation/cleanup remains a failed run, with the ten-minute
+auto-destroy as a backstop, not successful cleanup evidence. The unchanged
+production baseline is reproved only after confirmed cleanup. Only metadata is
+retained. An interrupted/ambiguous stage requires
 inspection, not an automatic replay or a new credential.
 
 Future principal staging uses the same machine-specific internal hostname.
