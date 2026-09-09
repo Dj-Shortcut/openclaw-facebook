@@ -9,6 +9,7 @@ import {
   SCHEMA_TRANSITION_JOB_NAME,
   SCHEMA_TRANSITION_WORKFLOW_PATH,
   assertCompletedMigrationSuperCleanup,
+  assertFailedCleanupCredentialReplacement,
   assertFailedMigrationSuperPredecessor,
   assertMigrationSuperCleanupEvidence,
   assertRunningMigrationSuperCleanup,
@@ -322,6 +323,56 @@ describe("captured pre-DDL predecessor proof", () => {
 });
 
 describe("protected cleanup run identity", () => {
+  function failedCleanup() {
+    const value = completedCleanupFixture();
+    value.run.conclusion = "failure";
+    value.jobs.jobs[0].conclusion = "failure";
+    value.jobs.jobs[0].steps.find(
+      (step) => step.name === "Revoke only temporary migration SUPER",
+    ).conclusion = "failure";
+    return value;
+  }
+
+  it("permits credential replacement without claiming cleanup succeeded", () => {
+    const value = failedCleanup();
+    expect(
+      assertFailedCleanupCredentialReplacement(value, expectedCleanup).id,
+    ).toBe(expectedCleanup.id);
+    expect(() =>
+      assertCompletedMigrationSuperCleanup(value, expectedCleanup),
+    ).toThrow();
+  });
+
+  it.each([
+    (value) => {
+      value.run.status = "in_progress";
+    },
+    (value) => {
+      value.run.conclusion = "success";
+    },
+    (value) => {
+      value.latest.workflow_runs[0].run_attempt = 2;
+    },
+    (value) => {
+      value.jobs.jobs[0].status = "in_progress";
+    },
+    (value) => {
+      value.jobs.jobs[0].steps = [];
+    },
+    (value) => {
+      value.jobs.total_count += 1;
+    },
+    (value) => {
+      value.run.repository.full_name = "another/repo";
+    },
+  ])("blocks replacement for active, superseded or unbound runs", (mutate) => {
+    const value = failedCleanup();
+    mutate(value);
+    expect(() =>
+      assertFailedCleanupCredentialReplacement(value, expectedCleanup),
+    ).toThrow();
+  });
+
   it("requires the current latest protected-main workflow run", () => {
     expect(
       assertRunningMigrationSuperCleanup(cleanupFixture(), expectedCleanup),

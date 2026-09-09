@@ -353,6 +353,19 @@ function cleanupHarness() {
       }
     }
     const endpoint = argv.at(-1);
+    if (
+      endpoint.endsWith(
+        "/environments/production/secrets/FLY_DATABASE_REPAIR_EXEC_TOKEN",
+      )
+    ) {
+      const original = state.secrets.find(
+        (item) => item.name === "FLY_DATABASE_REPAIR_EXEC_TOKEN",
+      );
+      return JSON.stringify({
+        name: original?.name,
+        updated_at: original?.updatedAt,
+      });
+    }
     if (endpoint.endsWith(`/actions/runs/${recovery.runId}`))
       return JSON.stringify(state.sourceRun);
     if (endpoint.endsWith(`/actions/runs/${recovery.cleanupRunId}`))
@@ -409,7 +422,7 @@ function cleanupHarness() {
   return {
     state,
     recovery,
-    run: () =>
+    run: (options = {}) =>
       retireAfterProtectedCleanup(recovery, {
         execute,
         reviewedWorkflow,
@@ -417,11 +430,82 @@ function cleanupHarness() {
         readInventory: async () => structuredClone(state.tokens),
         readArtifact: () => structuredClone(state.evidence),
         now: () => fixedNow,
+        ...options,
       }),
   };
 }
 
 describe("separate protected cleanup token retirement", () => {
+  it("ignores explicitly revoked historical names but keeps exact token identity", async () => {
+    const h = cleanupHarness();
+    h.state.tokens.push({
+      ...h.state.tokens[0],
+      id: "olderRevokedCleanupToken",
+      revokedAt: Date.parse("2026-09-05T05:01:00Z"),
+    });
+    await expect(h.run()).resolves.toBe(
+      "repair_and_cleanup_exec_tokens_retired",
+    );
+    expect(mutations(h.state).filter((call) => call[0] === "flyctl")).toEqual([
+      ["flyctl", ["tokens", "revoke", h.recovery.cleanupTokenId]],
+    ]);
+  });
+  function failedHarness() {
+    const h = cleanupHarness();
+    h.state.cleanupRun.conclusion = "failure";
+    h.state.cleanupJobs.jobs[0].conclusion = "failure";
+    h.state.cleanupJobs.jobs[0].steps.find(
+      (step) => step.name === "Revoke only temporary migration SUPER",
+    ).conclusion = "failure";
+    return h;
+  }
+  it("retires only a failed cleanup credential without claiming database success", async () => {
+    const h = failedHarness();
+    await expect(
+      h.run({
+        failedCleanupCredentialOnly: true,
+        readArtifact: () => {
+          throw Error("must not read success evidence");
+        },
+      }),
+    ).resolves.toBe("failed_cleanup_credential_retired_only");
+    expect(h.state.secrets).toEqual([
+      {
+        name: "FLY_DATABASE_REPAIR_EXEC_TOKEN",
+        updatedAt: h.recovery.secretUpdatedAt,
+      },
+    ]);
+    expect(
+      mutations(h.state).some((call) =>
+        call[1].includes("FLY_DATABASE_REPAIR_EXEC_TOKEN"),
+      ),
+    ).toBe(false);
+    expect(h.state.tokens[0].revokedAt).not.toBeNull();
+  });
+  it.each([
+    (h) => {
+      h.state.cleanupRun.status = "in_progress";
+    },
+    (h) => {
+      h.state.cleanupRun.conclusion = "success";
+    },
+    (h) => {
+      h.state.secrets[0].updatedAt = "2026-09-05T06:00:00Z";
+    },
+    (h) => {
+      h.state.secrets[1].updatedAt = "2026-09-05T06:00:00Z";
+    },
+  ])(
+    "refuses failed credential retirement when its boundaries change",
+    async (change) => {
+      const h = failedHarness();
+      change(h);
+      await expect(
+        h.run({ failedCleanupCredentialOnly: true }),
+      ).rejects.toThrow();
+      expect(mutations(h.state)).toEqual([]);
+    },
+  );
   it("removes the old absent credential only after protected cleanup and explicitly revokes the fresh cleanup token", async () => {
     const h = cleanupHarness();
     await expect(h.run()).resolves.toBe(

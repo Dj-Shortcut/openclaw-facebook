@@ -15,6 +15,7 @@ import { pathToFileURL } from "node:url";
 import { PINNED_FLYCTL_VERSION } from "./provision-image-gen-credit-provisioner.mjs";
 import {
   assertCompletedMigrationSuperCleanup,
+  assertFailedCleanupCredentialReplacement,
   assertFailedMigrationSuperPredecessor,
   assertMigrationSuperCleanupEvidence,
   MIGRATION_SUPER_CLEANUP_JOB_NAME,
@@ -470,8 +471,10 @@ export async function retireAfterProtectedCleanup(
     readArtifact = (runId, artifactName) =>
       downloadCleanupArtifact(execute, runId, artifactName),
     now = Date.now,
+    failedCleanupCredentialOnly = false,
   } = {},
 ) {
+  if (typeof failedCleanupCredentialOnly !== "boolean") reject();
   parseRetirementArguments(
     Object.entries({
       "--run-id": expected.runId,
@@ -551,7 +554,11 @@ export async function retireAfterProtectedCleanup(
       attempt: expected.cleanupRunAttempt,
       headSha: cleanup.run.head_sha,
     };
-    assertCompletedMigrationSuperCleanup(cleanup, cleanupRun);
+    if (failedCleanupCredentialOnly) {
+      assertFailedCleanupCredentialReplacement(cleanup, cleanupRun);
+    } else {
+      assertCompletedMigrationSuperCleanup(cleanup, cleanupRun);
+    }
     assertRetirementWorkflow(
       source(WORKFLOW, predecessor.run.head_sha),
       reviewedWorkflow,
@@ -571,6 +578,18 @@ export async function retireAfterProtectedCleanup(
       )
     )
       reject();
+    if (failedCleanupCredentialOnly) {
+      const original = api(`environments/${ENVIRONMENT}/secrets/${SECRET}`);
+      if (
+        original.name !== SECRET ||
+        original.updated_at !== expected.secretUpdatedAt
+      )
+        reject();
+      const current = JSON.stringify({ request, cleanupRun });
+      if (binding !== undefined && binding !== current) reject();
+      binding = current;
+      return { request, cleanupRun };
+    }
     const artifacts = api(
       `actions/runs/${expected.cleanupRunId}/artifacts?per_page=100`,
     );
@@ -608,16 +627,18 @@ export async function retireAfterProtectedCleanup(
     return { request, cleanupRun, artifactName };
   };
   const checked = safety();
-  const evidence = assertMigrationSuperCleanupEvidence(
-    readArtifact(expected.cleanupRunId, checked.artifactName),
-    checked,
-  );
-  if (
-    Date.parse(evidence.completedAt) > now() + 60_000 ||
-    Date.parse(evidence.completedAt) <
-      Date.parse(expected.cleanupSecretUpdatedAt)
-  )
-    reject();
+  if (!failedCleanupCredentialOnly) {
+    const evidence = assertMigrationSuperCleanupEvidence(
+      readArtifact(expected.cleanupRunId, checked.artifactName),
+      checked,
+    );
+    if (
+      Date.parse(evidence.completedAt) > now() + 60_000 ||
+      Date.parse(evidence.completedAt) <
+        Date.parse(expected.cleanupSecretUpdatedAt)
+    )
+      reject();
+  }
   safety();
   const targets = [
     {
@@ -632,7 +653,10 @@ export async function retireAfterProtectedCleanup(
       secret: CLEANUP_SECRET,
       updatedAt: expected.cleanupSecretUpdatedAt,
     },
-  ];
+  ].filter(
+    (target) =>
+      !failedCleanupCredentialOnly || target.secret === CLEANUP_SECRET,
+  );
   const secret = (target) => {
     const values = JSON.parse(
       execute("gh", [
@@ -659,7 +683,9 @@ export async function retireAfterProtectedCleanup(
   const inventory = async (target) => {
     const tokens = await readInventory();
     const matches = tokens.filter(
-      (token) => token.id === target.id || token.name === target.name,
+      (token) =>
+        token.id === target.id ||
+        (token.name === target.name && token.revokedAt === null),
     );
     if (matches.length === 0) {
       // Only the separate completed-cleanup path accepts an old absent token,
@@ -721,7 +747,9 @@ export async function retireAfterProtectedCleanup(
     }
     if (secret(target) !== null) reject();
   }
-  return "repair_and_cleanup_exec_tokens_retired";
+  return failedCleanupCredentialOnly
+    ? "failed_cleanup_credential_retired_only"
+    : "repair_and_cleanup_exec_tokens_retired";
 }
 
 export function retireRepairExecToken(
@@ -874,7 +902,13 @@ export function retireRepairExecToken(
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   try {
-    const expected = parseRetirementArguments(process.argv.slice(2));
+    const argv = process.argv.slice(2);
+    const failedCleanupCredentialOnly =
+      argv[0] === "--failed-cleanup-credential-only";
+    const expected = parseRetirementArguments(
+      failedCleanupCredentialOnly ? argv.slice(1) : argv,
+    );
+    if (failedCleanupCredentialOnly && !expected.cleanupRunId) reject();
     const env = operatorEnvironment(process.env);
     const reviewedWorkflow = readFileSync(
       new URL(`../${WORKFLOW}`, import.meta.url),
@@ -884,6 +918,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     const result = expected.cleanupRunId
       ? await retireAfterProtectedCleanup(expected, {
           execute,
+          failedCleanupCredentialOnly,
           reviewedWorkflow,
           reviewedCleanupWorkflow: readFileSync(
             new URL(

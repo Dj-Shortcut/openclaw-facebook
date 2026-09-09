@@ -290,7 +290,7 @@ fly_version="$(flyctl version)"
 [[ "$fly_version" =~ ^flyctl\ v0\.4\.94([[:space:]]|$) ]]
 flyctl tokens list --app leaderbot-portal-mysql --scope app | \
   CLEANUP_FAILED_RUN_ID="$failed_run_id" node --input-type=module -e \
-  'import {parseFlyTokenInventory} from "./scripts/retire-image-gen-repair-exec-token.mjs"; let s=""; for await (const c of process.stdin) s+=c; if (parseFlyTokenInventory(s).some(t=>t.name===`leaderbot-pr486-cleanup-${process.env.CLEANUP_FAILED_RUN_ID}`)) process.exit(1)'
+  'import {parseFlyTokenInventory} from "./scripts/retire-image-gen-repair-exec-token.mjs"; let s=""; for await (const c of process.stdin) s+=c; if (parseFlyTokenInventory(s).some(t=>t.name===`leaderbot-pr486-cleanup-${process.env.CLEANUP_FAILED_RUN_ID}` && t.revokedAt===null)) process.exit(1)'
 root_mysql_command_csv="$(node --input-type=module -e \
   'import {SUPER_CLEANUP_EXEC_COMMAND_FLYCTL_CSV} from "./scripts/image-gen-super-cleanup-exec.mjs"; process.stdout.write(SUPER_CLEANUP_EXEC_COMMAND_FLYCTL_CSV)')"
 cleanup_token_json="$(flyctl tokens create machine-exec \
@@ -299,12 +299,16 @@ cleanup_token_json="$(flyctl tokens create machine-exec \
 cleanup_token="$(printf '%s' "$cleanup_token_json" | node --input-type=module -e \
   'try { let s=""; for await (const c of process.stdin) s+=c; const v=JSON.parse(s).token; if(typeof v!=="string" || !v.trim()) process.exit(1); process.stdout.write(v); } catch { process.exit(1); }')"
 unset cleanup_token_json root_mysql_command_csv
+cleanup_token_id="$(flyctl tokens list --app leaderbot-portal-mysql --scope app | \
+  CLEANUP_FAILED_RUN_ID="$failed_run_id" node --input-type=module -e \
+  'import {parseFlyTokenInventory} from "./scripts/retire-image-gen-repair-exec-token.mjs"; let s=""; for await (const c of process.stdin) s+=c; const t=parseFlyTokenInventory(s).filter(t=>t.name===`leaderbot-pr486-cleanup-${process.env.CLEANUP_FAILED_RUN_ID}` && t.revokedAt===null); if(t.length!==1 || t[0].revokedAt!==null) process.exit(1); process.stdout.write(t[0].id)')"
+test -n "$cleanup_token_id"
+test "$cleanup_token_id" != "$repair_token_id"
+test "$(gh secret list --repo Dj-Shortcut/openclaw-facebook --env production \
+  --json name --jq '[.[] | select(.name == "FLY_DATABASE_CLEANUP_EXEC_TOKEN")] | length')" = 0
 printf '%s' "$cleanup_token" | gh secret set FLY_DATABASE_CLEANUP_EXEC_TOKEN \
   --repo Dj-Shortcut/openclaw-facebook --env production
 unset cleanup_token
-cleanup_token_id="$(flyctl tokens list --app leaderbot-portal-mysql --scope app | \
-  CLEANUP_FAILED_RUN_ID="$failed_run_id" node --input-type=module -e \
-  'import {parseFlyTokenInventory} from "./scripts/retire-image-gen-repair-exec-token.mjs"; let s=""; for await (const c of process.stdin) s+=c; const t=parseFlyTokenInventory(s).filter(t=>t.name===`leaderbot-pr486-cleanup-${process.env.CLEANUP_FAILED_RUN_ID}`); if(t.length!==1 || t[0].revokedAt!==null) process.exit(1); process.stdout.write(t[0].id)')"
 cleanup_secret_updated_at="$(gh secret list --repo Dj-Shortcut/openclaw-facebook \
   --env production --json name,updatedAt \
   --jq '.[] | select(.name == "FLY_DATABASE_CLEANUP_EXEC_TOKEN") | .updatedAt')"
@@ -316,6 +320,15 @@ test "$cleanup_token_id" != "$repair_token_id"
 Record only the eight metadata values, never either credential. If creation,
 installation, or metadata capture is uncertain, stop and inspect that exact
 cleanup identity; do not rerun token creation or replace the repair secret.
+For an explicitly authorized replacement after a terminal failed cleanup, use
+the retirement CLI with `--failed-cleanup-credential-only` followed by its
+existing nine metadata argument pairs. This mode requires the latest cleanup
+run to have failed and preserves the original repair secret unchanged. It
+retires only the recorded cleanup token and secret, and never supplies database
+cleanup evidence. Successful database cleanup is still required by the normal
+retirement path. Retired same-name historical tokens may remain visible; active
+same-name collisions still block replacement, and identity is always bound to
+the recorded token ID and secret timestamp rather than its name alone.
 The cleanup also refuses to report success if any non-system MySQL account
 still has `SUPER`, including a former migration account after credential
 rotation. It does not revoke privileges from other accounts automatically.

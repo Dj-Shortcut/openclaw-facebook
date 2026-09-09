@@ -153,6 +153,12 @@ Live payment enablement remains gated by the relevant P1 through P4 evidence.
         This proves the restricted transport boundary, not the full cleanup
         handshake, credential replacement, prepare, schema transition or
         payment journey. No production credential or database was changed.
+        Owner authorized failed-cleanup credential replacement on 2026-09-09.
+        The explicit `--failed-cleanup-credential-only` path preserves the
+        original repair credential, requires a terminal latest failed cleanup,
+        and retires only the exact cleanup identity. It is not successful
+        database cleanup evidence. Local failure-path and production-contract
+        tests pass; independent review and protected execution remain pending.
         Run the separately
         approved cleanup-only proof bound to the original failed run, and retire its
         exact temporary token and unchanged secret before a new transition.

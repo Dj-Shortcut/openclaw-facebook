@@ -343,6 +343,60 @@ export function assertCompletedMigrationSuperCleanup(
   return Object.freeze(identity);
 }
 
+// Credential replacement is not evidence of database cleanup. Only a terminal
+// failed run may release its own unusable credential; the original repair
+// credential and all database-proof requirements remain untouched.
+export function assertFailedCleanupCredentialReplacement(
+  { run, jobs, latest },
+  rawExpected,
+) {
+  const expected = exactKeys(rawExpected, ["id", "attempt", "headSha"]);
+  const identity = {
+    id: requireRunId(expected.id),
+    attempt: requireRunId(expected.attempt),
+    headSha: requireSha(expected.headSha),
+    workflowPath: MIGRATION_SUPER_CLEANUP_WORKFLOW_PATH,
+  };
+  requireRepositoryRun(run, identity, {
+    status: "completed",
+    conclusion: "failure",
+  });
+  requireLatestRun(latest, identity);
+  if (
+    !isObject(jobs) ||
+    !Array.isArray(jobs.jobs) ||
+    jobs.total_count !== jobs.jobs.length ||
+    jobs.jobs.length < 1 ||
+    jobs.jobs.length > 100
+  )
+    fail();
+  if (
+    jobs.jobs.some(
+      (job) =>
+        job.status !== "completed" ||
+        job.run_id !== run.id ||
+        job.head_sha !== run.head_sha ||
+        (job.run_attempt !== undefined && job.run_attempt !== run.run_attempt),
+    )
+  )
+    fail();
+  const matches = jobs.jobs.filter(
+    (job) => job.name === MIGRATION_SUPER_CLEANUP_JOB_NAME,
+  );
+  if (
+    matches.length !== 1 ||
+    matches[0].conclusion !== "failure" ||
+    !Array.isArray(matches[0].steps)
+  )
+    fail();
+  requireUniqueStep(
+    matches[0].steps,
+    "Revoke only temporary migration SUPER",
+    "failure",
+  );
+  return Object.freeze(identity);
+}
+
 function validateRunIdentity(value, workflowPath) {
   const run = exactKeys(value, ["id", "attempt", "headSha", "workflowPath"]);
   const result = {
