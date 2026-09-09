@@ -98,13 +98,25 @@ Live payment enablement remains gated by the relevant P1 through P4 evidence.
         The exact repair token and GitHub secret were retired with
         `repair_exec_token_retired`. Do not repeat this installation or the
         previously completed cleanup `34335377679`.
-  - [ ] **Build and deploy the final credit runtime.** The manifest is now
-        `runtime_build_pending` on the proven `0018` schema. Deploys remain
-        frozen on the attested bridge, which still serves the old frontend
-        and generic quota link. Build `image-gen-runtime`, review its digest,
-        stage the restricted principal, then deploy and verify the new frontend
-        and Messenger checkout route. Do not enable checkout from schema
-        success alone or repeat a rights repair on the completed expansion.
+  - [x] **Build the final credit runtime.** Protected build
+        [34342883040/2](https://github.com/Dj-Shortcut/openclaw-facebook/actions/runs/34342883040)
+        succeeded on `80703910131e227d1d683b1f5b6287c8bff241de`, producing
+        `sha256:1d80d6bce5fdbd7486f31d6223ca87ac7a50d075661ec48ae0f3d536eb8e5b36`.
+        Exact labels, rejection of pre-credit schemas, acceptance of 0018,
+        and trusted provenance passed. Attempt 1 stopped at the initial
+        exact-source CI gate while its last test was still running; it did
+        not build or deploy an image. Attempt 2 ran after all main CI passed.
+  - [ ] **Stage and deploy the reviewed credit runtime.** The manifest is now
+        `runtime_principal_pending` on proven `0018`. Deploys remain frozen;
+        the running bridge still serves the old frontend and generic quota
+        link. Stage the restricted principal against the exact reviewed runtime,
+        then deploy and verify the new frontend and Messenger checkout route.
+        Do not enable checkout from schema/build success alone or repeat the
+        completed expansion and repair.
+    - At checkout activation, also replace the landing page's hard-coded
+      `commercialBillingAvailable=false` / no-purchase badge with truthful
+      Messenger-purchase guidance. The public landing page must not create an
+      unbound payment or imply a working checkout while exposure remains off.
     - After schema/runtime readiness, complete the actual Messenger journey:
       signed checkout, verified Mollie webhook, credits on the correct
       user's balance, one delivered premium edit, and one debit. The

@@ -941,11 +941,16 @@ protected run [34339825855/1](https://github.com/Dj-Shortcut/openclaw-facebook/a
 on source `ea680af1061901436fdae4e59397365ce6949f36`, completed
 `2026-09-09T10:41:12Z`. The pre-credit snapshot was restore-tested and temporary
 SUPER was revoked. The bound repair token and GitHub secret were retired with
-`repair_exec_token_retired`. Application Machines still run the frozen bridge;
-resume at step 8, not by repeating the completed schema expansion. The protected
-schema workflow remains the only permitted path for the reviewed 0017/0018
-migrations; no application deploy, shell command, or ad-hoc Machine may change
-the production schema.
+`repair_exec_token_retired`. The final runtime was built and attested by
+[34342883040/2](https://github.com/Dj-Shortcut/openclaw-facebook/actions/runs/34342883040)
+from `80703910131e227d1d683b1f5b6287c8bff241de`, with digest
+`sha256:1d80d6bce5fdbd7486f31d6223ca87ac7a50d075661ec48ae0f3d536eb8e5b36`.
+It rejects pre-credit schemas and accepts the exact 0018 contract. Application
+Machines still run the frozen bridge; resume at step 9, not by repeating the
+completed schema expansion or runtime build. The protected schema workflow
+remains the only permitted path for the reviewed 0017/0018 migrations; no
+application deploy, shell command, or ad-hoc Machine may change the production
+schema.
 
 Use this exact sequence:
 
