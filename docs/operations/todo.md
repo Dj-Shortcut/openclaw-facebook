@@ -159,6 +159,12 @@ Live payment enablement remains gated by the relevant P1 through P4 evidence.
         and retires only the exact cleanup identity. It is not successful
         database cleanup evidence. Local failure-path and production-contract
         tests pass; independent review and protected execution remain pending.
+        Review follow-up binds failed-only retirement to all eight request
+        metadata fields from GitHub's exact attempt job log, not CLI values
+        alone. Read-only verification matched the recorded original credential
+        against job `102379885050`; a fresh replacement paired with that old
+        failed run is rejected before mutation. No key has been retired by this
+        change and the production cleanup remains unproven.
         Run the separately
         approved cleanup-only proof bound to the original failed run, and retire its
         exact temporary token and unchanged secret before a new transition.

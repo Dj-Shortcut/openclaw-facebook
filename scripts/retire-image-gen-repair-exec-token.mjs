@@ -15,6 +15,7 @@ import { pathToFileURL } from "node:url";
 import { PINNED_FLYCTL_VERSION } from "./provision-image-gen-credit-provisioner.mjs";
 import {
   assertCompletedMigrationSuperCleanup,
+  assertCleanupCredentialLogBinding,
   assertFailedCleanupCredentialReplacement,
   assertFailedMigrationSuperPredecessor,
   assertMigrationSuperCleanupEvidence,
@@ -579,6 +580,17 @@ export async function retireAfterProtectedCleanup(
     )
       reject();
     if (failedCleanupCredentialOnly) {
+      const job = cleanup.jobs.jobs.find(
+        (item) => item.name === MIGRATION_SUPER_CLEANUP_JOB_NAME,
+      );
+      if (!Number.isSafeInteger(job.id) || job.id <= 0) reject();
+      const log = execute("gh", [
+        "api",
+        "--hostname",
+        "github.com",
+        `/repos/${REPOSITORY}/actions/jobs/${job.id}/logs`,
+      ]);
+      assertCleanupCredentialLogBinding(log, job, request);
       const original = api(`environments/${ENVIRONMENT}/secrets/${SECRET}`);
       if (
         original.name !== SECRET ||

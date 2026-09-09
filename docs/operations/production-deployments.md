@@ -323,7 +323,13 @@ cleanup identity; do not rerun token creation or replace the repair secret.
 For an explicitly authorized replacement after a terminal failed cleanup, use
 the retirement CLI with `--failed-cleanup-credential-only` followed by its
 existing nine metadata argument pairs. This mode requires the latest cleanup
-run to have failed and preserves the original repair secret unchanged. It
+run to have failed and preserves the original repair secret unchanged. Before
+any mutation it fetches the exact attempt job log from GitHub and compares all
+eight runner-rendered request metadata fields in the successful source-check
+step with the requested identities. Missing, masked, ambiguous, or mismatched
+metadata fails closed; a later replacement cannot borrow the older failed run.
+Raw logs and credential identifiers must not be copied into repository evidence.
+It
 retires only the recorded cleanup token and secret, and never supplies database
 cleanup evidence. Successful database cleanup is still required by the normal
 retirement path. Retired same-name historical tokens may remain visible; active
