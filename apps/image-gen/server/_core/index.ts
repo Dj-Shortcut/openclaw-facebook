@@ -15,7 +15,6 @@ import { appRouter } from "../routers";
 import { assertAuthConfig, registerOAuthRoutes } from "./auth";
 import { createContext } from "./context";
 import { isDirectFacebookLoginConfigured } from "./oauth";
-import { registerPortalRoutes } from "./portalRoutes";
 import { registerPublicConfigRoute } from "./runtime/publicConfig";
 import { serveStatic } from "./vite";
 import { assertPrivacyConfig } from "./privacy";
@@ -384,7 +383,6 @@ async function startServer() {
   registerVersionRoute(app, () => buildVersionPayload(gitSha, bootTimestamp));
   registerMetricsRoute(app);
   registerFaceMemoryAdminRoutes(app);
-  registerPortalRoutes(app);
   registerPublicConfigRoute(app);
 
   registerDebugRoutes(app, gitSha);

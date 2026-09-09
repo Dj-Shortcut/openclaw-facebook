@@ -3,9 +3,9 @@ import crypto from "node:crypto";
 import { assertAuthConfig, getConfiguredJwtSecret } from "./env";
 
 /**
- * Page delivery decrypts a persisted credential with JWT_SECRET. Keep this
- * production startup guard even though browser-session authentication has been
- * retired from the owner-operated Messenger runtime.
+ * Page delivery decrypts a persisted credential with JWT_SECRET. The same
+ * secret signs the owner session, so this production startup guard covers both
+ * the retained owner login and Page delivery.
  */
 export function assertFacebookPageTokenConfig(): void {
   if (process.env.NODE_ENV !== "production") return;
