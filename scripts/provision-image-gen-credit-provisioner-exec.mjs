@@ -36,6 +36,26 @@ const PREPARE_ROOT_SHELL_SOURCE =
 export const PREPARE_ROOT_EXEC_COMMAND = `/bin/sh -lc '${PREPARE_ROOT_SHELL_SOURCE}' leaderbot-prepare-root`;
 export const PREPARE_ROOT_EXEC_COMMAND_FLYCTL_CSV = `"${PREPARE_ROOT_EXEC_COMMAND.replaceAll('"', '""')}"`;
 
+// One short-lived repair credential, two complete fixed wrappers.
+//
+// The schema-transition workflow runs `--operation prepare` and
+// `--operation revoke-super` under a single secret. The pinned flyctl accepts
+// repeated `--command-prefix` values, so that one credential can carry both
+// full wrappers without a shorter shell prefix and without a second secret.
+// Each prefix is the entire `/bin/sh -lc <source> <argv0>` head, so a token
+// minted this way still cannot run any other shell source.
+export const RESTRICTED_EXEC_SECRET = "FLY_DATABASE_REPAIR_EXEC_TOKEN";
+export const RESTRICTED_EXEC_OPERATIONS = Object.freeze({
+  prepare: Object.freeze({
+    operation: "prepare",
+    wrapperArgv0: "leaderbot-prepare-root",
+  }),
+  revokeSuper: Object.freeze({
+    operation: "revoke-super",
+    wrapperArgv0: "leaderbot-super-cleanup",
+  }),
+});
+
 export function buildPrepareRootExecArgv(sql) {
   if (
     typeof sql !== "string" ||

@@ -132,7 +132,13 @@ Live payment enablement remains gated by the relevant P1 through P4 evidence.
         broaden the credential to make the request pass.
         Before another production attempt, close the whole-path evidence gaps:
         (1) cleanup with the actual restricted credential, including rejection
-        of commands outside its boundary; (2) prepare and definer provisioning,
+        of commands outside its boundary. **Closed 2026-09-09.** The protected
+        cleanup run on `main` `6b88bb2` succeeded: temporary SUPER is absent and
+        the exact `0016` history is unchanged. Both bound credentials were
+        retired through the reviewed helper, which reported
+        `repair_and_cleanup_exec_tokens_retired`. No schema DDL and no payment
+        ran. This closes the cleanup gap only; (2) prepare and definer
+        provisioning,
         which still instantiate `RootMysqlSession` over SSH, with the actual
         intended credential rather than an operator credential. The read-only
         half of that gap now has a transport:
@@ -143,8 +149,19 @@ Live payment enablement remains gated by the relevant P1 through P4 evidence.
         on SSH: `GET_LOCK` and `IS_USED_LOCK(...)=CONNECTION_ID()` are
         connection-scoped, and one Exec request is one connection, so those
         phases must first be restructured into a single-connection batch like
-        the cleanup batch before they can move. Nothing here is proven against
-        a real restricted prepare credential yet; (3) snapshot
+        the cleanup batch before they can move. The mutating batch now exists:
+        one Exec request takes the repair lock, grants only what a second live
+        controller connection approved through per-privilege locks, and rolls
+        its own grants back when that controller withholds acceptance. It is
+        still unproven against a real restricted prepare credential, and the
+        repair CLI still defaults prepare to the SSH session. One short-lived
+        repair credential can carry both complete wrappers through repeated
+        `--command-prefix` values, so no second secret and no shorter shell
+        prefix is needed. Switching the CLI default additionally requires
+        migrating the redacted failure-stage diagnostics: the runner's
+        `root_connect` and `root_initialize` boundaries disappear with the SSH
+        session, and their shared test harness drives both operations;
+        (3) snapshot
         restore, exact 0016-to-0018 transition and rollback rehearsal on an
         isolated database; (4) the deployed Test Mode configuration and exact
         tester binding, then signed checkout, trusted webhook, one grant and

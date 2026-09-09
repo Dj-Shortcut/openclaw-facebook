@@ -8,6 +8,8 @@ import {
   parsePrepareRootExecResponse,
   PREPARE_ROOT_EXEC_COMMAND,
   PREPARE_ROOT_EXEC_COMMAND_FLYCTL_CSV,
+  RESTRICTED_EXEC_OPERATIONS,
+  RESTRICTED_EXEC_SECRET,
   requestPrepareRootExec,
 } from "./provision-image-gen-credit-provisioner-exec.mjs";
 import { SUPER_CLEANUP_EXEC_COMMAND } from "./image-gen-super-cleanup-exec.mjs";
@@ -209,6 +211,62 @@ describe("prepare root exec request", () => {
     const [url] = fetchImpl.mock.calls[0];
     expect(url).not.toContain(TOKEN);
     expect(url).not.toContain("secret-marker");
+  });
+});
+
+describe("restricted exec credential contract", () => {
+  it("keeps one secret and gives each operation its own wrapper", () => {
+    const { prepare, revokeSuper } = RESTRICTED_EXEC_OPERATIONS;
+
+    // One short-lived credential carries both prefixes; the existing secret
+    // and its retirement flow are unchanged.
+    expect(RESTRICTED_EXEC_SECRET).toBe("FLY_DATABASE_REPAIR_EXEC_TOKEN");
+    expect(prepare.wrapperArgv0).not.toBe(revokeSuper.wrapperArgv0);
+    expect(prepare.operation).toBe("prepare");
+    expect(revokeSuper.operation).toBe("revoke-super");
+  });
+
+  it("matches the wrapper each command actually runs", () => {
+    expect(PREPARE_ROOT_EXEC_COMMAND).toContain(
+      RESTRICTED_EXEC_OPERATIONS.prepare.wrapperArgv0,
+    );
+    expect(SUPER_CLEANUP_EXEC_COMMAND).toContain(
+      RESTRICTED_EXEC_OPERATIONS.revokeSuper.wrapperArgv0,
+    );
+    expect(PREPARE_ROOT_EXEC_COMMAND).not.toContain(
+      RESTRICTED_EXEC_OPERATIONS.revokeSuper.wrapperArgv0,
+    );
+    expect(SUPER_CLEANUP_EXEC_COMMAND).not.toContain(
+      RESTRICTED_EXEC_OPERATIONS.prepare.wrapperArgv0,
+    );
+  });
+
+  it("pins both prefixes to a complete wrapper, never a bare shell", () => {
+    for (const command of [
+      PREPARE_ROOT_EXEC_COMMAND,
+      SUPER_CLEANUP_EXEC_COMMAND,
+    ]) {
+      expect(command.startsWith("/bin/sh -lc '")).toBe(true);
+      expect(command).toContain('test "$#" -eq 1 || exit 64');
+      expect(command).toContain("mysql --protocol=socket");
+      expect(command.trim()).not.toBe("/bin/sh");
+      expect(command.trim()).not.toBe("/bin/sh -lc");
+    }
+  });
+
+  it("rejects a different shell source under the same prefix", () => {
+    const argv = buildPrepareRootExecArgv("DO 0;");
+    const tampered = argv[2].replace("mysql --protocol=socket", "sh -c");
+
+    // The shell source is inside the pinned prefix, so any edit produces a
+    // command a prefix-scoped credential cannot authorise.
+    expect(tampered).not.toBe(argv[2]);
+    expect(PREPARE_ROOT_EXEC_COMMAND).toContain(argv[2]);
+    expect(PREPARE_ROOT_EXEC_COMMAND).not.toContain(tampered);
+    expect(SUPER_CLEANUP_EXEC_COMMAND).not.toContain(tampered);
+    // Both wrappers deliberately share the same shell source; only the fixed
+    // argv0 separates them, so the two prefixes stay distinct commands.
+    expect(PREPARE_ROOT_EXEC_COMMAND).not.toBe(SUPER_CLEANUP_EXEC_COMMAND);
   });
 });
 
