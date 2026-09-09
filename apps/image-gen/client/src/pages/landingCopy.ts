@@ -13,7 +13,6 @@ export type LandingCopy = {
     examples: string;
     pricing: string;
     faq: string;
-    admin: string;
   };
   headerCta: string;
   eyebrow: string;
@@ -79,7 +78,6 @@ export const landingCopies: Record<AppLocale, LandingCopy> = {
       examples: "Wat je kan vragen",
       pricing: "Prijs",
       faq: "Vragen",
-      admin: "Beheerder",
     },
     headerCta: "Openen in Messenger",
     eyebrow: "Jouw fotohulp in Messenger",
@@ -261,7 +259,6 @@ export const landingCopies: Record<AppLocale, LandingCopy> = {
       examples: "Que demander",
       pricing: "Prix",
       faq: "Questions",
-      admin: "Administrateur",
     },
     headerCta: "Ouvrir dans Messenger",
     eyebrow: "Votre assistant photo dans Messenger",
@@ -443,7 +440,6 @@ export const landingCopies: Record<AppLocale, LandingCopy> = {
       examples: "What to ask",
       pricing: "Pricing",
       faq: "Questions",
-      admin: "Admin",
     },
     headerCta: "Open in Messenger",
     eyebrow: "Your photo helper in Messenger",

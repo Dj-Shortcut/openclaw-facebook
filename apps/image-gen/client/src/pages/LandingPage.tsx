@@ -1,4 +1,3 @@
-import { getLoginUrl, isLoginConfigured } from "@/const";
 import { PUBLIC_BUSINESS_DETAILS } from "@shared/publicBusinessDetails";
 import {
   ArrowRight,
@@ -111,29 +110,6 @@ function MessengerCta({
   );
 }
 
-function AdminLink({
-  copy,
-  loginConfigured,
-}: {
-  copy: LandingCopy;
-  loginConfigured: boolean;
-}) {
-  if (!loginConfigured) return null;
-  return (
-    <button
-      className={`inline-flex min-h-9 items-center gap-1.5 rounded-full px-2 text-xs font-semibold text-[#14203D]/70 transition hover:text-[#14203D] ${focusRing}`}
-      type="button"
-      onClick={() => {
-        const loginUrl = getLoginUrl("/");
-        if (loginUrl) window.location.href = loginUrl;
-      }}
-    >
-      <Lock className="h-3.5 w-3.5" aria-hidden="true" />
-      {copy.nav.admin}
-    </button>
-  );
-}
-
 /** Free-image dots plus a distinct "+8" credit badge — the whole
  * free/paid mechanic in one glance inside the hero chat mockup. The 8 mirrors
  * the premium bundle size in the checkout offer contract. */
@@ -209,7 +185,6 @@ function SectionEyebrow({ children }: { children: string }) {
 
 export default function LandingPage() {
   const [locale, setLocale] = useState<AppLocale>("nl-BE");
-  const loginConfigured = isLoginConfigured();
   // The purchase option is offered inside Messenger, not from this page, and
   // the router that used to report a catalogue here is retired. Saying "no
   // purchase option is shown" is the only thing this page can prove.
@@ -314,7 +289,6 @@ export default function LandingPage() {
             </a>
           </nav>
           <div className="flex items-center gap-2 sm:gap-4">
-            <AdminLink copy={copy} loginConfigured={loginConfigured} />
             <LanguagePicker copy={copy} locale={locale} onChange={setLocale} />
             <MessengerCta
               label={copy.headerCta}
