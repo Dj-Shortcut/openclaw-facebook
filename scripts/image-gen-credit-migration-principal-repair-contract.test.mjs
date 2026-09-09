@@ -1,4 +1,10 @@
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -26,6 +32,7 @@ import {
   executeRepair,
   executeSuperCleanup as executeSuperCleanupWithExec,
   parseCliArguments,
+  readExactCreditMigrationPhase,
   runCli,
 } from "./repair-image-gen-credit-migration-principal.mjs";
 
@@ -1946,6 +1953,61 @@ describe("credit migration principal repair resumability", () => {
     expect(() =>
       classifyCreditMigrationHistory(contract, { rows: [16, 18] }),
     ).toThrow();
+  });
+
+  it("configures the session before fingerprinting the actual 0016 contract", async () => {
+    const contract = JSON.parse(
+      readFileSync(
+        new URL(
+          "../apps/image-gen/drizzle/production-schema-contract.json",
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+    );
+    let verbose = false;
+    let freshStatistics = false;
+    const query = vi.fn(async (sql) => {
+      if (sql.startsWith("SET ")) {
+        if (sql === "SET SESSION show_create_table_verbosity=1") verbose = true;
+        if (sql === "SET SESSION information_schema_stats_expiry=0")
+          freshStatistics = true;
+        return [[]];
+      }
+      expect(verbose).toBe(true);
+      expect(freshStatistics).toBe(true);
+      if (sql.startsWith("SELECT COUNT")) return [[{ count: 1 }]];
+      if (sql.startsWith("SHOW CREATE"))
+        return [
+          [
+            {
+              "Create Table":
+                "CREATE TABLE `__drizzle_migrations` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `hash` text NOT NULL,\n  `created_at` bigint DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `id` (`id`)\n) ENGINE=InnoDB AUTO_INCREMENT=18 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci ROW_FORMAT=DYNAMIC",
+            },
+          ],
+        ];
+      if (sql.includes("AUTO_INCREMENT"))
+        return [[{ nextId: contract.history0016.nextId }]];
+      if (sql.startsWith("SELECT `id`")) return [contract.history0016.rows];
+      throw new Error("unexpected query");
+    });
+    await expect(readExactCreditMigrationPhase({ query })).resolves.toBe(
+      "0016_expand",
+    );
+    expect(
+      query.mock.calls.every(([sql]) =>
+        /^(SET SESSION |SET NAMES |SELECT |SHOW CREATE )/.test(sql),
+      ),
+    ).toBe(true);
+  });
+
+  it("does not inspect history after session initialization fails", async () => {
+    const query = vi.fn().mockRejectedValue(new Error("session unavailable"));
+    await expect(readExactCreditMigrationPhase({ query })).rejects.toThrow(
+      "session unavailable",
+    );
+    expect(query).toHaveBeenCalledOnce();
+    expect(query.mock.calls[0][0]).toMatch(/^SET SESSION /);
   });
 });
 
