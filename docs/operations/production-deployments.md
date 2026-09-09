@@ -295,7 +295,7 @@ root_mysql_command_csv="$(node --input-type=module -e \
   'import {SUPER_CLEANUP_EXEC_COMMAND_FLYCTL_CSV} from "./scripts/image-gen-super-cleanup-exec.mjs"; process.stdout.write(SUPER_CLEANUP_EXEC_COMMAND_FLYCTL_CSV)')"
 cleanup_token_json="$(flyctl tokens create machine-exec \
   --app leaderbot-portal-mysql --name "leaderbot-pr486-cleanup-$failed_run_id" \
-  --expiry 4h --command "$root_mysql_command_csv" --json)"
+  --expiry 4h --command-prefix "$root_mysql_command_csv" --json)"
 cleanup_token="$(printf '%s' "$cleanup_token_json" | node --input-type=module -e \
   'try { let s=""; for await (const c of process.stdin) s+=c; const v=JSON.parse(s).token; if(typeof v!=="string" || !v.trim()) process.exit(1); process.stdout.write(v); } catch { process.exit(1); }')"
 unset cleanup_token_json root_mysql_command_csv
@@ -324,7 +324,19 @@ The revoke-only runner sends one bounded Machines Exec API request to the
 exact verified database Machine. It uses `SUPER_CLEANUP_EXEC_COMMAND` and passes
 the bounded SQL batch as one shell-quoted positional argument to `mysql --execute`.
 The fixed shell source never evaluates SQL as shell code and rejects additional
-arguments. Read-only production probes returned empty stdout for both API stdin
+arguments. Cleanup alone uses `--command-prefix` for the complete fixed wrapper:
+Fly compares parsed argument lists, including the complete `-lc` script and
+its fixed `$0`. The sole trailing argument is the SQL batch. An exact
+`--command` for the wrapper would reject every batch; a shorter prefix (such
+as `/bin/sh`) would allow arbitrary shell source and is forbidden. The prepare
+credential above remains exact-command scoped; this is not a blanket permission
+to broaden other credentials. The cleanup token still permits root SQL, just
+as the former stdin transport did, so keep its four-hour expiry, protected-job
+approval, exact app binding, and verified retirement. Before using this revised
+credential on production, prove on an isolated target that the intended command
+succeeds while changed shell source and extra arguments fail. An operator-token
+probe alone does not satisfy this requirement.
+Read-only production probes returned empty stdout for both API stdin
 forms, while the explicit SQL argument returned its expected marker. Do not
 reuse a token restricted to the former stdin command: preserve its metadata and
 revoke it with verified readback before installing the separately recorded

@@ -39,13 +39,39 @@ const response = (value = responseBody()) =>
 afterEach(() => vi.restoreAllMocks());
 
 describe("fixed one-request Fly cleanup transport", () => {
+  it("refuses a missing SQL argument without starting mysql", () => {
+    const result = (() => {
+      try {
+        execFileSync(
+          "/bin/sh",
+          [
+            "-c",
+            SUPER_CLEANUP_EXEC_COMMAND.replace("/bin/sh -lc ", "/bin/sh -c "),
+          ],
+          {
+            stdio: "pipe",
+          },
+        );
+      } catch (error) {
+        return error;
+      }
+    })();
+    expect(result?.status).toBe(64);
+    expect(result?.stdout.toString()).toBe("");
+    expect(result?.stderr.toString()).toBe("");
+  });
+
   it("passes SQL shell metacharacters literally as exactly one argument", () => {
     const sql =
       "SELECT 'quoted', \"double\", '$HOME', '$(exit 91)', '`exit 92`';\nDO 0;";
-    const cmd = buildSuperCleanupExecCommand(sql).replace(
-      'exec env MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql --protocol=socket --batch --raw --skip-column-names --silent --unbuffered -uroot leaderbot --execute="$1"',
-      'printf "%s" "$1"',
-    );
+    // Isolate shell quoting from host-specific login profile initialization.
+    // The production login-shell command still requires the isolated Fly proof.
+    const cmd = buildSuperCleanupExecCommand(sql)
+      .replace("/bin/sh -lc ", "/bin/sh -c ")
+      .replace(
+        'exec env MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql --protocol=socket --batch --raw --skip-column-names --silent --unbuffered -uroot leaderbot --execute="$1"',
+        'printf "%s" "$1"',
+      );
     expect(cmd).not.toContain("mysql --protocol");
     expect(execFileSync("/bin/sh", ["-c", cmd], { encoding: "utf8" })).toBe(
       sql,

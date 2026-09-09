@@ -8289,6 +8289,10 @@ export function validateProductionRepository(rootDir = process.cwd()) {
       "must pass only the reviewed repair-command CSV field to flyctl",
     ],
     [
+      '--expiry 4h --command-prefix "$root_mysql_command_csv" --json',
+      "must pass the complete reviewed cleanup-command prefix CSV field to flyctl",
+    ],
+    [
       "parses\n`--command` as an RFC 4180 CSV field",
       "must explain the pinned flyctl StringSlice transport encoding",
     ],
@@ -8297,7 +8301,10 @@ export function validateProductionRepository(rootDir = process.cwd()) {
       fail(`Production deployment runbook ${message}`);
     }
   }
-  if (productionRunbook.includes('--command "$root_mysql_command"')) {
+  if (
+    productionRunbook.includes('--command "$root_mysql_command"') ||
+    productionRunbook.includes('--command-prefix "$root_mysql_command"')
+  ) {
     fail(
       "Production deployment runbook must not pass the raw root command to flyctl StringSlice parsing",
     );

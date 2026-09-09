@@ -606,13 +606,14 @@ describe("cleanup-only operator commands", () => {
     );
     expect(setup).toContain('--name "leaderbot-pr486-cleanup-$failed_run_id"');
     expect(setup).toContain(
-      '--expiry 4h --command "$root_mysql_command_csv" --json',
+      '--expiry 4h --command-prefix "$root_mysql_command_csv" --json',
     );
     expect(setup).toContain("SUPER_CLEANUP_EXEC_COMMAND_FLYCTL_CSV");
     expect(setup).toContain("gh secret set FLY_DATABASE_CLEANUP_EXEC_TOKEN");
     expect(setup).not.toContain("gh secret set FLY_DATABASE_REPAIR_EXEC_TOKEN");
     expect(setup).not.toContain("gh secret delete");
-    expect(setup).not.toContain("--command-prefix");
+    expect(setup.match(/--command-prefix/g)).toHaveLength(1);
+    expect(setup).not.toContain('--command-prefix "/bin/sh"');
     expect(setup).toContain("unset cleanup_token");
   });
 
