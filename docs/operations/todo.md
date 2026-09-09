@@ -134,7 +134,17 @@ Live payment enablement remains gated by the relevant P1 through P4 evidence.
         (1) cleanup with the actual restricted credential, including rejection
         of commands outside its boundary; (2) prepare and definer provisioning,
         which still instantiate `RootMysqlSession` over SSH, with the actual
-        intended credential rather than an operator credential; (3) snapshot
+        intended credential rather than an operator credential. The read-only
+        half of that gap now has a transport:
+        `provision-image-gen-credit-provisioner-exec.mjs` runs a single bounded
+        statement through the Machines Exec API under its own fixed wrapper
+        `leaderbot-prepare-root`, so a credential scoped to it can run neither
+        the cleanup wrapper nor SSH. The lock-holding and mutating phases stay
+        on SSH: `GET_LOCK` and `IS_USED_LOCK(...)=CONNECTION_ID()` are
+        connection-scoped, and one Exec request is one connection, so those
+        phases must first be restructured into a single-connection batch like
+        the cleanup batch before they can move. Nothing here is proven against
+        a real restricted prepare credential yet; (3) snapshot
         restore, exact 0016-to-0018 transition and rollback rehearsal on an
         isolated database; (4) the deployed Test Mode configuration and exact
         tester binding, then signed checkout, trusted webhook, one grant and
