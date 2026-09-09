@@ -1203,7 +1203,7 @@ describe("production deployment contract", () => {
     });
   });
 
-  it("freezes deployment while staging the attested 0018 runtime principal", () => {
+  it("binds the reviewed 0018 rollout to its proven staged runtime principal", () => {
     const manifest = JSON.parse(
       fs.readFileSync(
         path.join(repoRoot, "deploy/production/apps.json"),
@@ -1216,12 +1216,12 @@ describe("production deployment contract", () => {
     expect(app.databaseSchemaTransition).toMatchObject({
       from: "0016_expand",
       to: "0018_credit_checkout_reservation",
-      state: "runtime_principal_pending",
+      state: "runtime_reviewed",
       bridgeImage:
         "registry.fly.io/leaderbot-fb-image-gen@sha256:a37632c86a72a87cd94f5c030c8b88be330420289c553f4570e234c85df233b8",
       bridgeSourceCommit: "f26d80e1eb47361541b9812a1c0d47477afac535",
     });
-    expect(app.deploymentEnabled).toBe(false);
+    expect(app.deploymentEnabled).toBe(true);
     expect(app.reviewedArtifactKind).toBe("runtime");
     expect(app.reviewedImage).toBe(
       "registry.fly.io/leaderbot-fb-image-gen@sha256:1d80d6bce5fdbd7486f31d6223ca87ac7a50d075661ec48ae0f3d536eb8e5b36",
@@ -1232,7 +1232,9 @@ describe("production deployment contract", () => {
     expect(app.reviewedImageSchemaPhases).toEqual([
       "0018_credit_checkout_reservation",
     ]);
-    expect(app.databaseSchemaTransition.runtimePrincipalSha256).toBeUndefined();
+    expect(app.databaseSchemaTransition.runtimePrincipalSha256).toBe(
+      "972e89225a2d25540d6abfa7bb4e75303f6a94b2f80b4ec26152a95b9b44eeb9",
+    );
     expect(app.reviewedRollbackImages).toEqual([
       app.databaseSchemaTransition.bridgeImage,
     ]);

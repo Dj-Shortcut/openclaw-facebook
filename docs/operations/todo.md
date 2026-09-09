@@ -88,6 +88,13 @@ Live payment enablement remains gated by the relevant P1 through P4 evidence.
       Mode, pass paid checkout, delayed/replayed webhook, cancellation, failure,
       refund, partially used wallet, provider failure, delivery failure,
       deletion, budget exhaustion, receipt, reconciliation, and rollback.
+  - [ ] **Bug: false failure message after a delivered image.** Owner report
+        (2026-09-09): the tester receives each photo, then also receives
+        "ik kon de afbeelding nu niet maken". Cause not yet verified. Investigate
+        the post-delivery success/failure handling and add regression coverage:
+        a successfully delivered image must not produce a contradictory failure
+        message; genuine failures must still be reported. Preserve retry
+        protection and exactly-once quota/credit accounting.
   - [x] **Credit schema installed in production.** Protected run
         [34339825855/1](https://github.com/Dj-Shortcut/openclaw-facebook/actions/runs/34339825855)
         on `ea680af1061901436fdae4e59397365ce6949f36` completed at
@@ -112,13 +119,14 @@ Live payment enablement remains gated by the relevant P1 through P4 evidence.
         grants and exact candidate trigger preflight, then staged `DATABASE_URL`
         at `2026-09-09T11:53:32Z` without restarting any Machine. Artifact digest:
         `sha256:d3f807a17cc0e5d051e2d5aa476d600bbdf8395dc338c745073995f5930403e8`.
-  - [ ] **Review and deploy the staged credit runtime.** The manifest remains
-        `runtime_principal_pending` on proven `0018`, with deployment disabled.
+  - [ ] **Review and deploy the staged credit runtime.** The manifest binds the
+        verified staged principal to `runtime_reviewed` on proven `0018`.
         The running bridge still serves the old frontend and generic quota
-        link. Record the staged fingerprint in a separately approved manifest
-        change, then deploy and verify every app/worker, the new frontend, and
-        the Messenger checkout route. The deployment-control edit was denied
-        by the automatic approval review; no gate or runtime was changed.
+        link. After the separately reviewed manifest and exact-source CI pass,
+        deploy and verify every app/worker, the new frontend, and the Messenger
+        checkout route. The owner explicitly approved this rollout on
+        2026-09-09 after the earlier automatic approval rejection; retain the
+        exact bridge rollback and leave payment exposure unchanged.
         Do not enable checkout from schema/build success alone or repeat the
         completed expansion and repair.
     - Staging run `34345293602/1` stopped at `scheduler_update_trigger` before

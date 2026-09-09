@@ -961,8 +961,11 @@ other 0018 triggers unchanged. Fresh encrypted snapshot
 this extra pre-repair snapshot was created, not independently restore-tested.
 Runtime grants and commercial flags were unchanged. Staging success does not
 prove the deployed frontend, credit grant, or a completed payment.
-The manifest remains deployment-disabled pending the separate staged-principal
-review. Application Machines still run the bridge; resume at step 10, not by repeating the
+The manifest now binds the staged principal to `runtime_reviewed`, with the
+bridge retained as the only rollback. The owner explicitly approved this rollout
+on 2026-09-09; it still requires normal PR review and exact-source CI before
+deployment, and does not enable checkout or live payments. Application Machines
+still run the bridge; resume at step 10, not by repeating the
 completed schema expansion or runtime build. The protected schema workflow
 remains the only permitted path for the reviewed 0017/0018 migrations; no
 application deploy, shell command, or ad-hoc Machine may change the production
