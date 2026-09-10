@@ -154,6 +154,55 @@ describe("Mollie configuration", () => {
     expect(() => assertMollieNonSecretLaunchConfig()).not.toThrow();
   });
 
+  it.each([false, true])(
+    "does not require portal credentials for credit preflight (operational=%s)",
+    operational => {
+      if (operational) useValidSafetyDrainConfig();
+      else useValidOfflinePreflightConfig();
+      delete process.env.PORTAL_HANDOFF_TOKEN_SECRET;
+      delete process.env.BILLING_PROFILE_EVIDENCE_HMAC_SECRET;
+
+      expect(() =>
+        assertMollieNonSecretLaunchConfig({
+          requireOperationalFlags: operational,
+        })
+      ).not.toThrow();
+    }
+  );
+
+  it.each([
+    "PORTAL_HANDOFF_TOKEN_SECRET",
+    "BILLING_PROFILE_EVIDENCE_HMAC_SECRET",
+  ])("keeps %s required if legacy sales are explicitly enabled", name => {
+    useValidSafetyDrainConfig();
+    process.env.MOLLIE_BILLING_ENABLED = "true";
+    process.env.MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED = "true";
+    delete process.env[name];
+
+    expect(() => assertMollieNonSecretLaunchConfig()).toThrow(
+      `${name} is missing or too short`
+    );
+  });
+
+  it.each([
+    "DATABASE_URL",
+    "REDIS_URL",
+    "MOLLIE_CREDENTIAL_GENERATION_ID",
+    "MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD",
+    "MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD",
+    "MESSENGER_USER_DAILY_SPEND_CAP_USD",
+  ])(
+    "keeps the credit safety requirement %s without portal credentials",
+    name => {
+      useValidSafetyDrainConfig();
+      delete process.env.PORTAL_HANDOFF_TOKEN_SECRET;
+      delete process.env.BILLING_PROFILE_EVIDENCE_HMAC_SECRET;
+      delete process.env[name];
+
+      expect(() => assertMollieNonSecretLaunchConfig()).toThrow(name);
+    }
+  );
+
   it("still rejects commercial checkout without entitlement enforcement", () => {
     useValidSafetyDrainConfig();
     process.env.MOLLIE_BILLING_ENABLED = "true";

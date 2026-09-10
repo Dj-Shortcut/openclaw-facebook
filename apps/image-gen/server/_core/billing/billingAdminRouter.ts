@@ -151,14 +151,20 @@ export const billingAdminRouter = router({
         reason: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9 _./:-]{7,159}$/),
       })
     )
-    .mutation(async ({ ctx, input }) => ({
-      success: true as const,
-      ...(await enableBillingSchedulerTenant({
-        ...input,
-        actorUserId: ctx.user.id,
-        mode: getConfiguredBillingMode(),
-      })),
-    })),
+    .mutation(async ({ ctx, input }) => {
+      const mode = getConfiguredBillingMode();
+      // Initialize disabled payment controls without creating or attesting a
+      // portal buyer profile. Activation still requires the audited epoch fence.
+      await registerBillingSchedulerTenant(input.workspaceId, mode);
+      return {
+        success: true as const,
+        ...(await enableBillingSchedulerTenant({
+          ...input,
+          actorUserId: ctx.user.id,
+          mode,
+        })),
+      };
+    }),
 
   disableSchedulerTenant: adminProcedure
     .input(

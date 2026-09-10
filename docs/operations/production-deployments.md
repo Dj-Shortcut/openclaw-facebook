@@ -40,6 +40,29 @@ image-gen lockfile for the Actions dependency cache; the image-gen release
 step therefore reuses packages without changing the immutable artifact or
 production approval gates.
 
+### Credit readiness without the retired customer portal
+
+With legacy sales (`MOLLIE_BILLING_ENABLED`) disabled, credit startup and
+`/readyz` do not require a workspace buyer-profile attestation or the legacy
+`PORTAL_HANDOFF_TOKEN_SECRET` / `BILLING_PROFILE_EVIDENCE_HMAC_SECRET` values.
+Credit checkout uses its dedicated signed capability; it never sends a user
+through a portal login. Legacy sales, if explicitly enabled on a retained
+compatibility deployment, still require their original profile and keys.
+
+The existing authenticated operator `billingAdmin.enableSchedulerTenant` action
+initializes missing, commercially disabled payment controls before applying
+its audited activation with the expected execution epoch. Do not create a fake
+consumer attestation to initialize credit processing. No customer login or new
+management UI is required; this retains the existing operator-only authority.
+
+This does not remove the audited payment execution controls, worker lanes and
+heartbeats, notification checks, credential generation identity, spend caps,
+or credit schema/privilege checks. Do not delete old handoff secrets or financial
+records until their retained work is drained or retired under its own runbook.
+Verify both startup and `/readyz` on the reviewed image; a code change alone is
+not proof of activation, credit delivery, or a successful payment test. Rollback
+must use the reviewed 0018 image/config and retain payment recovery workers.
+
 ### Owner Page token rotation
 
 The reviewed image-gen runtime contains

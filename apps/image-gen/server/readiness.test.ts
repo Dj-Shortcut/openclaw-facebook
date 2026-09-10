@@ -284,7 +284,7 @@ describe("readiness", () => {
     });
   });
 
-  it("runs drain-only readiness without requiring entitlement enforcement", async () => {
+  it("runs drain-only readiness without portal credentials or entitlement enforcement", async () => {
     for (const [name, value] of Object.entries({
       MOLLIE_BILLING_ENABLED: "false",
       MOLLIE_BILLING_DRAIN_ENABLED: "true",
@@ -306,6 +306,8 @@ describe("readiness", () => {
     })) {
       vi.stubEnv(name, value);
     }
+    vi.stubEnv("PORTAL_HANDOFF_TOKEN_SECRET", "");
+    vi.stubEnv("BILLING_PROFILE_EVIDENCE_HMAC_SECRET", "");
     const databaseCheck = vi
       .spyOn(billingReadiness, "assertBillingDatabaseReadiness")
       .mockResolvedValue();

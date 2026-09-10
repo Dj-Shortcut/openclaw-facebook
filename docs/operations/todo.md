@@ -88,6 +88,15 @@ Live payment enablement remains gated by the relevant P1 through P4 evidence.
       Mode, pass paid checkout, delayed/replayed webhook, cancellation, failure,
       refund, partially used wallet, provider failure, delivery failure,
       deletion, budget exhaustion, receipt, reconciliation, and rollback.
+  - [ ] **Remove portal prerequisites from credit activation.** Credit startup
+        and `/readyz` must work without a legacy buyer-profile attestation,
+        `PORTAL_HANDOFF_TOKEN_SECRET`, or `BILLING_PROFILE_EVIDENCE_HMAC_SECRET`.
+        Keep the owner/user boundary, signed credit capability, audited payment
+        controls, worker health, budgets, and retained-payment recovery intact.
+        The code separates these requirements from legacy sales and initializes
+        payment controls through the existing audited operator action, without
+        a profile attestation. Reviewed merge, deployment and actual
+        payment-to-credit-to-delivery proof remain outstanding.
   - [ ] **Bug: false failure message after a delivered image.** Owner report
         (2026-09-09): the tester receives each photo, then also receives
         "ik kon de afbeelding nu niet maken". Cause not yet verified. Investigate
