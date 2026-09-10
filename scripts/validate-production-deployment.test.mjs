@@ -254,7 +254,9 @@ function stageImageGenReviewedRuntime(manifest, sourceCommit = "c".repeat(40)) {
   const app = manifest.apps["image-gen"];
   const predecessor = structuredClone(app.reviewedSettledPredecessor);
   const predecessorSourceCommit =
-    app.reviewedRollbackSourceCommits[predecessor.image];
+    predecessor.image === app.reviewedImage
+      ? app.reviewedSourceCommit
+      : app.reviewedRollbackSourceCommits[predecessor.image];
   const {
     bridgeImage,
     legacyImage,
@@ -1250,10 +1252,10 @@ describe("production deployment contract", () => {
       [predecessorImage]: ["0018_credit_checkout_reservation"],
     });
     expect(app.reviewedSettledPredecessor).toEqual({
-      identity: "deploy-34461561679-1",
+      identity: "deploy-34484419576-1",
       image:
-        "registry.fly.io/leaderbot-fb-image-gen@sha256:1d80d6bce5fdbd7486f31d6223ca87ac7a50d075661ec48ae0f3d536eb8e5b36",
-      path: "deploy/production/rollback-configs/image-gen-1d80d6bce5fd-deploy-34461561679-1.toml",
+        "registry.fly.io/leaderbot-fb-image-gen@sha256:f2fa9d60e1fca02c09cb2764981a7134e908f2e33f127eb0e54e77030b4a7a4b",
+      path: "deploy/production/rollback-configs/image-gen-f2fa9d60e1fc-deploy-34484419576-1.toml",
       sha256:
         "4d9c56fd92f7694c84365f8317117d2335017ac0efb963b78dd2799e22d47697",
     });
@@ -10287,7 +10289,7 @@ ${workflow.slice(start, end)}
     },
   );
 
-  it("accepts the exact reviewed predecessor for a runtime rotation", async () => {
+  it("accepts the exact reviewed settled predecessor", async () => {
     const root = createRepositoryFixture();
     const manifest = JSON.parse(
       fs.readFileSync(path.join(root, "deploy/production/apps.json"), "utf8"),
@@ -10321,21 +10323,97 @@ ${workflow.slice(start, end)}
     });
   });
 
-  it("accepts the predecessor image under another separately verified deployment identity", async () => {
+  it.each([
+    ["exact predecessor identity", true, false],
+    ["another identity", false, false],
+    ["strict current configuration", true, true],
+  ])(
+    "binds same-image payment flag drift to the %s",
+    async (_label, exactIdentity, requireCurrentReviewedImage) => {
+      const root = createRepositoryFixture();
+      const manifest = JSON.parse(
+        fs.readFileSync(path.join(root, "deploy/production/apps.json"), "utf8"),
+      );
+      const app = manifest.apps["image-gen"];
+      const predecessor = app.reviewedSettledPredecessor;
+      const flags = [
+        "BILLING_NOTIFICATION_PLANE_ENABLED",
+        "MOLLIE_BILLING_DRAIN_ENABLED",
+        "MOLLIE_RECONCILIATION_ENABLED",
+      ];
+      expect(predecessor.image).toBe(app.reviewedImage);
+      expect(app.reviewedRollbackImages).not.toContain(predecessor.image);
+      for (const flag of flags) {
+        expect(checkedInTomlEnv(app.config, root)[flag]).toBe("true");
+        expect(checkedInTomlEnv(predecessor.path, root)[flag]).toBe("false");
+      }
+      const identity = exactIdentity ? predecessor.identity : "deploy-999-1";
+      const acceptsPredecessor = exactIdentity && !requireCurrentReviewedImage;
+      const result = await checkSettledLiveFlyDrift("image-gen", {
+        rootDir: root,
+        requireCurrentReviewedImage,
+        runFly: imageGenSettledFlyState(
+          predecessor.image,
+          identity,
+          root,
+          predecessor.path,
+        ),
+        ...verificationOptions,
+        fetchImpl: async () => {
+          expect(acceptsPredecessor).toBe(true);
+          return jsonResponse(
+            canonicalDeploymentRun(
+              "image-gen",
+              ...identity.split("-").slice(1),
+            ),
+          );
+        },
+      });
+      expect(result.identity).toBe(identity);
+      expect(result.expectedImage).toBe(app.reviewedImage);
+      const errors = [...result.blockingErrors, ...result.reconcilableDrift];
+      if (acceptsPredecessor) {
+        expect(errors).toEqual([]);
+        expect(
+          getReviewedRestoreConfig(
+            "image-gen",
+            app.reviewedImage,
+            identity,
+            root,
+          ),
+        ).toBe(predecessor.path);
+      } else {
+        for (const flag of flags) {
+          expect(errors).toEqual(
+            expect.arrayContaining([expect.stringContaining(flag)]),
+          );
+        }
+      }
+      if (!exactIdentity) {
+        expect(() =>
+          getReviewedRestoreConfig(
+            "image-gen",
+            app.reviewedImage,
+            identity,
+            root,
+          ),
+        ).toThrow("current image lacks an exact identity-bound restore config");
+      }
+    },
+  );
+
+  it("accepts a reviewed rollback image under another separately verified deployment identity", async () => {
     const root = createRepositoryFixture();
     const manifest = JSON.parse(
       fs.readFileSync(path.join(root, "deploy/production/apps.json"), "utf8"),
     );
     const app = manifest.apps["image-gen"];
-    const predecessor = app.reviewedSettledPredecessor;
+    const image = app.reviewedRollbackImages[0];
+    const configPath = app.reviewedRollbackConfigs[image].path;
+    expect(image).not.toBe(app.reviewedImage);
     const result = await checkSettledLiveFlyDrift("image-gen", {
       rootDir: root,
-      runFly: imageGenSettledFlyState(
-        predecessor.image,
-        "deploy-999-1",
-        root,
-        predecessor.path,
-      ),
+      runFly: imageGenSettledFlyState(image, "deploy-999-1", root, configPath),
       ...verificationOptions,
       fetchImpl: async () =>
         jsonResponse(canonicalDeploymentRun("image-gen", "999", "1")),
@@ -10343,7 +10421,7 @@ ${workflow.slice(start, end)}
 
     expect(result).toMatchObject({
       identity: "deploy-999-1",
-      expectedImage: predecessor.image,
+      expectedImage: image,
       blockingErrors: [],
       reconcilableDrift: [],
     });

@@ -329,6 +329,20 @@ release`, before any deployment or restart. The app-level Fly config
       and retain its actual configuration/hash as the payment-compatible
       recovery baseline before enabling paid admission or checkout. Do not
       substitute an invented deployment identity or the old drain-off config.
+      This configuration-only rollout also pins the actual current predecessor
+      `deploy-34484419576-1` and its exact protected-source config from
+      `a3d0f1f10572debde5540a1097e906d9b54e8309`, so the existing settled-live
+      gate can distinguish that current state from the proposed flag change.
+      The prior `1d80d6bc...` rollback allowlist remains unchanged. Neither
+      retained drain-off config is a post-payment recovery baseline.
+      Immediately before this first processing-only rollout, repeat the five
+      durable-activity and two queue counts and keep commercial control,
+      checkout, paid admission and legacy sales disabled throughout. Abort
+      this preparation path if any count is nonzero or another operator has
+      changed those controls. With no route or ledger, an unknown Mollie
+      callback may perform a provider read but cannot persist the first
+      financial record. Do not extend this empty-state rollback reasoning to
+      an installation with existing payments or exposed checkout.
     - Checkout configuration readback (2026-09-10): `MOLLIE_API_KEY` is present
       and deployed. After confirming no pending secrets and no existing signer,
       the owner-authorized test setup generated a fresh 32-byte
