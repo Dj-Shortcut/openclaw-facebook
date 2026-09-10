@@ -1180,11 +1180,100 @@ trusted production artifact` with `image-gen-bridge`. The workflow proves
     across the stabilization window. The retirement workflow never deletes a
     GitHub secret itself and is not part of the bootstrap helper. Do not replace
     this sequence with manual SQL or an unreviewed secret-field edit.
-14. **Keep Test Mode exposure separate.** Until both cleanup paths have
-    metadata-only success evidence, the commercial cutover is incomplete and
-    no Mollie Test Mode checkout may be exposed. Continue only through the
-    separately reviewed Test Mode activation gates; schema state `complete` is
-    not payment-readiness evidence.
+14. **Review bounded Test Mode exposure separately.** Irreversible credential
+    retirement remains incomplete until both cleanup paths have metadata-only
+    success evidence. Eligible Messenger users may exercise the existing Test offer
+    before those drops only through the explicit activation contract below.
+    The two 24-hour recovery windows before deletion remain unchanged. Schema
+    state `complete`, a successful historical lock, and this sequencing
+    exception are not payment-readiness evidence. Live billing remains off.
+
+The optional image-gen manifest object `creditTestActivation` accepts exactly
+`state: "bounded_test"` and `obsoletePrincipalSha256`, the SHA-256 of the exact
+old runtime account name. It is a reviewed request, not evidence. It is absent
+from the current dark manifest. Reviewers must match that hash to the actual
+old runtime/cutover and protected cleanup evidence; never choose an arbitrary
+or newly generated hash. A later activation PR must retain the exact
+healthy 0018 runtime predecessor, runtime-only rollback entries, and a proven
+rollback configuration with both checkout and paid admission off, and drain,
+notifications and reconciliation on. After any provider transport, a drain-off rollback is unsafe
+and fails the runtime's durable-activity guard.
+
+The following inspection remains a draft until disposable MySQL validation and
+the separately authorized inspection grant are complete. It uses the existing
+protected provisioner over one pinned connection through the exact selected
+Machine's Fly tunnel; the migration token supplies metadata/tunnel access, not
+database SSH. In addition to its unchanged base profile, the inspection requires
+exact column-level `SELECT (NAME, TYPE, PROCESSLIST_ID, PROCESSLIST_USER)` on
+`performance_schema.threads`, without grant option. This grants no SQL-text,
+client-host or customer-content inspection and no extra bot privileges. Ordinary
+maintenance accepts the original profile or that exact extension; bootstrap
+still creates only the original profile. Never substitute `PROCESS`, table-wide
+`SELECT`, another token or an unverified partial census.
+
+The collector brackets its session inventory with connection counters and checks
+the account's locked/absent state before and after. It rejects unstable,
+incomplete, unsupported or unavailable observations. Transient connection IDs
+and total session counts are internal checks, not durable activation identities.
+The provisioner credential is present only in the two conditional proof steps
+and is removed from all Fly/runtime-probe subprocess environments. The draft
+does not grant its own access or authorize applying that grant in production.
+
+Only this explicit request would run the additional privileged inspection in
+`Deploy production`; ordinary dark deployments do not receive those additional
+credentials or perform those checks. `image-gen-credit-test-proof.mjs` must
+use only explicitly authorized access, never grant or create
+access, and never change accounts or read customer rows. The database
+account/session checks are read-only. The app-side check reuses the existing
+reviewed billing-trigger probe: it performs synthetic metadata INSERT/UPDATE
+operations and rolls them back. It is not a wholly read-only SQL probe, and
+its success requires no persistent user or financial changes. The protected job
+binds the exact GitHub source/run/attempt, settled predecessor and release
+watermark, every app/worker's restricted-principal probe, and the reviewed
+database Machine/volume. It separately checks the obsolete account is locked
+or positively absent after its approved drop, and its surviving session count
+is zero. The evidence distinguishes `locked` from `absent`. Session inspection
+reads only `NAME`, `TYPE`, `PROCESSLIST_ID` and `PROCESSLIST_USER` from
+`performance_schema.threads`; it neither requires `PROCESS` nor reads query
+text. It requires Performance Schema and one-thread-per-connection handling,
+checks its own pinned session, and matches distinct client sessions against
+stable `Connections` and `Threads_connected` counters. Only the two explicitly
+recognized internal daemon identities are excluded from the client count.
+Missing instrumentation, unknown session types, unstable counters or unavailable
+metadata fail closed rather than proving zero obsolete sessions. The same protected run
+then repeats current checks and consumes its own evidence, rejecting evidence
+older than 15 minutes, another run/source, a changed identity or topology,
+an unlocked account, or surviving sessions. Both steps execute under the
+existing shared deployment lock. This avoids treating an older lock artifact
+as proof after a later unlock or release. No account is killed or dropped by
+this inspection. Failure leaves exposure unchanged and requires investigation.
+This proves closure of the specified obsolete runtime account only. Audited
+provisioner accounts remain administrative recovery access used exclusively
+inside the existing protected operator workflows until their later retirement;
+the application must never receive their credentials. It is not proof that
+all administrative database access has been removed.
+The detailed proof is runner-local and is consumed within that same protected
+run; it is not uploaded or retained after the runner finishes. Workflow logs
+contain only fixed proof markers. A successful proof is not payment or image
+delivery evidence.
+
+The activation contract requires `MOLLIE_MODE=test`, legacy and live billing
+off, drain/notification/reconciliation on, no manual tester restriction, and
+the existing offer and cost caps. Enable paid admission before checkout.
+Use the existing authenticated admin `billingAdmin.enableSchedulerTenant`
+operation with the observed workspace/mode execution epoch and a fresh request
+ID to enable the DB control and lanes; do not fabricate profile attestations
+or replace this with ad-hoc SQL. Verify existing control/lane inventory and
+notification/reconciliation readiness before exposure. Missing registration
+requires a separate scoped operational change.
+
+After the test, close checkout and paid admission through a reviewed config
+deployment while retaining the wallet and financial safety drain. Remove the
+reviewed Test request only after that shutdown is proven. The obsolete-account
+cleanup workflow rejects `unlock` if the manifest still has the request or any
+Machine, including a stopped Machine, still has a paid/checkout exposure flag.
+Resume irreversible retirement with its existing exact identity/evidence and
+24-hour rules; never rewrite old evidence to fit a later deployment identity.
 
 Before paid-credit exposure, set the non-secret
 `CREDIT_CHECKOUT_HMAC_ACTIVE_KEY_ID=k1` beside the dedicated Fly secret. A later

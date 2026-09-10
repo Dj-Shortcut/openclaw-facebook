@@ -348,6 +348,13 @@ jobs:
           done
           exit 1
 
+      - name: Reject unlock while reviewed or live Test exposure remains
+        if: inputs.operation == 'unlock'
+        timeout-minutes: 2
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_IMAGE_GEN_DEPLOY_TOKEN }}
+        run: node scripts/image-gen-credit-test-proof.mjs guard-unlock
+
       - name: Lock, unlock, or drop only the exact obsolete broad principal
         timeout-minutes: 5
         env:

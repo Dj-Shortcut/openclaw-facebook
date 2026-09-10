@@ -6242,7 +6242,7 @@ describe("production deployment contract", () => {
     );
 
     expect(() => validateProductionRepository(root)).toThrow(
-      "must set MESSENGER_PAID_CREDITS_ENABLED=false",
+      "credit exposure requires an explicit bounded Test activation contract",
     );
   });
 
@@ -6262,6 +6262,107 @@ describe("production deployment contract", () => {
     );
     expect(() => validateProductionRepository(root)).toThrow(
       "must not contain a partial or malformed legacy tester pin",
+    );
+  });
+
+  it("rejects removal of the fresh Test-proof consumption before deployment", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/deploy-production.yml",
+      "run: node scripts/image-gen-credit-test-proof.mjs consume",
+      "run: true",
+    );
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must require protected proof only for the explicit bounded Test request",
+    );
+  });
+
+  it("rejects privileged Test proof on ordinary dark deployments", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/deploy-production.yml",
+      "      - name: Produce fresh bounded Test database and runtime proof\n        if: steps.credit-test-request.outputs.active == 'true'",
+      "      - name: Produce fresh bounded Test database and runtime proof\n        if: always()",
+    );
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must require protected proof only for the explicit bounded Test request",
+    );
+  });
+
+  it("requires the existing provisioner for conditional Test inspection", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/deploy-production.yml",
+      "          DATABASE_PROVISIONER_URL: ${{ secrets.IMAGE_GEN_DATABASE_PROVISIONER_URL }}\n",
+      "",
+    );
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must require protected proof only for the explicit bounded Test request",
+    );
+  });
+
+  it.each([
+    ["missing install", "run: true"],
+    [
+      "unpinned install",
+      "run: pnpm --dir apps/image-gen install --prod --ignore-scripts",
+    ],
+    [
+      "lifecycle scripts",
+      "run: pnpm --dir apps/image-gen install --prod --frozen-lockfile",
+    ],
+  ])("rejects %s in the Test inspection job", (_name, replacement) => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/deploy-production.yml",
+      "run: pnpm --dir apps/image-gen install --prod --frozen-lockfile --ignore-scripts",
+      replacement,
+    );
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must prepare locked Test inspection dependencies without credentials before proof in the deployment job",
+    );
+  });
+
+  it("rejects exposing the provisioner to the deployment command", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/deploy-production.yml",
+      "      - name: Deploy reviewed image-gen config\n        id: deploy\n        timeout-minutes: 35\n        env:\n",
+      "      - name: Deploy reviewed image-gen config\n        id: deploy\n        timeout-minutes: 35\n        env:\n          DATABASE_PROVISIONER_URL: ${{ secrets.IMAGE_GEN_DATABASE_PROVISIONER_URL }}\n",
+    );
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must expose the provisioner only to the two conditional Test-proof steps",
+    );
+  });
+
+  it("rejects bypassing the credential-free activation request reader", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/deploy-production.yml",
+      "run: node scripts/image-gen-credit-test-proof.mjs request",
+      "run: true",
+    );
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must read the explicit Test request without credentials or conditional skipping",
+    );
+  });
+
+  it("rejects removing the live exposure guard from principal unlock", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/cleanup-image-gen-runtime-principals.yml",
+      "run: node scripts/image-gen-credit-test-proof.mjs guard-unlock",
+      "run: true",
+    );
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must guard unlock against reviewed and live Test exposure",
     );
   });
 
