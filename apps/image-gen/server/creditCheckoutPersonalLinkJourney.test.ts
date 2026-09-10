@@ -507,7 +507,6 @@ import {
 } from "./_core/billing/creditCheckoutProviderStore";
 import { CREDIT_CHECKOUT_SESSION_COOKIE } from "./_core/billing/creditCheckoutSession";
 import { deriveCreditCheckoutCapability } from "./_core/billing/creditCheckoutCapability";
-import { deriveCreditCheckoutTestUserKeyHash } from "./_core/billing/creditCheckoutConfig";
 import { handleMollieWebhook } from "./_core/billing/webhookRoutes";
 import { MollieClient } from "./_core/billing/mollieClient";
 import { serveStatic } from "./_core/vite";
@@ -519,6 +518,12 @@ const USER_A = `u2.k1.${"a".repeat(64)}`;
 const USER_B = `u2.k1.${"b".repeat(64)}`;
 const MOLLIE_CHECKOUT_URL =
   "https://www.mollie.com/checkout/select-method/creditjourney";
+const TESTER_RESTRICTION_FIELDS = [
+  "MOLLIE_CREDIT_TEST_CHANNEL_CONNECTION_ID",
+  "MOLLIE_CREDIT_TEST_BINDING_EPOCH",
+  "MOLLIE_CREDIT_TEST_PRIVACY_EPOCH",
+  "MOLLIE_CREDIT_TEST_USER_KEY_HASH",
+] as const;
 
 const savedEnv = new Map<string, string | undefined>();
 
@@ -533,14 +538,6 @@ function restoreEnv(): void {
     else process.env[name] = value;
   }
   savedEnv.clear();
-}
-
-/** Pins Test Mode to one Messenger user, as the current rollout config does. */
-function pinTester(userKey: string): void {
-  setEnv(
-    "MOLLIE_CREDIT_TEST_USER_KEY_HASH",
-    deriveCreditCheckoutTestUserKeyHash(userKey)
-  );
 }
 
 function generationJob(userKey: string, suffix: string) {
@@ -584,7 +581,6 @@ async function runExhaustedGeneration(
   userKey: string,
   suffix: string
 ): Promise<{ url: URL; buttonText: string }> {
-  pinTester(userKey);
   const job = generationJob(userKey, suffix);
   await contextBackedRunner().processMessengerGenerationJob(job);
 
@@ -756,12 +752,14 @@ beforeEach(() => {
   setEnv("MOLLIE_CREDIT_CHECKOUT_ENABLED", "true");
   setEnv("MOLLIE_CREDIT_WORKSPACE_ID", "42");
   setEnv("MESSENGER_PAID_IMAGE_PROVIDER_MAX_COST_USD", "1.00");
-  setEnv("MOLLIE_CREDIT_TEST_CHANNEL_CONNECTION_ID", "8");
-  setEnv("MOLLIE_CREDIT_TEST_BINDING_EPOCH", "3");
-  setEnv("MOLLIE_CREDIT_TEST_PRIVACY_EPOCH", "5");
   setEnv("CREDIT_CHECKOUT_HMAC_ACTIVE_KEY_ID", "k1");
   setEnv("CREDIT_CHECKOUT_HMAC_SECRET", HMAC_SECRET);
-  pinTester(USER_A);
+  // Open Test Mode: no tester is registered up front. The four optional
+  // restriction fields stay unset for every user in this file.
+  for (const field of TESTER_RESTRICTION_FIELDS) {
+    if (!savedEnv.has(field)) savedEnv.set(field, process.env[field]);
+    delete process.env[field];
+  }
 
   resolveWorkspaceRuntimePolicyMock.mockResolvedValue({ kind: "free" });
   assertMessengerPrivacySubjectMock.mockResolvedValue(undefined);
@@ -988,6 +986,15 @@ describe("two Messenger users", () => {
     const paymentA = "tr_journeyusera";
     const paymentB = "tr_journeyuserb";
 
+    // One open Test Mode configuration serves both users. No tester is
+    // registered up front, and neither user changes the configuration.
+    const openConfig = getCreditCheckoutPilotConfig();
+    expect(openConfig.mode).toBe("test");
+    expect(openConfig.testPilotScope).toBeNull();
+    for (const field of TESTER_RESTRICTION_FIELDS) {
+      expect(process.env[field]).toBeUndefined();
+    }
+
     const linkA = (await runExhaustedGeneration(USER_A, "user-a")).url;
     const serverA = await startCheckoutServer(paymentA);
     servers.push(serverA);
@@ -1028,6 +1035,9 @@ describe("two Messenger users", () => {
     );
     expect(world.walletForUser(USER_A)?.credits).toBe(8);
     expect(world.walletForUser(USER_B)?.credits).toBe(8);
+
+    // The configuration never moved between the two users.
+    expect(getCreditCheckoutPilotConfig()).toEqual(openConfig);
 
     // Neither user's link can open the other's checkout.
     const crossed = await fetch(
