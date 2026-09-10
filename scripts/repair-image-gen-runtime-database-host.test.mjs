@@ -4,6 +4,7 @@ import vm from "node:vm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildRuntimeHostProbe,
+  classifyRuntimeHostFailure,
   cleanupRuntimeHostProbe,
   normalizeRuntimeDatabaseUrl,
   repairRuntimeDatabaseHost,
@@ -21,6 +22,70 @@ const binding = {
 const source = `mysql://${username}:${password}@[${binding.privateIp}]:3306/leaderbot`;
 const target = `mysql://${username}:${password}@${binding.machineId}.vm.${binding.app}.internal:3306/leaderbot`;
 afterEach(() => vi.unstubAllEnvs());
+
+describe("redacted repair diagnostics", () => {
+  it.each([
+    ["not authorized", "access_denied"],
+    ["Error: Unauthorized", "access_denied"],
+    ["permission denied", "access_denied"],
+    ["invalid machine config", "config_rejected"],
+    ["unknown flag: --example", "config_rejected"],
+    ["failed to pull image", "image_unavailable"],
+    ["manifest unknown", "image_unavailable"],
+    ["unrecognized failure", "failed"],
+  ])(
+    "classifies %s without exposing subprocess output",
+    (message, category) => {
+      const error = Object.assign(new Error(source), {
+        stderr: Buffer.from(`${message}: ${source}`),
+        stdout: target,
+        cause: new Error(password),
+      });
+      expect(classifyRuntimeHostFailure(error, "probe_create")).toBe(
+        `runtime_database_host_probe_create_${category}`,
+      );
+    },
+  );
+
+  it("separates a timed-out create from a rejected create", () => {
+    expect(
+      classifyRuntimeHostFailure(
+        { code: "ETIMEDOUT", stderr: source },
+        "probe_create",
+      ),
+    ).toBe("runtime_database_host_probe_create_timeout");
+  });
+
+  it.each([
+    "probe_inventory",
+    "probe_start",
+    "probe_verify",
+    "secret_read",
+    "secret_stage",
+  ])(
+    "reports only the fixed %s stage even when output contains a credential",
+    (stage) => {
+      expect(
+        classifyRuntimeHostFailure(
+          { message: source, stderr: source, stdout: target },
+          stage,
+        ),
+      ).toBe(`runtime_database_host_${stage}_failed`);
+    },
+  );
+
+  it("retains explicit rejection markers and rejects unrecognized stage names", () => {
+    expect(
+      classifyRuntimeHostFailure(
+        new Error("runtime_database_host_secret_changed"),
+        "secret_read",
+      ),
+    ).toBe("runtime_database_host_secret_changed");
+    expect(classifyRuntimeHostFailure(new Error(source), password)).toBe(
+      "runtime_database_host_repair_failed",
+    );
+  });
+});
 
 function repairHarness(failure) {
   const sha = "a".repeat(40);
@@ -191,18 +256,18 @@ describe("exact staged database hostname repair", () => {
   });
 
   it.each([
-    "create_response_lost",
-    "delayed_creation",
-    "unexpected_service",
-    "probe_failed",
-    "secret_changed",
+    ["create_response_lost", "probe_create_failed"],
+    ["delayed_creation", "probe_create_failed"],
+    ["unexpected_service", "probe_config_rejected"],
+    ["probe_failed", "probe_verify_failed"],
+    ["secret_changed", "secret_changed"],
   ])(
     "refuses %s, removes its probe and never changes the staged secret",
-    async (failure) => {
+    async (failure, marker) => {
       const { calls, dependencies } = repairHarness(failure);
       await expect(
         repairRuntimeDatabaseHost({ stage: true }, dependencies),
-      ).rejects.toThrow();
+      ).rejects.toThrow(`runtime_database_host_${marker}`);
       expect(calls.some((call) => call.args[1] === "import")).toBe(false);
       expect(calls.filter((call) => call.args[1] === "destroy")).toHaveLength(
         1,
@@ -215,7 +280,7 @@ describe("exact staged database hostname repair", () => {
     await expect(
       repairRuntimeDatabaseHost({ stage: true }, dependencies),
     ).rejects.toMatchObject({
-      message: "runtime_database_host_repair_failed",
+      message: "runtime_database_host_probe_create_failed",
       cleanupDiagnostics: ["runtime_database_host_cleanup_incomplete"],
     });
     expect(dependencies.wait).toHaveBeenCalledTimes(24);
