@@ -292,20 +292,25 @@ release`, before any deployment or restart. The app-level Fly config
         This bounded Test exception does not authorize live payment exposure.
     - On 2026-09-10 the owner explicitly approved replacing the old bridge
       rollback with the proven running runtime after the change was explained.
-      The settlement manifest records `deploy-34461561679-1` and its exact
-      config as the predecessor and sole final-0018 runtime rollback, and sets
-      the schema transition to `complete`. This closes the rollback-plan step
-      only after reviewed merge; it authorizes no account deletion, new database
-      permissions or payment activation. The previous automatic-review denial
-      was not bypassed; the owner supplied the missing specific authorization.
+      That settlement removed the bridge, set the schema transition to
+      `complete`, and recorded `deploy-34461561679-1` with its exact config as
+      the final-0018 runtime rollback at that time. It authorized no account
+      deletion, new database permissions or payment activation. The previous
+      automatic-review denial was not bypassed; the owner supplied the missing
+      specific authorization. A later owner-approved settlement superseded that
+      rollback point with `deploy-34496956631-1`; see the PR #524 entry below
+      and read the exact current values from `deploy/production/apps.json`.
     - PR #517 merged on 2026-09-10 as `7ba51d1a4f411fa18094ad42328718eb14dbeb22`.
       Both the PR MySQL run `34485670813` and main run `34486831012` passed,
       including the corrected exact-user disabled-monitoring fixture. This
       supersedes the failed test setup in `34482865305`; do not repeat that
       implementation. The existing same-run inspection uses the protected
       provisioner through a pinned exact-Machine tunnel. It does not create
-      access or enable checkout. The four-column metadata read grant still
-      requires separately authorized application; no bot rights are widened.
+      access or enable checkout. The owner separately authorized the exact
+      four-column metadata read grant on 2026-09-10; its application and
+      readback succeeded at `15:44:48Z`. Only the existing provisioner's
+      inspection rights changed; no bot rights, passwords or customer data
+      were changed. This is not the protected same-run activation proof.
     - Read-only operator inspection at `2026-09-10T14:51:51Z` found zero obsolete
       sessions in a complete stable census, but did not prove the obsolete
       account locked or absent. The historical fingerprint covered `User@Host`;
@@ -315,7 +320,38 @@ release`, before any deployment or restart. The app-level Fly config
       not the four-column extension. No account, grant, secret or
       data was changed. This local diagnostic is not the protected same-run
       activation proof and cannot replace its credential-consumer checks.
-    - Payment-processing preparation changes only notification, drain and
+    - The owner separately approved temporarily locking the exact unused old
+      runtime account. Protected workflow `34498036250/1` succeeded, recording
+      `ACCOUNT LOCK` at `2026-09-10T15:54:21.110Z` for account-name SHA-256
+      `db3013fb364b7486dabd6520c68beb4a7f5df05530ce90febb30049418a509b5`
+      against deployment `deploy-34496956631-1`. The account was not dropped.
+      Independent readback at `15:55:52Z` confirmed it locked with zero old
+      sessions in a complete stable census; the existing provisioner retained
+      its valid base profile plus the exact four-column inspection extension.
+      Commercial control remained false at epoch 1 and all five activity/two
+      queue counts remained zero. These completed access steps do not replace
+      the later activation workflow's fresh same-run proof.
+    - PR #524 merged as `f0c491c74c46e2f6821e12f3ea46e818f789c209`; its
+      protected processing-only rollout `34496956631/1` succeeded on
+      2026-09-10. Fresh settled-live verification proved
+      `deploy-34496956631-1`, reviewed runtime `f2fa9d60...`, release 383 and
+      watermark `ff6eab0614dd8a72ba26f93ae5093ea3610ae617c01452a255c2ade5092ad508`.
+      `/healthz` and `/readyz` returned 200; readiness reported `operational`
+      with all checks true. All four Machines retained Test Mode with
+      checkout, paid image use and live billing false. No payment was made.
+      The owner explicitly approved replacing the old recovery version with
+      this successful processing-on version. The settlement uses its exact
+      protected-source config, SHA-256
+      `05ffded5fb93abca68e275fe174f20db55f9e0dd1a679cd94c6378fc10053380`,
+      as the sole runtime recovery configuration; the older physical files
+      remain retained. Merge settlement before reviewing checkout activation.
+    - A browser check of the existing operator login reached Facebook, but
+      Facebook refused authentication with a supported-permission error.
+      A 302 from the login route is not successful sign-in. The existing
+      audited `billingAdmin.enableSchedulerTenant` action still needs a
+      legitimate admin session; do not forge one or register a tester to
+      bypass this. Public checkout does not require operator login.
+    - The completed payment-processing preparation changed only notification, drain and
       reconciliation flags to true; checkout, paid image use, legacy sales and
       live billing remain false. It reuses the reviewed `f2fa9d60...` runtime,
       not a new payment implementation. Metadata-only checks on all four
@@ -324,22 +360,18 @@ release`, before any deployment or restart. The app-level Fly config
       control epoch 1 with commercial access disabled, outbox enabled and the
       other three lanes disabled at epoch 1, with no pending/dead work.
       All five durable provider-activity counts and both delivery-queue counts
-      were zero. These are pre-rollout observations, not readiness after the
-      flag change. After the protected rollout, verify operational heartbeats
-      and retain its actual configuration/hash as the payment-compatible
-      recovery baseline before enabling paid admission or checkout. Do not
-      substitute an invented deployment identity or the old drain-off config.
-      This configuration-only rollout also pins the actual current predecessor
+      were zero, confirmed again immediately before dispatch at `15:36:15Z`.
+      These pre-rollout observations permitted the initial processing-only
+      transition while all purchase entry points stayed closed. Post-rollout
+      readiness and the new recovery baseline are recorded above.
+      This configuration-only rollout pinned its actual predecessor
       `deploy-34484419576-1` and its exact protected-source config from
       `a3d0f1f10572debde5540a1097e906d9b54e8309`, so the existing settled-live
       gate can distinguish that current state from the proposed flag change.
-      The prior `1d80d6bc...` rollback allowlist remains unchanged. Neither
-      retained drain-off config is a post-payment recovery baseline.
-      Immediately before this first processing-only rollout, repeat the five
-      durable-activity and two queue counts and keep commercial control,
-      checkout, paid admission and legacy sales disabled throughout. Abort
-      this preparation path if any count is nonzero or another operator has
-      changed those controls. With no route or ledger, an unknown Mollie
+      The prior `1d80d6bc...` rollback allowlist was unchanged during that
+      rollout; neither retained drain-off config is a post-payment recovery
+      baseline. Do not repeat the initial preparation path if any count is
+      nonzero or commercial controls have changed. With no route or ledger, an unknown Mollie
       callback may perform a provider read but cannot persist the first
       financial record. Do not extend this empty-state rollback reasoning to
       an installation with existing payments or exposed checkout.

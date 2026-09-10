@@ -98,25 +98,25 @@
       "reviewedArtifactKind": "runtime",
       "reviewedSourceCommit": "b9caea7951b44d1f97bbd1bc742c25aca68264e9",
       "reviewedSettledPredecessor": {
-        "identity": "deploy-34484419576-1",
+        "identity": "deploy-34496956631-1",
         "image": "registry.fly.io/leaderbot-fb-image-gen@sha256:f2fa9d60e1fca02c09cb2764981a7134e908f2e33f127eb0e54e77030b4a7a4b",
-        "path": "deploy/production/rollback-configs/image-gen-f2fa9d60e1fc-deploy-34484419576-1.toml",
-        "sha256": "4d9c56fd92f7694c84365f8317117d2335017ac0efb963b78dd2799e22d47697"
+        "path": "deploy/production/rollback-configs/image-gen-f2fa9d60e1fc-deploy-34496956631-1.toml",
+        "sha256": "05ffded5fb93abca68e275fe174f20db55f9e0dd1a679cd94c6378fc10053380"
       },
       "reviewedRollbackImages": [
-        "registry.fly.io/leaderbot-fb-image-gen@sha256:1d80d6bce5fdbd7486f31d6223ca87ac7a50d075661ec48ae0f3d536eb8e5b36"
+        "registry.fly.io/leaderbot-fb-image-gen@sha256:f2fa9d60e1fca02c09cb2764981a7134e908f2e33f127eb0e54e77030b4a7a4b"
       ],
       "reviewedRollbackConfigs": {
-        "registry.fly.io/leaderbot-fb-image-gen@sha256:1d80d6bce5fdbd7486f31d6223ca87ac7a50d075661ec48ae0f3d536eb8e5b36": {
-          "path": "deploy/production/rollback-configs/image-gen-1d80d6bce5fd-deploy-34461561679-1.toml",
-          "sha256": "4d9c56fd92f7694c84365f8317117d2335017ac0efb963b78dd2799e22d47697"
+        "registry.fly.io/leaderbot-fb-image-gen@sha256:f2fa9d60e1fca02c09cb2764981a7134e908f2e33f127eb0e54e77030b4a7a4b": {
+          "path": "deploy/production/rollback-configs/image-gen-f2fa9d60e1fc-deploy-34496956631-1.toml",
+          "sha256": "05ffded5fb93abca68e275fe174f20db55f9e0dd1a679cd94c6378fc10053380"
         }
       },
       "reviewedRollbackArtifactKinds": {
-        "registry.fly.io/leaderbot-fb-image-gen@sha256:1d80d6bce5fdbd7486f31d6223ca87ac7a50d075661ec48ae0f3d536eb8e5b36": "runtime"
+        "registry.fly.io/leaderbot-fb-image-gen@sha256:f2fa9d60e1fca02c09cb2764981a7134e908f2e33f127eb0e54e77030b4a7a4b": "runtime"
       },
       "reviewedRollbackSourceCommits": {
-        "registry.fly.io/leaderbot-fb-image-gen@sha256:1d80d6bce5fdbd7486f31d6223ca87ac7a50d075661ec48ae0f3d536eb8e5b36": "80703910131e227d1d683b1f5b6287c8bff241de"
+        "registry.fly.io/leaderbot-fb-image-gen@sha256:f2fa9d60e1fca02c09cb2764981a7134e908f2e33f127eb0e54e77030b4a7a4b": "b9caea7951b44d1f97bbd1bc742c25aca68264e9"
       },
       "databaseSchemaPhase": "0018_credit_checkout_reservation",
       "databaseSchemaTransition": {
@@ -140,7 +140,7 @@
       },
       "reviewedImageSchemaPhases": ["0018_credit_checkout_reservation"],
       "reviewedRollbackImageSchemaPhases": {
-        "registry.fly.io/leaderbot-fb-image-gen@sha256:1d80d6bce5fdbd7486f31d6223ca87ac7a50d075661ec48ae0f3d536eb8e5b36": [
+        "registry.fly.io/leaderbot-fb-image-gen@sha256:f2fa9d60e1fca02c09cb2764981a7134e908f2e33f127eb0e54e77030b4a7a4b": [
           "0018_credit_checkout_reservation"
         ]
       },

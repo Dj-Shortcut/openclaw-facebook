@@ -1207,7 +1207,7 @@ describe("production deployment contract", () => {
     });
   });
 
-  it("reviews the updated 0018 runtime while retaining the proven predecessor rollback", () => {
+  it("settles the proven payment-processing runtime as the sole 0018 rollback", () => {
     const manifest = JSON.parse(
       fs.readFileSync(
         path.join(repoRoot, "deploy/production/apps.json"),
@@ -1216,7 +1216,7 @@ describe("production deployment contract", () => {
     );
     const app = manifest.apps["image-gen"];
     const predecessorImage =
-      "registry.fly.io/leaderbot-fb-image-gen@sha256:1d80d6bce5fdbd7486f31d6223ca87ac7a50d075661ec48ae0f3d536eb8e5b36";
+      "registry.fly.io/leaderbot-fb-image-gen@sha256:f2fa9d60e1fca02c09cb2764981a7134e908f2e33f127eb0e54e77030b4a7a4b";
 
     expect(app.databaseSchemaPhase).toBe("0018_credit_checkout_reservation");
     expect(app.databaseSchemaTransition).toMatchObject({
@@ -1246,18 +1246,18 @@ describe("production deployment contract", () => {
       [predecessorImage]: "runtime",
     });
     expect(app.reviewedRollbackSourceCommits).toEqual({
-      [predecessorImage]: "80703910131e227d1d683b1f5b6287c8bff241de",
+      [predecessorImage]: "b9caea7951b44d1f97bbd1bc742c25aca68264e9",
     });
     expect(app.reviewedRollbackImageSchemaPhases).toEqual({
       [predecessorImage]: ["0018_credit_checkout_reservation"],
     });
     expect(app.reviewedSettledPredecessor).toEqual({
-      identity: "deploy-34484419576-1",
+      identity: "deploy-34496956631-1",
       image:
         "registry.fly.io/leaderbot-fb-image-gen@sha256:f2fa9d60e1fca02c09cb2764981a7134e908f2e33f127eb0e54e77030b4a7a4b",
-      path: "deploy/production/rollback-configs/image-gen-f2fa9d60e1fc-deploy-34484419576-1.toml",
+      path: "deploy/production/rollback-configs/image-gen-f2fa9d60e1fc-deploy-34496956631-1.toml",
       sha256:
-        "4d9c56fd92f7694c84365f8317117d2335017ac0efb963b78dd2799e22d47697",
+        "05ffded5fb93abca68e275fe174f20db55f9e0dd1a679cd94c6378fc10053380",
     });
   });
 
@@ -10341,6 +10341,39 @@ ${workflow.slice(start, end)}
         "MOLLIE_BILLING_DRAIN_ENABLED",
         "MOLLIE_RECONCILIATION_ENABLED",
       ];
+      // Model the pre-settlement transition explicitly: a dark same-image
+      // predecessor and a distinct older rollback, independent of today's pins.
+      const rollbackImage = `registry.fly.io/${app.app}@sha256:${"e".repeat(64)}`;
+      const previousRollbackImage = app.reviewedRollbackImages[0];
+      app.reviewedRollbackImages = [rollbackImage];
+      for (const field of [
+        "reviewedRollbackConfigs",
+        "reviewedRollbackArtifactKinds",
+        "reviewedRollbackSourceCommits",
+        "reviewedRollbackImageSchemaPhases",
+      ]) {
+        app[field] = { [rollbackImage]: app[field][previousRollbackImage] };
+      }
+      let predecessorConfig = fs.readFileSync(
+        path.join(root, app.config),
+        "utf8",
+      );
+      for (const flag of flags) {
+        predecessorConfig = predecessorConfig.replace(
+          `${flag} = "true"`,
+          `${flag} = "false"`,
+        );
+      }
+      predecessor.path =
+        "deploy/production/rollback-configs/fixture-dark-predecessor.toml";
+      predecessor.sha256 = createHash("sha256")
+        .update(predecessorConfig)
+        .digest("hex");
+      fs.writeFileSync(path.join(root, predecessor.path), predecessorConfig);
+      fs.writeFileSync(
+        path.join(root, "deploy/production/apps.json"),
+        JSON.stringify(manifest),
+      );
       expect(predecessor.image).toBe(app.reviewedImage);
       expect(app.reviewedRollbackImages).not.toContain(predecessor.image);
       for (const flag of flags) {
@@ -10350,7 +10383,6 @@ ${workflow.slice(start, end)}
       const identity = exactIdentity ? predecessor.identity : "deploy-999-1";
       const acceptsPredecessor = exactIdentity && !requireCurrentReviewedImage;
       const result = await checkSettledLiveFlyDrift("image-gen", {
-        rootDir: root,
         requireCurrentReviewedImage,
         runFly: imageGenSettledFlyState(
           predecessor.image,
@@ -10359,6 +10391,7 @@ ${workflow.slice(start, end)}
           predecessor.path,
         ),
         ...verificationOptions,
+        rootDir: root,
         fetchImpl: async () => {
           expect(acceptsPredecessor).toBe(true);
           return jsonResponse(
@@ -10410,11 +10443,17 @@ ${workflow.slice(start, end)}
     const app = manifest.apps["image-gen"];
     const image = app.reviewedRollbackImages[0];
     const configPath = app.reviewedRollbackConfigs[image].path;
+    // A later candidate can differ from the currently proven rollback image.
+    app.reviewedImage = `registry.fly.io/${app.app}@sha256:${"e".repeat(64)}`;
+    fs.writeFileSync(
+      path.join(root, "deploy/production/apps.json"),
+      JSON.stringify(manifest),
+    );
     expect(image).not.toBe(app.reviewedImage);
     const result = await checkSettledLiveFlyDrift("image-gen", {
-      rootDir: root,
       runFly: imageGenSettledFlyState(image, "deploy-999-1", root, configPath),
       ...verificationOptions,
+      rootDir: root,
       fetchImpl: async () =>
         jsonResponse(canonicalDeploymentRun("image-gen", "999", "1")),
     });
