@@ -220,14 +220,14 @@ release`, before any deployment or restart. The app-level Fly config
         Commercial exposure remains incomplete until both cleanup paths have
         metadata-only success evidence; do not substitute manual SQL or
         unreviewed secret-field edits.
-    - Runtime settlement is not yet authorized: automatic review rejected
-      replacing the bridge rollback with the proven final runtime and marking
-      the transition `complete`, because that removes the old rollback option
-      and unlocks later principal-retirement operations. The exact deployed
-      runtime config is prepared as an inert rollback file only; the manifest
-      is unchanged. Obtain explicit approval for this transition separately
-      from account deletion or broader database access; do not bypass the
-      rejection through another tool or agent.
+    - On 2026-09-10 the owner explicitly approved replacing the old bridge
+      rollback with the proven running runtime after the change was explained.
+      The settlement manifest records `deploy-34461561679-1` and its exact
+      config as the predecessor and sole final-0018 runtime rollback, and sets
+      the schema transition to `complete`. This closes the rollback-plan step
+      only after reviewed merge; it authorizes no account deletion, new database
+      permissions or payment activation. The previous automatic-review denial
+      was not bypassed; the owner supplied the missing specific authorization.
     - The owner-approved bounded-Test alternative is proposed in PR #517, not
       merged or activated. Its same-run account/session inspection still lacks
       an authorized transport/credential: the migration Fly token excludes

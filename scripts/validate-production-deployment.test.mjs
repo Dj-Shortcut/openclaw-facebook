@@ -1204,7 +1204,7 @@ describe("production deployment contract", () => {
     });
   });
 
-  it("binds the reviewed 0018 rollout to its proven staged runtime principal", () => {
+  it("settles the proven 0018 runtime with only its exact runtime rollback", () => {
     const manifest = JSON.parse(
       fs.readFileSync(
         path.join(repoRoot, "deploy/production/apps.json"),
@@ -1217,7 +1217,7 @@ describe("production deployment contract", () => {
     expect(app.databaseSchemaTransition).toMatchObject({
       from: "0016_expand",
       to: "0018_credit_checkout_reservation",
-      state: "runtime_reviewed",
+      state: "complete",
       bridgeImage:
         "registry.fly.io/leaderbot-fb-image-gen@sha256:a37632c86a72a87cd94f5c030c8b88be330420289c553f4570e234c85df233b8",
       bridgeSourceCommit: "f26d80e1eb47361541b9812a1c0d47477afac535",
@@ -1236,16 +1236,23 @@ describe("production deployment contract", () => {
     expect(app.databaseSchemaTransition.runtimePrincipalSha256).toBe(
       "972e89225a2d25540d6abfa7bb4e75303f6a94b2f80b4ec26152a95b9b44eeb9",
     );
-    expect(app.reviewedRollbackImages).toEqual([
-      app.databaseSchemaTransition.bridgeImage,
-    ]);
+    expect(app.reviewedRollbackImages).toEqual([app.reviewedImage]);
+    expect(app.reviewedRollbackArtifactKinds).toEqual({
+      [app.reviewedImage]: "runtime",
+    });
+    expect(app.reviewedRollbackSourceCommits).toEqual({
+      [app.reviewedImage]: app.reviewedSourceCommit,
+    });
+    expect(app.reviewedRollbackImageSchemaPhases).toEqual({
+      [app.reviewedImage]: ["0018_credit_checkout_reservation"],
+    });
     expect(app.reviewedSettledPredecessor).toEqual({
-      identity: "deploy-33297361675-1",
+      identity: "deploy-34461561679-1",
       image:
-        "registry.fly.io/leaderbot-fb-image-gen@sha256:a37632c86a72a87cd94f5c030c8b88be330420289c553f4570e234c85df233b8",
-      path: "deploy/production/rollback-configs/image-gen-a37632c86a72-deploy-33297361675-1.toml",
+        "registry.fly.io/leaderbot-fb-image-gen@sha256:1d80d6bce5fdbd7486f31d6223ca87ac7a50d075661ec48ae0f3d536eb8e5b36",
+      path: "deploy/production/rollback-configs/image-gen-1d80d6bce5fd-deploy-34461561679-1.toml",
       sha256:
-        "cd74c375ff2ebfa9c178cea325377b654851a71d105375ca51b826796bf9e9c0",
+        "4d9c56fd92f7694c84365f8317117d2335017ac0efb963b78dd2799e22d47697",
     });
   });
 
@@ -5970,21 +5977,13 @@ describe("production deployment contract", () => {
       maximum: "0018_credit_checkout_reservation",
       phases: ["0018_credit_checkout_reservation"],
     });
-    expect(
+    expect(() =>
       getReviewedArtifactSchemaSupport(
         "image-gen",
         manifest.apps["image-gen"].databaseSchemaTransition.bridgeImage,
         repoRoot,
       ),
-    ).toEqual({
-      minimum: "0016_expand",
-      maximum: "0018_credit_checkout_reservation",
-      phases: [
-        "0016_expand",
-        "0017_credit_wallet_expand",
-        "0018_credit_checkout_reservation",
-      ],
-    });
+    ).toThrow("image-gen image is not in the reviewed production allowlist");
   });
 
   it("validates schema compatibility for current and rollback images", () => {
@@ -10164,7 +10163,12 @@ ${workflow.slice(start, end)}
         ),
         ...verificationOptions,
         fetchImpl: async () =>
-          jsonResponse(canonicalDeploymentRun("image-gen", "33297361675", "1")),
+          jsonResponse(
+            canonicalDeploymentRun(
+              "image-gen",
+              ...predecessor.identity.split("-").slice(1),
+            ),
+          ),
       }),
     ).resolves.toMatchObject({
       identity: predecessor.identity,
@@ -10269,7 +10273,12 @@ ${workflow.slice(start, end)}
         },
         ...verificationOptions,
         fetchImpl: async () =>
-          jsonResponse(canonicalDeploymentRun("image-gen", "33297361675", "1")),
+          jsonResponse(
+            canonicalDeploymentRun(
+              "image-gen",
+              ...predecessor.identity.split("-").slice(1),
+            ),
+          ),
       });
 
       expect(result).toMatchObject({
@@ -10336,7 +10345,12 @@ ${workflow.slice(start, end)}
         },
         ...verificationOptions,
         fetchImpl: async () =>
-          jsonResponse(canonicalDeploymentRun("image-gen", "33297361675", "1")),
+          jsonResponse(
+            canonicalDeploymentRun(
+              "image-gen",
+              ...predecessor.identity.split("-").slice(1),
+            ),
+          ),
       });
 
     const first = await inspect([43]);

@@ -1124,6 +1124,12 @@ trusted production artifact` with `image-gen-bridge`. The workflow proves
     while the only rollback is the migration bridge. This settled manifest is a
     prerequisite for the protected obsolete-principal cleanup workflow; moving
     to `complete` does not itself enable paid credits or checkout.
+    The owner approved this exact rollback-plan change on 2026-09-10. Its
+    replacement is runtime `1d80d6bce5fd...`, built from
+    `80703910131e227d1d683b1f5b6287c8bff241de`, with settled identity
+    `deploy-34461561679-1`. The retained config has SHA-256
+    `4d9c56fd92f7694c84365f8317117d2335017ac0efb963b78dd2799e22d47697`.
+    This approval does not authorize the account-retirement operations below.
 12. **Retire the obsolete broad runtime principal.** Only after every desired
     Machine reproves the restricted principal under the settled deployment
     identity, run the protected cleanup workflow to lock the exact obsolete
