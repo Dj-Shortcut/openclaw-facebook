@@ -37,6 +37,21 @@ describe("draft narrow credit session census", () => {
     expect(session.queries.join("\n")).not.toMatch(
       /PROCESSLIST_(INFO|HOST|DB)|SELECT \*|UPDATE|GRANT/,
     );
+    const census = session.queries.find((sql) =>
+      sql.includes("AS internal_daemon"),
+    );
+    expect(census).toContain(
+      "BINARY NAME='thread/sql/event_scheduler' AND BINARY PROCESSLIST_USER='event_scheduler'",
+    );
+    expect(census).toContain(
+      "BINARY NAME='thread/sql/compress_gtid_table' AND PROCESSLIST_USER IS NULL",
+    );
+    // The obsolete-account check must still cover every foreground row, even
+    // those excluded from the external connection total.
+    expect(census).toContain(
+      `COALESCE(SUM(SHA2(PROCESSLIST_USER,256)='${options.obsoletePrincipalSha256}'),0)`,
+    );
+    expect(census).not.toContain("WHERE internal_daemon");
   });
   it.each([
     [

@@ -263,12 +263,14 @@ release`, before any deployment or restart. The app-level Fly config
     - The bounded-Test alternative proposed in PR #517 is not merged or
       activated. Its updated activation contract follows PR #522: no manual
       tester registration, with automatic exact user/Page/privacy binding.
-      Its same-run account/session inspection still lacks
-      an authorized transport/credential: the migration Fly token excludes
-      Machine-exec, and the provisioner lacks complete cross-user session
-      visibility. Do not repurpose another token, widen runtime grants, or
-      substitute unbound local output. A narrowly scoped metadata-only
-      inspection path needs explicit authorization and review.
+      Its draft same-run inspection now uses the existing provisioner through
+      a pinned exact-Machine tunnel, not the migration token's unavailable SSH
+      path. The four-column metadata-only read grant is not applied or proven
+      in production. Disposable MySQL validation exposed an over-inclusive
+      foreground-thread census; the correction now follows pinned MySQL 8.4.11
+      source and still requires fresh real-MySQL proof. Do not repurpose another token, widen runtime
+      grants, substitute partial output or enable payment flags to bypass this.
+      The narrow inspection grant still needs specific authorization and review.
     - Checkout configuration readback (2026-09-10): `MOLLIE_API_KEY` is present
       and deployed. After confirming no pending secrets and no existing signer,
       the owner-authorized test setup generated a fresh 32-byte

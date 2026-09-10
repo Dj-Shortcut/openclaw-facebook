@@ -720,6 +720,18 @@ jobs:
         timeout-minutes: 1
         run: node scripts/image-gen-credit-test-proof.mjs request
 
+      - name: Prepare pinned package manager for Test inspection
+        if: steps.credit-test-request.outputs.active == 'true'
+        timeout-minutes: 3
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 10.28.1
+
+      - name: Install locked Test inspection dependencies without credentials
+        if: steps.credit-test-request.outputs.active == 'true'
+        timeout-minutes: 5
+        run: pnpm --dir apps/image-gen install --prod --frozen-lockfile --ignore-scripts
+
       - name: Produce fresh bounded Test database and runtime proof
         if: steps.credit-test-request.outputs.active == 'true'
         timeout-minutes: 12
@@ -727,6 +739,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           CREDIT_TEST_IMAGE_TOKEN: ${{ secrets.FLY_IMAGE_GEN_DEPLOY_TOKEN }}
           CREDIT_TEST_DATABASE_TOKEN: ${{ secrets.FLY_DATABASE_MIGRATION_TOKEN }}
+          DATABASE_PROVISIONER_URL: ${{ secrets.IMAGE_GEN_DATABASE_PROVISIONER_URL }}
         run: node scripts/image-gen-credit-test-proof.mjs prove
 
       - name: Recheck and consume bounded Test proof under the deployment lock
@@ -736,6 +749,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           CREDIT_TEST_IMAGE_TOKEN: ${{ secrets.FLY_IMAGE_GEN_DEPLOY_TOKEN }}
           CREDIT_TEST_DATABASE_TOKEN: ${{ secrets.FLY_DATABASE_MIGRATION_TOKEN }}
+          DATABASE_PROVISIONER_URL: ${{ secrets.IMAGE_GEN_DATABASE_PROVISIONER_URL }}
         run: node scripts/image-gen-credit-test-proof.mjs consume
 
       - name: Deploy reviewed image-gen config

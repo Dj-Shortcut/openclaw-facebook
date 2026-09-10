@@ -6280,11 +6280,60 @@ describe("production deployment contract", () => {
     replaceFixtureText(
       root,
       ".github/workflows/deploy-production.yml",
-      "if: steps.credit-test-request.outputs.active == 'true'",
-      "if: always()",
+      "      - name: Produce fresh bounded Test database and runtime proof\n        if: steps.credit-test-request.outputs.active == 'true'",
+      "      - name: Produce fresh bounded Test database and runtime proof\n        if: always()",
     );
     expect(() => validateProductionRepository(root)).toThrow(
       "must require protected proof only for the explicit bounded Test request",
+    );
+  });
+
+  it("requires the existing provisioner for conditional Test inspection", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/deploy-production.yml",
+      "          DATABASE_PROVISIONER_URL: ${{ secrets.IMAGE_GEN_DATABASE_PROVISIONER_URL }}\n",
+      "",
+    );
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must require protected proof only for the explicit bounded Test request",
+    );
+  });
+
+  it.each([
+    ["missing install", "run: true"],
+    [
+      "unpinned install",
+      "run: pnpm --dir apps/image-gen install --prod --ignore-scripts",
+    ],
+    [
+      "lifecycle scripts",
+      "run: pnpm --dir apps/image-gen install --prod --frozen-lockfile",
+    ],
+  ])("rejects %s in the Test inspection job", (_name, replacement) => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/deploy-production.yml",
+      "run: pnpm --dir apps/image-gen install --prod --frozen-lockfile --ignore-scripts",
+      replacement,
+    );
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must prepare locked Test inspection dependencies without credentials before proof in the deployment job",
+    );
+  });
+
+  it("rejects exposing the provisioner to the deployment command", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/deploy-production.yml",
+      "      - name: Deploy reviewed image-gen config\n        id: deploy\n        timeout-minutes: 35\n        env:\n",
+      "      - name: Deploy reviewed image-gen config\n        id: deploy\n        timeout-minutes: 35\n        env:\n          DATABASE_PROVISIONER_URL: ${{ secrets.IMAGE_GEN_DATABASE_PROVISIONER_URL }}\n",
+    );
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must expose the provisioner only to the two conditional Test-proof steps",
     );
   });
 

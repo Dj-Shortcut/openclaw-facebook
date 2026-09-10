@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -12,9 +14,11 @@ import {
   collectCreditTestProof,
   inspectLockedObsoletePrincipal,
   obsoletePrincipalProofQueries,
+  openCreditTestProvisionerSession,
   selectCreditTestRuntimeMachines,
 } from "./image-gen-credit-test-proof.mjs";
 import { validateCreditTestActivation } from "./validate-production-deployment.mjs";
+import { buildExpectedProvisionerGrants } from "./image-gen-credit-provisioner-bootstrap-contract.mjs";
 
 const repo = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const dirs = [];
@@ -37,6 +41,7 @@ const env = {
   GITHUB_TOKEN: "test-github",
   CREDIT_TEST_IMAGE_TOKEN: "test-image",
   CREDIT_TEST_DATABASE_TOKEN: "test-database",
+  DATABASE_PROVISIONER_URL: `mysql://lbcp_0123456789abcdef:Aa1!${"c".repeat(96)}@127.0.0.1:13306/leaderbot`,
 };
 const remoteRun = {
   id: 123,
@@ -186,6 +191,8 @@ function collectorFixture(overrides = {}) {
   };
   let settledReads = 0;
   const execute = vi.fn((command, args, childEnv) => {
+    expect(childEnv.DATABASE_PROVISIONER_URL).toBeUndefined();
+    expect(childEnv.IMAGE_GEN_DATABASE_PROVISIONER_URL).toBeUndefined();
     if (command === "git") return SOURCE;
     if (command === "node") {
       if (args.includes("--settled-live"))
@@ -207,17 +214,27 @@ function collectorFixture(overrides = {}) {
     expect(childEnv.GITHUB_TOKEN).toBeUndefined();
     return JSON.stringify(args[0] === "volumes" ? [volume] : [machine]);
   });
+  let accountReads = 0;
   const session = {
+    expectedSessionId: "7",
     initialize: vi.fn(async () => {}),
     close: vi.fn(async () => {}),
     execute: vi.fn(async (sql) => {
-      expect(sql.startsWith("SELECT ")).toBe(true);
-      if (sql.includes("Process_priv"))
-        return [overrides.processPrivilege ?? "1"];
-      if (sql.includes("CONNECTION_ID()")) return [overrides.visibility ?? "1"];
-      return sql.includes("mysql.user")
-        ? [overrides.account ?? "1\t1"]
-        : [overrides.sessions ?? "0"];
+      expect(sql).toMatch(/^(SELECT|SHOW GLOBAL) /);
+      if (sql.includes("mysql.user"))
+        return [
+          (accountReads++ ? overrides.afterAccount : undefined) ??
+            overrides.account ??
+            "1\t1",
+        ];
+      if (sql.startsWith("SELECT @@"))
+        return ["1\tone-thread-per-connection\t7"];
+      if (sql.includes("LIKE 'Connections'")) return ["Connections\t10"];
+      if (sql.includes("LIKE 'Threads_connected'"))
+        return ["Threads_connected\t2"];
+      return [
+        `${overrides.total ?? "2"}\t2\t${overrides.visibility ?? "1"}\t${overrides.sessions ?? "0"}\t0\t0`,
+      ];
     }),
   };
   return {
@@ -231,6 +248,180 @@ function collectorFixture(overrides = {}) {
     session,
   };
 }
+
+function provisionerTransportFixture(overrides = {}) {
+  const child = new EventEmitter();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.exitCode = null;
+  child.signalCode = null;
+  child.killed = false;
+  child.kill = vi.fn(() => {
+    child.killed = true;
+    child.signalCode = "SIGTERM";
+    queueMicrotask(() => child.emit("close", null, "SIGTERM"));
+  });
+  const username = "lbcp_0123456789abcdef";
+  const grants = [
+    ...buildExpectedProvisionerGrants({ databaseName: "leaderbot", username }),
+    `GRANT SELECT (NAME, TYPE, PROCESSLIST_ID, PROCESSLIST_USER) ON \`performance_schema\`.\`threads\` TO '${username}'@'%'`,
+  ];
+  let identityReads = 0;
+  const connection = {
+    destroy: vi.fn(),
+    query: vi.fn(async ({ sql, timeout, rowsAsArray }) => {
+      expect(timeout).toBe(10_000);
+      expect(rowsAsArray).toBe(true);
+      if (sql.startsWith("SELECT CURRENT_USER"))
+        return [
+          [
+            [
+              overrides.currentUser ?? `${username}@%`,
+              overrides.databaseName ?? "leaderbot",
+              (identityReads++ ? overrides.afterSessionId : undefined) ?? "7",
+            ],
+          ],
+        ];
+      if (sql.startsWith("SHOW GRANTS"))
+        return [(overrides.grants ?? grants).map((value) => [value])];
+      return [[[1]]];
+    }),
+  };
+  const spawnChild = vi.fn(() => {
+    queueMicrotask(() =>
+      child.stdout.write(
+        `Proxying localhost:15432 to remote [${overrides.proxyIp ?? "fdaa:1::1"}]:3306\n`,
+      ),
+    );
+    return child;
+  });
+  const mysql = {
+    createConnection: vi.fn(async () => {
+      if (overrides.connectionFailure)
+        throw new Error("sensitive connection error");
+      return connection;
+    }),
+  };
+  const controller = new AbortController();
+  return {
+    child,
+    connection,
+    mysql,
+    spawnChild,
+    controller,
+    options: {
+      recovery: { app: "leaderbot-portal-mysql", databaseName: "leaderbot" },
+      machine: { private_ip: "fdaa:1::1" },
+      url: overrides.url ?? env.DATABASE_PROVISIONER_URL,
+      env: {
+        FLY_API_TOKEN: "test-database",
+        DATABASE_PROVISIONER_URL: env.DATABASE_PROVISIONER_URL,
+      },
+      signal: controller.signal,
+      spawnChild,
+      mysql,
+    },
+  };
+}
+
+describe("pinned provisioner proof transport", () => {
+  it("uses exact Fly IP, ephemeral local port and one restricted MySQL session, never database SSH", async () => {
+    const f = provisionerTransportFixture();
+    const session = await openCreditTestProvisionerSession(f.options);
+    try {
+      await session.initialize();
+      await session.initialize();
+      expect(session.expectedSessionId).toBe("7");
+      expect(await session.execute("SELECT 1")).toEqual(["1"]);
+      expect(f.mysql.createConnection).toHaveBeenCalledTimes(1);
+      expect(new URL(f.mysql.createConnection.mock.calls[0][0]).port).toBe(
+        "15432",
+      );
+      expect(f.spawnChild.mock.calls[0][1]).toEqual([
+        "proxy",
+        "0:3306",
+        "fdaa:1::1",
+        "--app",
+        "leaderbot-portal-mysql",
+        "--bind-addr",
+        "127.0.0.1",
+        "--quiet",
+      ]);
+      expect(
+        f.spawnChild.mock.calls[0][2].env.DATABASE_PROVISIONER_URL,
+      ).toBeUndefined();
+      expect(JSON.stringify(f.spawnChild.mock.calls)).not.toContain("Aa1!");
+      expect(
+        f.connection.query.mock.calls.map(([query]) => query.sql).join("\n"),
+      ).not.toMatch(/ALTER|GRANT SELECT|INSERT|UPDATE|DELETE|PROCESSLIST_INFO/);
+    } finally {
+      await session.close();
+    }
+    expect(f.connection.destroy).toHaveBeenCalled();
+    expect(f.child.kill).toHaveBeenCalled();
+  });
+  it.each([
+    { currentUser: "different@%" },
+    { databaseName: "different" },
+    { afterSessionId: "8" },
+    { grants: [] },
+  ])("rejects identity or privilege drift %j", async (overrides) => {
+    const f = provisionerTransportFixture(overrides);
+    const session = await openCreditTestProvisionerSession(f.options);
+    try {
+      await expect(
+        (async () => {
+          await session.initialize();
+          await session.initialize();
+        })(),
+      ).rejects.toThrow();
+    } finally {
+      await session.close();
+    }
+  });
+  it("requires the additional exact metadata grant, not the base maintenance profile", async () => {
+    const f = provisionerTransportFixture({
+      grants: buildExpectedProvisionerGrants({
+        databaseName: "leaderbot",
+        username: "lbcp_0123456789abcdef",
+      }),
+    });
+    const session = await openCreditTestProvisionerSession(f.options);
+    try {
+      await expect(session.initialize()).rejects.toThrow();
+    } finally {
+      await session.close();
+    }
+  });
+  it.each([{ proxyIp: "fdaa:2::2" }, { connectionFailure: true }])(
+    "closes a failed tunnel/connection without exposing errors %j",
+    async (overrides) => {
+      const f = provisionerTransportFixture(overrides);
+      await expect(openCreditTestProvisionerSession(f.options)).rejects.toThrow(
+        "credit_test_proof_rejected",
+      );
+      expect(f.child.kill).toHaveBeenCalled();
+    },
+  );
+  it("rejects a non-local stored URL before spawning a tunnel", async () => {
+    const f = provisionerTransportFixture({
+      url: env.DATABASE_PROVISIONER_URL.replace("127.0.0.1", "db.internal"),
+    });
+    await expect(openCreditTestProvisionerSession(f.options)).rejects.toThrow(
+      "credit_test_proof_rejected",
+    );
+    expect(f.spawnChild).not.toHaveBeenCalled();
+  });
+  it("fails closed and cleans up when the deadline aborts", async () => {
+    const f = provisionerTransportFixture();
+    const session = await openCreditTestProvisionerSession(f.options);
+    f.controller.abort();
+    await expect(session.execute("SELECT 1")).rejects.toThrow();
+    await session.close();
+    expect(f.connection.destroy).toHaveBeenCalled();
+    expect(f.child.kill).toHaveBeenCalled();
+  });
+});
 
 describe("bounded credit Test activation", () => {
   it("accepts Test Mode without tester registration with final runtime and draining rollback", () => {
@@ -384,14 +575,7 @@ describe("protected metadata proof", () => {
     ["1\t1", "1"],
     ["1\t1", ""],
   ])("rejects account/session inventory %s / %s", async (account, sessions) => {
-    const session = {
-      execute: vi
-        .fn()
-        .mockResolvedValueOnce([account])
-        .mockResolvedValueOnce(["1"])
-        .mockResolvedValueOnce(["1"])
-        .mockResolvedValueOnce([sessions]),
-    };
+    const { session } = collectorFixture({ account, sessions });
     await expect(
       inspectLockedObsoletePrincipal(session, OLD),
     ).rejects.toThrow();
@@ -405,7 +589,8 @@ describe("protected metadata proof", () => {
       candidateIdentity: "deploy-123-2",
       databaseName: "leaderbot",
     });
-    expect(f.session.close).toHaveBeenCalledWith({ releaseLock: false });
+    expect(f.session.close).toHaveBeenCalledWith();
+    expect(f.session.initialize).toHaveBeenCalledTimes(2);
     expect(JSON.stringify(proof)).not.toContain("test-database");
     expect(() =>
       assertCreditTestEvidence(
@@ -421,8 +606,10 @@ describe("protected metadata proof", () => {
     { probeOutput: "failed" },
     { sessions: "1" },
     { account: "1\t0" },
-    { processPrivilege: "0" },
+    { total: "1" },
     { visibility: "0" },
+    { afterAccount: "1\t0" },
+    { afterAccount: "0\t0" },
   ])(
     "rejects drift, incomplete visibility or failed probe %j",
     async (change) => {

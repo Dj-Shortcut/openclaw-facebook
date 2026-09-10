@@ -206,6 +206,30 @@ suite("narrow session inventory on disposable MySQL 8.4.11", () => {
   it("verifies restricted metadata access, existing locked sessions, absence, cache, auth and disabled instrumentation", async () => {
     metadataDiagnostics = [];
     const baseline = await collect();
+    if (!baseline.verified) {
+      const [instruments] = await inspector.query(
+        `SELECT NAME,COUNT(*) AS thread_count,
+          COALESCE(SUM(PROCESSLIST_USER IS NULL),0) AS anonymous_count
+         FROM performance_schema.threads
+         WHERE TYPE='FOREGROUND' AND PROCESSLIST_ID>0 GROUP BY NAME`,
+      );
+      metadataDiagnostics.push({
+        operation: "instrument_inventory",
+        // This is a disposable server: expose only server instrumentation names
+        // and counts, never process IDs, account names or SQL text.
+        instruments: instruments.map((row) => ({
+          name: /^thread\/[a-z0-9_]+\/[a-z0-9_]+$/.test(row.NAME ?? "")
+            ? row.NAME
+            : "unsupported_instrument_name",
+          count: /^\d+$/.test(String(row.thread_count))
+            ? String(row.thread_count)
+            : "invalid",
+          anonymousCount: /^\d+$/.test(String(row.anonymous_count))
+            ? String(row.anonymous_count)
+            : "invalid",
+        })),
+      });
+    }
     expect(
       baseline,
       JSON.stringify({ baseline, metadataDiagnostics }),
@@ -213,6 +237,108 @@ suite("narrow session inventory on disposable MySQL 8.4.11", () => {
       verified: true,
       obsoleteSessionCount: 0,
     });
+    // Exercise the actual SQL classifier, not a mock of its aggregate output.
+    // Only this disposable test substitutes synthetic metadata for P_S rows.
+    const syntheticThread = (offset, name, user) => {
+      if (
+        !/^thread\/[a-z0-9_]+\/[a-z0-9_]+$/.test(name) ||
+        (user !== null && !/^[a-z0-9_]+$/.test(user))
+      )
+        throw new Error("invalid synthetic thread metadata");
+      const id = BigInt(expectedSessionId) + BigInt(offset);
+      return `SELECT '${name}' AS NAME,'FOREGROUND' AS TYPE,
+        ${id} AS PROCESSLIST_ID,${user === null ? "NULL" : `'${user}'`} AS PROCESSLIST_USER`;
+    };
+    const clientRows = [
+      syntheticThread(0, "thread/sql/one_connection", names.inspector),
+      syntheticThread(1, "thread/sql/one_connection", "fixture_user"),
+    ];
+    for (const [
+      label,
+      extraRows,
+      expected,
+      includedClients = clientRows,
+      obsoleteHash = oldHash,
+    ] of [
+      [
+        "exact internal daemon pairs",
+        [
+          syntheticThread(2, "thread/sql/event_scheduler", "event_scheduler"),
+          syntheticThread(3, "thread/sql/compress_gtid_table", null),
+        ],
+        { verified: true, sessionCount: "2" },
+      ],
+      [
+        "internal rows cannot compensate for a missing client",
+        [
+          syntheticThread(2, "thread/sql/event_scheduler", "event_scheduler"),
+          syntheticThread(3, "thread/sql/compress_gtid_table", null),
+        ],
+        { verified: false, reason: "incomplete_inventory" },
+        clientRows.slice(0, 1),
+      ],
+      [
+        "obsolete match is checked even on excluded internal rows",
+        [syntheticThread(2, "thread/sql/event_scheduler", "event_scheduler")],
+        { verified: false, reason: "obsolete_sessions_present" },
+        clientRows,
+        createHash("sha256").update("event_scheduler").digest("hex"),
+      ],
+      [
+        "client using an internal username",
+        [syntheticThread(2, "thread/sql/one_connection", "event_scheduler")],
+        { verified: false, reason: "incomplete_inventory" },
+      ],
+      [
+        "daemon name with a different user",
+        [syntheticThread(2, "thread/sql/event_scheduler", "fixture_user")],
+        { verified: false, reason: "unknown_session_type" },
+      ],
+      [
+        "daemon name with the obsolete account",
+        [syntheticThread(2, "thread/sql/event_scheduler", names.old)],
+        { verified: false, reason: "obsolete_sessions_present" },
+      ],
+      [
+        "compression daemon name with the obsolete account",
+        [syntheticThread(2, "thread/sql/compress_gtid_table", names.old)],
+        { verified: false, reason: "obsolete_sessions_present" },
+      ],
+      [
+        "unknown anonymous instrument",
+        [syntheticThread(2, "thread/plugin/unknown", null)],
+        { verified: false, reason: "unknown_session_type" },
+      ],
+      [
+        "event worker is not the scheduler",
+        [syntheticThread(2, "thread/sql/event_worker", "event_scheduler")],
+        { verified: false, reason: "unknown_session_type" },
+      ],
+    ]) {
+      const syntheticSession = {
+        async execute(sql) {
+          if (sql.includes("LIKE 'Connections'")) return ["Connections\t10"];
+          if (sql.includes("LIKE 'Threads_connected'"))
+            return ["Threads_connected\t2"];
+          if (sql.includes("AS internal_daemon")) {
+            return session.execute(
+              sql.replace(
+                "FROM performance_schema.threads",
+                `FROM (${[...includedClients, ...extraRows].join(" UNION ALL ")}) AS synthetic_threads`,
+              ),
+            );
+          }
+          return session.execute(sql);
+        },
+      };
+      expect(
+        await collectCreditTestSessionInventory(syntheticSession, {
+          obsoletePrincipalSha256: obsoleteHash,
+          expectedSessionId,
+        }),
+        label,
+      ).toMatchObject(expected);
+    }
     // Column grants expose cross-user metadata, but not SQL text or other columns.
     for (const sql of [
       "SELECT PROCESSLIST_INFO FROM performance_schema.threads",

@@ -55,13 +55,27 @@ export async function collectCreditTestSessionInventory(
       // replacement connections; matching global counts detect missing P_S rows.
       const connectionsBefore = await status("Connections");
       const connectedBefore = await status("Threads_connected");
+      // MySQL 8.4 assigns processlist IDs to these two internal daemon threads,
+      // so TYPE alone does not identify client connections. Neither contributes
+      // to Connection_handler_manager::connection_count (Threads_connected).
+      // Match both the server-owned instrumentation name and its fixed user;
+      // never exclude event workers, plugin sessions or client-supplied names.
+      // Source: mysql/mysql-server mysql-8.4.11 sql/event_scheduler.cc,
+      // sql/rpl_gtid_persist.cc and storage/perfschema/table_threads.cc.
       const row =
-        await one(`SELECT COUNT(PROCESSLIST_ID),COUNT(DISTINCT PROCESSLIST_ID),
+        await one(`SELECT COUNT(CASE WHEN internal_daemon=0 THEN PROCESSLIST_ID END),
+        COUNT(DISTINCT CASE WHEN internal_daemon=0 THEN PROCESSLIST_ID END),
         COALESCE(SUM(PROCESSLIST_ID=CONNECTION_ID()),0),
         COALESCE(SUM(SHA2(PROCESSLIST_USER,256)='${obsoletePrincipalSha256}'),0),
-        COALESCE(SUM(PROCESSLIST_USER IS NULL OR PROCESSLIST_USER IN ('','unauthenticated user','system user')),0),
-        COALESCE(SUM(NAME IS NULL OR NAME<>'thread/sql/one_connection'),0)
-        FROM performance_schema.threads WHERE TYPE='FOREGROUND' AND PROCESSLIST_ID>0`);
+        COALESCE(SUM(internal_daemon=0 AND (PROCESSLIST_USER IS NULL OR PROCESSLIST_USER IN ('','unauthenticated user','system user'))),0),
+        COALESCE(SUM(internal_daemon=0 AND (NAME IS NULL OR NAME<>'thread/sql/one_connection')),0)
+        FROM (
+          SELECT NAME,PROCESSLIST_ID,PROCESSLIST_USER,
+          CASE WHEN (BINARY NAME='thread/sql/event_scheduler' AND BINARY PROCESSLIST_USER='event_scheduler')
+            OR (BINARY NAME='thread/sql/compress_gtid_table' AND PROCESSLIST_USER IS NULL)
+            THEN 1 ELSE 0 END AS internal_daemon
+          FROM performance_schema.threads WHERE TYPE='FOREGROUND' AND PROCESSLIST_ID>0
+        ) AS session_inventory`);
       if (row.length !== 6) throw new Error("invalid metadata census");
       const [total, distinct, own, obsolete, unknown, unsupported] =
         row.map(number);

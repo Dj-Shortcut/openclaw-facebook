@@ -1199,13 +1199,25 @@ rollback configuration with both checkout and paid admission off, and drain,
 notifications and reconciliation on. After any provider transport, a drain-off rollback is unsafe
 and fails the runtime's durable-activity guard.
 
-The following inspection is a draft contract, not an executable activation
-path yet. The current implementation attempts database SSH with a migration
-token that does not authorize it, and the existing protected provisioner lacks
-complete cross-user session visibility. Do not enable the request until a
-separately authorized, reviewed and tested metadata-only inspection replaces
-that path. Do not add broader permissions to the bot or substitute a different
-token merely to make this draft pass.
+The following inspection remains a draft until disposable MySQL validation and
+the separately authorized inspection grant are complete. It uses the existing
+protected provisioner over one pinned connection through the exact selected
+Machine's Fly tunnel; the migration token supplies metadata/tunnel access, not
+database SSH. In addition to its unchanged base profile, the inspection requires
+exact column-level `SELECT (NAME, TYPE, PROCESSLIST_ID, PROCESSLIST_USER)` on
+`performance_schema.threads`, without grant option. This grants no SQL-text,
+client-host or customer-content inspection and no extra bot privileges. Ordinary
+maintenance accepts the original profile or that exact extension; bootstrap
+still creates only the original profile. Never substitute `PROCESS`, table-wide
+`SELECT`, another token or an unverified partial census.
+
+The collector brackets its session inventory with connection counters and checks
+the account's locked/absent state before and after. It rejects unstable,
+incomplete, unsupported or unavailable observations. Transient connection IDs
+and total session counts are internal checks, not durable activation identities.
+The provisioner credential is present only in the two conditional proof steps
+and is removed from all Fly/runtime-probe subprocess environments. The draft
+does not grant its own access or authorize applying that grant in production.
 
 Only this explicit request would run the additional privileged inspection in
 `Deploy production`; ordinary dark deployments do not receive those additional

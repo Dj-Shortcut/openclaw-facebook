@@ -1,10 +1,19 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
+import { createRequire } from "node:module";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { RootMysqlSession } from "./provision-image-gen-credit-provisioner.mjs";
-import { selectReviewedDatabaseTarget } from "./image-gen-credit-provisioner-bootstrap-contract.mjs";
+import {
+  buildFlyProxyArgs,
+  waitForFlyProxyStartup,
+} from "./provision-image-gen-credit-provisioner.mjs";
+import {
+  assertProvisionerUrl,
+  selectReviewedDatabaseTarget,
+} from "./image-gen-credit-provisioner-bootstrap-contract.mjs";
+import { assertCreditProvisionerGrantScope } from "../apps/image-gen/scripts/production-schema-contract.mjs";
+import { collectCreditTestSessionInventory } from "./credit-test-session-inventory.mjs";
 import { readCreditTestActivation } from "./validate-production-deployment.mjs";
 
 const REPOSITORY = "Dj-Shortcut/openclaw-facebook";
@@ -66,16 +75,11 @@ export async function assertProtectedCreditTestRun(env, fetchImpl = fetch) {
   return run;
 }
 
-// Fixed metadata-only queries, never PROCESSLIST.INFO. Use MySQL 8.4's legacy
-// process inventory: Performance Schema instrumentation/capacity can omit rows.
-// Require effective PROCESS visibility and our own session before accepting 0.
+// Account state is separate from the complete, stable metadata-only census.
 export function obsoletePrincipalProofQueries(principalSha256) {
   if (!sha(principalSha256)) fail();
   return [
     `SELECT COUNT(*),COALESCE(SUM(Host='%' AND account_locked='Y'),0) FROM mysql.user WHERE SHA2(User,256)='${principalSha256}'`,
-    "SELECT COUNT(*) FROM mysql.user WHERE CONCAT(User,'@',Host)=CURRENT_USER() AND Process_priv='Y'",
-    "SELECT COUNT(*) FROM INFORMATION_SCHEMA.PROCESSLIST WHERE ID=CONNECTION_ID()",
-    `SELECT COUNT(*) FROM INFORMATION_SCHEMA.PROCESSLIST WHERE SHA2(USER,256)='${principalSha256}'`,
   ];
 }
 
@@ -86,27 +90,159 @@ export async function inspectLockedObsoletePrincipal(
 ) {
   const queries = obsoletePrincipalProofQueries(principalSha256);
   const account = await session.execute(queries[0], { signal });
-  const privileges = await session.execute(queries[1], { signal });
-  const visibility = await session.execute(queries[2], { signal });
-  if (
-    privileges.length !== 1 ||
-    privileges[0] !== "1" ||
-    visibility.length !== 1 ||
-    visibility[0] !== "1"
-  )
-    fail();
-  const sessions = await session.execute(queries[3], { signal });
-  if (
-    account.length !== 1 ||
-    !["1\t1", "0\t0"].includes(account[0]) ||
-    sessions.length !== 1 ||
-    sessions[0] !== "0"
-  )
-    fail();
+  if (account.length !== 1 || !["1\t1", "0\t0"].includes(account[0])) fail();
+  const census = await collectCreditTestSessionInventory(session, {
+    obsoletePrincipalSha256: principalSha256,
+    expectedSessionId: session.expectedSessionId,
+  });
+  if (!census.verified) fail();
+  const after = await session.execute(queries[0], { signal });
+  if (JSON.stringify(after) !== JSON.stringify(account)) fail();
   return {
     obsoleteAccountState: account[0] === "1\t1" ? "locked" : "absent",
     obsoleteSessionCount: 0,
   };
+}
+
+// Existing provisioner credential, exact selected Machine IP, no SSH/root path.
+export async function openCreditTestProvisionerSession({
+  recovery,
+  machine,
+  url,
+  env,
+  signal,
+  spawnChild = spawn,
+  mysql = createRequire(
+    new URL("../apps/image-gen/package.json", import.meta.url),
+  )("mysql2/promise"),
+}) {
+  let child, connection, expectedSessionId;
+  const childEnv = { ...env };
+  delete childEnv.DATABASE_PROVISIONER_URL;
+  delete childEnv.IMAGE_GEN_DATABASE_PROVISIONER_URL;
+  const abort = () => {
+    connection?.destroy();
+    child?.kill("SIGTERM");
+  };
+  const close = async () => {
+    signal?.removeEventListener("abort", abort);
+    connection?.destroy();
+    if (child && child.exitCode === null && child.signalCode == null) {
+      const closed = new Promise((resolve) => child.once("close", resolve));
+      let timer;
+      child.kill("SIGTERM");
+      await Promise.race([
+        closed,
+        new Promise((resolve) => {
+          timer = setTimeout(resolve, 1000);
+        }),
+      ]);
+      clearTimeout(timer);
+      if (child.exitCode === null && child.signalCode == null) {
+        child.kill("SIGKILL");
+        await Promise.race([
+          closed,
+          new Promise((resolve) => {
+            timer = setTimeout(resolve, 1000);
+          }),
+        ]);
+        clearTimeout(timer);
+        if (child.exitCode === null && child.signalCode == null) fail();
+      }
+    }
+  };
+  try {
+    if (signal?.aborted) fail();
+    const parsed = new URL(url);
+    assertProvisionerUrl(url, {
+      databaseName: recovery.databaseName,
+      username: parsed.username,
+    });
+    child = spawnChild("flyctl", buildFlyProxyArgs({ recovery, machine }), {
+      env: childEnv,
+      shell: false,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    child.on("error", abort);
+    child.on("close", () => connection?.destroy());
+    signal?.addEventListener("abort", abort, { once: true });
+    const port = await waitForFlyProxyStartup({
+      child,
+      expectedPrivateIp: machine.private_ip,
+      signal,
+    });
+    parsed.port = String(port);
+    connection = await mysql.createConnection(parsed.toString());
+    if (
+      signal?.aborted ||
+      child.exitCode !== null ||
+      child.signalCode != null ||
+      child.killed
+    )
+      fail();
+    const execute = async (sql) => {
+      if (
+        signal?.aborted ||
+        child.exitCode !== null ||
+        child.signalCode != null ||
+        child.killed
+      )
+        fail();
+      try {
+        const [rows] = await connection.query({
+          sql,
+          timeout: 10_000,
+          rowsAsArray: true,
+        });
+        if (
+          signal?.aborted ||
+          child.exitCode !== null ||
+          child.signalCode != null ||
+          child.killed
+        )
+          fail();
+        if (!Array.isArray(rows) || rows.some((row) => !Array.isArray(row)))
+          fail();
+        return rows.map((row) =>
+          row
+            .map((value) => (value === null ? "NULL" : String(value)))
+            .join("\t"),
+        );
+      } catch {
+        fail();
+      }
+    };
+    return {
+      execute,
+      get expectedSessionId() {
+        return expectedSessionId;
+      },
+      async initialize() {
+        const rows = await execute(
+          "SELECT CURRENT_USER(),DATABASE(),CONNECTION_ID()",
+        );
+        const identity = rows.length === 1 ? rows[0].split("\t") : [];
+        if (
+          identity.length !== 3 ||
+          identity[0] !== `${parsed.username}@%` ||
+          identity[1] !== recovery.databaseName ||
+          !/^[1-9][0-9]*$/.test(identity[2]) ||
+          (expectedSessionId !== undefined && expectedSessionId !== identity[2])
+        )
+          fail();
+        expectedSessionId = identity[2];
+        assertCreditProvisionerGrantScope(
+          await execute("SHOW GRANTS FOR CURRENT_USER()"),
+          recovery.databaseName,
+          { requireSessionInventory: true },
+        );
+      },
+      close,
+    };
+  } catch {
+    await close();
+    fail();
+  }
 }
 
 export function selectCreditTestRuntimeMachines(
@@ -217,15 +353,15 @@ export async function collectCreditTestProof({
   env = process.env,
   rootDir = process.cwd(),
   execute = run,
-  sessionFactory = (options) => new RootMysqlSession(options),
+  sessionFactory = openCreditTestProvisionerSession,
   fetchImpl = fetch,
   now = Date.now,
 }) {
   const runContext = await assertProtectedCreditTestRun(env, fetchImpl);
   if (
-    execute("git", ["rev-parse", "HEAD"], env) !== runContext.sourceHead ||
     !env.CREDIT_TEST_IMAGE_TOKEN ||
     !env.CREDIT_TEST_DATABASE_TOKEN ||
+    !env.DATABASE_PROVISIONER_URL ||
     !sha(app.databaseSchemaTransition?.runtimePrincipalSha256) ||
     !sha(app.creditTestActivation?.obsoletePrincipalSha256) ||
     app.databaseSchemaTransition.runtimePrincipalSha256 ===
@@ -237,8 +373,12 @@ export async function collectCreditTestProof({
   for (const context of [imageEnv, databaseEnv]) {
     delete context.CREDIT_TEST_IMAGE_TOKEN;
     delete context.CREDIT_TEST_DATABASE_TOKEN;
+    delete context.DATABASE_PROVISIONER_URL;
+    delete context.IMAGE_GEN_DATABASE_PROVISIONER_URL;
   }
   delete databaseEnv.GITHUB_TOKEN;
+  if (execute("git", ["rev-parse", "HEAD"], imageEnv) !== runContext.sourceHead)
+    fail();
   const flyJson = (args, context) =>
     JSON.parse(execute("flyctl", args, context));
   const settled = () =>
@@ -319,27 +459,32 @@ export async function collectCreditTestProof({
   const target = databaseTarget();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 90_000);
-  const session = sessionFactory({
-    app: recovery.app,
-    machineId: target.machine.id,
-    signal: controller.signal,
-    env: databaseEnv,
-  });
+  let session;
   let state;
   try {
+    session = await sessionFactory({
+      recovery,
+      machine: target.machine,
+      url: env.DATABASE_PROVISIONER_URL,
+      signal: controller.signal,
+      env: databaseEnv,
+    });
     await session.initialize(controller.signal);
     state = await inspectLockedObsoletePrincipal(
       session,
       app.creditTestActivation.obsoletePrincipalSha256,
       controller.signal,
     );
+    await session.initialize(controller.signal);
   } finally {
     clearTimeout(timeout);
-    await session.close({ releaseLock: false });
+    await session?.close();
   }
+  const afterTarget = databaseTarget();
   if (
     JSON.stringify(settled()) !== JSON.stringify(baseline) ||
-    databaseTarget().machine.id !== target.machine.id ||
+    afterTarget.machine.id !== target.machine.id ||
+    afterTarget.machine.private_ip !== target.machine.private_ip ||
     JSON.stringify(
       selectCreditTestRuntimeMachines(
         flyJson(["machine", "list", "--app", app.app, "--json"], imageEnv),

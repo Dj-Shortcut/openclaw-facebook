@@ -2360,6 +2360,41 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
       "image-gen must read the explicit Test request without credentials or conditional skipping",
     );
   }
+  let dependencyIndex = requestIndex;
+  for (const [name, requirements] of [
+    [
+      "Prepare pinned package manager for Test inspection",
+      [
+        "uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4",
+        "version: 10.28.1",
+      ],
+    ],
+    [
+      "Install locked Test inspection dependencies without credentials",
+      [
+        "run: pnpm --dir apps/image-gen install --prod --frozen-lockfile --ignore-scripts",
+      ],
+    ],
+  ]) {
+    const steps = namedWorkflowStepBodies(creditWorkflow, name);
+    const step = steps[0];
+    const index = creditWorkflow.indexOf(`      - name: ${name}`);
+    if (
+      steps.length !== 1 ||
+      !step?.includes(
+        "if: steps.credit-test-request.outputs.active == 'true'",
+      ) ||
+      requirements.some((requirement) => !step.includes(requirement)) ||
+      /\n\s+env:|secrets\.|continue-on-error:/.test(step) ||
+      index <= dependencyIndex ||
+      index >= proofIndex
+    ) {
+      fail(
+        "image-gen must prepare locked Test inspection dependencies without credentials before proof in the deployment job",
+      );
+    }
+    dependencyIndex = index;
+  }
   for (const [name, operation] of [
     [proofName, "prove"],
     [consumeName, "consume"],
@@ -2378,6 +2413,9 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
       !step.includes(
         "CREDIT_TEST_DATABASE_TOKEN: ${{ secrets.FLY_DATABASE_MIGRATION_TOKEN }}",
       ) ||
+      !step.includes(
+        "DATABASE_PROVISIONER_URL: ${{ secrets.IMAGE_GEN_DATABASE_PROVISIONER_URL }}",
+      ) ||
       !step.includes("GITHUB_TOKEN: ${{ github.token }}") ||
       step.includes("continue-on-error:")
     ) {
@@ -2385,6 +2423,15 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
         "image-gen must require protected proof only for the explicit bounded Test request",
       );
     }
+  }
+  if (
+    occurrenceCount(creditWorkflow, "IMAGE_GEN_DATABASE_PROVISIONER_URL") !==
+      2 ||
+    occurrenceCount(creditWorkflow, "DATABASE_PROVISIONER_URL:") !== 2
+  ) {
+    fail(
+      "image-gen must expose the provisioner only to the two conditional Test-proof steps",
+    );
   }
   const workflowPath = path.join(rootDir, PRODUCTION_WORKFLOW_PATH);
   if (!fs.existsSync(workflowPath)) {
@@ -3256,7 +3303,7 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
     ],
     [
       /^\s*timeout-minutes: 3\s*$/gm,
-      17,
+      18,
       "must bound setup, rollback-plan, and diagnostic uploads",
     ],
     [
@@ -3266,7 +3313,7 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
     ],
     [
       /^\s*timeout-minutes: 5\s*$/gm,
-      11,
+      12,
       "must bound drift, trigger probing, rollback capture, and recovery dispatch",
     ],
     [
@@ -8688,13 +8735,14 @@ export function validateProductionRepository(rootDir = process.cwd()) {
     JSON.stringify(provisionerSecretHolders) !==
     JSON.stringify([
       "cleanup-image-gen-runtime-principals.yml",
+      "deploy-production.yml",
       "image-gen-schema-transition.yml",
       "retire-image-gen-credit-provisioners.yml",
       "stage-image-gen-credit-runtime-principal.yml",
     ])
   ) {
     fail(
-      "IMAGE_GEN_DATABASE_PROVISIONER_URL may exist only in the four protected image-gen database workflows",
+      "IMAGE_GEN_DATABASE_PROVISIONER_URL may exist only in the five protected image-gen database workflows",
     );
   }
   for (const [target, script] of [
