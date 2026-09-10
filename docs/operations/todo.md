@@ -136,6 +136,19 @@ release`, before any deployment or restart. The app-level Fly config
       remained 200. Capture rollback from the existing strict settled-live
       Machine/release evidence, not the shadow app config. Require an unchanged
       settlement tuple and the exact hash-reviewed restore file before retrying.
+    - Rollout `34353109061/1` passed the corrected rollback capture, then both
+      candidate and restore release commands rejected the staged database URL
+      with `getaddrinfo ENOTFOUND` on a bracketed IPv6 hostname. No app/worker
+      Machine was replaced: all four retained the reviewed bridge and identity;
+      exact restored-config verification plus health/readiness passed. The
+      staging probe had used an IPv4 tunnel, missing the production URL parsing
+      mismatch. Repair only the staged URL hostname via the protected hostname
+      repair workflow, preserving the restricted principal and password; prove
+      the exact schema and trigger probes through that production hostname
+      before the next rollout. Do not repeat schema migration or create another
+      principal. The separate recovery controller also needs its standalone
+      startup regression: its eager cleanup-helper import was unavailable in
+      the isolated recovery directory.
     - Public address check (2026-09-09): `app.leaderbot.live` serves the bot app;
       Fly lists its certificate as ready. `leaderbot.live` resolves to different
       A/AAAA addresses and timed out from the operator Mac. Verify/correct that

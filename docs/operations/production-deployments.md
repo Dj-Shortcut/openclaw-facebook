@@ -3,14 +3,20 @@
 Production has one owner: the reviewed Git repository through the manually
 dispatched `Deploy production` GitHub Actions workflow. `fly deploy` may replace
 or update Machines. Operators never use `fly machine run` as a deployment or
-migration shortcut. Only the protected schema workflow may create its one
-temporary, no-DNS Machine to prove that a fresh database snapshot restores.
-The fixed integrity check runs as that isolated Machine's entrypoint with
+migration shortcut. Temporary Machines are permitted only in two protected
+workflows: the schema workflow's one no-DNS snapshot-restore Machine, and the
+bounded staged-hostname repair described below. Neither exception permits an
+ad-hoc application deployment or schema change.
+The schema workflow's fixed integrity check runs as its isolated Machine's entrypoint with
 networking disabled in MySQL and automatic restart disabled. The workflow reads
 structured exit evidence from the exact Machines API endpoint; a stopped
 Machine alone is not success. It retains the Machine until verification, then
 the existing unconditional cleanup removes the Machine and restored volume.
 This restore test uses no SSH or Machine-exec credential.
+The separate hostname-repair workflow may start one attested, sleep-only,
+auto-destroying Machine with no services or volumes and no DNS registration.
+Its bounded SSH probe and cleanup are restricted to the exact staged-hostname
+repair procedure; it must leave the running application baseline unchanged.
 
 ## Ownership model
 
@@ -977,6 +983,50 @@ completed schema expansion or runtime build. The protected schema workflow
 remains the only permitted path for the reviewed 0017/0018 migrations; no
 application deploy, shell command, or ad-hoc Machine may change the production
 schema.
+
+### Repair a staged runtime database hostname
+
+Run `34353109061/1` (2026-09-09) failed before replacing any app/worker
+Machine. The attested runtime's mysql2 URL parser retained square brackets
+around the private IPv6 hostname, producing `getaddrinfo ENOTFOUND`. The earlier
+staging probe used the loopback tunnel instead of that production URL. Both
+the candidate and bridge release-command checks rejected the staged URL; all
+four original Machines retained the healthy bridge, and exact restored-config
+verification plus `/healthz` and `/readyz` passed.
+
+For this exact `runtime_reviewed` condition, use only the protected manual
+`repair-image-gen-runtime-database-host.yml` workflow from green reviewed main.
+Before dispatch, the responsible operator must reserve an exclusive secret-change
+window through cleanup: no direct Fly CLI/API/dashboard credential changes or
+external rotation jobs may run against this app. The required
+`exclusive_secret_window=true` input records that operational confirmation;
+the protected production approval must verify it. Repository mutation workflows
+already share the same concurrency group. Fly's secret update API has no
+compare-and-set field, so this is an operator coordination requirement, not an
+atomic vault lock. Do not dispatch when other writers cannot be excluded.
+It does not create or rotate a database principal, widen privileges, change
+schema, deploy the app, or enable payments. It starts one auto-destroying,
+ten-minute isolated Machine on the attested runtime with a sleep-only entrypoint,
+no services and no volumes. A bounded SSH command validates the staged account
+fingerprint, exact database Machine/private IP and database name, substitutes
+the exact `<machine-id>.vm.<database-app>.internal` hostname, and requires that
+DNS resolve to the same private IP. Both the exact artifact schema verifier
+and the synthetic, rolled-back billing-trigger probe must pass through that
+hostname. The resulting credential travels only in process memory from SSH
+stdout to `flyctl secrets import --stage` stdin, never in arguments, files,
+application logs or artifacts. A changed vault digest or deployment status
+observed immediately before staging aborts; that check alone cannot prevent a
+write racing the import. Cleanup polls for delayed probe creation for up to two
+minutes, removes only its exact random marker, and requires two separated absent
+observations. Unknown creation/cleanup remains a failed run, with the ten-minute
+auto-destroy as a backstop, not successful cleanup evidence. The unchanged
+production baseline is reproved only after confirmed cleanup. Only metadata is
+retained. An interrupted/ambiguous stage requires
+inspection, not an automatic replay or a new credential.
+
+Future principal staging uses the same machine-specific internal hostname.
+This is an address-format correction, not completion of the runtime rollout
+or permission to expose a checkout. Resume step 10 after successful repair.
 
 Use this exact sequence:
 

@@ -3,7 +3,6 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { assertProtectedCleanupWorkflow } from "./retire-image-gen-repair-exec-token.mjs";
 
 const MANIFEST_PATH = "deploy/production/apps.json";
 const PRODUCTION_WORKFLOW_PATH = ".github/workflows/deploy-production.yml";
@@ -103,6 +102,7 @@ const VERIFIED_FLYCTL_WORKFLOW_JOBS = Object.freeze({
   [SCHEMA_TRANSITION_WORKFLOW_PATH]: ["preflight", "expand"],
   [MIGRATION_SUPER_CLEANUP_WORKFLOW_PATH]: ["cleanup"],
   [RUNTIME_PRINCIPAL_STAGING_WORKFLOW_PATH]: ["stage"],
+  [".github/workflows/repair-image-gen-runtime-database-host.yml"]: ["repair"],
   [RUNTIME_PRINCIPAL_CLEANUP_WORKFLOW_PATH]: ["preflight", "mutate"],
   [CREDIT_PROVISIONER_RETIREMENT_WORKFLOW_PATH]: ["mutate"],
   [PRODUCTION_RECONCILIATION_WORKFLOW_PATH]: [
@@ -5832,7 +5832,22 @@ function validateCreditMigrationPrincipalRepair(rootDir) {
     "utf8",
   );
   try {
-    assertProtectedCleanupWorkflow(cleanupWorkflow, cleanupWorkflow);
+    // Recovery copies this controller as a standalone file. Load the optional
+    // cleanup validator only for full repository validation, never at startup.
+    execFileSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        `
+      import fs from "node:fs";
+      import { assertProtectedCleanupWorkflow } from ${JSON.stringify(new URL("./retire-image-gen-repair-exec-token.mjs", import.meta.url).href)};
+      const workflow = fs.readFileSync(0, "utf8");
+      assertProtectedCleanupWorkflow(workflow, workflow);
+    `,
+      ],
+      { input: cleanupWorkflow, stdio: ["pipe", "pipe", "pipe"] },
+    );
   } catch {
     fail(
       `${MIGRATION_SUPER_CLEANUP_WORKFLOW_PATH} must preserve protected revoke-only cleanup evidence`,
@@ -5946,7 +5961,7 @@ function validateRuntimePrincipalStagingWorkflow(rootDir) {
       "must verify the new principal only through the isolated local tunnel",
     ],
     [
-      'runtime_database_url="mysql://${runtime_principal}:${runtime_password}@[${RUNTIME_PRINCIPAL_DATABASE_PRIVATE_IP}]:3306/${RUNTIME_PRINCIPAL_DATABASE_NAME}"',
+      'runtime_database_url="mysql://${runtime_principal}:${runtime_password}@${RUNTIME_PRINCIPAL_DATABASE_MACHINE_ID}.vm.${RUNTIME_PRINCIPAL_DATABASE_APP}.internal:3306/${RUNTIME_PRINCIPAL_DATABASE_NAME}"',
       "must stage the Fly-reachable private database URL",
     ],
     [
