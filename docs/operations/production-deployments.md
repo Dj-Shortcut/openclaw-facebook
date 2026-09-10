@@ -1199,8 +1199,9 @@ rollback configuration with both checkout and paid admission off, and drain,
 notifications and reconciliation on. After any provider transport, a drain-off rollback is unsafe
 and fails the runtime's durable-activity guard.
 
-The following inspection remains a draft until disposable MySQL validation and
-the separately authorized inspection grant are complete. It uses the existing
+The following inspection was merged in PR #517 after disposable MySQL validation
+passed on PR run `34485670813` and main run `34486831012`. Production use still
+requires the separately authorized inspection grant. It uses the existing
 protected provisioner over one pinned connection through the exact selected
 Machine's Fly tunnel; the migration token supplies metadata/tunnel access, not
 database SSH. In addition to its unchanged base profile, the inspection requires
@@ -1216,7 +1217,7 @@ the account's locked/absent state before and after. It rejects unstable,
 incomplete, unsupported or unavailable observations. Transient connection IDs
 and total session counts are internal checks, not durable activation identities.
 The provisioner credential is present only in the two conditional proof steps
-and is removed from all Fly/runtime-probe subprocess environments. The draft
+and is removed from all Fly/runtime-probe subprocess environments. The inspection
 does not grant its own access or authorize applying that grant in production.
 
 Only this explicit request would run the additional privileged inspection in

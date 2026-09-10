@@ -298,23 +298,51 @@ release`, before any deployment or restart. The app-level Fly config
       only after reviewed merge; it authorizes no account deletion, new database
       permissions or payment activation. The previous automatic-review denial
       was not bypassed; the owner supplied the missing specific authorization.
-    - The bounded-Test alternative proposed in PR #517 is not merged or
-      activated. Its updated activation contract follows PR #522: no manual
-      tester registration, with automatic exact user/Page/privacy binding.
-      Its draft same-run inspection now uses the existing provisioner through
-      a pinned exact-Machine tunnel, not the migration token's unavailable SSH
-      path. The four-column metadata-only read grant is not applied or proven
-      in production. Disposable MySQL validation exposed an over-inclusive
-      foreground-thread census. Run `34482865305` proved the corrected census,
-      nine SQL classifier cases, restricted metadata access, active/locked
-      obsolete-session rejection, closed/dropped-account acceptance, cached
-      connections and incomplete-login rejection on MySQL 8.4.11. Its final
-      disabled-monitoring case failed in test setup, not in the census:
-      `thread/sql/one_connection` is not a `setup_instruments` row. That test
-      must use the actual foreground-thread controls and pass in a fresh run;
-      the full integration suite is not yet green. Do not repurpose another token, widen runtime
-      grants, substitute partial output or enable payment flags to bypass this.
-      The narrow inspection grant still needs specific authorization and review.
+    - PR #517 merged on 2026-09-10 as `7ba51d1a4f411fa18094ad42328718eb14dbeb22`.
+      Both the PR MySQL run `34485670813` and main run `34486831012` passed,
+      including the corrected exact-user disabled-monitoring fixture. This
+      supersedes the failed test setup in `34482865305`; do not repeat that
+      implementation. The existing same-run inspection uses the protected
+      provisioner through a pinned exact-Machine tunnel. It does not create
+      access or enable checkout. The four-column metadata read grant still
+      requires separately authorized application; no bot rights are widened.
+    - Read-only operator inspection at `2026-09-10T14:51:51Z` found zero obsolete
+      sessions in a complete stable census, but did not prove the obsolete
+      account locked or absent. The historical fingerprint covered `User@Host`;
+      it was mapped to the account's `User` fingerprint before the census.
+      The earlier mismatched-fingerprint lookup is not account-retirement
+      evidence. The sole managed provisioner had the valid base profile but
+      not the four-column extension. No account, grant, secret or
+      data was changed. This local diagnostic is not the protected same-run
+      activation proof and cannot replace its credential-consumer checks.
+    - Payment-processing preparation changes only notification, drain and
+      reconciliation flags to true; checkout, paid image use, legacy sales and
+      live billing remain false. It reuses the reviewed `f2fa9d60...` runtime,
+      not a new payment implementation. Metadata-only checks on all four
+      Machines confirmed the deployed Test key, matching distinct notification
+      key pairs and both required HMACs. The same database inspection found
+      control epoch 1 with commercial access disabled, outbox enabled and the
+      other three lanes disabled at epoch 1, with no pending/dead work.
+      All five durable provider-activity counts and both delivery-queue counts
+      were zero. These are pre-rollout observations, not readiness after the
+      flag change. After the protected rollout, verify operational heartbeats
+      and retain its actual configuration/hash as the payment-compatible
+      recovery baseline before enabling paid admission or checkout. Do not
+      substitute an invented deployment identity or the old drain-off config.
+      This configuration-only rollout also pins the actual current predecessor
+      `deploy-34484419576-1` and its exact protected-source config from
+      `a3d0f1f10572debde5540a1097e906d9b54e8309`, so the existing settled-live
+      gate can distinguish that current state from the proposed flag change.
+      The prior `1d80d6bc...` rollback allowlist remains unchanged. Neither
+      retained drain-off config is a post-payment recovery baseline.
+      Immediately before this first processing-only rollout, repeat the five
+      durable-activity and two queue counts and keep commercial control,
+      checkout, paid admission and legacy sales disabled throughout. Abort
+      this preparation path if any count is nonzero or another operator has
+      changed those controls. With no route or ledger, an unknown Mollie
+      callback may perform a provider read but cannot persist the first
+      financial record. Do not extend this empty-state rollback reasoning to
+      an installation with existing payments or exposed checkout.
     - Checkout configuration readback (2026-09-10): `MOLLIE_API_KEY` is present
       and deployed. After confirming no pending secrets and no existing signer,
       the owner-authorized test setup generated a fresh 32-byte
