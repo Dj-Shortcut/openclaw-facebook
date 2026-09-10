@@ -66,6 +66,9 @@ describe("CI change classification", () => {
     "scripts/provision-image-gen-credit-provisioner.test.mjs",
     "scripts/retire-image-gen-credit-provisioners.mjs",
     "scripts/retire-image-gen-credit-provisioners.test.mjs",
+    "scripts/credit-test-session-inventory.mjs",
+    "scripts/credit-test-session-inventory.test.mjs",
+    "scripts/credit-test-session-inventory.mysql.test.mjs",
   ])("runs image-gen and migration checks for %s", (file) => {
     expect(classifyCiChanges([file])).toEqual({
       imageGen: true,
