@@ -284,7 +284,7 @@ describe("readiness", () => {
     });
   });
 
-  it("runs drain-only readiness without requiring entitlement enforcement", async () => {
+  it("runs drain-only readiness without a portal delivery key or entitlement enforcement", async () => {
     for (const [name, value] of Object.entries({
       MOLLIE_BILLING_ENABLED: "false",
       MOLLIE_BILLING_DRAIN_ENABLED: "true",
@@ -306,6 +306,7 @@ describe("readiness", () => {
     })) {
       vi.stubEnv(name, value);
     }
+    vi.stubEnv("PORTAL_HANDOFF_TOKEN_SECRET", "");
     const databaseCheck = vi
       .spyOn(billingReadiness, "assertBillingDatabaseReadiness")
       .mockResolvedValue();
@@ -317,6 +318,12 @@ describe("readiness", () => {
     expect(databaseCheck).toHaveBeenCalledWith("test", {
       requireRuntimeHeartbeat: true,
     });
+    databaseCheck.mockClear();
+    vi.stubEnv("BILLING_PROFILE_EVIDENCE_HMAC_SECRET", "");
+    await expect(check?.check()).rejects.toThrow(
+      "BILLING_PROFILE_EVIDENCE_HMAC_SECRET is missing or too short"
+    );
+    expect(databaseCheck).not.toHaveBeenCalled();
   });
 
   it("checks the exact paid-credit schema and pilot boundary", async () => {

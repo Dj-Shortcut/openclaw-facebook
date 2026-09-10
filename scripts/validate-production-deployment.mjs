@@ -6375,7 +6375,7 @@ function validateCreditProvisionerRetirementWorkflow(rootDir) {
       "must require the exact reviewed worker Machine count",
     ],
     [
-      "EXPECTED_RUNTIME_PRINCIPAL_SHA256=$EXPECTED_RUNTIME_PRINCIPAL_SHA256 node /app/dist/billing-trigger-runtime-preflight.cjs",
+      '--command "env EXPECTED_RUNTIME_PRINCIPAL_SHA256=$EXPECTED_RUNTIME_PRINCIPAL_SHA256 node /app/dist/billing-trigger-runtime-preflight.cjs"',
       "must reprove the restricted principal on every Machine",
     ],
     [
@@ -6547,7 +6547,7 @@ function validateCreditProvisionerRetirementWorkflow(rootDir) {
     'for machine_id in "${machine_ids[@]}"; do',
   );
   const preflightCommand = topologyStep?.indexOf(
-    "EXPECTED_RUNTIME_PRINCIPAL_SHA256=$EXPECTED_RUNTIME_PRINCIPAL_SHA256 node /app/dist/billing-trigger-runtime-preflight.cjs",
+    '--command "env EXPECTED_RUNTIME_PRINCIPAL_SHA256=$EXPECTED_RUNTIME_PRINCIPAL_SHA256 node /app/dist/billing-trigger-runtime-preflight.cjs"',
   );
   const loopEnd = topologyStep?.indexOf("          done", loopStart ?? -1);
   if (
@@ -6641,7 +6641,7 @@ function validateRuntimePrincipalCleanupWorkflow(rootDir) {
       "must derive the exact successor count from reviewed desiredScale",
     ],
     [
-      "EXPECTED_RUNTIME_PRINCIPAL_SHA256=$EXPECTED_RUNTIME_PRINCIPAL_SHA256 node /app/dist/billing-trigger-runtime-preflight.cjs",
+      '--command "env EXPECTED_RUNTIME_PRINCIPAL_SHA256=$EXPECTED_RUNTIME_PRINCIPAL_SHA256 node /app/dist/billing-trigger-runtime-preflight.cjs"',
       "must reprove the exact principal and DML boundary on every Machine",
     ],
     [
@@ -8885,13 +8885,14 @@ export function validateProductionRepository(rootDir = process.cwd()) {
       if (
         creditExposureEnabled &&
         String(envAssignments.MOLLIE_MODE ?? "") === "test" &&
+        Object.values(testPilotValues).some((value) => value !== "") &&
         (!canonicalDatabaseId(testPilotValues.channelConnectionId) ||
           !canonicalDatabaseId(testPilotValues.bindingEpoch) ||
           !canonicalDatabaseId(testPilotValues.privacyEpoch) ||
           !/^[a-f0-9]{64}$/.test(testPilotValues.userKeyHash))
       ) {
         fail(
-          `${app.config} must pin Test Mode paid credits to one hashed Messenger user and exact Page binding`,
+          `${app.config} must not contain a partial or malformed legacy tester pin`,
         );
       }
       if (
