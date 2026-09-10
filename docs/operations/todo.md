@@ -149,6 +149,14 @@ release`, before any deployment or restart. The app-level Fly config
       principal. The separate recovery controller also needs its standalone
       startup regression: its eager cleanup-helper import was unavailable in
       the isolated recovery directory.
+    - Host-repair run `34457016452/1` (2026-09-10) stopped at
+      `runtime_database_host_probe_create_failed`, before URL staging, and did
+      not establish cleanup completion. A subsequent read-only reproduction
+      with pinned flyctl 0.4.85 showed that its image resolver duplicates the
+      reviewed digest suffix. Correct the probe creation request to preserve
+      that exact digest, retain all existing isolation/cleanup guards, and
+      rerun only after reviewed main CI. This is not a successful database
+      repair or payment test.
     - Public address check (2026-09-09): `app.leaderbot.live` serves the bot app;
       Fly lists its certificate as ready. `leaderbot.live` resolves to different
       A/AAAA addresses and timed out from the operator Mac. Verify/correct that
