@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   registerSchedulerTenant: vi.fn(),
   enableSchedulerTenant: vi.fn(),
   disableSchedulerTenant: vi.fn(),
+  legacyBillingEnabled: vi.fn(),
   listOperatorNotifications: vi.fn(),
   acknowledgeOperatorNotification: vi.fn(),
   listCreditReservationTransportReviews: vi.fn(),
@@ -41,6 +42,7 @@ vi.mock("./creditReservationOperatorResolution", () => ({
 
 vi.mock("./config", () => ({
   getConfiguredBillingMode: () => "test",
+  isMollieBillingEnabled: mocks.legacyBillingEnabled,
 }));
 
 import { billingAdminRouter } from "./billingAdminRouter";
@@ -136,6 +138,7 @@ describe("payment controls without a portal buyer profile", () => {
 
   beforeEach(() => {
     vi.resetAllMocks();
+    mocks.legacyBillingEnabled.mockReturnValue(false);
     mocks.registerSchedulerTenant.mockResolvedValue(undefined);
     mocks.enableSchedulerTenant.mockResolvedValue({ executionEpoch: 2 });
   });
@@ -167,6 +170,23 @@ describe("payment controls without a portal buyer profile", () => {
       expect(mocks.enableSchedulerTenant).not.toHaveBeenCalled();
     }
   );
+
+  it("does not initialize unattested controls when legacy sales are enabled", async () => {
+    mocks.legacyBillingEnabled.mockReturnValue(true);
+    mocks.enableSchedulerTenant.mockRejectedValueOnce(
+      new Error("billing execution control is not provisioned")
+    );
+    await expect(createCaller().enableSchedulerTenant(input)).rejects.toThrow(
+      "billing execution control is not provisioned"
+    );
+    expect(mocks.registerSchedulerTenant).not.toHaveBeenCalled();
+    expect(mocks.attestProfile).not.toHaveBeenCalled();
+    expect(mocks.enableSchedulerTenant).toHaveBeenCalledWith({
+      ...input,
+      mode: "test",
+      actorUserId: admin.id,
+    });
+  });
 
   it("does not activate when initialization fails", async () => {
     mocks.registerSchedulerTenant.mockRejectedValueOnce(

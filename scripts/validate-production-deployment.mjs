@@ -8885,13 +8885,14 @@ export function validateProductionRepository(rootDir = process.cwd()) {
       if (
         creditExposureEnabled &&
         String(envAssignments.MOLLIE_MODE ?? "") === "test" &&
+        Object.values(testPilotValues).some((value) => value !== "") &&
         (!canonicalDatabaseId(testPilotValues.channelConnectionId) ||
           !canonicalDatabaseId(testPilotValues.bindingEpoch) ||
           !canonicalDatabaseId(testPilotValues.privacyEpoch) ||
           !/^[a-f0-9]{64}$/.test(testPilotValues.userKeyHash))
       ) {
         fail(
-          `${app.config} must pin Test Mode paid credits to one hashed Messenger user and exact Page binding`,
+          `${app.config} must not contain a partial or malformed legacy tester pin`,
         );
       }
       if (

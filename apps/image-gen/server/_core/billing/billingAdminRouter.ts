@@ -6,7 +6,7 @@ import {
   getWorkspaceBillingProfileAttestationStatus,
   revokeWorkspaceBillingProfile,
 } from "./billingProfileStore";
-import { getConfiguredBillingMode } from "./config";
+import { getConfiguredBillingMode, isMollieBillingEnabled } from "./config";
 import {
   disableBillingSchedulerTenant,
   enableBillingSchedulerTenant,
@@ -155,7 +155,9 @@ export const billingAdminRouter = router({
       const mode = getConfiguredBillingMode();
       // Initialize disabled payment controls without creating or attesting a
       // portal buyer profile. Activation still requires the audited epoch fence.
-      await registerBillingSchedulerTenant(input.workspaceId, mode);
+      if (!isMollieBillingEnabled()) {
+        await registerBillingSchedulerTenant(input.workspaceId, mode);
+      }
       return {
         success: true as const,
         ...(await enableBillingSchedulerTenant({
