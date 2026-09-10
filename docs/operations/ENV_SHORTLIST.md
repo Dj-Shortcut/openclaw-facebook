@@ -120,25 +120,21 @@ Fly.
 | `BILLING_SUPPORT_EMAIL`                  | Customer billing support              | Public support address, not a secret.                                                                                                                                                                                                                                                    |
 | `MOLLIE_LIVE_BILLING_ENABLED`            | Independent live kill switch          | Defaults off; may be `true` only with `MOLLIE_MODE=live` after GO.                                                                                                                                                                                                                       |
 | `MOLLIE_RECONCILIATION_ENABLED`          | Daily state reconciliation            | Defaults enabled; disabling requires an incident/change record.                                                                                                                                                                                                                          |
-| `MOLLIE_BILLING_SCHEDULER_MODE`          | Retained billing-drain lane           | Must be explicit: `pilot_pin` for the internal owner boundary; `multi_tenant` is legacy compatibility only. Readiness verifies control/lane epochs, heartbeats and dead letters.                                                                                                        |
+| `MOLLIE_BILLING_SCHEDULER_MODE`          | Retained billing-drain lane           | Must be explicit: `pilot_pin` for the internal owner boundary; `multi_tenant` is legacy compatibility only. Readiness verifies control/lane epochs, heartbeats and dead letters.                                                                                                         |
 | `MOLLIE_BILLING_WORKER_WORKSPACE_ID`     | Internal owner boundary               | Required and positive only with `pilot_pin`; must be unset with legacy `multi_tenant` compatibility mode.                                                                                                                                                                                |
 | `MOLLIE_WEBHOOK_RATE_LIMIT_PER_MINUTE`   | Dedicated classic-webhook protection  | Defaults to 6000 per source IP/minute so the shared app limiter cannot suppress Mollie delivery.                                                                                                                                                                                         |
 
-The direct premium-credit Test Mode flags have an additional single-tester
-barrier. Before either `MESSENGER_PAID_CREDITS_ENABLED` or
+The direct premium-credit Test Mode journey requires no manual tester
+registration. Before `MESSENGER_PAID_CREDITS_ENABLED` or
 `MOLLIE_CREDIT_CHECKOUT_ENABLED` can be enabled, configure the exact non-secret
-`MOLLIE_CREDIT_WORKSPACE_ID`, `MOLLIE_CREDIT_TEST_CHANNEL_CONNECTION_ID`,
-`MOLLIE_CREDIT_TEST_BINDING_EPOCH` and `MOLLIE_CREDIT_TEST_PRIVACY_EPOCH`.
-Configure `MOLLIE_CREDIT_TEST_USER_KEY_HASH` as the lowercase SHA-256 of the
-UTF-8 domain `leaderbot.credit-checkout-test-user.v1\0` followed by the
-canonical pseudonymous Messenger user key. Compute it only in the protected
-operator environment. Never copy the underlying user key or raw PSID into
-Fly config, docs, chat, logs or evidence. Startup and readiness reject missing
-or partial pins; prove the current pin separately in the protected operator
-environment before activation. Request/admission/session/provider checks reject
-a changed Page/privacy boundary or another user before wallet, intent or
-provider work. Readiness alone does not compare the configured pin to current
-user records.
+`MOLLIE_CREDIT_WORKSPACE_ID` and complete the reviewed activation gates. Leave
+`MOLLIE_CREDIT_TEST_CHANNEL_CONNECTION_ID`, `MOLLIE_CREDIT_TEST_BINDING_EPOCH`,
+`MOLLIE_CREDIT_TEST_PRIVACY_EPOCH` and `MOLLIE_CREDIT_TEST_USER_KEY_HASH` empty.
+The production activation contract rejects a manual tester restriction. The
+application honors an older complete restriction only for compatibility;
+partially specified restrictions fail closed. Each checkout and wallet remains
+automatically bound to the real Messenger user and current Page/privacy
+boundary. No user key or raw PSID belongs in Fly config, docs, chat or logs.
 
 `MESSENGER_PAID_IMAGE_PROVIDER_MAX_COST_USD` is also mandatory before paid
 credits can be enabled. It is the reviewed conservative maximum reserved

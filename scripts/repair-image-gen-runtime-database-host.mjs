@@ -99,10 +99,131 @@ function executeCommand(command, args, options = {}) {
   }).trim();
 }
 
+// flyctl 0.4.85's image resolver appends a second @sha256 suffix for the
+// reviewed digest. Submit the exact attested image to the fixed Machines API
+// instead; keep the existing app-scoped credential and never retry a create.
+export async function createRuntimeHostProbe(
+  { name, region, image, token },
+  fetchImpl = fetch,
+) {
+  if (
+    !/^dbhost-[a-f0-9]{12}$/.test(name) ||
+    !/^[a-z]{3}$/.test(region) ||
+    !/^registry\.fly\.io\/leaderbot-fb-image-gen@sha256:[a-f0-9]{64}$/.test(
+      image,
+    ) ||
+    typeof token !== "string" ||
+    !token.trim()
+  )
+    throw new Error("runtime_database_host_probe_create_input_rejected");
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 60000);
+  try {
+    const response = await fetchImpl(
+      "https://api.machines.dev/v1/apps/leaderbot-fb-image-gen/machines",
+      {
+        method: "POST",
+        redirect: "error",
+        signal: controller.signal,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          name,
+          region,
+          skip_launch: false,
+          skip_service_registration: true,
+          config: {
+            image,
+            init: { entrypoint: ["/bin/sleep"], cmd: ["600"] },
+            services: [],
+            mounts: [],
+            env: {},
+            auto_destroy: true,
+            restart: { policy: "no" },
+            dns: { skip_registration: true },
+            guest: { cpu_kind: "shared", cpus: 1, memory_mb: 256 },
+            metadata: { leaderbot_database_host_probe: name },
+          },
+        }),
+      },
+    );
+    // Response bodies may contain sensitive platform diagnostics. Do not read
+    // them: the existing independent inventory validates the exact new probe.
+    await response.body?.cancel();
+    if (!response.ok) {
+      const category = [401, 403].includes(response.status)
+        ? "access_denied"
+        : [400, 422].includes(response.status)
+          ? "config_rejected"
+          : "failed";
+      throw new Error(`runtime_database_host_probe_create_${category}`);
+    }
+  } catch (error) {
+    throw new Error(
+      controller.signal.aborted
+        ? "runtime_database_host_probe_create_timeout"
+        : failureMarker(error) === "runtime_database_host_repair_failed"
+          ? "runtime_database_host_probe_create_failed"
+          : failureMarker(error),
+    );
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 function failureMarker(error) {
   return /^runtime_database_host_[a-z_]+$/.test(error?.message ?? "")
     ? error.message
     : "runtime_database_host_repair_failed";
+}
+
+// Inspect captured subprocess output only in memory. Never attach it as a cause:
+// SSH stdout can contain the repaired database URL, even on a failed command.
+export function classifyRuntimeHostFailure(error, stage) {
+  const marker = failureMarker(error);
+  if (marker !== "runtime_database_host_repair_failed") return marker;
+  if (
+    !new Set([
+      "probe_create",
+      "probe_inventory",
+      "probe_start",
+      "probe_verify",
+      "secret_read",
+      "secret_stage",
+    ]).has(stage)
+  )
+    return marker;
+  if (stage === "probe_create") {
+    const stderr =
+      typeof error?.stderr === "string"
+        ? error.stderr
+        : Buffer.isBuffer(error?.stderr)
+          ? error.stderr.toString("utf8")
+          : "";
+    if (error?.code === "ETIMEDOUT")
+      return "runtime_database_host_probe_create_timeout";
+    if (
+      /not authorized|unauthorized|permission denied|access denied/i.test(
+        stderr,
+      )
+    )
+      return "runtime_database_host_probe_create_access_denied";
+    if (
+      /invalid machine config|invalid restart provided|unknown flag/i.test(
+        stderr,
+      )
+    )
+      return "runtime_database_host_probe_create_config_rejected";
+    if (
+      /failed to (?:pull|resolve) image|manifest unknown|image not found/i.test(
+        stderr,
+      )
+    )
+      return "runtime_database_host_probe_create_image_unavailable";
+  }
+  return `runtime_database_host_${stage}_failed`;
 }
 
 export async function cleanupRuntimeHostProbe({ name, probeId, runFly, wait }) {
@@ -277,36 +398,20 @@ export async function repairRuntimeDatabaseHost(
   let probeId;
   let result;
   let primaryFailure;
+  let failureStage = "probe_create";
   try {
     // No app entrypoint, ports, volumes, workers or provider transport. The
     // deadline plus auto-destroy also bounds cleanup after operator interruption.
-    runFly([
-      "machine",
-      "run",
-      app.reviewedImage,
-      "600",
-      "--app",
-      APP,
-      "--name",
-      name,
-      "--region",
-      app.databaseRecovery.region,
-      "--entrypoint",
-      "/bin/sleep",
-      "--rm",
-      "--detach",
-      "--restart",
-      "no",
-      "--machine-config",
-      JSON.stringify({ services: [], mounts: [], env: {} }),
-      "--skip-dns-registration",
-      "--vm-memory",
-      "256",
-      "--vm-cpus",
-      "1",
-      "--metadata",
-      `leaderbot_database_host_probe=${name}`,
-    ]);
+    await createRuntimeHostProbe(
+      {
+        name,
+        region: app.databaseRecovery.region,
+        image: app.reviewedImage,
+        token: process.env.FLY_API_TOKEN,
+      },
+      dependencies.fetch,
+    );
+    failureStage = "probe_inventory";
     const machines = JSON.parse(
       runFly(["machine", "list", "--app", APP, "--json"]),
     );
@@ -326,6 +431,7 @@ export async function repairRuntimeDatabaseHost(
       JSON.stringify(probes[0].config.init?.cmd) !== '["600"]'
     )
       throw new Error("runtime_database_host_probe_config_rejected");
+    failureStage = "probe_start";
     runFly([
       "machine",
       "wait",
@@ -338,6 +444,7 @@ export async function repairRuntimeDatabaseHost(
       "45s",
     ]);
     const command = `node -e '${buildRuntimeHostProbe(binding).replaceAll("'", "'\\''")}'`;
+    failureStage = "probe_verify";
     const repaired = runFly(
       [
         "ssh",
@@ -357,6 +464,7 @@ export async function repairRuntimeDatabaseHost(
     // the required operator-exclusive window, not this read, excludes direct
     // external writers between comparison and import. Repository workflows
     // share the production-deploy-image-gen concurrency group.
+    failureStage = "secret_read";
     const current = JSON.parse(
       runFly(["secrets", "list", "--app", APP, "--json"]),
     ).filter((row) => row.name === "DATABASE_URL");
@@ -366,6 +474,7 @@ export async function repairRuntimeDatabaseHost(
       current[0].digest !== secret[0].digest
     )
       throw new Error("runtime_database_host_secret_changed");
+    failureStage = "secret_stage";
     if (stage)
       runFly(["secrets", "import", "--app", APP, "--stage"], {
         input: `DATABASE_URL=${repaired}\n`,
@@ -380,7 +489,7 @@ export async function repairRuntimeDatabaseHost(
       exclusiveSecretWindowConfirmed: true,
     };
   } catch (error) {
-    primaryFailure = failureMarker(error);
+    primaryFailure = classifyRuntimeHostFailure(error, failureStage);
   }
   const cleanupDiagnostics = await cleanupRuntimeHostProbe({
     name,

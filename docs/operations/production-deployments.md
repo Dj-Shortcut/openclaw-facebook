@@ -40,6 +40,32 @@ image-gen lockfile for the Actions dependency cache; the image-gen release
 step therefore reuses packages without changing the immutable artifact or
 production approval gates.
 
+### Credit readiness without the retired customer portal
+
+With legacy sales (`MOLLIE_BILLING_ENABLED`) disabled, credit startup and
+`/readyz` do not require a workspace buyer-profile attestation or the legacy
+`PORTAL_HANDOFF_TOKEN_SECRET`. Preserve the existing
+`BILLING_PROFILE_EVIDENCE_HMAC_SECRET`: despite its historical name, it also
+signs credit reservation recovery evidence and remains required.
+Credit checkout uses its dedicated signed capability; it never sends a user
+through a portal login. Legacy sales, if explicitly enabled on a retained
+compatibility deployment, still require their original profile and keys.
+
+The existing authenticated operator `billingAdmin.enableSchedulerTenant` action
+initializes missing, commercially disabled payment controls only when legacy
+sales are disabled, before applying
+its audited activation with the expected execution epoch. Do not create a fake
+consumer attestation to initialize credit processing. No customer login or new
+management UI is required; this retains the existing operator-only authority.
+
+This does not remove the audited payment execution controls, worker lanes and
+heartbeats, notification checks, credential generation identity, spend caps,
+or credit schema/privilege checks. Do not delete old handoff secrets or financial
+records until their retained work is drained or retired under its own runbook.
+Verify both startup and `/readyz` on the reviewed image; a code change alone is
+not proof of activation, credit delivery, or a successful payment test. Rollback
+must use the reviewed 0018 image/config and retain payment recovery workers.
+
 ### Owner Page token rotation
 
 The reviewed image-gen runtime contains
@@ -1024,6 +1050,15 @@ production baseline is reproved only after confirmed cleanup. Only metadata is
 retained. An interrupted/ambiguous stage requires
 inspection, not an automatic replay or a new credential.
 
+Probe creation submits the attested image digest unchanged to the fixed Fly
+Machines API using the existing image-gen app-scoped deploy token. A read-only
+`--build-only` reproduction on pinned flyctl 0.4.85 showed its image resolver
+appending a second `@sha256:` suffix to this digest reference. The helper avoids
+that resolver only for creation; all inventory, verification, staging and cleanup
+guards remain. Creation has a sixty-second timeout, rejects redirects, never
+automatically retries, and discards response bodies. No broader token, database
+privilege or mutable image tag is required by this correction.
+
 Future principal staging uses the same machine-specific internal hostname.
 This is an address-format correction, not completion of the runtime rollout
 or permission to expose a checkout. Resume step 10 after successful repair.
@@ -1098,6 +1133,16 @@ trusted production artifact` with `image-gen-bridge`. The workflow proves
     through the staged principal on every desired app and worker Machine before
     `/healthz` and `/readyz` may complete the rollout. A failed rollout restores
     the bridge and its captured configuration; the 0018 schema remains in place.
+    Fly SSH executes the command directly, not through a shell: pass the
+    principal fingerprint using `env EXPECTED_RUNTIME_PRINCIPAL_SHA256=... node ...`,
+    never a bare leading assignment. Run `34459197149/1` reached all four
+    runtime Machines but that malformed probe command triggered a verified
+    bridge restore before principal/readiness evidence could be completed.
+    The corrected rollout `34461561679/1` passed on all four Machines under
+    `deploy-34461561679-1`. Its final `image-gen-release-34461561679-1` artifact
+    (not the earlier rollback artifact) contains the completed
+    `runtime-principal-cutover.json` with health/readiness no longer pending.
+    This proves runtime cutover, not checkout activation or a Mollie payment.
 11. **Settle the final runtime before principal cleanup.** Record a healthy
     final-schema runtime predecessor and move to `complete` only in a later reviewed
     manifest PR that removes the bridge from the rollback allowlist and retains
@@ -1105,6 +1150,14 @@ trusted production artifact` with `image-gen-bridge`. The workflow proves
     while the only rollback is the migration bridge. This settled manifest is a
     prerequisite for the protected obsolete-principal cleanup workflow; moving
     to `complete` does not itself enable paid credits or checkout.
+    The owner approved this exact rollback-plan change on 2026-09-10. Its
+    replacement is runtime `1d80d6bce5fd...`, built from
+    `80703910131e227d1d683b1f5b6287c8bff241de`, with settled identity
+    `deploy-34461561679-1`. The retained config has SHA-256
+    `4d9c56fd92f7694c84365f8317117d2335017ac0efb963b78dd2799e22d47697`.
+    This approval does not authorize the account-retirement operations below.
+    Their per-Machine probes must also use `env` before the principal assignment;
+    both manual cleanup workflows and their exact-command checks enforce this.
 12. **Retire the obsolete broad runtime principal.** Only after every desired
     Machine reproves the restricted principal under the settled deployment
     identity, run the protected cleanup workflow to lock the exact obsolete
@@ -1129,7 +1182,7 @@ trusted production artifact` with `image-gen-bridge`. The workflow proves
     this sequence with manual SQL or an unreviewed secret-field edit.
 14. **Review bounded Test Mode exposure separately.** Irreversible credential
     retirement remains incomplete until both cleanup paths have metadata-only
-    success evidence. One pinned tester may exercise the existing Test offer
+    success evidence. Eligible Messenger users may exercise the existing Test offer
     before those drops only through the explicit activation contract below.
     The two 24-hour recovery windows before deletion remain unchanged. Schema
     state `complete`, a successful historical lock, and this sequencing
@@ -1146,11 +1199,19 @@ rollback configuration with both checkout and paid admission off, and drain,
 notifications and reconciliation on. After any provider transport, a drain-off rollback is unsafe
 and fails the runtime's durable-activity guard.
 
-Only this explicit request runs the additional privileged inspection in
+The following inspection is a draft contract, not an executable activation
+path yet. The current implementation attempts database SSH with a migration
+token that does not authorize it, and the existing protected provisioner lacks
+complete cross-user session visibility. Do not enable the request until a
+separately authorized, reviewed and tested metadata-only inspection replaces
+that path. Do not add broader permissions to the bot or substitute a different
+token merely to make this draft pass.
+
+Only this explicit request would run the additional privileged inspection in
 `Deploy production`; ordinary dark deployments do not receive those additional
-credentials or perform those checks. `image-gen-credit-test-proof.mjs` uses
-the existing protected app and database credentials, never grants or creates
-access, and never changes accounts or reads customer rows. The database
+credentials or perform those checks. `image-gen-credit-test-proof.mjs` must
+use only explicitly authorized access, never grant or create
+access, and never change accounts or read customer rows. The database
 account/session checks are read-only. The app-side check reuses the existing
 reviewed billing-trigger probe: it performs synthetic metadata INSERT/UPDATE
 operations and rolls them back. It is not a wholly read-only SQL probe, and
@@ -1180,7 +1241,7 @@ contain only fixed proof markers. A successful proof is not payment or image
 delivery evidence.
 
 The activation contract requires `MOLLIE_MODE=test`, legacy and live billing
-off, drain/notification/reconciliation on, the exact tester pins below, and
+off, drain/notification/reconciliation on, no manual tester restriction, and
 the existing offer and cost caps. Enable paid admission before checkout.
 Use the existing authenticated admin `billingAdmin.enableSchedulerTenant`
 operation with the observed workspace/mode execution epoch and a fresh request
@@ -1208,21 +1269,18 @@ key. Never remove a predecessor until no non-erased wallet or
 provider-resolution proof uses it; removal is a fail-closed incident, not a
 wallet migration.
 
-Test Mode exposure is additionally limited to one approved pseudonymous
-Messenger subject on one exact Page binding. In the reviewed activation change,
-set `MOLLIE_CREDIT_TEST_CHANNEL_CONNECTION_ID`,
-`MOLLIE_CREDIT_TEST_BINDING_EPOCH` and `MOLLIE_CREDIT_TEST_PRIVACY_EPOCH` to the
-current non-secret database boundary. Compute
-`MOLLIE_CREDIT_TEST_USER_KEY_HASH` only in the protected operator environment as
-SHA-256 over the UTF-8 domain `leaderbot.credit-checkout-test-user.v1\0`
-followed by the canonical pseudonymous user key. Retain only the hash; never
-place the source user key or PSID in config, documentation, evidence, chat or
-logs. Startup/readiness reject absent or malformed pins before credit database
-checks; the request/admission/session/provider paths enforce the current Page
-and privacy boundary. Readiness does not itself compare the pin to current
-user records: independently prove its freshness in the protected operator
-environment immediately before activation. A different user in the same owner workspace remains on the ordinary
-free-quota response and cannot create a wallet, intent or provider operation.
+The owner-directed Test Mode journey requires no tester registration. In the
+reviewed activation change, leave `MOLLIE_CREDIT_TEST_CHANNEL_CONNECTION_ID`,
+`MOLLIE_CREDIT_TEST_BINDING_EPOCH`, `MOLLIE_CREDIT_TEST_PRIVACY_EPOCH` and
+`MOLLIE_CREDIT_TEST_USER_KEY_HASH` all empty. Eligible Messenger users on the
+owner Page may then use the same checkout path. Each intent, capability,
+payment and wallet still binds the actual user, channel connection, Page
+binding and privacy epoch automatically; this is not an anonymous shared
+wallet or an unbound payment URL. Consent, the messaging window, quota and
+budget admission remain mandatory. For compatibility an existing complete
+four-field tester restriction is honored; partial or malformed restrictions
+fail closed. The source change alone does not activate checkout: the protected
+activation, payment workers and production evidence gates above remain open.
 
 Set the non-secret `MESSENGER_PAID_IMAGE_PROVIDER_MAX_COST_USD=1.00` in the same
 reviewed Test Mode activation. This is a conservative reservation against the

@@ -822,7 +822,7 @@ jobs:
             uploaded_machines+=("$machine_id")
             probe_output="$(timeout --signal=TERM 45s flyctl ssh console \
               --app leaderbot-fb-image-gen --machine "$machine_id" --quiet \
-              --command "EXPECTED_RUNTIME_PRINCIPAL_SHA256=$expected_principal_sha256 node $remote_probe")"
+              --command "env EXPECTED_RUNTIME_PRINCIPAL_SHA256=$expected_principal_sha256 node $remote_probe")"
             test "$probe_output" = "Billing trigger runtime preflight passed."
             timeout --signal=TERM 30s flyctl ssh console \
               --app leaderbot-fb-image-gen --machine "$machine_id" --quiet \

@@ -295,7 +295,7 @@ jobs:
           for machine_id in "${machine_ids[@]}"; do
             output="$(timeout --signal=TERM 45s flyctl ssh console \
               --app leaderbot-fb-image-gen --machine "$machine_id" --quiet \
-              --command "EXPECTED_RUNTIME_PRINCIPAL_SHA256=$EXPECTED_RUNTIME_PRINCIPAL_SHA256 node /app/dist/billing-trigger-runtime-preflight.cjs")"
+              --command "env EXPECTED_RUNTIME_PRINCIPAL_SHA256=$EXPECTED_RUNTIME_PRINCIPAL_SHA256 node /app/dist/billing-trigger-runtime-preflight.cjs")"
             test "$output" = "Billing trigger runtime preflight passed."
           done
           health_body="$(mktemp)"

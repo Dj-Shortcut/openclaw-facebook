@@ -81,10 +81,10 @@ function fixture() {
     MOLLIE_BILLING_DRAIN_ENABLED: "true",
     BILLING_NOTIFICATION_PLANE_ENABLED: "true",
     MOLLIE_RECONCILIATION_ENABLED: "true",
-    MOLLIE_CREDIT_TEST_CHANNEL_CONNECTION_ID: "2",
-    MOLLIE_CREDIT_TEST_BINDING_EPOCH: "3",
-    MOLLIE_CREDIT_TEST_PRIVACY_EPOCH: "4",
-    MOLLIE_CREDIT_TEST_USER_KEY_HASH: "c".repeat(64),
+    MOLLIE_CREDIT_TEST_CHANNEL_CONNECTION_ID: "",
+    MOLLIE_CREDIT_TEST_BINDING_EPOCH: "",
+    MOLLIE_CREDIT_TEST_PRIVACY_EPOCH: "",
+    MOLLIE_CREDIT_TEST_USER_KEY_HASH: "",
   };
   for (const [key, value] of Object.entries(changes))
     config = config.replace(
@@ -233,7 +233,7 @@ function collectorFixture(overrides = {}) {
 }
 
 describe("bounded credit Test activation", () => {
-  it("accepts an explicit scoped Test contract with final runtime and draining rollback", () => {
+  it("accepts Test Mode without tester registration with final runtime and draining rollback", () => {
     const f = fixture();
     expect(validateCreditTestActivation(f.app, f.configEnv, f.root)).toBe(true);
   });
@@ -244,7 +244,9 @@ describe("bounded credit Test activation", () => {
     ["drain", "MOLLIE_BILLING_DRAIN_ENABLED", "false"],
     ["notifications", "BILLING_NOTIFICATION_PLANE_ENABLED", "false"],
     ["reconciliation", "MOLLIE_RECONCILIATION_ENABLED", "false"],
-    ["tester hash", "MOLLIE_CREDIT_TEST_USER_KEY_HASH", ""],
+    ["manual tester hash", "MOLLIE_CREDIT_TEST_USER_KEY_HASH", "c".repeat(64)],
+    ["manual tester channel", "MOLLIE_CREDIT_TEST_CHANNEL_CONNECTION_ID", "2"],
+    ["manual tester privacy epoch", "MOLLIE_CREDIT_TEST_PRIVACY_EPOCH", "4"],
     ["binding", "MOLLIE_CREDIT_TEST_BINDING_EPOCH", "0"],
     ["cost policy", "MESSENGER_PAID_IMAGE_PROVIDER_MAX_COST_USD", "0.01"],
     ["daily cap", "MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD", "100.00"],
