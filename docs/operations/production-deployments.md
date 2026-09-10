@@ -1200,8 +1200,13 @@ notifications and reconciliation on. After any provider transport, a drain-off r
 and fails the runtime's durable-activity guard.
 
 The following inspection was merged in PR #517 after disposable MySQL validation
-passed on PR run `34485670813` and main run `34486831012`. Production use still
-requires the separately authorized inspection grant. It uses the existing
+passed on PR run `34485670813` and main run `34486831012`. The owner separately
+authorized the exact inspection grant; application and effective-grant readback
+succeeded on 2026-09-10 at `15:44:48Z` for the existing managed provisioner.
+No credentials, customer data or application runtime rights changed. This
+one-off access preparation is not activation evidence: the protected job must
+still prove its actual credential consumer and fresh account/session state.
+It uses the existing
 protected provisioner over one pinned connection through the exact selected
 Machine's Fly tunnel; the migration token supplies metadata/tunnel access, not
 database SSH. In addition to its unchanged base profile, the inspection requires
