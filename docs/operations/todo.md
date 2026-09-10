@@ -97,7 +97,8 @@ Live payment enablement remains gated by the relevant P1 through P4 evidence.
         controls, worker health, budgets, and retained-payment recovery intact.
         The code separates these requirements from legacy sales and initializes
         payment controls through the existing audited operator action, without
-        a profile attestation. Reviewed merge, deployment and actual
+        a profile attestation. PR #522 merged as
+        `92961bb59bef11e7a6e02e1bbe44383907c16f60`; deployment and actual
         payment-to-credit-to-delivery proof remain outstanding.
   - [ ] **Test Mode without tester registration.** Owner direction (2026-09-10):
         any eligible Messenger user must be able to test without a manually
@@ -105,16 +106,44 @@ Live payment enablement remains gated by the relevant P1 through P4 evidence.
         restriction fields empty, while automatically binding each checkout,
         payment and wallet to its actual Messenger user and Page/privacy
         boundary. PR #522 implements eligibility and retains consent, budgets,
-        audited payment controls and worker checks. Review, deployment and the
-        complete payment-to-credit-to-delivered-edit proof remain outstanding;
-        live billing stays off.
+        audited payment controls and worker checks. PR #522 is merged; PR #515
+        merged as `b9caea7951b44d1f97bbd1bc742c25aca68264e9` with tests for two
+        users under one unchanged configuration with all tester pins absent.
+        Deployment and the complete payment-to-credit-to-delivered-edit proof
+        remain outstanding; live billing stays off.
   - [ ] **Bug: false failure message after a delivered image.** Owner report
         (2026-09-09): the tester receives each photo, then also receives
-        "ik kon de afbeelding nu niet maken". Cause not yet verified. Investigate
-        the post-delivery success/failure handling and add regression coverage:
-        a successfully delivered image must not produce a contradictory failure
-        message; genuine failures must still be reported. Preserve retry
-        protection and exactly-once quota/credit accounting.
+        "ik kon de afbeelding nu niet maken". PR #514 identified post-delivery
+        bookkeeping failures escaping into generic failure handling and merged
+        its scoped suppression and regression tests as
+        `b8ad818ab2a02b8b1c527327821f3f8a8a30a1fa`. Deployment and actual
+        delivered-image verification remain open; code tests are not proof of
+        delivery. Genuine failures, retry protection and exactly-once
+        quota/credit accounting remain required.
+  - Read-only activation inventory on 2026-09-10, exact running
+    `deploy-34461561679-1` and restricted runtime principal: the deployed Mollie
+    key has a Test prefix; the recovery signer and both distinct, correctly
+    paired notification-signing audiences meet their configuration checks.
+    This does not prove Mollie accepts the key. The checkout signer is staged,
+    not applied. Workspace 1/Test controls already exist at epoch 1 with
+    commercial execution disabled; the outbox safety lane is enabled, the
+    other three lanes are disabled, and every lane has zero pending/dead-letter
+    work. Use the existing audited enable action, not direct SQL. The temporary
+    metadata-only probe was removed. No customer rows, payments or provider
+    calls were read or changed.
+  - [ ] **Roll out the current reviewed fixes before activation.** Protected
+        build [34479903069/1](https://github.com/Dj-Shortcut/openclaw-facebook/actions/runs/34479903069)
+        succeeded from `b9caea7951b44d1f97bbd1bc742c25aca68264e9`, producing
+        `sha256:f2fa9d60e1fca02c09cb2764981a7134e908f2e33f127eb0e54e77030b4a7a4b`.
+        Exact-source CI and final-0018 schema checks passed; provenance was
+        published and still requires verification in the protected deploy. This
+        includes merged PRs #514, #515, #520 and #522. The release proposal
+        changes only the reviewed image/source and retains the proven
+        `deploy-34461561679-1` predecessor for rollback. No payment flags, price,
+        grants, database schema or gateway settings change. Apply the already
+        staged checkout signer during this reviewed rollout, then verify the
+        legal pages and core bot health. A successful rollout still does not
+        prove payment-to-credit-to-delivery or authorize live payments.
   - [x] **Credit schema installed in production.** Protected run
         [34339825855/1](https://github.com/Dj-Shortcut/openclaw-facebook/actions/runs/34339825855)
         on `ea680af1061901436fdae4e59397365ce6949f36` completed at
