@@ -507,7 +507,8 @@ describe("Messenger credit checkout personal link journey", () => {
     bound = undefined;
     if (originalAppBaseUrl === undefined) delete process.env.APP_BASE_URL;
     else process.env.APP_BASE_URL = originalAppBaseUrl;
-    process.env.NODE_ENV = originalNodeEnv;
+    if (originalNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = originalNodeEnv;
   });
 
   async function startJourney() {
