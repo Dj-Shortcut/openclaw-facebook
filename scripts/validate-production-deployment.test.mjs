@@ -6229,7 +6229,7 @@ describe("production deployment contract", () => {
     );
   });
 
-  it("rejects Test Mode paid-credit exposure without one exact hashed Messenger tester pin", () => {
+  it("keeps activation gated, without requiring tester registration", () => {
     const root = createRepositoryFixture();
     replaceFixtureText(
       root,
@@ -6239,7 +6239,26 @@ describe("production deployment contract", () => {
     );
 
     expect(() => validateProductionRepository(root)).toThrow(
-      "must pin Test Mode paid credits to one hashed Messenger user and exact Page binding",
+      "must set MESSENGER_PAID_CREDITS_ENABLED=false",
+    );
+  });
+
+  it("does not silently broaden a partial older tester restriction", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      "apps/image-gen/fly.toml",
+      '  MESSENGER_PAID_CREDITS_ENABLED = "false"\n  MOLLIE_CREDIT_CHECKOUT_ENABLED = "false"\n',
+      '  MESSENGER_PAID_CREDITS_ENABLED = "true"\n  MOLLIE_CREDIT_CHECKOUT_ENABLED = "true"\n',
+    );
+    replaceFixtureText(
+      root,
+      "apps/image-gen/fly.toml",
+      '  MOLLIE_CREDIT_TEST_CHANNEL_CONNECTION_ID = ""',
+      '  MOLLIE_CREDIT_TEST_CHANNEL_CONNECTION_ID = "8"',
+    );
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must not contain a partial or malformed legacy tester pin",
     );
   });
 

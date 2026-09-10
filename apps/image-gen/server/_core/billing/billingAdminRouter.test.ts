@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   registerSchedulerTenant: vi.fn(),
   enableSchedulerTenant: vi.fn(),
   disableSchedulerTenant: vi.fn(),
+  legacyBillingEnabled: vi.fn(),
   listOperatorNotifications: vi.fn(),
   acknowledgeOperatorNotification: vi.fn(),
   listCreditReservationTransportReviews: vi.fn(),
@@ -41,6 +42,7 @@ vi.mock("./creditReservationOperatorResolution", () => ({
 
 vi.mock("./config", () => ({
   getConfiguredBillingMode: () => "test",
+  isMollieBillingEnabled: mocks.legacyBillingEnabled,
 }));
 
 import { billingAdminRouter } from "./billingAdminRouter";
@@ -123,6 +125,87 @@ describe("portal Belgian consumer billing attestation", () => {
 
     expect(mocks.attestProfile).not.toHaveBeenCalled();
     expect(mocks.registerSchedulerTenant).not.toHaveBeenCalled();
+  });
+});
+
+describe("payment controls without a portal buyer profile", () => {
+  const input = {
+    requestId: "b35ee776-d81e-4dd4-8799-45d4f34d4892",
+    workspaceId: 42,
+    expectedExecutionEpoch: 1,
+    reason: "Initialize owner credit checkout",
+  };
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    mocks.legacyBillingEnabled.mockReturnValue(false);
+    mocks.registerSchedulerTenant.mockResolvedValue(undefined);
+    mocks.enableSchedulerTenant.mockResolvedValue({ executionEpoch: 2 });
+  });
+
+  it("initializes disabled controls before audited activation without an attestation", async () => {
+    await expect(createCaller().enableSchedulerTenant(input)).resolves.toEqual({
+      success: true,
+      executionEpoch: 2,
+    });
+    expect(mocks.registerSchedulerTenant).toHaveBeenCalledWith(42, "test");
+    expect(mocks.enableSchedulerTenant).toHaveBeenCalledWith({
+      ...input,
+      mode: "test",
+      actorUserId: admin.id,
+    });
+    expect(
+      mocks.registerSchedulerTenant.mock.invocationCallOrder[0]
+    ).toBeLessThan(mocks.enableSchedulerTenant.mock.invocationCallOrder[0]!);
+    expect(mocks.attestProfile).not.toHaveBeenCalled();
+  });
+
+  it.each([null, { ...admin, role: "user" as const }])(
+    "does not initialize payment controls for a non-admin",
+    async user => {
+      await expect(
+        createCaller(user).enableSchedulerTenant(input)
+      ).rejects.toThrow();
+      expect(mocks.registerSchedulerTenant).not.toHaveBeenCalled();
+      expect(mocks.enableSchedulerTenant).not.toHaveBeenCalled();
+    }
+  );
+
+  it("does not initialize unattested controls when legacy sales are enabled", async () => {
+    mocks.legacyBillingEnabled.mockReturnValue(true);
+    mocks.enableSchedulerTenant.mockRejectedValueOnce(
+      new Error("billing execution control is not provisioned")
+    );
+    await expect(createCaller().enableSchedulerTenant(input)).rejects.toThrow(
+      "billing execution control is not provisioned"
+    );
+    expect(mocks.registerSchedulerTenant).not.toHaveBeenCalled();
+    expect(mocks.attestProfile).not.toHaveBeenCalled();
+    expect(mocks.enableSchedulerTenant).toHaveBeenCalledWith({
+      ...input,
+      mode: "test",
+      actorUserId: admin.id,
+    });
+  });
+
+  it("does not activate when initialization fails", async () => {
+    mocks.registerSchedulerTenant.mockRejectedValueOnce(
+      new Error("database unavailable")
+    );
+    await expect(createCaller().enableSchedulerTenant(input)).rejects.toThrow(
+      "database unavailable"
+    );
+    expect(mocks.enableSchedulerTenant).not.toHaveBeenCalled();
+  });
+
+  it("preserves the audited activation failure", async () => {
+    mocks.enableSchedulerTenant.mockRejectedValueOnce(
+      new Error("billing scheduler enable epoch mismatch")
+    );
+    await expect(createCaller().enableSchedulerTenant(input)).rejects.toThrow(
+      "enable epoch mismatch"
+    );
+    expect(mocks.attestProfile).not.toHaveBeenCalled();
   });
 });
 

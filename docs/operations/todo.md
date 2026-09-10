@@ -88,6 +88,26 @@ Live payment enablement remains gated by the relevant P1 through P4 evidence.
       Mode, pass paid checkout, delayed/replayed webhook, cancellation, failure,
       refund, partially used wallet, provider failure, delivery failure,
       deletion, budget exhaustion, receipt, reconciliation, and rollback.
+  - [ ] **Remove portal prerequisites from credit activation.** Credit startup
+        and `/readyz` must work without a legacy buyer-profile attestation or
+        `PORTAL_HANDOFF_TOKEN_SECRET`. Preserve the existing
+        `BILLING_PROFILE_EVIDENCE_HMAC_SECRET` for credit recovery evidence;
+        its historical name does not make it a portal prerequisite.
+        Keep the owner/user boundary, signed credit capability, audited payment
+        controls, worker health, budgets, and retained-payment recovery intact.
+        The code separates these requirements from legacy sales and initializes
+        payment controls through the existing audited operator action, without
+        a profile attestation. Reviewed merge, deployment and actual
+        payment-to-credit-to-delivery proof remain outstanding.
+  - [ ] **Test Mode without tester registration.** Owner direction (2026-09-10):
+        any eligible Messenger user must be able to test without a manually
+        registered identity or customer login. Leave the four optional tester
+        restriction fields empty, while automatically binding each checkout,
+        payment and wallet to its actual Messenger user and Page/privacy
+        boundary. PR #522 implements eligibility and retains consent, budgets,
+        audited payment controls and worker checks. Review, deployment and the
+        complete payment-to-credit-to-delivered-edit proof remain outstanding;
+        live billing stays off.
   - [ ] **Bug: false failure message after a delivered image.** Owner report
         (2026-09-09): the tester receives each photo, then also receives
         "ik kon de afbeelding nu niet maken". Cause not yet verified. Investigate
@@ -228,8 +248,10 @@ release`, before any deployment or restart. The app-level Fly config
       only after reviewed merge; it authorizes no account deletion, new database
       permissions or payment activation. The previous automatic-review denial
       was not bypassed; the owner supplied the missing specific authorization.
-    - The owner-approved bounded-Test alternative is proposed in PR #517, not
-      merged or activated. Its same-run account/session inspection still lacks
+    - The bounded-Test alternative proposed in PR #517 is not merged or
+      activated. Its single-tester restriction no longer matches the owner's
+      current direction and must not be activated unchanged. Its same-run
+      account/session inspection still lacks
       an authorized transport/credential: the migration Fly token excludes
       Machine-exec, and the provisioner lacks complete cross-user session
       visibility. Do not repurpose another token, widen runtime grants, or
@@ -243,7 +265,7 @@ release`, before any deployment or restart. The app-level Fly config
       was triggered and no existing key was replaced. Its value was not logged
       or written to disk. The next reviewed deployment must apply it; this is
       not evidence that checkout is active.
-      The exact tester binding, payment drain/notification configuration and
+      Automatic per-user checkout binding, payment drain/notification configuration and
       real Test Mode payment-to-credit-to-delivery proof are still required.
 
 - [ ] **P5 - Bounded live pilot and legacy removal.** Obtain legal/accounting

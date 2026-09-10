@@ -40,6 +40,32 @@ image-gen lockfile for the Actions dependency cache; the image-gen release
 step therefore reuses packages without changing the immutable artifact or
 production approval gates.
 
+### Credit readiness without the retired customer portal
+
+With legacy sales (`MOLLIE_BILLING_ENABLED`) disabled, credit startup and
+`/readyz` do not require a workspace buyer-profile attestation or the legacy
+`PORTAL_HANDOFF_TOKEN_SECRET`. Preserve the existing
+`BILLING_PROFILE_EVIDENCE_HMAC_SECRET`: despite its historical name, it also
+signs credit reservation recovery evidence and remains required.
+Credit checkout uses its dedicated signed capability; it never sends a user
+through a portal login. Legacy sales, if explicitly enabled on a retained
+compatibility deployment, still require their original profile and keys.
+
+The existing authenticated operator `billingAdmin.enableSchedulerTenant` action
+initializes missing, commercially disabled payment controls only when legacy
+sales are disabled, before applying
+its audited activation with the expected execution epoch. Do not create a fake
+consumer attestation to initialize credit processing. No customer login or new
+management UI is required; this retains the existing operator-only authority.
+
+This does not remove the audited payment execution controls, worker lanes and
+heartbeats, notification checks, credential generation identity, spend caps,
+or credit schema/privilege checks. Do not delete old handoff secrets or financial
+records until their retained work is drained or retired under its own runbook.
+Verify both startup and `/readyz` on the reviewed image; a code change alone is
+not proof of activation, credit delivery, or a successful payment test. Rollback
+must use the reviewed 0018 image/config and retain payment recovery workers.
+
 ### Owner Page token rotation
 
 The reviewed image-gen runtime contains
@@ -1171,18 +1197,18 @@ key. Never remove a predecessor until no non-erased wallet or
 provider-resolution proof uses it; removal is a fail-closed incident, not a
 wallet migration.
 
-Test Mode exposure is additionally limited to one approved pseudonymous
-Messenger subject on one exact Page binding. In the reviewed activation change,
-set `MOLLIE_CREDIT_TEST_CHANNEL_CONNECTION_ID`,
-`MOLLIE_CREDIT_TEST_BINDING_EPOCH` and `MOLLIE_CREDIT_TEST_PRIVACY_EPOCH` to the
-current non-secret database boundary. Compute
-`MOLLIE_CREDIT_TEST_USER_KEY_HASH` only in the protected operator environment as
-SHA-256 over the UTF-8 domain `leaderbot.credit-checkout-test-user.v1\0`
-followed by the canonical pseudonymous user key. Retain only the hash; never
-place the source user key or PSID in config, documentation, evidence, chat or
-logs. `/readyz` must fail before database access when any part is absent or
-stale. A different user in the same owner workspace remains on the ordinary
-free-quota response and cannot create a wallet, intent or provider operation.
+The owner-directed Test Mode journey requires no tester registration. In the
+reviewed activation change, leave `MOLLIE_CREDIT_TEST_CHANNEL_CONNECTION_ID`,
+`MOLLIE_CREDIT_TEST_BINDING_EPOCH`, `MOLLIE_CREDIT_TEST_PRIVACY_EPOCH` and
+`MOLLIE_CREDIT_TEST_USER_KEY_HASH` all empty. Eligible Messenger users on the
+owner Page may then use the same checkout path. Each intent, capability,
+payment and wallet still binds the actual user, channel connection, Page
+binding and privacy epoch automatically; this is not an anonymous shared
+wallet or an unbound payment URL. Consent, the messaging window, quota and
+budget admission remain mandatory. For compatibility an existing complete
+four-field tester restriction is honored; partial or malformed restrictions
+fail closed. The source change alone does not activate checkout: the protected
+activation, payment workers and production evidence gates above remain open.
 
 Set the non-secret `MESSENGER_PAID_IMAGE_PROVIDER_MAX_COST_USD=1.00` in the same
 reviewed Test Mode activation. This is a conservative reservation against the

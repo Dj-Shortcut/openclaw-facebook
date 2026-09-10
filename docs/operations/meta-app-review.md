@@ -1,6 +1,6 @@
 # Meta App Review notes
 
-Last reviewed: 2026-08-28.
+Last reviewed: 2026-09-10.
 
 This note records the current Meta App Review impact for the public Leaderbot
 Messenger surface served directly by `apps/image-gen`. The repository owner's
@@ -75,6 +75,14 @@ Before requesting review or changing public access, record:
     capability, refusal without Mollie checkout or image-provider call,
     explicit browser confirmation before Mollie payment creation, no grant from
     the browser return, and exactly one grant after the trusted Mollie webhook.
+    For the owner-directed Test Mode activation, no customer login or manual
+    tester registration is required. Test two distinct eligible Messenger users
+    through the same CTA: each automatically signed link, payment and credit
+    grant must remain bound to its own user, Page binding and privacy epoch.
+    A second user's browser session must not redirect the first user's grant.
+    Keep the current EUR 4.99 / 8-credit offer and all response-window, consent,
+    quota, budget and payment-worker gates. This checklist describes required
+    evidence, not a claim that Test Mode is already deployed or verified.
 11. Delete-my-data behavior with production-equivalent state.
 12. Public `/privacy`, `/terms`, and `/data-deletion` routes.
 13. Confirmation that the pre-redaction inbound logger receives metadata only:

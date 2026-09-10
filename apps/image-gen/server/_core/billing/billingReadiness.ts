@@ -27,6 +27,7 @@ import {
   getBillingSchedulerRollout,
   getTenantBillingWorkerWorkspaceId,
   isMollieBillingDrainEnabled,
+  isMollieBillingEnabled,
   isMollieEntitlementEnforcementEnabled,
 } from "./config";
 import { getMollieRuntimePolicy } from "./billingRuntimePolicy";
@@ -464,6 +465,9 @@ export async function assertBillingDatabaseReadiness(
     if (!pinnedControl) {
       throw new Error("Pinned billing workspace has no execution control");
     }
+    // Only new legacy workspace sales require a portal buyer profile. Credit
+    // checkout and retained-payment recovery use their own identity boundaries.
+    if (!isMollieBillingEnabled()) return;
     const profiles = await database
       .select({
         workspaceId: workspaceBillingProfiles.workspaceId,

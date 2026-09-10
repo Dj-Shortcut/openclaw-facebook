@@ -321,9 +321,15 @@ export function assertMollieNonSecretLaunchConfig(
   ) {
     throw new Error("MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED must be true");
   }
-  if ((process.env.PORTAL_HANDOFF_TOKEN_SECRET?.trim().length ?? 0) < 32) {
-    throw new Error("PORTAL_HANDOFF_TOKEN_SECRET is missing or too short");
+  // Credit checkout has its own signed capability and no portal buyer profile.
+  // Drain-only recovery must not depend on the legacy portal delivery key.
+  if (isMollieBillingEnabled()) {
+    if ((process.env.PORTAL_HANDOFF_TOKEN_SECRET?.trim().length ?? 0) < 32) {
+      throw new Error("PORTAL_HANDOFF_TOKEN_SECRET is missing or too short");
+    }
   }
+  // Despite its historical name, this existing key also signs credit reservation
+  // recovery evidence. Requiring it does not require a portal or buyer profile.
   if (
     (process.env.BILLING_PROFILE_EVIDENCE_HMAC_SECRET?.trim().length ?? 0) < 32
   ) {
