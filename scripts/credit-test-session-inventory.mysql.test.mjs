@@ -40,19 +40,20 @@ describe("session inventory disposable-test boundary", () => {
   });
 });
 
-// Run separately/sequentially: this disposable-service test temporarily changes
-// one global instrumentation switch, restores it, and drops only its own accounts.
+// Run separately/sequentially: this disposable-service test installs and removes
+// one exact synthetic-user monitoring rule and drops only its own accounts.
 const suite = describe.runIf(
   process.env.RUN_MYSQL_INTEGRATION === "1" &&
     Boolean(process.env.DATABASE_URL),
 );
 suite("narrow session inventory on disposable MySQL 8.4.11", () => {
-  let mysql, root, inspector, settings, instrumentation;
+  let mysql, root, inspector, settings;
+  let syntheticActorInstalled = false;
   const connections = new Set();
   const accounts = [];
   const password = randomBytes(24).toString("hex");
   const names = Object.fromEntries(
-    ["inspector", "old", "noise"].map((role) => [
+    ["inspector", "old", "noise", "unmonitored"].map((role) => [
       role,
       `lbsi_${randomBytes(8).toString("hex")}`,
     ]),
@@ -136,9 +137,9 @@ suite("narrow session inventory on disposable MySQL 8.4.11", () => {
       );
     },
   };
-  const collect = () =>
+  const collect = (obsoletePrincipalSha256 = oldHash) =>
     collectCreditTestSessionInventory(session, {
-      obsoletePrincipalSha256: oldHash,
+      obsoletePrincipalSha256,
       expectedSessionId,
     });
   beforeAll(async () => {
@@ -183,11 +184,11 @@ suite("narrow session inventory on disposable MySQL 8.4.11", () => {
         cleanupFailed = true;
       }
     };
-    if (root && instrumentation !== undefined) {
+    if (root && syntheticActorInstalled) {
       await attempt(() =>
         root.query(
-          "UPDATE performance_schema.setup_instruments SET ENABLED=? WHERE NAME='thread/sql/one_connection'",
-          [instrumentation],
+          "DELETE FROM performance_schema.setup_actors WHERE HOST='%' AND USER=? AND ROLE='%'",
+          [names.unmonitored],
         ),
       );
     }
@@ -239,6 +240,8 @@ suite("narrow session inventory on disposable MySQL 8.4.11", () => {
     });
     // Exercise the actual SQL classifier, not a mock of its aggregate output.
     // Only this disposable test substitutes synthetic metadata for P_S rows.
+    // Missing-row/capacity-loss coverage here is injected, not a demonstration
+    // of exhausting the real MySQL thread container or restarting P_S disabled.
     const syntheticThread = (offset, name, user) => {
       if (
         !/^thread\/[a-z0-9_]+\/[a-z0-9_]+$/.test(name) ||
@@ -386,27 +389,52 @@ suite("narrow session inventory on disposable MySQL 8.4.11", () => {
     } finally {
       unauthenticated.destroy();
     }
-    const [[instrument]] = await root.query(
-      "SELECT ENABLED FROM performance_schema.setup_instruments WHERE NAME='thread/sql/one_connection'",
+    const [[existingActor]] = await root.query(
+      "SELECT COUNT(*) AS matching_rules FROM performance_schema.setup_actors WHERE HOST='%' AND USER=? AND ROLE='%'",
+      [names.unmonitored],
     );
-    instrumentation = instrument.ENABLED;
+    expect(Number(existingActor.matching_rules)).toBe(0);
     await root.query(
-      "UPDATE performance_schema.setup_instruments SET ENABLED='NO' WHERE NAME='thread/sql/one_connection'",
+      "INSERT INTO performance_schema.setup_actors (HOST,USER,ROLE,ENABLED,HISTORY) VALUES ('%',?,'%','NO','NO')",
+      [names.unmonitored],
     );
-    await root.query(
-      `CREATE USER ${account(names.old)} IDENTIFIED BY '${password}'`,
+    syntheticActorInstalled = true;
+    const disabled = await connect(names.unmonitored);
+    const [[disabledConnection]] = await disabled.query(
+      "SELECT CONNECTION_ID() AS id",
     );
-    const disabled = await connect(names.old);
-    await root.query(`ALTER USER ${account(names.old)} ACCOUNT LOCK`);
+    // MySQL8.4 foreground monitoring is configured by setup_actors, not
+    // setup_instruments/setup_threads. NO disables collection, not the thread
+    // row itself; assert that actual distinction instead of claiming absence.
+    // https://dev.mysql.com/doc/refman/8.4/en/performance-schema-setup-threads-table.html
+    const [[observedThread]] = await root.query(
+      `SELECT COUNT(*) AS matching_rows,
+        COALESCE(SUM(INSTRUMENTED='NO' AND HISTORY='NO'),0) AS unmonitored_rows
+       FROM performance_schema.threads
+       WHERE PROCESSLIST_ID=? AND PROCESSLIST_USER=? AND NAME='thread/sql/one_connection'`,
+      [disabledConnection.id, names.unmonitored],
+    );
+    expect(Number(observedThread.matching_rows)).toBe(1);
+    expect(Number(observedThread.unmonitored_rows)).toBe(1);
+    await root.query(`ALTER USER ${account(names.unmonitored)} ACCOUNT LOCK`);
     await root.query("FLUSH STATUS");
     expect((await disabled.query("SELECT 1 AS alive"))[0][0].alive).toBe(1);
-    // Whether MySQL still includes this thread or omits it, zero must not pass.
-    expect(await collect()).toMatchObject({ verified: false });
+    const unmonitoredHash = createHash("sha256")
+      .update(names.unmonitored)
+      .digest("hex");
+    expect(await collect(unmonitoredHash)).toMatchObject({
+      verified: false,
+      reason: "obsolete_sessions_present",
+    });
     await close(disabled);
+    expect(await collect(unmonitoredHash)).toMatchObject({
+      verified: true,
+      obsoleteSessionCount: 0,
+    });
     await root.query(
-      "UPDATE performance_schema.setup_instruments SET ENABLED=? WHERE NAME='thread/sql/one_connection'",
-      [instrumentation],
+      "DELETE FROM performance_schema.setup_actors WHERE HOST='%' AND USER=? AND ROLE='%'",
+      [names.unmonitored],
     );
-    instrumentation = undefined;
+    syntheticActorInstalled = false;
   }, 30000);
 });

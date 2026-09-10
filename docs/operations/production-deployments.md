@@ -1233,9 +1233,14 @@ watermark, every app/worker's restricted-principal probe, and the reviewed
 database Machine/volume. It separately checks the obsolete account is locked
 or positively absent after its approved drop, and its surviving session count
 is zero. The evidence distinguishes `locked` from `absent`. Session inspection
-uses `INFORMATION_SCHEMA.PROCESSLIST` with verified PROCESS visibility and an
-own-session check; it never selects query text and does not depend on Performance
-Schema instrumentation completeness. The same protected run
+reads only `NAME`, `TYPE`, `PROCESSLIST_ID` and `PROCESSLIST_USER` from
+`performance_schema.threads`; it neither requires `PROCESS` nor reads query
+text. It requires Performance Schema and one-thread-per-connection handling,
+checks its own pinned session, and matches distinct client sessions against
+stable `Connections` and `Threads_connected` counters. Only the two explicitly
+recognized internal daemon identities are excluded from the client count.
+Missing instrumentation, unknown session types, unstable counters or unavailable
+metadata fail closed rather than proving zero obsolete sessions. The same protected run
 then repeats current checks and consumes its own evidence, rejecting evidence
 older than 15 minutes, another run/source, a changed identity or topology,
 an unlocked account, or surviving sessions. Both steps execute under the

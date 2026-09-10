@@ -98,8 +98,9 @@ Live payment enablement remains gated by the relevant P1 through P4 evidence.
         The code separates these requirements from legacy sales and initializes
         payment controls through the existing audited operator action, without
         a profile attestation. PR #522 merged as
-        `92961bb59bef11e7a6e02e1bbe44383907c16f60`; deployment and actual
-        payment-to-credit-to-delivery proof remain outstanding.
+        `92961bb59bef11e7a6e02e1bbe44383907c16f60` and is deployed in
+        `deploy-34484419576-1`; actual payment-to-credit-to-delivery proof
+        remains outstanding.
   - [ ] **Test Mode without tester registration.** Owner direction (2026-09-10):
         any eligible Messenger user must be able to test without a manually
         registered identity or customer login. Leave the four optional tester
@@ -109,41 +110,49 @@ Live payment enablement remains gated by the relevant P1 through P4 evidence.
         audited payment controls and worker checks. PR #522 is merged; PR #515
         merged as `b9caea7951b44d1f97bbd1bc742c25aca68264e9` with tests for two
         users under one unchanged configuration with all tester pins absent.
-        Deployment and the complete payment-to-credit-to-delivered-edit proof
-        remain outstanding; live billing stays off.
+        Both changes are deployed in `deploy-34484419576-1`. The complete
+        payment-to-credit-to-delivered-edit proof remains outstanding;
+        live billing stays off.
   - [ ] **Bug: false failure message after a delivered image.** Owner report
         (2026-09-09): the tester receives each photo, then also receives
         "ik kon de afbeelding nu niet maken". PR #514 identified post-delivery
         bookkeeping failures escaping into generic failure handling and merged
         its scoped suppression and regression tests as
-        `b8ad818ab2a02b8b1c527327821f3f8a8a30a1fa`. Deployment and actual
-        delivered-image verification remain open; code tests are not proof of
-        delivery. Genuine failures, retry protection and exactly-once
+        `b8ad818ab2a02b8b1c527327821f3f8a8a30a1fa`. The fix is deployed in
+        `deploy-34484419576-1`; actual delivered-image verification remains
+        open. Code tests are not proof of delivery. Genuine failures, retry protection and exactly-once
         quota/credit accounting remain required.
   - Read-only activation inventory on 2026-09-10, exact running
     `deploy-34461561679-1` and restricted runtime principal: the deployed Mollie
     key has a Test prefix; the recovery signer and both distinct, correctly
     paired notification-signing audiences meet their configuration checks.
-    This does not prove Mollie accepts the key. The checkout signer is staged,
-    not applied. Workspace 1/Test controls already exist at epoch 1 with
+    This does not prove Mollie accepts the key. The checkout signer was staged
+    at this inspection and was subsequently applied by `deploy-34484419576-1`.
+    Workspace 1/Test controls already exist at epoch 1 with
     commercial execution disabled; the outbox safety lane is enabled, the
     other three lanes are disabled, and every lane has zero pending/dead-letter
     work. Use the existing audited enable action, not direct SQL. The temporary
     metadata-only probe was removed. No customer rows, payments or provider
     calls were read or changed.
-  - [ ] **Roll out the current reviewed fixes before activation.** Protected
+  - [x] **Roll out the current reviewed fixes before activation.** Protected
         build [34479903069/1](https://github.com/Dj-Shortcut/openclaw-facebook/actions/runs/34479903069)
         succeeded from `b9caea7951b44d1f97bbd1bc742c25aca68264e9`, producing
         `sha256:f2fa9d60e1fca02c09cb2764981a7134e908f2e33f127eb0e54e77030b4a7a4b`.
-        Exact-source CI and final-0018 schema checks passed; provenance was
-        published and still requires verification in the protected deploy. This
-        includes merged PRs #514, #515, #520 and #522. The release proposal
-        changes only the reviewed image/source and retains the proven
-        `deploy-34461561679-1` predecessor for rollback. No payment flags, price,
-        grants, database schema or gateway settings change. Apply the already
-        staged checkout signer during this reviewed rollout, then verify the
-        legal pages and core bot health. A successful rollout still does not
-        prove payment-to-credit-to-delivery or authorize live payments.
+        PR #523 merged as `a3d0f1f10572debde5540a1097e906d9b54e8309` after
+        review and CI. Protected deployment
+        [34484419576/1](https://github.com/Dj-Shortcut/openclaw-facebook/actions/runs/34484419576)
+        passed artifact provenance, Meta callback, rollback, billing-trigger,
+        drift and health/readiness checks. All four Machines independently
+        report the exact image/source above and `deploy-34484419576-1`.
+        This includes PRs #514, #515, #520 and #522 and retains the proven
+        `deploy-34461561679-1` predecessor for rollback. The existing checkout
+        signer is now Deployed, with no staged secrets remaining. Paid and
+        checkout flags remain false, mode is test, and live remains false.
+        No grants, schema or gateway settings changed. Anonymous `/healthz`
+        and `/readyz` return 200; all four legal routes return 200 with the
+        shared header/footer, and browser inspection confirms the new privacy
+        and terms layout. This is not payment-to-credit-to-delivery proof or
+        live-payment approval.
   - [x] **Credit schema installed in production.** Protected run
         [34339825855/1](https://github.com/Dj-Shortcut/openclaw-facebook/actions/runs/34339825855)
         on `ea680af1061901436fdae4e59397365ce6949f36` completed at
@@ -296,18 +305,24 @@ release`, before any deployment or restart. The app-level Fly config
       a pinned exact-Machine tunnel, not the migration token's unavailable SSH
       path. The four-column metadata-only read grant is not applied or proven
       in production. Disposable MySQL validation exposed an over-inclusive
-      foreground-thread census; the correction now follows pinned MySQL 8.4.11
-      source and still requires fresh real-MySQL proof. Do not repurpose another token, widen runtime
+      foreground-thread census. Run `34482865305` proved the corrected census,
+      nine SQL classifier cases, restricted metadata access, active/locked
+      obsolete-session rejection, closed/dropped-account acceptance, cached
+      connections and incomplete-login rejection on MySQL 8.4.11. Its final
+      disabled-monitoring case failed in test setup, not in the census:
+      `thread/sql/one_connection` is not a `setup_instruments` row. That test
+      must use the actual foreground-thread controls and pass in a fresh run;
+      the full integration suite is not yet green. Do not repurpose another token, widen runtime
       grants, substitute partial output or enable payment flags to bypass this.
       The narrow inspection grant still needs specific authorization and review.
     - Checkout configuration readback (2026-09-10): `MOLLIE_API_KEY` is present
       and deployed. After confirming no pending secrets and no existing signer,
       the owner-authorized test setup generated a fresh 32-byte
       `CREDIT_CHECKOUT_HMAC_SECRET` in memory and imported it through stdin with
-      `--stage`. Fly confirms the signer is `Staged`; no deployment or restart
-      was triggered and no existing key was replaced. Its value was not logged
-      or written to disk. The next reviewed deployment must apply it; this is
-      not evidence that checkout is active.
+      `--stage`; staging itself triggered no deployment or restart and replaced
+      no existing key. Its value was not logged or written to disk. The later
+      reviewed deployment `34484419576/1` applied it; Fly now reports `Deployed`
+      and no staged secrets. This is not evidence that checkout is active.
       Automatic per-user checkout binding, payment drain/notification configuration and
       real Test Mode payment-to-credit-to-delivery proof are still required.
 
