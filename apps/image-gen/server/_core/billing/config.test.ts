@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   assertMollieBillingEnabled,
@@ -153,6 +153,105 @@ describe("Mollie configuration", () => {
 
     expect(() => assertMollieNonSecretLaunchConfig()).not.toThrow();
   });
+
+  it.each([false, true])(
+    "does not require the portal delivery key for credit preflight (operational=%s)",
+    operational => {
+      if (operational) useValidSafetyDrainConfig();
+      else useValidOfflinePreflightConfig();
+      delete process.env.PORTAL_HANDOFF_TOKEN_SECRET;
+
+      expect(() =>
+        assertMollieNonSecretLaunchConfig({
+          requireOperationalFlags: operational,
+        })
+      ).not.toThrow();
+    }
+  );
+
+  it.each([false, true])(
+    "requires the existing credit recovery evidence key (operational=%s)",
+    operational => {
+      if (operational) useValidSafetyDrainConfig();
+      else useValidOfflinePreflightConfig();
+      delete process.env.PORTAL_HANDOFF_TOKEN_SECRET;
+      delete process.env.BILLING_PROFILE_EVIDENCE_HMAC_SECRET;
+
+      expect(() =>
+        assertMollieNonSecretLaunchConfig({
+          requireOperationalFlags: operational,
+        })
+      ).toThrow("BILLING_PROFILE_EVIDENCE_HMAC_SECRET is missing or too short");
+    }
+  );
+
+  it("rejects credit recovery before database access when its evidence key is absent", async () => {
+    useValidSafetyDrainConfig();
+    delete process.env.BILLING_PROFILE_EVIDENCE_HMAC_SECRET;
+    const { resolveAmbiguousPaidCreditReservation } =
+      await import("./creditReservationOperatorResolution");
+    const database = vi.fn();
+
+    await expect(
+      resolveAmbiguousPaidCreditReservation(
+        {
+          requestId: "11111111-1111-4111-8111-111111111111",
+          workspaceId: 42,
+          mode: "test",
+          reservationId: "22222222-2222-4222-8222-222222222222",
+          walletId: "33333333-3333-4333-8333-333333333333",
+          actorUserId: 91,
+          decision: "provider_rejected",
+          providerStatus: 400,
+          evidenceReference: "provider-review:case-42",
+        },
+        {
+          database,
+          markProviderAccepted: vi.fn(),
+          commit: vi.fn(),
+          releaseProviderRejected: vi.fn(),
+          releaseOutputNotDelivered: vi.fn(),
+          deriveCommit: vi.fn(),
+          deriveOutputNotDelivered: vi.fn(),
+          deriveProviderRejected: vi.fn(),
+        }
+      )
+    ).rejects.toThrow("credit_reservation_operator_evidence_key_unavailable");
+    expect(database).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "PORTAL_HANDOFF_TOKEN_SECRET",
+    "BILLING_PROFILE_EVIDENCE_HMAC_SECRET",
+  ])("keeps %s required if legacy sales are explicitly enabled", name => {
+    useValidSafetyDrainConfig();
+    process.env.MOLLIE_BILLING_ENABLED = "true";
+    process.env.MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED = "true";
+    delete process.env[name];
+
+    expect(() => assertMollieNonSecretLaunchConfig()).toThrow(
+      `${name} is missing or too short`
+    );
+  });
+
+  it.each([
+    "DATABASE_URL",
+    "REDIS_URL",
+    "BILLING_PROFILE_EVIDENCE_HMAC_SECRET",
+    "MOLLIE_CREDENTIAL_GENERATION_ID",
+    "MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD",
+    "MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD",
+    "MESSENGER_USER_DAILY_SPEND_CAP_USD",
+  ])(
+    "keeps the credit safety requirement %s without portal credentials",
+    name => {
+      useValidSafetyDrainConfig();
+      delete process.env.PORTAL_HANDOFF_TOKEN_SECRET;
+      delete process.env[name];
+
+      expect(() => assertMollieNonSecretLaunchConfig()).toThrow(name);
+    }
+  );
 
   it("still rejects commercial checkout without entitlement enforcement", () => {
     useValidSafetyDrainConfig();

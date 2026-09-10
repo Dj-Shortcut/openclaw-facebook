@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
@@ -82,6 +82,7 @@ function createRepositoryFixture() {
     ".github/workflows/image-gen-migration-smoke.yml",
     ".github/workflows/image-gen-schema-transition.yml",
     ".github/workflows/stage-image-gen-credit-runtime-principal.yml",
+    ".github/workflows/repair-image-gen-runtime-database-host.yml",
     ".github/workflows/main.yml",
     ".github/workflows/production-uptime.yml",
     ".github/workflows/recover-completed-production-deployment.yml",
@@ -1203,7 +1204,7 @@ describe("production deployment contract", () => {
     });
   });
 
-  it("binds the reviewed 0018 rollout to its proven staged runtime principal", () => {
+  it("settles the proven 0018 runtime with only its exact runtime rollback", () => {
     const manifest = JSON.parse(
       fs.readFileSync(
         path.join(repoRoot, "deploy/production/apps.json"),
@@ -1216,7 +1217,7 @@ describe("production deployment contract", () => {
     expect(app.databaseSchemaTransition).toMatchObject({
       from: "0016_expand",
       to: "0018_credit_checkout_reservation",
-      state: "runtime_reviewed",
+      state: "complete",
       bridgeImage:
         "registry.fly.io/leaderbot-fb-image-gen@sha256:a37632c86a72a87cd94f5c030c8b88be330420289c553f4570e234c85df233b8",
       bridgeSourceCommit: "f26d80e1eb47361541b9812a1c0d47477afac535",
@@ -1235,16 +1236,23 @@ describe("production deployment contract", () => {
     expect(app.databaseSchemaTransition.runtimePrincipalSha256).toBe(
       "972e89225a2d25540d6abfa7bb4e75303f6a94b2f80b4ec26152a95b9b44eeb9",
     );
-    expect(app.reviewedRollbackImages).toEqual([
-      app.databaseSchemaTransition.bridgeImage,
-    ]);
+    expect(app.reviewedRollbackImages).toEqual([app.reviewedImage]);
+    expect(app.reviewedRollbackArtifactKinds).toEqual({
+      [app.reviewedImage]: "runtime",
+    });
+    expect(app.reviewedRollbackSourceCommits).toEqual({
+      [app.reviewedImage]: app.reviewedSourceCommit,
+    });
+    expect(app.reviewedRollbackImageSchemaPhases).toEqual({
+      [app.reviewedImage]: ["0018_credit_checkout_reservation"],
+    });
     expect(app.reviewedSettledPredecessor).toEqual({
-      identity: "deploy-33297361675-1",
+      identity: "deploy-34461561679-1",
       image:
-        "registry.fly.io/leaderbot-fb-image-gen@sha256:a37632c86a72a87cd94f5c030c8b88be330420289c553f4570e234c85df233b8",
-      path: "deploy/production/rollback-configs/image-gen-a37632c86a72-deploy-33297361675-1.toml",
+        "registry.fly.io/leaderbot-fb-image-gen@sha256:1d80d6bce5fdbd7486f31d6223ca87ac7a50d075661ec48ae0f3d536eb8e5b36",
+      path: "deploy/production/rollback-configs/image-gen-1d80d6bce5fd-deploy-34461561679-1.toml",
       sha256:
-        "cd74c375ff2ebfa9c178cea325377b654851a71d105375ca51b826796bf9e9c0",
+        "4d9c56fd92f7694c84365f8317117d2335017ac0efb963b78dd2799e22d47697",
     });
   });
 
@@ -1273,7 +1281,7 @@ describe("production deployment contract", () => {
       'runtime_verification_url="mysql://${runtime_principal}:${runtime_password}@127.0.0.1:13306/${RUNTIME_PRINCIPAL_DATABASE_NAME}"',
     );
     expect(workflow).toContain(
-      'runtime_database_url="mysql://${runtime_principal}:${runtime_password}@[${RUNTIME_PRINCIPAL_DATABASE_PRIVATE_IP}]:3306/${RUNTIME_PRINCIPAL_DATABASE_NAME}"',
+      'runtime_database_url="mysql://${runtime_principal}:${runtime_password}@${RUNTIME_PRINCIPAL_DATABASE_MACHINE_ID}.vm.${RUNTIME_PRINCIPAL_DATABASE_APP}.internal:3306/${RUNTIME_PRINCIPAL_DATABASE_NAME}"',
     );
     expect(workflow).toContain(
       'RUNTIME_DATABASE_URL="$runtime_verification_url"',
@@ -1351,7 +1359,7 @@ describe("production deployment contract", () => {
     replaceFixtureText(
       root,
       ".github/workflows/stage-image-gen-credit-runtime-principal.yml",
-      'runtime_database_url="mysql://${runtime_principal}:${runtime_password}@[${RUNTIME_PRINCIPAL_DATABASE_PRIVATE_IP}]:3306/${RUNTIME_PRINCIPAL_DATABASE_NAME}"',
+      'runtime_database_url="mysql://${runtime_principal}:${runtime_password}@${RUNTIME_PRINCIPAL_DATABASE_MACHINE_ID}.vm.${RUNTIME_PRINCIPAL_DATABASE_APP}.internal:3306/${RUNTIME_PRINCIPAL_DATABASE_NAME}"',
       'runtime_database_url="mysql://${runtime_principal}:${runtime_password}@127.0.0.1:13306/${RUNTIME_PRINCIPAL_DATABASE_NAME}"',
     );
 
@@ -1435,6 +1443,89 @@ describe("production deployment contract", () => {
       "must prove every successor Machine uses the exact staged runtime principal before readiness evidence",
     );
   });
+
+  it.each([
+    ".github/workflows/deploy-production.yml",
+    ".github/workflows/cleanup-image-gen-runtime-principals.yml",
+    ".github/workflows/retire-image-gen-credit-provisioners.yml",
+  ])(
+    "executes the runtime-principal assignment through env without a shell in %s",
+    (workflowPath) => {
+      const workflow = fs.readFileSync(
+        path.join(repoRoot, workflowPath),
+        "utf8",
+      );
+      const command = workflow.match(
+        /--command "((?:\/usr\/bin\/)?env EXPECTED_RUNTIME_PRINCIPAL_SHA256=\$(?:expected_principal_sha256|EXPECTED_RUNTIME_PRINCIPAL_SHA256) node (?:\$remote_probe|\/app\/dist\/billing-trigger-runtime-preflight\.cjs))"/,
+      )?.[1];
+      expect(command).toBeDefined();
+      const [executable, assignment] = command.split(" ");
+      const expectedHash = "a".repeat(64);
+      const resolvedAssignment = assignment.replace(
+        /\$(?:expected_principal_sha256|EXPECTED_RUNTIME_PRINCIPAL_SHA256)/,
+        expectedHash,
+      );
+      const probeArgs = [
+        process.execPath,
+        "-e",
+        "process.stdout.write(process.env.EXPECTED_RUNTIME_PRINCIPAL_SHA256 ?? '')",
+      ];
+      const options = {
+        shell: false,
+        encoding: "utf8",
+        timeout: 5000,
+        env: { PATH: process.env.PATH },
+      };
+      const result = spawnSync(
+        executable,
+        [resolvedAssignment, ...probeArgs],
+        options,
+      );
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(0);
+      expect(result.stdout).toBe(expectedHash);
+      expect(result.stderr).toBe("");
+
+      // Fly executes argv directly: a bare assignment is an executable name,
+      // not a shell environment statement, and must not silently pass this test.
+      const bareAssignment = spawnSync(resolvedAssignment, probeArgs, options);
+      expect(bareAssignment.error?.code).toBe("ENOENT");
+      expect(bareAssignment.status).toBeNull();
+    },
+  );
+
+  it.each([
+    [
+      ".github/workflows/deploy-production.yml",
+      "must prove every successor Machine uses the exact staged runtime principal before readiness evidence",
+    ],
+    [
+      ".github/workflows/cleanup-image-gen-runtime-principals.yml",
+      "must reprove the exact principal and DML boundary on every Machine",
+    ],
+    [
+      ".github/workflows/retire-image-gen-credit-provisioners.yml",
+      "must reprove the restricted principal on every Machine",
+    ],
+  ])(
+    "rejects a bare runtime-principal assignment in %s",
+    (workflowPath, error) => {
+      const root = createRepositoryFixture();
+      const workflow = fs.readFileSync(path.join(root, workflowPath), "utf8");
+      const explicitCommand = workflow.match(
+        /--command "(?:\/usr\/bin\/)?env EXPECTED_RUNTIME_PRINCIPAL_SHA256=\$(?:expected_principal_sha256|EXPECTED_RUNTIME_PRINCIPAL_SHA256) node (?:\$remote_probe|\/app\/dist\/billing-trigger-runtime-preflight\.cjs)"/,
+      )?.[0];
+      expect(explicitCommand).toBeDefined();
+      replaceFixtureText(
+        root,
+        workflowPath,
+        explicitCommand,
+        explicitCommand.replace(/"(?:\/usr\/bin\/)?env /, '"'),
+      );
+
+      expect(() => validateProductionRepository(root)).toThrow(error);
+    },
+  );
 
   it("derives deploy successor count from reviewed desiredScale", () => {
     const root = createRepositoryFixture();
@@ -5906,21 +5997,13 @@ describe("production deployment contract", () => {
       maximum: "0018_credit_checkout_reservation",
       phases: ["0018_credit_checkout_reservation"],
     });
-    expect(
+    expect(() =>
       getReviewedArtifactSchemaSupport(
         "image-gen",
         manifest.apps["image-gen"].databaseSchemaTransition.bridgeImage,
         repoRoot,
       ),
-    ).toEqual({
-      minimum: "0016_expand",
-      maximum: "0018_credit_checkout_reservation",
-      phases: [
-        "0016_expand",
-        "0017_credit_wallet_expand",
-        "0018_credit_checkout_reservation",
-      ],
-    });
+    ).toThrow("image-gen image is not in the reviewed production allowlist");
   });
 
   it("validates schema compatibility for current and rollback images", () => {
@@ -6146,7 +6229,7 @@ describe("production deployment contract", () => {
     );
   });
 
-  it("rejects Test Mode paid-credit exposure without one exact hashed Messenger tester pin", () => {
+  it("keeps activation gated, without requiring tester registration", () => {
     const root = createRepositoryFixture();
     replaceFixtureText(
       root,
@@ -6156,7 +6239,26 @@ describe("production deployment contract", () => {
     );
 
     expect(() => validateProductionRepository(root)).toThrow(
-      "must pin Test Mode paid credits to one hashed Messenger user and exact Page binding",
+      "must set MESSENGER_PAID_CREDITS_ENABLED=false",
+    );
+  });
+
+  it("does not silently broaden a partial older tester restriction", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      "apps/image-gen/fly.toml",
+      '  MESSENGER_PAID_CREDITS_ENABLED = "false"\n  MOLLIE_CREDIT_CHECKOUT_ENABLED = "false"\n',
+      '  MESSENGER_PAID_CREDITS_ENABLED = "true"\n  MOLLIE_CREDIT_CHECKOUT_ENABLED = "true"\n',
+    );
+    replaceFixtureText(
+      root,
+      "apps/image-gen/fly.toml",
+      '  MOLLIE_CREDIT_TEST_CHANNEL_CONNECTION_ID = ""',
+      '  MOLLIE_CREDIT_TEST_CHANNEL_CONNECTION_ID = "8"',
+    );
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must not contain a partial or malformed legacy tester pin",
     );
   });
 
@@ -9889,6 +9991,50 @@ describe("release-command recovery selector", () => {
 });
 
 describe("versioned recovery data contract", () => {
+  it("runs the exact copied recovery controller without repository sibling modules", () => {
+    const root = fs.mkdtempSync(
+      path.join(os.tmpdir(), "leaderbot-standalone-recovery-"),
+    );
+    tempDirs.push(root);
+    const controller = path.join(
+      fs.realpathSync(root),
+      "leaderbot-recovery-controller-v1.mjs",
+    );
+    const protocol = path.join(root, "recovery-protocol.txt");
+    fs.copyFileSync(
+      path.join(repoRoot, "scripts/validate-production-deployment.mjs"),
+      controller,
+    );
+    fs.writeFileSync(protocol, "v1\n");
+    expect(() =>
+      execFileSync(
+        process.execPath,
+        [
+          controller,
+          "--validate-recovery-protocol",
+          protocol,
+          "--root-dir",
+          repoRoot,
+        ],
+        { stdio: "pipe" },
+      ),
+    ).not.toThrow();
+    fs.writeFileSync(protocol, "v2\n");
+    expect(() =>
+      execFileSync(
+        process.execPath,
+        [
+          controller,
+          "--validate-recovery-protocol",
+          protocol,
+          "--root-dir",
+          repoRoot,
+        ],
+        { stdio: "pipe" },
+      ),
+    ).toThrow();
+  });
+
   it("supports exact recovery protocol v1 and rejects unknown encodings", () => {
     expect(validateRecoveryProtocol("v1\n")).toBe("v1");
     for (const invalid of ["", "v1", "v1\nextra\n", "v2\n"]) {
@@ -10056,7 +10202,12 @@ ${workflow.slice(start, end)}
         ),
         ...verificationOptions,
         fetchImpl: async () =>
-          jsonResponse(canonicalDeploymentRun("image-gen", "33297361675", "1")),
+          jsonResponse(
+            canonicalDeploymentRun(
+              "image-gen",
+              ...predecessor.identity.split("-").slice(1),
+            ),
+          ),
       }),
     ).resolves.toMatchObject({
       identity: predecessor.identity,
@@ -10161,7 +10312,12 @@ ${workflow.slice(start, end)}
         },
         ...verificationOptions,
         fetchImpl: async () =>
-          jsonResponse(canonicalDeploymentRun("image-gen", "33297361675", "1")),
+          jsonResponse(
+            canonicalDeploymentRun(
+              "image-gen",
+              ...predecessor.identity.split("-").slice(1),
+            ),
+          ),
       });
 
       expect(result).toMatchObject({
@@ -10228,7 +10384,12 @@ ${workflow.slice(start, end)}
         },
         ...verificationOptions,
         fetchImpl: async () =>
-          jsonResponse(canonicalDeploymentRun("image-gen", "33297361675", "1")),
+          jsonResponse(
+            canonicalDeploymentRun(
+              "image-gen",
+              ...predecessor.identity.split("-").slice(1),
+            ),
+          ),
       });
 
     const first = await inspect([43]);

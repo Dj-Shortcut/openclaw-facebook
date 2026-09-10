@@ -3,7 +3,6 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { assertProtectedCleanupWorkflow } from "./retire-image-gen-repair-exec-token.mjs";
 
 const MANIFEST_PATH = "deploy/production/apps.json";
 const PRODUCTION_WORKFLOW_PATH = ".github/workflows/deploy-production.yml";
@@ -103,6 +102,7 @@ const VERIFIED_FLYCTL_WORKFLOW_JOBS = Object.freeze({
   [SCHEMA_TRANSITION_WORKFLOW_PATH]: ["preflight", "expand"],
   [MIGRATION_SUPER_CLEANUP_WORKFLOW_PATH]: ["cleanup"],
   [RUNTIME_PRINCIPAL_STAGING_WORKFLOW_PATH]: ["stage"],
+  [".github/workflows/repair-image-gen-runtime-database-host.yml"]: ["repair"],
   [RUNTIME_PRINCIPAL_CLEANUP_WORKFLOW_PATH]: ["preflight", "mutate"],
   [CREDIT_PROVISIONER_RETIREMENT_WORKFLOW_PATH]: ["mutate"],
   [PRODUCTION_RECONCILIATION_WORKFLOW_PATH]: [
@@ -2889,7 +2889,7 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
       '.config.metadata.fly_process_group == "app" or .config.metadata.fly_process_group == "worker"',
     ) ||
     !runtimePrincipalCutoverStep.includes(
-      "EXPECTED_RUNTIME_PRINCIPAL_SHA256=$expected_principal_sha256 node $remote_probe",
+      '--command "env EXPECTED_RUNTIME_PRINCIPAL_SHA256=$expected_principal_sha256 node $remote_probe"',
     ) ||
     !runtimePrincipalCutoverStep.includes(
       'test "$probe_output" = "Billing trigger runtime preflight passed."',
@@ -5832,7 +5832,22 @@ function validateCreditMigrationPrincipalRepair(rootDir) {
     "utf8",
   );
   try {
-    assertProtectedCleanupWorkflow(cleanupWorkflow, cleanupWorkflow);
+    // Recovery copies this controller as a standalone file. Load the optional
+    // cleanup validator only for full repository validation, never at startup.
+    execFileSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        `
+      import fs from "node:fs";
+      import { assertProtectedCleanupWorkflow } from ${JSON.stringify(new URL("./retire-image-gen-repair-exec-token.mjs", import.meta.url).href)};
+      const workflow = fs.readFileSync(0, "utf8");
+      assertProtectedCleanupWorkflow(workflow, workflow);
+    `,
+      ],
+      { input: cleanupWorkflow, stdio: ["pipe", "pipe", "pipe"] },
+    );
   } catch {
     fail(
       `${MIGRATION_SUPER_CLEANUP_WORKFLOW_PATH} must preserve protected revoke-only cleanup evidence`,
@@ -5946,7 +5961,7 @@ function validateRuntimePrincipalStagingWorkflow(rootDir) {
       "must verify the new principal only through the isolated local tunnel",
     ],
     [
-      'runtime_database_url="mysql://${runtime_principal}:${runtime_password}@[${RUNTIME_PRINCIPAL_DATABASE_PRIVATE_IP}]:3306/${RUNTIME_PRINCIPAL_DATABASE_NAME}"',
+      'runtime_database_url="mysql://${runtime_principal}:${runtime_password}@${RUNTIME_PRINCIPAL_DATABASE_MACHINE_ID}.vm.${RUNTIME_PRINCIPAL_DATABASE_APP}.internal:3306/${RUNTIME_PRINCIPAL_DATABASE_NAME}"',
       "must stage the Fly-reachable private database URL",
     ],
     [
@@ -6360,7 +6375,7 @@ function validateCreditProvisionerRetirementWorkflow(rootDir) {
       "must require the exact reviewed worker Machine count",
     ],
     [
-      "EXPECTED_RUNTIME_PRINCIPAL_SHA256=$EXPECTED_RUNTIME_PRINCIPAL_SHA256 node /app/dist/billing-trigger-runtime-preflight.cjs",
+      '--command "env EXPECTED_RUNTIME_PRINCIPAL_SHA256=$EXPECTED_RUNTIME_PRINCIPAL_SHA256 node /app/dist/billing-trigger-runtime-preflight.cjs"',
       "must reprove the restricted principal on every Machine",
     ],
     [
@@ -6532,7 +6547,7 @@ function validateCreditProvisionerRetirementWorkflow(rootDir) {
     'for machine_id in "${machine_ids[@]}"; do',
   );
   const preflightCommand = topologyStep?.indexOf(
-    "EXPECTED_RUNTIME_PRINCIPAL_SHA256=$EXPECTED_RUNTIME_PRINCIPAL_SHA256 node /app/dist/billing-trigger-runtime-preflight.cjs",
+    '--command "env EXPECTED_RUNTIME_PRINCIPAL_SHA256=$EXPECTED_RUNTIME_PRINCIPAL_SHA256 node /app/dist/billing-trigger-runtime-preflight.cjs"',
   );
   const loopEnd = topologyStep?.indexOf("          done", loopStart ?? -1);
   if (
@@ -6626,7 +6641,7 @@ function validateRuntimePrincipalCleanupWorkflow(rootDir) {
       "must derive the exact successor count from reviewed desiredScale",
     ],
     [
-      "EXPECTED_RUNTIME_PRINCIPAL_SHA256=$EXPECTED_RUNTIME_PRINCIPAL_SHA256 node /app/dist/billing-trigger-runtime-preflight.cjs",
+      '--command "env EXPECTED_RUNTIME_PRINCIPAL_SHA256=$EXPECTED_RUNTIME_PRINCIPAL_SHA256 node /app/dist/billing-trigger-runtime-preflight.cjs"',
       "must reprove the exact principal and DML boundary on every Machine",
     ],
     [
@@ -8870,13 +8885,14 @@ export function validateProductionRepository(rootDir = process.cwd()) {
       if (
         creditExposureEnabled &&
         String(envAssignments.MOLLIE_MODE ?? "") === "test" &&
+        Object.values(testPilotValues).some((value) => value !== "") &&
         (!canonicalDatabaseId(testPilotValues.channelConnectionId) ||
           !canonicalDatabaseId(testPilotValues.bindingEpoch) ||
           !canonicalDatabaseId(testPilotValues.privacyEpoch) ||
           !/^[a-f0-9]{64}$/.test(testPilotValues.userKeyHash))
       ) {
         fail(
-          `${app.config} must pin Test Mode paid credits to one hashed Messenger user and exact Page binding`,
+          `${app.config} must not contain a partial or malformed legacy tester pin`,
         );
       }
       if (

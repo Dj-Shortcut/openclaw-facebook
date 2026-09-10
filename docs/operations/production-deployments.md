@@ -3,14 +3,20 @@
 Production has one owner: the reviewed Git repository through the manually
 dispatched `Deploy production` GitHub Actions workflow. `fly deploy` may replace
 or update Machines. Operators never use `fly machine run` as a deployment or
-migration shortcut. Only the protected schema workflow may create its one
-temporary, no-DNS Machine to prove that a fresh database snapshot restores.
-The fixed integrity check runs as that isolated Machine's entrypoint with
+migration shortcut. Temporary Machines are permitted only in two protected
+workflows: the schema workflow's one no-DNS snapshot-restore Machine, and the
+bounded staged-hostname repair described below. Neither exception permits an
+ad-hoc application deployment or schema change.
+The schema workflow's fixed integrity check runs as its isolated Machine's entrypoint with
 networking disabled in MySQL and automatic restart disabled. The workflow reads
 structured exit evidence from the exact Machines API endpoint; a stopped
 Machine alone is not success. It retains the Machine until verification, then
 the existing unconditional cleanup removes the Machine and restored volume.
 This restore test uses no SSH or Machine-exec credential.
+The separate hostname-repair workflow may start one attested, sleep-only,
+auto-destroying Machine with no services or volumes and no DNS registration.
+Its bounded SSH probe and cleanup are restricted to the exact staged-hostname
+repair procedure; it must leave the running application baseline unchanged.
 
 ## Ownership model
 
@@ -33,6 +39,32 @@ The shared validation job installs the pinned pnpm toolchain once and uses the
 image-gen lockfile for the Actions dependency cache; the image-gen release
 step therefore reuses packages without changing the immutable artifact or
 production approval gates.
+
+### Credit readiness without the retired customer portal
+
+With legacy sales (`MOLLIE_BILLING_ENABLED`) disabled, credit startup and
+`/readyz` do not require a workspace buyer-profile attestation or the legacy
+`PORTAL_HANDOFF_TOKEN_SECRET`. Preserve the existing
+`BILLING_PROFILE_EVIDENCE_HMAC_SECRET`: despite its historical name, it also
+signs credit reservation recovery evidence and remains required.
+Credit checkout uses its dedicated signed capability; it never sends a user
+through a portal login. Legacy sales, if explicitly enabled on a retained
+compatibility deployment, still require their original profile and keys.
+
+The existing authenticated operator `billingAdmin.enableSchedulerTenant` action
+initializes missing, commercially disabled payment controls only when legacy
+sales are disabled, before applying
+its audited activation with the expected execution epoch. Do not create a fake
+consumer attestation to initialize credit processing. No customer login or new
+management UI is required; this retains the existing operator-only authority.
+
+This does not remove the audited payment execution controls, worker lanes and
+heartbeats, notification checks, credential generation identity, spend caps,
+or credit schema/privilege checks. Do not delete old handoff secrets or financial
+records until their retained work is drained or retired under its own runbook.
+Verify both startup and `/readyz` on the reviewed image; a code change alone is
+not proof of activation, credit delivery, or a successful payment test. Rollback
+must use the reviewed 0018 image/config and retain payment recovery workers.
 
 ### Owner Page token rotation
 
@@ -978,6 +1010,59 @@ remains the only permitted path for the reviewed 0017/0018 migrations; no
 application deploy, shell command, or ad-hoc Machine may change the production
 schema.
 
+### Repair a staged runtime database hostname
+
+Run `34353109061/1` (2026-09-09) failed before replacing any app/worker
+Machine. The attested runtime's mysql2 URL parser retained square brackets
+around the private IPv6 hostname, producing `getaddrinfo ENOTFOUND`. The earlier
+staging probe used the loopback tunnel instead of that production URL. Both
+the candidate and bridge release-command checks rejected the staged URL; all
+four original Machines retained the healthy bridge, and exact restored-config
+verification plus `/healthz` and `/readyz` passed.
+
+For this exact `runtime_reviewed` condition, use only the protected manual
+`repair-image-gen-runtime-database-host.yml` workflow from green reviewed main.
+Before dispatch, the responsible operator must reserve an exclusive secret-change
+window through cleanup: no direct Fly CLI/API/dashboard credential changes or
+external rotation jobs may run against this app. The required
+`exclusive_secret_window=true` input records that operational confirmation;
+the protected production approval must verify it. Repository mutation workflows
+already share the same concurrency group. Fly's secret update API has no
+compare-and-set field, so this is an operator coordination requirement, not an
+atomic vault lock. Do not dispatch when other writers cannot be excluded.
+It does not create or rotate a database principal, widen privileges, change
+schema, deploy the app, or enable payments. It starts one auto-destroying,
+ten-minute isolated Machine on the attested runtime with a sleep-only entrypoint,
+no services and no volumes. A bounded SSH command validates the staged account
+fingerprint, exact database Machine/private IP and database name, substitutes
+the exact `<machine-id>.vm.<database-app>.internal` hostname, and requires that
+DNS resolve to the same private IP. Both the exact artifact schema verifier
+and the synthetic, rolled-back billing-trigger probe must pass through that
+hostname. The resulting credential travels only in process memory from SSH
+stdout to `flyctl secrets import --stage` stdin, never in arguments, files,
+application logs or artifacts. A changed vault digest or deployment status
+observed immediately before staging aborts; that check alone cannot prevent a
+write racing the import. Cleanup polls for delayed probe creation for up to two
+minutes, removes only its exact random marker, and requires two separated absent
+observations. Unknown creation/cleanup remains a failed run, with the ten-minute
+auto-destroy as a backstop, not successful cleanup evidence. The unchanged
+production baseline is reproved only after confirmed cleanup. Only metadata is
+retained. An interrupted/ambiguous stage requires
+inspection, not an automatic replay or a new credential.
+
+Probe creation submits the attested image digest unchanged to the fixed Fly
+Machines API using the existing image-gen app-scoped deploy token. A read-only
+`--build-only` reproduction on pinned flyctl 0.4.85 showed its image resolver
+appending a second `@sha256:` suffix to this digest reference. The helper avoids
+that resolver only for creation; all inventory, verification, staging and cleanup
+guards remain. Creation has a sixty-second timeout, rejects redirects, never
+automatically retries, and discards response bodies. No broader token, database
+privilege or mutable image tag is required by this correction.
+
+Future principal staging uses the same machine-specific internal hostname.
+This is an address-format correction, not completion of the runtime rollout
+or permission to expose a checkout. Resume step 10 after successful repair.
+
 Use this exact sequence:
 
 1. **Open the reviewed transition.** In a dedicated manifest PR, set the
@@ -1048,6 +1133,16 @@ trusted production artifact` with `image-gen-bridge`. The workflow proves
     through the staged principal on every desired app and worker Machine before
     `/healthz` and `/readyz` may complete the rollout. A failed rollout restores
     the bridge and its captured configuration; the 0018 schema remains in place.
+    Fly SSH executes the command directly, not through a shell: pass the
+    principal fingerprint using `env EXPECTED_RUNTIME_PRINCIPAL_SHA256=... node ...`,
+    never a bare leading assignment. Run `34459197149/1` reached all four
+    runtime Machines but that malformed probe command triggered a verified
+    bridge restore before principal/readiness evidence could be completed.
+    The corrected rollout `34461561679/1` passed on all four Machines under
+    `deploy-34461561679-1`. Its final `image-gen-release-34461561679-1` artifact
+    (not the earlier rollback artifact) contains the completed
+    `runtime-principal-cutover.json` with health/readiness no longer pending.
+    This proves runtime cutover, not checkout activation or a Mollie payment.
 11. **Settle the final runtime before principal cleanup.** Record a healthy
     final-schema runtime predecessor and move to `complete` only in a later reviewed
     manifest PR that removes the bridge from the rollback allowlist and retains
@@ -1055,6 +1150,14 @@ trusted production artifact` with `image-gen-bridge`. The workflow proves
     while the only rollback is the migration bridge. This settled manifest is a
     prerequisite for the protected obsolete-principal cleanup workflow; moving
     to `complete` does not itself enable paid credits or checkout.
+    The owner approved this exact rollback-plan change on 2026-09-10. Its
+    replacement is runtime `1d80d6bce5fd...`, built from
+    `80703910131e227d1d683b1f5b6287c8bff241de`, with settled identity
+    `deploy-34461561679-1`. The retained config has SHA-256
+    `4d9c56fd92f7694c84365f8317117d2335017ac0efb963b78dd2799e22d47697`.
+    This approval does not authorize the account-retirement operations below.
+    Their per-Machine probes must also use `env` before the principal assignment;
+    both manual cleanup workflows and their exact-command checks enforce this.
 12. **Retire the obsolete broad runtime principal.** Only after every desired
     Machine reproves the restricted principal under the settled deployment
     identity, run the protected cleanup workflow to lock the exact obsolete
@@ -1094,18 +1197,18 @@ key. Never remove a predecessor until no non-erased wallet or
 provider-resolution proof uses it; removal is a fail-closed incident, not a
 wallet migration.
 
-Test Mode exposure is additionally limited to one approved pseudonymous
-Messenger subject on one exact Page binding. In the reviewed activation change,
-set `MOLLIE_CREDIT_TEST_CHANNEL_CONNECTION_ID`,
-`MOLLIE_CREDIT_TEST_BINDING_EPOCH` and `MOLLIE_CREDIT_TEST_PRIVACY_EPOCH` to the
-current non-secret database boundary. Compute
-`MOLLIE_CREDIT_TEST_USER_KEY_HASH` only in the protected operator environment as
-SHA-256 over the UTF-8 domain `leaderbot.credit-checkout-test-user.v1\0`
-followed by the canonical pseudonymous user key. Retain only the hash; never
-place the source user key or PSID in config, documentation, evidence, chat or
-logs. `/readyz` must fail before database access when any part is absent or
-stale. A different user in the same owner workspace remains on the ordinary
-free-quota response and cannot create a wallet, intent or provider operation.
+The owner-directed Test Mode journey requires no tester registration. In the
+reviewed activation change, leave `MOLLIE_CREDIT_TEST_CHANNEL_CONNECTION_ID`,
+`MOLLIE_CREDIT_TEST_BINDING_EPOCH`, `MOLLIE_CREDIT_TEST_PRIVACY_EPOCH` and
+`MOLLIE_CREDIT_TEST_USER_KEY_HASH` all empty. Eligible Messenger users on the
+owner Page may then use the same checkout path. Each intent, capability,
+payment and wallet still binds the actual user, channel connection, Page
+binding and privacy epoch automatically; this is not an anonymous shared
+wallet or an unbound payment URL. Consent, the messaging window, quota and
+budget admission remain mandatory. For compatibility an existing complete
+four-field tester restriction is honored; partial or malformed restrictions
+fail closed. The source change alone does not activate checkout: the protected
+activation, payment workers and production evidence gates above remain open.
 
 Set the non-secret `MESSENGER_PAID_IMAGE_PROVIDER_MAX_COST_USD=1.00` in the same
 reviewed Test Mode activation. This is a conservative reservation against the

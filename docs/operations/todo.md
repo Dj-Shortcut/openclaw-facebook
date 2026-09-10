@@ -88,6 +88,26 @@ Live payment enablement remains gated by the relevant P1 through P4 evidence.
       Mode, pass paid checkout, delayed/replayed webhook, cancellation, failure,
       refund, partially used wallet, provider failure, delivery failure,
       deletion, budget exhaustion, receipt, reconciliation, and rollback.
+  - [ ] **Remove portal prerequisites from credit activation.** Credit startup
+        and `/readyz` must work without a legacy buyer-profile attestation or
+        `PORTAL_HANDOFF_TOKEN_SECRET`. Preserve the existing
+        `BILLING_PROFILE_EVIDENCE_HMAC_SECRET` for credit recovery evidence;
+        its historical name does not make it a portal prerequisite.
+        Keep the owner/user boundary, signed credit capability, audited payment
+        controls, worker health, budgets, and retained-payment recovery intact.
+        The code separates these requirements from legacy sales and initializes
+        payment controls through the existing audited operator action, without
+        a profile attestation. Reviewed merge, deployment and actual
+        payment-to-credit-to-delivery proof remain outstanding.
+  - [ ] **Test Mode without tester registration.** Owner direction (2026-09-10):
+        any eligible Messenger user must be able to test without a manually
+        registered identity or customer login. Leave the four optional tester
+        restriction fields empty, while automatically binding each checkout,
+        payment and wallet to its actual Messenger user and Page/privacy
+        boundary. PR #522 implements eligibility and retains consent, budgets,
+        audited payment controls and worker checks. Review, deployment and the
+        complete payment-to-credit-to-delivered-edit proof remain outstanding;
+        live billing stays off.
   - [ ] **Bug: false failure message after a delivered image.** Owner report
         (2026-09-09): the tester receives each photo, then also receives
         "ik kon de afbeelding nu niet maken". Cause not yet verified. Investigate
@@ -119,16 +139,23 @@ Live payment enablement remains gated by the relevant P1 through P4 evidence.
         grants and exact candidate trigger preflight, then staged `DATABASE_URL`
         at `2026-09-09T11:53:32Z` without restarting any Machine. Artifact digest:
         `sha256:d3f807a17cc0e5d051e2d5aa476d600bbdf8395dc338c745073995f5930403e8`.
-  - [ ] **Review and deploy the staged credit runtime.** The manifest binds the
-        verified staged principal to `runtime_reviewed` on proven `0018`.
-        The running bridge still serves the old frontend and generic quota
-        link. After the separately reviewed manifest and exact-source CI pass,
-        deploy and verify every app/worker, the new frontend, and the Messenger
-        checkout route. The owner explicitly approved this rollout on
-        2026-09-09 after the earlier automatic approval rejection; retain the
-        exact bridge rollback and leave payment exposure unchanged.
-        Do not enable checkout from schema/build success alone or repeat the
-        completed expansion and repair.
+  - [x] **Review and deploy the staged credit runtime.** Protected rollout
+        [34461561679/1](https://github.com/Dj-Shortcut/openclaw-facebook/actions/runs/34461561679)
+        on `8ee0a971e4916b92ca07be6924498373315775e7` succeeded. All four desired
+        app/worker Machines run the reviewed `1d80d6bce5fd...` final runtime under
+        `deploy-34461561679-1`. The exact restricted-principal probe passed on
+        every Machine; smoke health/readiness and a fresh strict settled-live
+        readback passed with no drift (Fly release 381). The release artifact
+        contains `runtime-principal-cutover.json` with `machineCount:4` and
+        `healthAndReadinessPending:false`; artifact SHA-256:
+        `8d4ca366b787d54f4c23a6722647033ff02651b40d78c1af4b4023e0479f5049`.
+        The public HTML at `app.leaderbot.live` contains the premium-credit
+        offer. This is not visual acceptance: the owner reports old styling on
+        privacy, terms, refunds, data, contact and Messenger pages; Claude is
+        checking these against the approved homepage in a separate frontend PR.
+        Payment flags remain off in Test Mode. Personal Messenger checkout, actual
+        credit grant and delivered-edit proof remain open below. Do not repeat
+        the completed schema expansion, hostname repair or principal staging.
     - Rollout `34350372911/1` on merged PR #511 stopped in `Record rollback
 release`, before any deployment or restart. The app-level Fly config
       returned no deployment identity, while all four started Machines still
@@ -136,6 +163,41 @@ release`, before any deployment or restart. The app-level Fly config
       remained 200. Capture rollback from the existing strict settled-live
       Machine/release evidence, not the shadow app config. Require an unchanged
       settlement tuple and the exact hash-reviewed restore file before retrying.
+    - Rollout `34353109061/1` passed the corrected rollback capture, then both
+      candidate and restore release commands rejected the staged database URL
+      with `getaddrinfo ENOTFOUND` on a bracketed IPv6 hostname. No app/worker
+      Machine was replaced: all four retained the reviewed bridge and identity;
+      exact restored-config verification plus health/readiness passed. The
+      staging probe had used an IPv4 tunnel, missing the production URL parsing
+      mismatch. Repair only the staged URL hostname via the protected hostname
+      repair workflow, preserving the restricted principal and password; prove
+      the exact schema and trigger probes through that production hostname
+      before the next rollout. Do not repeat schema migration or create another
+      principal. The separate recovery controller also needs its standalone
+      startup regression: its eager cleanup-helper import was unavailable in
+      the isolated recovery directory.
+    - Host-repair run `34457016452/1` (2026-09-10) stopped at
+      `runtime_database_host_probe_create_failed`, before URL staging, and did
+      not establish cleanup completion. A subsequent read-only reproduction
+      with pinned flyctl 0.4.85 showed that its image resolver duplicates the
+      reviewed digest suffix. Correct the probe creation request to preserve
+      that exact digest, retain all existing isolation/cleanup guards, and
+      rerun only after reviewed main CI.
+    - **Hostname repair passed:** protected run
+      [34458768314/1](https://github.com/Dj-Shortcut/openclaw-facebook/actions/runs/34458768314)
+      on merged PR #518 (`d9042b1303ecca481ffb122cdee64ac26205c1d2`) passed both
+      exact schema and trigger probes through the corrected hostname, staged
+      the same restricted principal, removed its probe and reproved the unchanged
+      bridge baseline. This step is complete; do not repeat it or rotate keys.
+    - Runtime rollout `34459197149/1` then started the reviewed final runtime
+      on all four Machines, but the post-deploy principal probe failed before
+      running: Fly SSH treated the leading environment assignment as an
+      executable. The protected workflow restored all four Machines to the
+      reviewed bridge and verified restored configuration and health. Prefix
+      that exact probe command with `env`, prove the argv behavior in tests,
+      and retain the all-Machine gate for the next rollout. PR #519 supplied
+      that fix and executable regression; run `34461561679/1` subsequently
+      passed the complete rollout. Neither run proves a payment test.
     - Public address check (2026-09-09): `app.leaderbot.live` serves the bot app;
       Fly lists its certificate as ready. `leaderbot.live` resolves to different
       A/AAAA addresses and timed out from the operator Mac. Verify/correct that
@@ -178,6 +240,33 @@ release`, before any deployment or restart. The app-level Fly config
         Commercial exposure remains incomplete until both cleanup paths have
         metadata-only success evidence; do not substitute manual SQL or
         unreviewed secret-field edits.
+    - On 2026-09-10 the owner explicitly approved replacing the old bridge
+      rollback with the proven running runtime after the change was explained.
+      The settlement manifest records `deploy-34461561679-1` and its exact
+      config as the predecessor and sole final-0018 runtime rollback, and sets
+      the schema transition to `complete`. This closes the rollback-plan step
+      only after reviewed merge; it authorizes no account deletion, new database
+      permissions or payment activation. The previous automatic-review denial
+      was not bypassed; the owner supplied the missing specific authorization.
+    - The bounded-Test alternative proposed in PR #517 is not merged or
+      activated. Its single-tester restriction no longer matches the owner's
+      current direction and must not be activated unchanged. Its same-run
+      account/session inspection still lacks
+      an authorized transport/credential: the migration Fly token excludes
+      Machine-exec, and the provisioner lacks complete cross-user session
+      visibility. Do not repurpose another token, widen runtime grants, or
+      substitute unbound local output. A narrowly scoped metadata-only
+      inspection path needs explicit authorization and review.
+    - Checkout configuration readback (2026-09-10): `MOLLIE_API_KEY` is present
+      and deployed. After confirming no pending secrets and no existing signer,
+      the owner-authorized test setup generated a fresh 32-byte
+      `CREDIT_CHECKOUT_HMAC_SECRET` in memory and imported it through stdin with
+      `--stage`. Fly confirms the signer is `Staged`; no deployment or restart
+      was triggered and no existing key was replaced. Its value was not logged
+      or written to disk. The next reviewed deployment must apply it; this is
+      not evidence that checkout is active.
+      Automatic per-user checkout binding, payment drain/notification configuration and
+      real Test Mode payment-to-credit-to-delivery proof are still required.
 
 - [ ] **P5 - Bounded live pilot and legacy removal.** Obtain legal/accounting
       approval, enable one reviewed live offer for a bounded audience, monitor
