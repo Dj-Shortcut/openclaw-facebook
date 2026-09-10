@@ -1130,6 +1130,8 @@ trusted production artifact` with `image-gen-bridge`. The workflow proves
     `deploy-34461561679-1`. The retained config has SHA-256
     `4d9c56fd92f7694c84365f8317117d2335017ac0efb963b78dd2799e22d47697`.
     This approval does not authorize the account-retirement operations below.
+    Their per-Machine probes must also use `env` before the principal assignment;
+    both manual cleanup workflows and their exact-command checks enforce this.
 12. **Retire the obsolete broad runtime principal.** Only after every desired
     Machine reproves the restricted principal under the settled deployment
     identity, run the protected cleanup workflow to lock the exact obsolete
