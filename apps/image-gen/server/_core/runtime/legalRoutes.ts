@@ -2,6 +2,7 @@ import {
   PUBLIC_BUSINESS_DETAILS,
   formatPublicBusinessAddress,
 } from "../../../shared/publicBusinessDetails";
+import { PUBLIC_LEGAL_LINKS } from "../../../shared/publicLegalNavigation";
 import type express from "express";
 import { formatAmountMinor } from "../billing/catalog";
 import {
@@ -69,7 +70,7 @@ export function registerLegalRoutes(app: express.Express) {
           },
           {
             heading: "Retention and your choices",
-          html: '<p>Retention depends on the feature and legal obligations. Messenger users can request deletion by sending <strong>delete my data</strong> or <strong>verwijder mijn data</strong>, or by contacting <a href="mailto:privacy@leaderbot.live">privacy@leaderbot.live</a>.</p>',
+            html: '<p>Retention depends on the feature and legal obligations. Messenger users can request deletion by sending <strong>delete my data</strong> or <strong>verwijder mijn data</strong>, or by contacting <a href="mailto:privacy@leaderbot.live">privacy@leaderbot.live</a>.</p>',
           },
           {
             heading: "Payments",
@@ -102,7 +103,7 @@ export function registerLegalRoutes(app: express.Express) {
           },
           {
             heading: "Messenger connection and limits",
-          html: "<p>You may connect only a Facebook Page that you are authorized to manage. Quotas, rate limits, budget limits, abuse protection and temporary safety restrictions may apply.</p>",
+            html: "<p>You may connect only a Facebook Page that you are authorized to manage. Quotas, rate limits, budget limits, abuse protection and temporary safety restrictions may apply.</p>",
           },
           {
             heading: "Platform separation",
@@ -164,7 +165,7 @@ export function registerLegalRoutes(app: express.Express) {
         sections: [
           {
             heading: "Data requests",
-            html: "<p>Messenger users can request deletion by sending <strong>delete my data</strong> or <strong>verwijder mijn data</strong>, or by contacting <a href=\"mailto:privacy@leaderbot.live\">privacy@leaderbot.live</a>.</p>",
+            html: '<p>Messenger users can request deletion by sending <strong>delete my data</strong> or <strong>verwijder mijn data</strong>, or by contacting <a href="mailto:privacy@leaderbot.live">privacy@leaderbot.live</a>.</p>',
           },
           {
             heading: "Messenger requests",
@@ -201,39 +202,101 @@ function renderLegalPage(page: LegalPage): string {
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="robots" content="index,follow" />
+  <meta name="theme-color" content="#f6f2ea" />
   <title>${escapeHtml(page.title)} – Leaderbot</title>
   <style>
-    :root { color-scheme: dark; }
+    :root { color-scheme: light; }
     * { box-sizing: border-box; }
-    body { margin: 0; background: #10211d; color: #d6d3d1; font: 16px/1.65 Arial, sans-serif; }
-    main { max-width: 780px; margin: 0 auto; padding: 40px 24px 64px; }
-    h1, h2, strong { color: #fff; }
-    h1 { font-size: clamp(2rem, 6vw, 3rem); line-height: 1.1; margin: 20px 0 12px; }
-    h2 { font-size: 1.15rem; margin-top: 0; }
-    section, address { margin-top: 16px; padding: 20px; border: 1px solid rgba(255,255,255,.1); border-radius: 16px; background: rgba(255,255,255,.04); }
-    address { font-style: normal; }
-    a { color: #bef264; }
-    .back { font-weight: 700; text-decoration: none; }
-    .updated { margin-top: 28px; color: #a8a29e; font-size: .8rem; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
-    .intro { font-size: 1.05rem; }
+    body {
+      margin: 0;
+      background: #f6f2ea;
+      color: #14203D;
+      font: 16px/1.65 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    }
+    a { color: #2541C9; }
+    a:focus-visible, button:focus-visible { outline: 2px solid #2541C9; outline-offset: 2px; }
+    .skip { position: absolute; left: -9999px; }
+    .skip:focus { left: 16px; top: 16px; z-index: 50; background: #fff; padding: 8px 16px; border-radius: 6px; font-weight: 600; text-decoration: none; }
+    .site-header { position: sticky; top: 0; z-index: 40; border-bottom: 1px solid rgba(20,32,61,.1); background: rgba(246,242,234,.9); backdrop-filter: blur(8px); }
+    .bar { max-width: 1280px; margin: 0 auto; padding: 12px 16px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; }
+    .brand { display: flex; align-items: center; gap: 12px; text-decoration: none; color: inherit; }
+    .brand .mark { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 12px; background: linear-gradient(135deg,#2541C9,#8B2FE0); color: #fff; font-weight: 900; }
+    .brand strong { display: block; font-size: 1rem; }
+    .brand span.host { display: block; font-size: .75rem; color: rgba(20,32,61,.7); }
+    .cta { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 0 20px; border-radius: 9999px; font-size: .875rem; font-weight: 700; text-decoration: none; color: #fff; background: linear-gradient(120deg,#2541C9,#8B2FE0); box-shadow: 0 14px 30px -14px rgba(37,65,201,.6); }
+    main { max-width: 768px; margin: 0 auto; padding: 32px 16px 56px; }
+    .back { display: inline-block; font-size: .875rem; font-weight: 600; text-decoration: none; }
+    .updated { margin-top: 24px; margin-bottom: 0; color: rgba(20,32,61,.65); font-size: .75rem; font-weight: 700; letter-spacing: .16em; text-transform: uppercase; }
+    h1 { font-size: clamp(1.875rem, 5vw, 2.25rem); line-height: 1.15; margin: 12px 0 0; }
+    .intro { margin-top: 16px; font-size: 1rem; line-height: 1.75; color: rgba(20,32,61,.8); }
+    section { margin-top: 16px; padding: 20px; border: 1px solid rgba(20,32,61,.12); border-radius: 16px; background: #fff; }
+    section h2 { margin: 0; font-size: 1.125rem; }
+    section p { margin: 8px 0 0; font-size: .9375rem; line-height: 1.7; color: rgba(20,32,61,.8); }
+    address.business { margin-top: 24px; padding: 20px; border: 1px solid rgba(37,65,201,.2); border-radius: 16px; background: rgba(37,65,201,.05); font-style: normal; font-size: .875rem; line-height: 1.7; }
+    .site-footer { border-top: 1px solid rgba(20,32,61,.12); background: #f6f2ea; }
+    .site-footer .bar { align-items: flex-end; padding: 32px 16px; font-size: .875rem; color: rgba(20,32,61,.75); }
+    .site-footer address { font-style: normal; line-height: 1.6; }
+    .site-footer nav { display: flex; flex-wrap: wrap; gap: 8px 16px; }
+    @media (min-width: 640px) { .bar { padding-left: 24px; padding-right: 24px; } }
+    @media (min-width: 1024px) { .bar { padding-left: 32px; padding-right: 32px; } }
   </style>
 </head>
 <body>
-  <main>
-    <a class="back" href="/">Back to Leaderbot</a>
+  <a class="skip" href="#legal-content">Skip to content</a>
+  ${renderSiteHeader()}
+  <main id="legal-content">
+    <a class="back" href="/">← Back to Leaderbot</a>
     <p class="updated">Last updated 28 August 2026</p>
     <h1>${escapeHtml(page.title)}</h1>
     <p class="intro">${escapeHtml(page.intro)}</p>
     ${sections}
     ${renderBusinessDetails()}
   </main>
+  ${renderSiteFooter()}
 </body>
 </html>`;
 }
 
+function renderSiteHeader(): string {
+  const business = PUBLIC_BUSINESS_DETAILS;
+  return `<header class="site-header">
+    <div class="bar">
+      <a class="brand" href="/" aria-label="Leaderbot home">
+        <span class="mark" aria-hidden="true">L</span>
+        <span>
+          <strong>${escapeHtml(business.brandName)}</strong>
+          <span class="host">leaderbot.live</span>
+        </span>
+      </a>
+      <a class="cta" href="${escapeHtml(business.messengerUrl)}" rel="noreferrer" target="_blank">Openen in Messenger</a>
+    </div>
+  </header>`;
+}
+
+function renderSiteFooter(): string {
+  const business = PUBLIC_BUSINESS_DETAILS;
+  const links = PUBLIC_LEGAL_LINKS.map(
+    link =>
+      `<a href="${escapeHtml(link.href)}"${
+        link.external ? ' rel="noreferrer" target="_blank"' : ""
+      }>${escapeHtml(link.label)}</a>`
+  ).join("");
+  return `<footer class="site-footer">
+    <div class="bar">
+      <address>
+        <strong>${escapeHtml(business.brandName)} · ${escapeHtml(business.legalName)}</strong><br />
+        ${escapeHtml(formatPublicBusinessAddress())} · KBO ${escapeHtml(business.enterpriseNumber)}<br />
+        <a href="tel:${escapeHtml(business.phoneHref)}">${escapeHtml(business.phoneDisplay)}</a> ·
+        <a href="mailto:${escapeHtml(business.email)}">${escapeHtml(business.email)}</a>
+      </address>
+      <nav aria-label="Juridische informatie">${links}</nav>
+    </div>
+  </footer>`;
+}
+
 function renderBusinessDetails(): string {
   const business = PUBLIC_BUSINESS_DETAILS;
-  return `<address>
+  return `<address class="business">
     <strong>${escapeHtml(business.brandName)} · ${escapeHtml(business.legalName)}</strong><br />
     Enterprise number ${escapeHtml(business.enterpriseNumber)} · VAT ${escapeHtml(business.vatNumber)}<br />
     ${escapeHtml(formatPublicBusinessAddress())}<br />
