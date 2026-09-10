@@ -1024,6 +1024,15 @@ production baseline is reproved only after confirmed cleanup. Only metadata is
 retained. An interrupted/ambiguous stage requires
 inspection, not an automatic replay or a new credential.
 
+Probe creation submits the attested image digest unchanged to the fixed Fly
+Machines API using the existing image-gen app-scoped deploy token. A read-only
+`--build-only` reproduction on pinned flyctl 0.4.85 showed its image resolver
+appending a second `@sha256:` suffix to this digest reference. The helper avoids
+that resolver only for creation; all inventory, verification, staging and cleanup
+guards remain. Creation has a sixty-second timeout, rejects redirects, never
+automatically retries, and discards response bodies. No broader token, database
+privilege or mutable image tag is required by this correction.
+
 Future principal staging uses the same machine-specific internal hostname.
 This is an address-format correction, not completion of the runtime rollout
 or permission to expose a checkout. Resume step 10 after successful repair.

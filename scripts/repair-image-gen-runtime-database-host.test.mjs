@@ -6,6 +6,7 @@ import {
   buildRuntimeHostProbe,
   classifyRuntimeHostFailure,
   cleanupRuntimeHostProbe,
+  createRuntimeHostProbe,
   normalizeRuntimeDatabaseUrl,
   repairRuntimeDatabaseHost,
 } from "./repair-image-gen-runtime-database-host.mjs";
@@ -21,7 +22,136 @@ const binding = {
 };
 const source = `mysql://${username}:${password}@[${binding.privateIp}]:3306/leaderbot`;
 const target = `mysql://${username}:${password}@${binding.machineId}.vm.${binding.app}.internal:3306/leaderbot`;
-afterEach(() => vi.unstubAllEnvs());
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.useRealTimers();
+});
+
+describe("exact-digest probe creation", () => {
+  const input = {
+    name: "dbhost-012345abcdef",
+    region: "ams",
+    image: `registry.fly.io/leaderbot-fb-image-gen@sha256:${"b".repeat(64)}`,
+    token: "test-app-scoped-token",
+  };
+
+  it("submits the immutable reference unchanged, with no public routes or app startup", async () => {
+    const cancel = vi.fn(async () => {});
+    const fetchImpl = vi.fn(async () => ({ ok: true, body: { cancel } }));
+    await createRuntimeHostProbe(input, fetchImpl);
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    const [url, options] = fetchImpl.mock.calls[0];
+    expect(url).toBe(
+      "https://api.machines.dev/v1/apps/leaderbot-fb-image-gen/machines",
+    );
+    expect(options).toMatchObject({
+      method: "POST",
+      redirect: "error",
+      headers: {
+        Authorization: `Bearer ${input.token}`,
+        "Content-Type": "application/json",
+      },
+    });
+    expect(options.signal).toBeInstanceOf(AbortSignal);
+    expect(JSON.parse(options.body)).toEqual({
+      name: input.name,
+      region: input.region,
+      skip_launch: false,
+      skip_service_registration: true,
+      config: {
+        image: input.image,
+        init: { entrypoint: ["/bin/sleep"], cmd: ["600"] },
+        services: [],
+        mounts: [],
+        env: {},
+        auto_destroy: true,
+        restart: { policy: "no" },
+        dns: { skip_registration: true },
+        guest: { cpu_kind: "shared", cpus: 1, memory_mb: 256 },
+        metadata: { leaderbot_database_host_probe: input.name },
+      },
+    });
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { image: `${input.image}@sha256:${"b".repeat(64)}` },
+    { image: "registry.fly.io/leaderbot-fb-image-gen:latest" },
+    { image: `registry.fly.io/another-app@sha256:${"b".repeat(64)}` },
+    { token: "" },
+    { name: "production-machine" },
+    { region: "" },
+  ])(
+    "rejects invalid creation inputs without a request: %j",
+    async (override) => {
+      const fetchImpl = vi.fn();
+      await expect(
+        createRuntimeHostProbe({ ...input, ...override }, fetchImpl),
+      ).rejects.toThrow("runtime_database_host_probe_create_input_rejected");
+      expect(fetchImpl).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    [401, "access_denied"],
+    [403, "access_denied"],
+    [400, "config_rejected"],
+    [422, "config_rejected"],
+    [500, "failed"],
+    [302, "failed"],
+  ])(
+    "redacts HTTP %s and never repeats a possibly accepted create",
+    async (status, category) => {
+      const text = vi.fn(() => input.token);
+      const fetchImpl = vi.fn(async () => ({ ok: false, status, text }));
+      const error = await createRuntimeHostProbe(input, fetchImpl).catch(
+        (error) => error,
+      );
+      expect(error.message).toBe(
+        `runtime_database_host_probe_create_${category}`,
+      );
+      expect(error.cause).toBeUndefined();
+      expect(text).not.toHaveBeenCalled();
+      expect(fetchImpl).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("aborts a hanging request after one minute without retry or sensitive cause", async () => {
+    vi.useFakeTimers();
+    const fetchImpl = vi.fn(
+      (_url, { signal }) =>
+        new Promise((_resolve, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => reject(new Error(input.token)),
+            { once: true },
+          );
+        }),
+    );
+    const result = createRuntimeHostProbe(input, fetchImpl).catch(
+      (error) => error,
+    );
+    await vi.advanceTimersByTimeAsync(60000);
+    const error = await result;
+    expect(error.message).toBe("runtime_database_host_probe_create_timeout");
+    expect(error.cause).toBeUndefined();
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("discards transport error details and clears the deadline", async () => {
+    vi.useFakeTimers();
+    const fetchImpl = vi.fn(async () => {
+      throw new Error(input.token, { cause: new Error(source) });
+    });
+    const error = await createRuntimeHostProbe(input, fetchImpl).catch(
+      (error) => error,
+    );
+    expect(error.message).toBe("runtime_database_host_probe_create_failed");
+    expect(error.cause).toBeUndefined();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});
 
 describe("redacted repair diagnostics", () => {
   it.each([
@@ -92,6 +222,7 @@ function repairHarness(failure) {
   vi.stubEnv("GITHUB_ACTIONS", "true");
   vi.stubEnv("EXCLUSIVE_SECRET_WINDOW", "true");
   vi.stubEnv("GITHUB_SHA", sha);
+  vi.stubEnv("FLY_API_TOKEN", "test-app-scoped-token");
   vi.stubEnv(
     "GITHUB_WORKFLOW_REF",
     "Dj-Shortcut/openclaw-facebook/.github/workflows/repair-image-gen-runtime-database-host.yml@refs/heads/main",
@@ -136,6 +267,25 @@ function repairHarness(failure) {
   let delayedReads = 0;
   const dependencies = {
     manifest,
+    fetch: vi.fn(async (_url, options) => {
+      const request = JSON.parse(options.body);
+      probe = {
+        id: "abcdef12345678",
+        name: request.name,
+        config: request.config,
+      };
+      if (
+        [
+          "create_response_lost",
+          "delayed_creation",
+          "unknown_creation",
+        ].includes(failure)
+      )
+        throw new Error("lost");
+      if (failure === "unexpected_service")
+        probe.config.services.push({ port: 8080 });
+      return { ok: true };
+    }),
     verifyCi: vi.fn(async () => {}),
     wait: vi.fn(async () => {}),
     checkSettled: vi.fn(async () => baseline),
@@ -177,31 +327,6 @@ function repairHarness(failure) {
         if (failure === "delayed_creation" && ++delayedReads <= 3) return "[]";
         if (failure === "unknown_creation") return "[]";
         return JSON.stringify(probe ? [probe] : []);
-      }
-      if (args[0] === "machine" && args[1] === "run") {
-        const name = args[args.indexOf("--name") + 1];
-        probe = {
-          id: "abcdef12345678",
-          name,
-          config: {
-            image,
-            metadata: { leaderbot_database_host_probe: name },
-            services: [],
-            mounts: [],
-            init: { entrypoint: ["/bin/sleep"], cmd: ["600"] },
-          },
-        };
-        if (
-          [
-            "create_response_lost",
-            "delayed_creation",
-            "unknown_creation",
-          ].includes(failure)
-        )
-          throw new Error("lost");
-        if (failure === "unexpected_service")
-          probe.config.services.push({ port: 8080 });
-        return "created";
       }
       if (args[0] === "machine" && args[1] === "destroy") {
         probe = undefined;
@@ -245,6 +370,12 @@ describe("exact staged database hostname repair", () => {
     );
     expect(calls.filter((call) => call.args[1] === "destroy")).toHaveLength(1);
     expect(dependencies.checkSettled).toHaveBeenCalledTimes(2);
+    expect(dependencies.fetch).toHaveBeenCalledOnce();
+    expect(
+      calls.some(
+        (call) => call.args[0] === "machine" && call.args[1] === "run",
+      ),
+    ).toBe(false);
   });
 
   it("does not stage a secret in verification-only mode", async () => {
