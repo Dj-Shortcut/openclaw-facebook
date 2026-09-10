@@ -81,9 +81,54 @@ suite("narrow session inventory on disposable MySQL 8.4.11", () => {
     connections.add(connection);
     return connection;
   };
+  let metadataDiagnostics = [];
   const session = {
     async execute(sql) {
-      const [rows] = await inspector.query(sql);
+      const operation = sql.startsWith("SELECT @@")
+        ? "identity"
+        : sql.startsWith("SHOW GLOBAL")
+          ? "status"
+          : "census";
+      let rows;
+      try {
+        [rows] = await inspector.query(sql);
+      } catch (error) {
+        metadataDiagnostics.push({
+          operation,
+          errorCode: /^ER_[A-Z_]+$/.test(error?.code ?? "")
+            ? error.code
+            : "metadata_query_failed",
+        });
+        throw error;
+      }
+      // Only fixed enums, booleans and aggregate counts may reach CI failures.
+      // Never include driver messages, SQL, usernames, or arbitrary row values.
+      const values =
+        rows.length === 1 ? Object.values(rows[0]).map(String) : [];
+      if (operation === "identity") {
+        metadataDiagnostics.push({
+          operation,
+          enabled: values[0] === "1",
+          supportedThreadModel: values[1] === "one-thread-per-connection",
+          expectedSession: values[2] === expectedSessionId,
+        });
+      } else if (operation === "status") {
+        metadataDiagnostics.push({
+          operation,
+          name: ["Connections", "Threads_connected"].includes(values[0])
+            ? values[0]
+            : "unexpected",
+          count: /^\d+$/.test(values[1] ?? "") ? values[1] : "invalid",
+        });
+      } else {
+        metadataDiagnostics.push({
+          operation,
+          counts:
+            values.length === 6 && values.every((value) => /^\d+$/.test(value))
+              ? values
+              : "invalid",
+        });
+      }
       return rows.map((row) =>
         Object.values(row)
           .map((value) => (value === null ? "NULL" : String(value)))
@@ -159,7 +204,12 @@ suite("narrow session inventory on disposable MySQL 8.4.11", () => {
       throw new Error("synthetic session inventory cleanup failed");
   });
   it("verifies restricted metadata access, existing locked sessions, absence, cache, auth and disabled instrumentation", async () => {
-    expect(await collect()).toMatchObject({
+    metadataDiagnostics = [];
+    const baseline = await collect();
+    expect(
+      baseline,
+      JSON.stringify({ baseline, metadataDiagnostics }),
+    ).toMatchObject({
       verified: true,
       obsoleteSessionCount: 0,
     });
