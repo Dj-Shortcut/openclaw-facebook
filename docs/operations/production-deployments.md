@@ -1142,8 +1142,8 @@ from the current dark manifest. Reviewers must match that hash to the actual
 old runtime/cutover and protected cleanup evidence; never choose an arbitrary
 or newly generated hash. A later activation PR must retain the exact
 healthy 0018 runtime predecessor, runtime-only rollback entries, and a proven
-rollback configuration with checkout off and drain, notifications and
-reconciliation on. After any provider transport, a drain-off rollback is unsafe
+rollback configuration with both checkout and paid admission off, and drain,
+notifications and reconciliation on. After any provider transport, a drain-off rollback is unsafe
 and fails the runtime's durable-activity guard.
 
 Only this explicit request runs the additional privileged inspection in

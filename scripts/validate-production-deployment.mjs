@@ -8291,6 +8291,7 @@ export function validateCreditTestActivation(app, env, rootDir) {
       MOLLIE_MODE: "test", MOLLIE_LIVE_BILLING_ENABLED: "false",
       MOLLIE_BILLING_ENABLED: "false", MOLLIE_BILLING_DRAIN_ENABLED: "true",
       MOLLIE_RECONCILIATION_ENABLED: "true", BILLING_NOTIFICATION_PLANE_ENABLED: "true",
+      MESSENGER_PAID_CREDITS_ENABLED: "false",
       MOLLIE_CREDIT_CHECKOUT_ENABLED: "false",
     })) {
       if (String(rollbackEnv[key]) !== value) fail(`image-gen Test rollback requires ${key}=${value}`);

@@ -98,10 +98,15 @@ function fixture() {
     ]),
   );
   const rollbackPath = "deploy/production/rollback-configs/test-runtime.toml";
-  const rollback = config.replace(
-    'MOLLIE_CREDIT_CHECKOUT_ENABLED = "true"',
-    'MOLLIE_CREDIT_CHECKOUT_ENABLED = "false"',
-  );
+  const rollback = config
+    .replace(
+      'MOLLIE_CREDIT_CHECKOUT_ENABLED = "true"',
+      'MOLLIE_CREDIT_CHECKOUT_ENABLED = "false"',
+    )
+    .replace(
+      'MESSENGER_PAID_CREDITS_ENABLED = "true"',
+      'MESSENGER_PAID_CREDITS_ENABLED = "false"',
+    );
   app.reviewedRollbackConfigs = {
     [image]: {
       path: rollbackPath,
@@ -299,6 +304,42 @@ describe("bounded credit Test activation", () => {
       validateCreditTestActivation(f.app, f.configEnv, f.root),
     ).toThrow("Test rollback requires MOLLIE_BILLING_DRAIN_ENABLED=true");
   });
+
+  it.each([
+    ["missing tester pin", 'MOLLIE_CREDIT_TEST_USER_KEY_HASH = ""'],
+    [
+      "different tester pin",
+      `MOLLIE_CREDIT_TEST_USER_KEY_HASH = "${"f".repeat(64)}"`,
+    ],
+    [
+      "different cost cap",
+      'MESSENGER_PAID_IMAGE_PROVIDER_MAX_COST_USD = "100.00"',
+    ],
+  ])(
+    "rejects paid admission in a hash-reviewed rollback with %s",
+    (_, replacement) => {
+      const f = fixture();
+      const entry = f.app.reviewedRollbackConfigs[f.app.reviewedImage];
+      const file = path.join(f.root, entry.path);
+      const key = replacement.split(" = ")[0];
+      const changed = fs
+        .readFileSync(file, "utf8")
+        .replace(
+          'MESSENGER_PAID_CREDITS_ENABLED = "false"',
+          'MESSENGER_PAID_CREDITS_ENABLED = "true"',
+        )
+        .replace(new RegExp(`${key} = "[^"]*"`), replacement);
+      fs.writeFileSync(file, changed);
+      entry.sha256 = createHash("sha256").update(changed).digest("hex");
+      fs.writeFileSync(
+        path.join(f.root, "deploy/production/apps.json"),
+        JSON.stringify({ schemaVersion: 1, apps: { "image-gen": f.app } }),
+      );
+      expect(() =>
+        validateCreditTestActivation(f.app, f.configEnv, f.root),
+      ).toThrow("Test rollback requires MESSENGER_PAID_CREDITS_ENABLED=false");
+    },
+  );
 });
 
 describe("protected metadata proof", () => {
