@@ -292,12 +292,14 @@ release`, before any deployment or restart. The app-level Fly config
         This bounded Test exception does not authorize live payment exposure.
     - On 2026-09-10 the owner explicitly approved replacing the old bridge
       rollback with the proven running runtime after the change was explained.
-      The settlement manifest records `deploy-34461561679-1` and its exact
-      config as the predecessor and sole final-0018 runtime rollback, and sets
-      the schema transition to `complete`. This closes the rollback-plan step
-      only after reviewed merge; it authorizes no account deletion, new database
-      permissions or payment activation. The previous automatic-review denial
-      was not bypassed; the owner supplied the missing specific authorization.
+      That settlement removed the bridge, set the schema transition to
+      `complete`, and recorded `deploy-34461561679-1` with its exact config as
+      the final-0018 runtime rollback at that time. It authorized no account
+      deletion, new database permissions or payment activation. The previous
+      automatic-review denial was not bypassed; the owner supplied the missing
+      specific authorization. A later owner-approved settlement superseded that
+      rollback point with `deploy-34496956631-1`; see the PR #524 entry below
+      and read the exact current values from `deploy/production/apps.json`.
     - PR #517 merged on 2026-09-10 as `7ba51d1a4f411fa18094ad42328718eb14dbeb22`.
       Both the PR MySQL run `34485670813` and main run `34486831012` passed,
       including the corrected exact-user disabled-monitoring fixture. This

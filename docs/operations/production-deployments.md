@@ -1150,11 +1150,15 @@ trusted production artifact` with `image-gen-bridge`. The workflow proves
     while the only rollback is the migration bridge. This settled manifest is a
     prerequisite for the protected obsolete-principal cleanup workflow; moving
     to `complete` does not itself enable paid credits or checkout.
-    The owner approved this exact rollback-plan change on 2026-09-10. Its
-    replacement is runtime `1d80d6bce5fd...`, built from
-    `80703910131e227d1d683b1f5b6287c8bff241de`, with settled identity
-    `deploy-34461561679-1`. The retained config has SHA-256
-    `4d9c56fd92f7694c84365f8317117d2335017ac0efb963b78dd2799e22d47697`.
+    The owner approved this exact rollback-plan change on 2026-09-10, which
+    first replaced the migration bridge with runtime `1d80d6bce5fd...`, built
+    from `80703910131e227d1d683b1f5b6287c8bff241de`, under settled identity
+    `deploy-34461561679-1`. A later owner-approved settlement replaced that
+    entry, so the current rollback point is runtime `f2fa9d60e1fc...`, built
+    from `b9caea7951b44d1f97bbd1bc742c25aca68264e9`, with settled identity
+    `deploy-34496956631-1` and config SHA-256
+    `05ffded5fb93abca68e275fe174f20db55f9e0dd1a679cd94c6378fc10053380`.
+    Read the exact current values from `deploy/production/apps.json`.
     This approval does not authorize the account-retirement operations below.
     Their per-Machine probes must also use `env` before the principal assignment;
     both manual cleanup workflows and their exact-command checks enforce this.
