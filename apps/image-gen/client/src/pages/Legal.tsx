@@ -33,7 +33,7 @@ const legalCopy: Record<LegalPageKind, LegalPageCopy> = {
       },
       {
         heading: "Retention and your choices",
-      body: "Retention depends on the feature and legal obligations. Messenger users can request deletion by sending ‘delete my data’ or ‘verwijder mijn data’, or by contacting privacy@leaderbot.live.",
+        body: "Retention depends on the feature and legal obligations. Messenger users can request deletion by sending ‘delete my data’ or ‘verwijder mijn data’, or by contacting privacy@leaderbot.live.",
       },
       {
         heading: "Payments",
@@ -60,7 +60,7 @@ const legalCopy: Record<LegalPageKind, LegalPageCopy> = {
       },
       {
         heading: "Messenger connection",
-      body: "You may connect only a Facebook Page that you are authorized to manage. Usage limits, budget limits, abuse protection and temporary safety restrictions may apply.",
+        body: "You may connect only a Facebook Page that you are authorized to manage. Usage limits, budget limits, abuse protection and temporary safety restrictions may apply.",
       },
       {
         heading: "Platform separation",
@@ -102,78 +102,119 @@ const legalCopy: Record<LegalPageKind, LegalPageCopy> = {
   },
 };
 
+const focusRing =
+  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#2541C9]";
+
+function LegalHeader() {
+  return (
+    <header className="sticky top-0 z-40 border-b border-[#14203D]/10 bg-[#f6f2ea]/90 backdrop-blur">
+      <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 py-3 sm:px-6 lg:px-8">
+        <a
+          aria-label="Leaderbot home"
+          className={`flex items-center gap-3 rounded-xl ${focusRing}`}
+          href="/"
+        >
+          <span className="grid h-10 w-10 place-items-center rounded-xl bg-[linear-gradient(135deg,#2541C9,#8B2FE0)] font-black text-white">
+            L
+          </span>
+          <span>
+            <strong className="block text-base">
+              {PUBLIC_BUSINESS_DETAILS.brandName}
+            </strong>
+            <span className="block text-xs text-[#14203D]/70">
+              leaderbot.live
+            </span>
+          </span>
+        </a>
+        <a
+          className={`inline-flex min-h-11 items-center justify-center rounded-full bg-[linear-gradient(120deg,#2541C9,#8B2FE0)] px-5 text-sm font-bold text-white shadow-[0_14px_30px_-14px_rgba(37,65,201,0.6)] transition hover:brightness-110 ${focusRing}`}
+          href={PUBLIC_BUSINESS_DETAILS.messengerUrl}
+          rel="noreferrer"
+          target="_blank"
+        >
+          Openen in Messenger
+        </a>
+      </div>
+    </header>
+  );
+}
+
 function LegalPage({ page }: { page: LegalPageKind }) {
   const copy = legalCopy[page];
   const isDutchBillingPolicy = page === "billing-policy";
 
   return (
-    <main
-      className="min-h-full bg-[#10211d] px-4 py-10 text-stone-100 sm:px-6 lg:px-8"
-      lang={isDutchBillingPolicy ? "nl" : "en"}
-    >
-      <div className="mx-auto max-w-3xl">
-        <Link
-          className="text-sm font-medium text-lime-300 transition-colors hover:text-lime-200"
-          href="/"
-        >
-          {isDutchBillingPolicy ? "Terug naar Leaderbot" : "Back to Leaderbot"}
-        </Link>
-        <section className="mt-6">
-          <p className="text-xs font-bold uppercase tracking-[0.16em] text-stone-400">
+    <div className="min-h-full bg-[#f6f2ea] text-[#14203D]">
+      <LegalHeader />
+      <main
+        className="px-4 pb-14 pt-8 sm:px-6 lg:px-8"
+        lang={isDutchBillingPolicy ? "nl" : "en"}
+      >
+        <div className="mx-auto max-w-3xl">
+          <Link
+            className={`inline-block rounded text-sm font-semibold text-[#2541C9] transition-colors hover:text-[#14203D] ${focusRing}`}
+            href="/"
+          >
+            ←{" "}
             {isDutchBillingPolicy
-              ? "Bijgewerkt op 28 augustus 2026"
-              : "Last updated 28 August 2026"}
-          </p>
-          <h1 className="mt-3 text-3xl font-semibold text-white sm:text-4xl">
-            {copy.title}
-          </h1>
-          <p className="mt-4 text-base leading-7 text-stone-300">
-            {copy.intro}
-          </p>
-          <div className="mt-8 grid gap-4">
-            {copy.sections.map(section => (
-              <article
-                className="rounded-2xl border border-white/10 bg-white/5 p-5"
-                key={section.heading}
-              >
-                <h2 className="text-lg font-semibold text-white">
-                  {section.heading}
-                </h2>
-                <p className="mt-2 text-sm leading-6 text-stone-300">
-                  {section.body}
-                </p>
-              </article>
-            ))}
-          </div>
+              ? "Terug naar Leaderbot"
+              : "Back to Leaderbot"}
+          </Link>
+          <section className="mt-6">
+            <p className="text-xs font-bold uppercase tracking-[0.16em] text-[#14203D]/70">
+              {isDutchBillingPolicy
+                ? "Bijgewerkt op 28 augustus 2026"
+                : "Last updated 28 August 2026"}
+            </p>
+            <h1 className="mt-3 text-3xl font-semibold sm:text-4xl">
+              {copy.title}
+            </h1>
+            <p className="mt-4 text-base leading-7 text-[#14203D]/80">
+              {copy.intro}
+            </p>
+            <div className="mt-8 grid gap-4">
+              {copy.sections.map(section => (
+                <article
+                  className="rounded-2xl border border-[#14203D]/15 bg-white p-5"
+                  key={section.heading}
+                >
+                  <h2 className="text-lg font-semibold">{section.heading}</h2>
+                  <p className="mt-2 text-sm leading-6 text-[#14203D]/80">
+                    {section.body}
+                  </p>
+                </article>
+              ))}
+            </div>
 
-          <address className="mt-8 rounded-2xl border border-lime-300/20 bg-lime-300/5 p-5 text-sm not-italic leading-6 text-stone-300">
-            <strong className="text-white">
-              {PUBLIC_BUSINESS_DETAILS.brandName} ·{" "}
-              {PUBLIC_BUSINESS_DETAILS.legalName}
-            </strong>
-            <br />
-            Enterprise number {PUBLIC_BUSINESS_DETAILS.enterpriseNumber} · VAT{" "}
-            {PUBLIC_BUSINESS_DETAILS.vatNumber}
-            <br />
-            {formatPublicBusinessAddress()}
-            <br />
-            <a
-              className="text-lime-300 hover:underline"
-              href={`tel:${PUBLIC_BUSINESS_DETAILS.phoneHref}`}
-            >
-              {PUBLIC_BUSINESS_DETAILS.phoneDisplay}
-            </a>{" "}
-            ·{" "}
-            <a
-              className="text-lime-300 hover:underline"
-              href={`mailto:${PUBLIC_BUSINESS_DETAILS.email}`}
-            >
-              {PUBLIC_BUSINESS_DETAILS.email}
-            </a>
-          </address>
-        </section>
-      </div>
-    </main>
+            <address className="mt-8 rounded-2xl border border-[#2541C9]/20 bg-[#2541C9]/5 p-5 text-sm not-italic leading-6 text-[#14203D]/80">
+              <strong className="text-[#14203D]">
+                {PUBLIC_BUSINESS_DETAILS.brandName} ·{" "}
+                {PUBLIC_BUSINESS_DETAILS.legalName}
+              </strong>
+              <br />
+              Enterprise number {PUBLIC_BUSINESS_DETAILS.enterpriseNumber} · VAT{" "}
+              {PUBLIC_BUSINESS_DETAILS.vatNumber}
+              <br />
+              {formatPublicBusinessAddress()}
+              <br />
+              <a
+                className="text-[#2541C9] hover:underline"
+                href={`tel:${PUBLIC_BUSINESS_DETAILS.phoneHref}`}
+              >
+                {PUBLIC_BUSINESS_DETAILS.phoneDisplay}
+              </a>{" "}
+              ·{" "}
+              <a
+                className="text-[#2541C9] hover:underline"
+                href={`mailto:${PUBLIC_BUSINESS_DETAILS.email}`}
+              >
+                {PUBLIC_BUSINESS_DETAILS.email}
+              </a>
+            </address>
+          </section>
+        </div>
+      </main>
+    </div>
   );
 }
 

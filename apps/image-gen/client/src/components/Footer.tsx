@@ -2,19 +2,9 @@ import {
   PUBLIC_BUSINESS_DETAILS,
   formatPublicBusinessAddress,
 } from "@shared/publicBusinessDetails";
+import { PUBLIC_LEGAL_LINKS } from "@shared/publicLegalNavigation";
 
-const legalLinks = [
-  { href: "/privacy", label: "Privacybeleid" },
-  { href: "/terms", label: "Algemene voorwaarden" },
-  { href: "/billing-policy", label: "Terugbetalingsbeleid" },
-  { href: "/data-deletion", label: "Gegevens verwijderen" },
-  { href: `mailto:${PUBLIC_BUSINESS_DETAILS.email}`, label: "Contact" },
-  {
-    href: PUBLIC_BUSINESS_DETAILS.messengerUrl,
-    label: "Facebook Messenger",
-    external: true,
-  },
-];
+const legalLinks = PUBLIC_LEGAL_LINKS;
 
 export default function Footer() {
   return (
