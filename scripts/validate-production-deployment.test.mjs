@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
@@ -1430,6 +1430,69 @@ describe("production deployment contract", () => {
       ".github/workflows/deploy-production.yml",
       "EXPECTED_RUNTIME_PRINCIPAL_SHA256=$expected_principal_sha256 node $remote_probe",
       "node $remote_probe",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must prove every successor Machine uses the exact staged runtime principal before readiness evidence",
+    );
+  });
+
+  it("executes the runtime-principal assignment through env without a shell", () => {
+    const workflow = fs.readFileSync(
+      path.join(repoRoot, ".github/workflows/deploy-production.yml"),
+      "utf8",
+    );
+    const command = workflow.match(
+      /--command "((?:\/usr\/bin\/)?env EXPECTED_RUNTIME_PRINCIPAL_SHA256=\$expected_principal_sha256 node \$remote_probe)"/,
+    )?.[1];
+    expect(command).toBeDefined();
+    const [executable, assignment] = command.split(" ");
+    const expectedHash = "a".repeat(64);
+    const resolvedAssignment = assignment.replace(
+      "$expected_principal_sha256",
+      expectedHash,
+    );
+    const probeArgs = [
+      process.execPath,
+      "-e",
+      "process.stdout.write(process.env.EXPECTED_RUNTIME_PRINCIPAL_SHA256 ?? '')",
+    ];
+    const options = {
+      shell: false,
+      encoding: "utf8",
+      timeout: 5000,
+      env: { PATH: process.env.PATH },
+    };
+    const result = spawnSync(
+      executable,
+      [resolvedAssignment, ...probeArgs],
+      options,
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe(expectedHash);
+    expect(result.stderr).toBe("");
+
+    // Fly executes argv directly: a bare assignment is an executable name,
+    // not a shell environment statement, and must not silently pass this test.
+    const bareAssignment = spawnSync(resolvedAssignment, probeArgs, options);
+    expect(bareAssignment.error?.code).toBe("ENOENT");
+    expect(bareAssignment.status).toBeNull();
+  });
+
+  it("rejects a bare runtime-principal assignment in the Fly exec command", () => {
+    const root = createRepositoryFixture();
+    const workflowPath = ".github/workflows/deploy-production.yml";
+    const workflow = fs.readFileSync(path.join(root, workflowPath), "utf8");
+    const explicitCommand = workflow.match(
+      /--command "(?:\/usr\/bin\/)?env EXPECTED_RUNTIME_PRINCIPAL_SHA256=\$expected_principal_sha256 node \$remote_probe"/,
+    )?.[0];
+    expect(explicitCommand).toBeDefined();
+    replaceFixtureText(
+      root,
+      workflowPath,
+      explicitCommand,
+      explicitCommand.replace(/"(?:\/usr\/bin\/)?env /, '"'),
     );
 
     expect(() => validateProductionRepository(root)).toThrow(

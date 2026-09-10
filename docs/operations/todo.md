@@ -155,8 +155,21 @@ release`, before any deployment or restart. The app-level Fly config
       with pinned flyctl 0.4.85 showed that its image resolver duplicates the
       reviewed digest suffix. Correct the probe creation request to preserve
       that exact digest, retain all existing isolation/cleanup guards, and
-      rerun only after reviewed main CI. This is not a successful database
-      repair or payment test.
+      rerun only after reviewed main CI.
+    - **Hostname repair passed:** protected run
+      [34458768314/1](https://github.com/Dj-Shortcut/openclaw-facebook/actions/runs/34458768314)
+      on merged PR #518 (`d9042b1303ecca481ffb122cdee64ac26205c1d2`) passed both
+      exact schema and trigger probes through the corrected hostname, staged
+      the same restricted principal, removed its probe and reproved the unchanged
+      bridge baseline. This step is complete; do not repeat it or rotate keys.
+    - Runtime rollout `34459197149/1` then started the reviewed final runtime
+      on all four Machines, but the post-deploy principal probe failed before
+      running: Fly SSH treated the leading environment assignment as an
+      executable. The protected workflow restored all four Machines to the
+      reviewed bridge and verified restored configuration and health. Prefix
+      that exact probe command with `env`, prove the argv behavior in tests,
+      and retain the all-Machine gate for the next rollout. No payment test or
+      final runtime settlement has passed.
     - Public address check (2026-09-09): `app.leaderbot.live` serves the bot app;
       Fly lists its certificate as ready. `leaderbot.live` resolves to different
       A/AAAA addresses and timed out from the operator Mac. Verify/correct that
