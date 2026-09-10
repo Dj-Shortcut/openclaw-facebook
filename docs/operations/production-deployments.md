@@ -1107,6 +1107,11 @@ trusted production artifact` with `image-gen-bridge`. The workflow proves
     through the staged principal on every desired app and worker Machine before
     `/healthz` and `/readyz` may complete the rollout. A failed rollout restores
     the bridge and its captured configuration; the 0018 schema remains in place.
+    Fly SSH executes the command directly, not through a shell: pass the
+    principal fingerprint using `env EXPECTED_RUNTIME_PRINCIPAL_SHA256=... node ...`,
+    never a bare leading assignment. Run `34459197149/1` reached all four
+    runtime Machines but that malformed probe command triggered a verified
+    bridge restore before principal/readiness evidence could be completed.
 11. **Settle the final runtime before principal cleanup.** Record a healthy
     final-schema runtime predecessor and move to `complete` only in a later reviewed
     manifest PR that removes the bridge from the rollback allowlist and retains

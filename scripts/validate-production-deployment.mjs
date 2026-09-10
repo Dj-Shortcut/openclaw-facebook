@@ -2889,7 +2889,7 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
       '.config.metadata.fly_process_group == "app" or .config.metadata.fly_process_group == "worker"',
     ) ||
     !runtimePrincipalCutoverStep.includes(
-      "EXPECTED_RUNTIME_PRINCIPAL_SHA256=$expected_principal_sha256 node $remote_probe",
+      '--command "env EXPECTED_RUNTIME_PRINCIPAL_SHA256=$expected_principal_sha256 node $remote_probe"',
     ) ||
     !runtimePrincipalCutoverStep.includes(
       'test "$probe_output" = "Billing trigger runtime preflight passed."',
