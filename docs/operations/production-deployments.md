@@ -1112,6 +1112,11 @@ trusted production artifact` with `image-gen-bridge`. The workflow proves
     never a bare leading assignment. Run `34459197149/1` reached all four
     runtime Machines but that malformed probe command triggered a verified
     bridge restore before principal/readiness evidence could be completed.
+    The corrected rollout `34461561679/1` passed on all four Machines under
+    `deploy-34461561679-1`. Its final `image-gen-release-34461561679-1` artifact
+    (not the earlier rollback artifact) contains the completed
+    `runtime-principal-cutover.json` with health/readiness no longer pending.
+    This proves runtime cutover, not checkout activation or a Mollie payment.
 11. **Settle the final runtime before principal cleanup.** Record a healthy
     final-schema runtime predecessor and move to `complete` only in a later reviewed
     manifest PR that removes the bridge from the rollback allowlist and retains
