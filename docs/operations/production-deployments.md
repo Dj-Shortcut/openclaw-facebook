@@ -1112,6 +1112,11 @@ trusted production artifact` with `image-gen-bridge`. The workflow proves
     never a bare leading assignment. Run `34459197149/1` reached all four
     runtime Machines but that malformed probe command triggered a verified
     bridge restore before principal/readiness evidence could be completed.
+    The corrected rollout `34461561679/1` passed on all four Machines under
+    `deploy-34461561679-1`. Its final `image-gen-release-34461561679-1` artifact
+    (not the earlier rollback artifact) contains the completed
+    `runtime-principal-cutover.json` with health/readiness no longer pending.
+    This proves runtime cutover, not checkout activation or a Mollie payment.
 11. **Settle the final runtime before principal cleanup.** Record a healthy
     final-schema runtime predecessor and move to `complete` only in a later reviewed
     manifest PR that removes the bridge from the rollback allowlist and retains
@@ -1119,6 +1124,14 @@ trusted production artifact` with `image-gen-bridge`. The workflow proves
     while the only rollback is the migration bridge. This settled manifest is a
     prerequisite for the protected obsolete-principal cleanup workflow; moving
     to `complete` does not itself enable paid credits or checkout.
+    The owner approved this exact rollback-plan change on 2026-09-10. Its
+    replacement is runtime `1d80d6bce5fd...`, built from
+    `80703910131e227d1d683b1f5b6287c8bff241de`, with settled identity
+    `deploy-34461561679-1`. The retained config has SHA-256
+    `4d9c56fd92f7694c84365f8317117d2335017ac0efb963b78dd2799e22d47697`.
+    This approval does not authorize the account-retirement operations below.
+    Their per-Machine probes must also use `env` before the principal assignment;
+    both manual cleanup workflows and their exact-command checks enforce this.
 12. **Retire the obsolete broad runtime principal.** Only after every desired
     Machine reproves the restricted principal under the settled deployment
     identity, run the protected cleanup workflow to lock the exact obsolete
