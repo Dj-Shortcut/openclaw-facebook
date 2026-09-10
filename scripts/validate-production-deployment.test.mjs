@@ -253,7 +253,8 @@ function stageImageGenBridge(manifest, sourceCommit = "a".repeat(40)) {
 function stageImageGenReviewedRuntime(manifest, sourceCommit = "c".repeat(40)) {
   const app = manifest.apps["image-gen"];
   const predecessor = structuredClone(app.reviewedSettledPredecessor);
-  const predecessorSourceCommit = app.reviewedSourceCommit;
+  const predecessorSourceCommit =
+    app.reviewedRollbackSourceCommits[predecessor.image];
   const {
     bridgeImage,
     legacyImage,
@@ -1204,7 +1205,7 @@ describe("production deployment contract", () => {
     });
   });
 
-  it("settles the proven 0018 runtime with only its exact runtime rollback", () => {
+  it("reviews the updated 0018 runtime while retaining the proven predecessor rollback", () => {
     const manifest = JSON.parse(
       fs.readFileSync(
         path.join(repoRoot, "deploy/production/apps.json"),
@@ -1212,6 +1213,8 @@ describe("production deployment contract", () => {
       ),
     );
     const app = manifest.apps["image-gen"];
+    const predecessorImage =
+      "registry.fly.io/leaderbot-fb-image-gen@sha256:1d80d6bce5fdbd7486f31d6223ca87ac7a50d075661ec48ae0f3d536eb8e5b36";
 
     expect(app.databaseSchemaPhase).toBe("0018_credit_checkout_reservation");
     expect(app.databaseSchemaTransition).toMatchObject({
@@ -1225,10 +1228,10 @@ describe("production deployment contract", () => {
     expect(app.deploymentEnabled).toBe(true);
     expect(app.reviewedArtifactKind).toBe("runtime");
     expect(app.reviewedImage).toBe(
-      "registry.fly.io/leaderbot-fb-image-gen@sha256:1d80d6bce5fdbd7486f31d6223ca87ac7a50d075661ec48ae0f3d536eb8e5b36",
+      "registry.fly.io/leaderbot-fb-image-gen@sha256:f2fa9d60e1fca02c09cb2764981a7134e908f2e33f127eb0e54e77030b4a7a4b",
     );
     expect(app.reviewedSourceCommit).toBe(
-      "80703910131e227d1d683b1f5b6287c8bff241de",
+      "b9caea7951b44d1f97bbd1bc742c25aca68264e9",
     );
     expect(app.reviewedImageSchemaPhases).toEqual([
       "0018_credit_checkout_reservation",
@@ -1236,15 +1239,15 @@ describe("production deployment contract", () => {
     expect(app.databaseSchemaTransition.runtimePrincipalSha256).toBe(
       "972e89225a2d25540d6abfa7bb4e75303f6a94b2f80b4ec26152a95b9b44eeb9",
     );
-    expect(app.reviewedRollbackImages).toEqual([app.reviewedImage]);
+    expect(app.reviewedRollbackImages).toEqual([predecessorImage]);
     expect(app.reviewedRollbackArtifactKinds).toEqual({
-      [app.reviewedImage]: "runtime",
+      [predecessorImage]: "runtime",
     });
     expect(app.reviewedRollbackSourceCommits).toEqual({
-      [app.reviewedImage]: app.reviewedSourceCommit,
+      [predecessorImage]: "80703910131e227d1d683b1f5b6287c8bff241de",
     });
     expect(app.reviewedRollbackImageSchemaPhases).toEqual({
-      [app.reviewedImage]: ["0018_credit_checkout_reservation"],
+      [predecessorImage]: ["0018_credit_checkout_reservation"],
     });
     expect(app.reviewedSettledPredecessor).toEqual({
       identity: "deploy-34461561679-1",
