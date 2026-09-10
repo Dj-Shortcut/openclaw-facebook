@@ -715,6 +715,29 @@ jobs:
             --command "test ! -e $remote_probe"
           trap - EXIT
 
+      - name: Read explicit bounded Test activation request
+        id: credit-test-request
+        timeout-minutes: 1
+        run: node scripts/image-gen-credit-test-proof.mjs request
+
+      - name: Produce fresh bounded Test database and runtime proof
+        if: steps.credit-test-request.outputs.active == 'true'
+        timeout-minutes: 12
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          CREDIT_TEST_IMAGE_TOKEN: ${{ secrets.FLY_IMAGE_GEN_DEPLOY_TOKEN }}
+          CREDIT_TEST_DATABASE_TOKEN: ${{ secrets.FLY_DATABASE_MIGRATION_TOKEN }}
+        run: node scripts/image-gen-credit-test-proof.mjs prove
+
+      - name: Recheck and consume bounded Test proof under the deployment lock
+        if: steps.credit-test-request.outputs.active == 'true'
+        timeout-minutes: 12
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          CREDIT_TEST_IMAGE_TOKEN: ${{ secrets.FLY_IMAGE_GEN_DEPLOY_TOKEN }}
+          CREDIT_TEST_DATABASE_TOKEN: ${{ secrets.FLY_DATABASE_MIGRATION_TOKEN }}
+        run: node scripts/image-gen-credit-test-proof.mjs consume
+
       - name: Deploy reviewed image-gen config
         id: deploy
         timeout-minutes: 35

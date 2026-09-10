@@ -133,9 +133,12 @@ Configure `MOLLIE_CREDIT_TEST_USER_KEY_HASH` as the lowercase SHA-256 of the
 UTF-8 domain `leaderbot.credit-checkout-test-user.v1\0` followed by the
 canonical pseudonymous Messenger user key. Compute it only in the protected
 operator environment. Never copy the underlying user key or raw PSID into
-Fly config, docs, chat, logs or evidence. Startup and readiness reject missing,
-partial or stale pins; a Page reconnect, privacy-epoch change, or other user is
-therefore outside the pilot before any wallet, intent or provider work.
+Fly config, docs, chat, logs or evidence. Startup and readiness reject missing
+or partial pins; prove the current pin separately in the protected operator
+environment before activation. Request/admission/session/provider checks reject
+a changed Page/privacy boundary or another user before wallet, intent or
+provider work. Readiness alone does not compare the configured pin to current
+user records.
 
 `MESSENGER_PAID_IMAGE_PROVIDER_MAX_COST_USD` is also mandatory before paid
 credits can be enabled. It is the reviewed conservative maximum reserved

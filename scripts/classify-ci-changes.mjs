@@ -20,6 +20,8 @@ const IMAGE_GEN_CREDIT_DATABASE_CONTROL_PATHS = new Set([
   "scripts/retire-image-gen-repair-exec-token.test.mjs",
   "scripts/validate-production-deployment.mjs",
   "scripts/validate-production-deployment.test.mjs",
+  "scripts/image-gen-credit-test-proof.mjs",
+  "scripts/image-gen-credit-test-proof.test.mjs",
   "scripts/image-gen-credit-provisioner-bootstrap-contract.mjs",
   "scripts/image-gen-credit-provisioner-bootstrap-contract.test.mjs",
   "scripts/provision-image-gen-credit-provisioner.mjs",

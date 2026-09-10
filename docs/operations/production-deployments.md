@@ -1127,11 +1127,75 @@ trusted production artifact` with `image-gen-bridge`. The workflow proves
     across the stabilization window. The retirement workflow never deletes a
     GitHub secret itself and is not part of the bootstrap helper. Do not replace
     this sequence with manual SQL or an unreviewed secret-field edit.
-14. **Keep Test Mode exposure separate.** Until both cleanup paths have
-    metadata-only success evidence, the commercial cutover is incomplete and
-    no Mollie Test Mode checkout may be exposed. Continue only through the
-    separately reviewed Test Mode activation gates; schema state `complete` is
-    not payment-readiness evidence.
+14. **Review bounded Test Mode exposure separately.** Irreversible credential
+    retirement remains incomplete until both cleanup paths have metadata-only
+    success evidence. One pinned tester may exercise the existing Test offer
+    before those drops only through the explicit activation contract below.
+    The two 24-hour recovery windows before deletion remain unchanged. Schema
+    state `complete`, a successful historical lock, and this sequencing
+    exception are not payment-readiness evidence. Live billing remains off.
+
+The optional image-gen manifest object `creditTestActivation` accepts exactly
+`state: "bounded_test"` and `obsoletePrincipalSha256`, the SHA-256 of the exact
+old runtime account name. It is a reviewed request, not evidence. It is absent
+from the current dark manifest. Reviewers must match that hash to the actual
+old runtime/cutover and protected cleanup evidence; never choose an arbitrary
+or newly generated hash. A later activation PR must retain the exact
+healthy 0018 runtime predecessor, runtime-only rollback entries, and a proven
+rollback configuration with checkout off and drain, notifications and
+reconciliation on. After any provider transport, a drain-off rollback is unsafe
+and fails the runtime's durable-activity guard.
+
+Only this explicit request runs the additional privileged inspection in
+`Deploy production`; ordinary dark deployments do not receive those additional
+credentials or perform those checks. `image-gen-credit-test-proof.mjs` uses
+the existing protected app and database credentials, never grants or creates
+access, and never changes accounts or reads customer rows. The database
+account/session checks are read-only. The app-side check reuses the existing
+reviewed billing-trigger probe: it performs synthetic metadata INSERT/UPDATE
+operations and rolls them back. It is not a wholly read-only SQL probe, and
+its success requires no persistent user or financial changes. The protected job
+binds the exact GitHub source/run/attempt, settled predecessor and release
+watermark, every app/worker's restricted-principal probe, and the reviewed
+database Machine/volume. It separately checks the obsolete account is locked
+or positively absent after its approved drop, and its surviving session count
+is zero. The evidence distinguishes `locked` from `absent`. Session inspection
+uses `INFORMATION_SCHEMA.PROCESSLIST` with verified PROCESS visibility and an
+own-session check; it never selects query text and does not depend on Performance
+Schema instrumentation completeness. The same protected run
+then repeats current checks and consumes its own evidence, rejecting evidence
+older than 15 minutes, another run/source, a changed identity or topology,
+an unlocked account, or surviving sessions. Both steps execute under the
+existing shared deployment lock. This avoids treating an older lock artifact
+as proof after a later unlock or release. No account is killed or dropped by
+this inspection. Failure leaves exposure unchanged and requires investigation.
+This proves closure of the specified obsolete runtime account only. Audited
+provisioner accounts remain administrative recovery access used exclusively
+inside the existing protected operator workflows until their later retirement;
+the application must never receive their credentials. It is not proof that
+all administrative database access has been removed.
+The detailed proof is runner-local and is consumed within that same protected
+run; it is not uploaded or retained after the runner finishes. Workflow logs
+contain only fixed proof markers. A successful proof is not payment or image
+delivery evidence.
+
+The activation contract requires `MOLLIE_MODE=test`, legacy and live billing
+off, drain/notification/reconciliation on, the exact tester pins below, and
+the existing offer and cost caps. Enable paid admission before checkout.
+Use the existing authenticated admin `billingAdmin.enableSchedulerTenant`
+operation with the observed workspace/mode execution epoch and a fresh request
+ID to enable the DB control and lanes; do not fabricate profile attestations
+or replace this with ad-hoc SQL. Verify existing control/lane inventory and
+notification/reconciliation readiness before exposure. Missing registration
+requires a separate scoped operational change.
+
+After the test, close checkout and paid admission through a reviewed config
+deployment while retaining the wallet and financial safety drain. Remove the
+reviewed Test request only after that shutdown is proven. The obsolete-account
+cleanup workflow rejects `unlock` if the manifest still has the request or any
+Machine, including a stopped Machine, still has a paid/checkout exposure flag.
+Resume irreversible retirement with its existing exact identity/evidence and
+24-hour rules; never rewrite old evidence to fit a later deployment identity.
 
 Before paid-credit exposure, set the non-secret
 `CREDIT_CHECKOUT_HMAC_ACTIVE_KEY_ID=k1` beside the dedicated Fly secret. A later
@@ -1153,8 +1217,11 @@ current non-secret database boundary. Compute
 SHA-256 over the UTF-8 domain `leaderbot.credit-checkout-test-user.v1\0`
 followed by the canonical pseudonymous user key. Retain only the hash; never
 place the source user key or PSID in config, documentation, evidence, chat or
-logs. `/readyz` must fail before database access when any part is absent or
-stale. A different user in the same owner workspace remains on the ordinary
+logs. Startup/readiness reject absent or malformed pins before credit database
+checks; the request/admission/session/provider paths enforce the current Page
+and privacy boundary. Readiness does not itself compare the pin to current
+user records: independently prove its freshness in the protected operator
+environment immediately before activation. A different user in the same owner workspace remains on the ordinary
 free-quota response and cannot create a wallet, intent or provider operation.
 
 Set the non-secret `MESSENGER_PAID_IMAGE_PROVIDER_MAX_COST_USD=1.00` in the same

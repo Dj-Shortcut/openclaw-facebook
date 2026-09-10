@@ -177,20 +177,32 @@ release`, before any deployment or restart. The app-level Fly config
       credit grant. Keep the current offer unchanged. Live-pilot readiness
       additionally requires the P5 gates below.
 
-  - [ ] Before any Mollie Test Mode checkout, prove the restricted runtime,
-        settle the manifest at `complete` with the bridge removed from rollback,
-        then use the protected obsolete-principal flow to lock, retain the
-        24-hour unlock window, and drop the old broad runtime principal. Keep
-        `IMAGE_GEN_DATABASE_PROVISIONER_URL` until that drop succeeds. Next run
-        the separately reviewed
+  - [ ] Before any Mollie Test Mode checkout, prove the restricted runtime and
+        settle the manifest at `complete` with only proven 0018 runtime
+        rollbacks. A separately reviewed `creditTestActivation` request may
+        expose the existing offer to one exact pinned tester after the protected
+        obsolete-principal flow locks the old broad runtime account. The
+        protected deployment must independently prove that account is still
+        locked, has zero sessions, and every current app/worker uses the exact
+        restricted principal. Produce and consume fresh metadata evidence in
+        the same deployment run under the shared lock; a historical lock
+        artifact or a manifest assertion is not current proof. Keep a proven
+        drain-on, checkout-off rollback and all payment/privacy/budget gates.
+        Current manifest/config remain dark until that separate activation.
+  - [ ] Retain the obsolete account's 24-hour recovery window before its
+        separately approved irreversible drop. Unlock is blocked while the
+        reviewed Test request exists or any Machine still exposes credits or
+        checkout. Keep `IMAGE_GEN_DATABASE_PROVISIONER_URL` until the drop
+        succeeds. Then run the separately reviewed
         `.github/workflows/retire-image-gen-credit-provisioners.yml` path to
         lock all reserved `lbcp_*` accounts under its own database-backed
         24-hour recovery window, drop them, and prove the inventory empty. An
         authorized owner must then delete the exact production environment
         secret before the workflow's separate stable-absence verification.
-        Commercial exposure remains incomplete until both cleanup paths have
-        metadata-only success evidence; do not substitute manual SQL or
-        unreviewed secret-field edits.
+        Full credential retirement remains incomplete until both cleanup paths
+        have metadata-only success evidence. Their irreversible deletion clocks
+        are unchanged; do not substitute manual SQL or unreviewed secret edits.
+        This bounded Test exception does not authorize live payment exposure.
 
 - [ ] **P5 - Bounded live pilot and legacy removal.** Obtain legal/accounting
       approval, enable one reviewed live offer for a bounded audience, monitor

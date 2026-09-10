@@ -6161,6 +6161,34 @@ describe("production deployment contract", () => {
     );
   });
 
+  it("rejects removal of the fresh Test-proof consumption before deployment", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(root, ".github/workflows/deploy-production.yml",
+      "run: node scripts/image-gen-credit-test-proof.mjs consume", "run: true");
+    expect(() => validateProductionRepository(root)).toThrow("must require protected proof only for the explicit bounded Test request");
+  });
+
+  it("rejects privileged Test proof on ordinary dark deployments", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(root, ".github/workflows/deploy-production.yml",
+      "if: steps.credit-test-request.outputs.active == 'true'", "if: always()");
+    expect(() => validateProductionRepository(root)).toThrow("must require protected proof only for the explicit bounded Test request");
+  });
+
+  it("rejects bypassing the credential-free activation request reader", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(root, ".github/workflows/deploy-production.yml",
+      "run: node scripts/image-gen-credit-test-proof.mjs request", "run: true");
+    expect(() => validateProductionRepository(root)).toThrow("must read the explicit Test request without credentials or conditional skipping");
+  });
+
+  it("rejects removing the live exposure guard from principal unlock", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(root, ".github/workflows/cleanup-image-gen-runtime-principals.yml",
+      "run: node scripts/image-gen-credit-test-proof.mjs guard-unlock", "run: true");
+    expect(() => validateProductionRepository(root)).toThrow("must guard unlock against reviewed and live Test exposure");
+  });
+
   it("requires a bounded graceful image-worker shutdown window", () => {
     const root = createRepositoryFixture();
     const configPath = path.join(root, "apps/image-gen/fly.toml");

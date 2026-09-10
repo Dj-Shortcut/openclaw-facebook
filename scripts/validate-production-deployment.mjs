@@ -2319,6 +2319,37 @@ export function resolveImmutableReleaseImage(
 }
 
 export function validateProductionWorkflow(rootDir = process.cwd()) {
+  const creditWorkflow = fs.readFileSync(path.join(rootDir, PRODUCTION_WORKFLOW_PATH), "utf8");
+  const requestName = "Read explicit bounded Test activation request";
+  const proofName = "Produce fresh bounded Test database and runtime proof";
+  const consumeName = "Recheck and consume bounded Test proof under the deployment lock";
+  const imageJobIndex = creditWorkflow.indexOf("  deploy-image-gen:");
+  const requestIndex = creditWorkflow.indexOf(`      - name: ${requestName}`);
+  const proofIndex = creditWorkflow.indexOf(`      - name: ${proofName}`);
+  const consumeIndex = creditWorkflow.indexOf(`      - name: ${consumeName}`);
+  const deploymentIndex = creditWorkflow.indexOf("      - name: Deploy reviewed image-gen config");
+  const nextJobIndex = creditWorkflow.indexOf("  deploy-storage-proxy:");
+  if (imageJobIndex < 0 || requestIndex <= imageJobIndex || proofIndex <= requestIndex ||
+      consumeIndex <= proofIndex || deploymentIndex <= consumeIndex || nextJobIndex <= deploymentIndex ||
+      !creditWorkflow.includes("group: production-deploy-${{ inputs.target }}")) {
+    fail("image-gen must produce and freshly consume bounded Test proof before deployment under the shared lock");
+  }
+  const [requestStep] = namedWorkflowStepBodies(creditWorkflow, requestName);
+  if (!requestStep?.includes("id: credit-test-request") ||
+      !requestStep.includes("run: node scripts/image-gen-credit-test-proof.mjs request") ||
+      /\n\s+(?:if|env):/.test(requestStep)) {
+    fail("image-gen must read the explicit Test request without credentials or conditional skipping");
+  }
+  for (const [name, operation] of [[proofName, "prove"], [consumeName, "consume"]]) {
+    const [step] = namedWorkflowStepBodies(creditWorkflow, name);
+    if (!step?.includes("if: steps.credit-test-request.outputs.active == 'true'") ||
+        !step.includes(`run: node scripts/image-gen-credit-test-proof.mjs ${operation}`) ||
+        !step.includes("CREDIT_TEST_IMAGE_TOKEN: ${{ secrets.FLY_IMAGE_GEN_DEPLOY_TOKEN }}") ||
+        !step.includes("CREDIT_TEST_DATABASE_TOKEN: ${{ secrets.FLY_DATABASE_MIGRATION_TOKEN }}") ||
+        !step.includes("GITHUB_TOKEN: ${{ github.token }}") || step.includes("continue-on-error:")) {
+      fail("image-gen must require protected proof only for the explicit bounded Test request");
+    }
+  }
   const workflowPath = path.join(rootDir, PRODUCTION_WORKFLOW_PATH);
   if (!fs.existsSync(workflowPath)) {
     fail(`Missing ${PRODUCTION_WORKFLOW_PATH}`);
@@ -6601,6 +6632,15 @@ function validateRuntimePrincipalCleanupWorkflow(rootDir) {
     fail(`Missing ${RUNTIME_PRINCIPAL_CLEANUP_WORKFLOW_PATH}`);
   }
   const workflow = fs.readFileSync(workflowPath, "utf8");
+  const guardIndex = workflow.indexOf("      - name: Reject unlock while reviewed or live Test exposure remains");
+  const mutationIndex = workflow.indexOf("      - name: Lock, unlock, or drop only the exact obsolete broad principal");
+  const [guardStep] = namedWorkflowStepBodies(workflow, "Reject unlock while reviewed or live Test exposure remains");
+  if (guardIndex < 0 || mutationIndex <= guardIndex ||
+      !guardStep?.includes("if: inputs.operation == 'unlock'") ||
+      !guardStep.includes("run: node scripts/image-gen-credit-test-proof.mjs guard-unlock") ||
+      guardStep.includes("continue-on-error:")) {
+    fail("runtime-principal cleanup must guard unlock against reviewed and live Test exposure");
+  }
   assertNoDirectGithubExpressionsInRunBlocks(
     workflow,
     RUNTIME_PRINCIPAL_CLEANUP_WORKFLOW_PATH,
@@ -8199,6 +8239,72 @@ function validateStorageProxyArtifactTransition(app) {
   }
 }
 
+// This is an explicit reviewed request, never proof of database state. The
+// protected deploy independently produces and consumes fresh metadata proof.
+export function validateCreditTestActivation(app, env, rootDir) {
+  const request = app.creditTestActivation;
+  const exposed = ["MESSENGER_PAID_CREDITS_ENABLED", "MOLLIE_CREDIT_CHECKOUT_ENABLED"]
+    .some((key) => String(env[key]) === "true");
+  if (request === undefined) {
+    if (exposed) fail("image-gen credit exposure requires an explicit bounded Test activation contract");
+    return false;
+  }
+  if (!request || typeof request !== "object" || Array.isArray(request) ||
+      Object.keys(request).sort().join(",") !== "obsoletePrincipalSha256,state" ||
+      request.state !== "bounded_test" ||
+      !/^[a-f0-9]{64}$/.test(request.obsoletePrincipalSha256 ?? "") ||
+      request.obsoletePrincipalSha256 === app.databaseSchemaTransition?.runtimePrincipalSha256 ||
+      app.databaseSchemaTransition?.state !== "complete" ||
+      app.databaseSchemaPhase !== "0018_credit_checkout_reservation") {
+    fail("image-gen bounded Test activation must bind the completed restricted runtime and a distinct obsolete principal");
+  }
+  validateImageGenSchemaTransition(app);
+  for (const [key, value] of Object.entries({
+    MOLLIE_MODE: "test", MOLLIE_LIVE_BILLING_ENABLED: "false",
+    MOLLIE_BILLING_ENABLED: "false", MOLLIE_CREDIT_WORKSPACE_ID: "1",
+    MOLLIE_BILLING_DRAIN_ENABLED: "true", BILLING_NOTIFICATION_PLANE_ENABLED: "true",
+    MOLLIE_RECONCILIATION_ENABLED: "true",
+    MESSENGER_PAID_IMAGE_PROVIDER_MAX_COST_USD: "1.00",
+    MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD: "5.00",
+    MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD: "25.00",
+    MESSENGER_USER_DAILY_SPEND_CAP_USD: "2.00",
+  })) {
+    if (String(env[key]) !== value) fail(`image-gen bounded Test activation requires ${key}=${value}`);
+  }
+  for (const key of ["MESSENGER_PAID_CREDITS_ENABLED", "MOLLIE_CREDIT_CHECKOUT_ENABLED"]) {
+    if (!["true", "false"].includes(String(env[key]))) fail("image-gen bounded Test flags must be explicit booleans");
+  }
+  if (String(env.MOLLIE_CREDIT_CHECKOUT_ENABLED) === "true" &&
+      String(env.MESSENGER_PAID_CREDITS_ENABLED) !== "true") fail("image-gen checkout requires paid admission");
+  for (const key of ["MOLLIE_CREDIT_TEST_CHANNEL_CONNECTION_ID", "MOLLIE_CREDIT_TEST_BINDING_EPOCH", "MOLLIE_CREDIT_TEST_PRIVACY_EPOCH"]) {
+    const value = String(env[key] ?? "");
+    if (!/^[1-9][0-9]*$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) > 2_147_483_647)
+      fail("image-gen bounded Test activation requires one exact tester boundary");
+  }
+  if (!/^[a-f0-9]{64}$/.test(String(env.MOLLIE_CREDIT_TEST_USER_KEY_HASH ?? "")))
+    fail("image-gen bounded Test activation requires one exact tester boundary");
+  // A rollback after any provider transport must retain the durable drain.
+  for (const image of app.reviewedRollbackImages) {
+    const config = getReviewedRollbackConfig("image-gen", image, rootDir);
+    const rollbackEnv = tableAssignments(readTomlTables(fs.readFileSync(path.join(rootDir, config), "utf8")), "env");
+    for (const [key, value] of Object.entries({
+      MOLLIE_MODE: "test", MOLLIE_LIVE_BILLING_ENABLED: "false",
+      MOLLIE_BILLING_ENABLED: "false", MOLLIE_BILLING_DRAIN_ENABLED: "true",
+      MOLLIE_RECONCILIATION_ENABLED: "true", BILLING_NOTIFICATION_PLANE_ENABLED: "true",
+      MOLLIE_CREDIT_CHECKOUT_ENABLED: "false",
+    })) {
+      if (String(rollbackEnv[key]) !== value) fail(`image-gen Test rollback requires ${key}=${value}`);
+    }
+  }
+  return true;
+}
+
+export function readCreditTestActivation(rootDir = process.cwd()) {
+  const app = loadProductionManifest(rootDir).apps["image-gen"];
+  const env = tableAssignments(readTomlTables(fs.readFileSync(path.join(rootDir, app.config), "utf8")), "env");
+  return { app, env, active: validateCreditTestActivation(app, env, rootDir) };
+}
+
 export function validateProductionRepository(rootDir = process.cwd()) {
   const manifest = loadProductionManifest(rootDir);
   const packageJson = readJson(path.join(rootDir, "package.json"));
@@ -8900,6 +9006,7 @@ export function validateProductionRepository(rootDir = process.cwd()) {
       ) {
         fail(`${app.config} must remove the Test Mode tester pin in live mode`);
       }
+      const boundedTest = validateCreditTestActivation(app, envAssignments, rootDir);
       for (const [name, expected] of [
         [
           "PUBLIC_BASE_URL",
@@ -8908,9 +9015,9 @@ export function validateProductionRepository(rootDir = process.cwd()) {
         ["MESSENGER_FREE_DAILY_LIMIT", "5"],
         ["MESSENGER_FREE_MONTHLY_LIMIT", "20"],
         ["MESSENGER_IMAGE_QUOTA_TIME_ZONE", "Europe/Brussels"],
-        ["MESSENGER_PAID_CREDITS_ENABLED", "false"],
+        ["MESSENGER_PAID_CREDITS_ENABLED", boundedTest ? paidCreditsEnabled : "false"],
         ["MESSENGER_PAID_IMAGE_PROVIDER_MAX_COST_USD", "1.00"],
-        ["MOLLIE_CREDIT_CHECKOUT_ENABLED", "false"],
+        ["MOLLIE_CREDIT_CHECKOUT_ENABLED", boundedTest ? creditCheckoutEnabled : "false"],
         ["MOLLIE_CREDIT_WORKSPACE_ID", "1"],
         ["OPENAI_IMAGE_MAX_RETRIES", "0"],
         [
