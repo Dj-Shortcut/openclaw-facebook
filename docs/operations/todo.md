@@ -412,12 +412,14 @@ release`, before any deployment or restart. The app-level Fly config
       work, without changing data. Operator execution, checkout exposure and
       the payment-to-credit-to-delivered-edit proof remain open.
     - Protected artifact build
-      [34571665119/1](https://github.com/Dj-Shortcut/openclaw-facebook/actions/runs/34571665119)
+      [34578480504/1](https://github.com/Dj-Shortcut/openclaw-facebook/actions/runs/34578480504)
       passed from exact merged source
-      `3f0b7d01b0daef28f6f9abf8d514a128d68eeb62`, producing runtime
-      `sha256:70c608aa90473aa9da6fe671a486d757e3041328ba61f9d4ba564b3548a6c4ad`
-      with attestation `46783444`. Its exact-container checks reject pre-credit
-      schemas and accept 0018. The desired Test activation pins this artifact
+      `479e43d17aab852ea6b4bbfd6b03c4eac15eb797`, producing runtime
+      `sha256:c54c1fd026e281ada8f88ecb1acc0a26d48e736b3874d3e7aeb70dc2c64efe5f`
+      with attestation `46800613`. Its exact-container checks reject pre-credit
+      schemas and accept 0018. This supersedes the unexecuted `70c608aa...`
+      candidate and includes the reviewed conditional purchase copy and original
+      activation-audit checks. The desired Test activation pins this artifact
       while retaining `f2fa9d60...` / `deploy-34496956631-1` as the unchanged
       checkout-off, processing-on predecessor and rollback. The offer remains
       EUR 4.99 for eight medium credits; all manual tester pins remain empty,
