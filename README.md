@@ -131,8 +131,8 @@ that a feature is live.
 | Status | Documents | Meaning |
 | --- | --- | --- |
 | Active state | [Operations backlog](docs/operations/todo.md), [production readiness](docs/production-readiness.md), [deployment and rollback](docs/operations/production-deployments.md) | Current gates, evidence, and executable operational procedures. |
-| Current architecture and policy | [Architecture](docs/architecture.md), [security](docs/security/SECURITY.md), [billing operations](docs/BILLING_RUNBOOK.md), [cancellation and refund policy](docs/CANCELLATION_REFUND_POLICY.md), [storage and retention](docs/storage-proxy-r2.md) | Current boundaries and policies; implementation or production status is stated explicitly in each document. |
-| Transitional or release-specific | [OpenClaw setup](docs/setup.md), [Meta App Review](docs/operations/meta-app-review.md), [ClawHub listing](docs/clawhub-listing.md), [ClawHub release preparation](docs/clawhub.md) | Retained for the legacy plugin and its extraction/release path, not the active Leaderbot runtime path. |
+| Current architecture and policy | [Architecture](docs/architecture.md), [Meta App Review](docs/operations/meta-app-review.md), [security](docs/security/SECURITY.md), [billing operations](docs/BILLING_RUNBOOK.md), [cancellation and refund policy](docs/CANCELLATION_REFUND_POLICY.md), [storage and retention](docs/storage-proxy-r2.md) | Current boundaries and policies; implementation or production status is stated explicitly in each document. Meta App Review covers the public `apps/image-gen` Messenger surface and must change with visible Messenger behavior or permissions. |
+| Transitional or release-specific | [OpenClaw setup](docs/setup.md), [ClawHub listing](docs/clawhub-listing.md), [ClawHub release preparation](docs/clawhub.md) | Retained for the legacy plugin and its extraction/release path, not the active Leaderbot runtime path. |
 
 Documentation is current-state only. Git history is the archive for removed
 product plans and completed incident detail. Do not copy historical run notes

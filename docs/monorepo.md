@@ -53,8 +53,8 @@ Machines, volume, secrets, and Meta callback safely.
 
 - `apps/image-gen` and `apps/image-gen/storage-proxy` are the two isolated
   applications with their own checked-in pnpm lockfiles.
-- `apps/customer-app` is a retained transitional subtree, not a third active
-  pnpm application boundary.
+- `apps/customer-app` holds no application code or lockfile (only a leftover
+  `src-tauri/.gitignore`) and is not a pnpm application boundary.
 - The root npm package and compatibility lockfiles remain until plugin
   extraction is complete.
 - Do not regenerate a lockfile owned by another package boundary casually.

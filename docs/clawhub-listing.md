@@ -144,18 +144,19 @@ may pass messages to model providers or tools according to your configuration.
 
 ## Optional Leaderbot Image Generation
 
-The package contains a guarded compatibility bridge for the retired Leaderbot
-image-generation service. It is disabled by default and is not used by current
-Leaderbot customer Pages. If an explicitly approved legacy deployment enables
-the bridge, selected Messenger events, sender identifiers, prompts, and media
-references may be forwarded to the separate image-generation service.
+The package contains a guarded, transitional compatibility bridge to the
+Leaderbot image-generation service in `apps/image-gen`. Only this root-plugin
+bridge is transitional; `apps/image-gen` itself is the supported Leaderbot
+runtime. The bridge is disabled by default and is not used by current Leaderbot
+customer Pages. If an explicitly approved legacy deployment enables the bridge,
+selected Messenger events, sender identifiers, prompts, and media references may
+be forwarded to the separate image-generation service.
 
 Do not enable the bridge unless that external processing is intentional,
 security-reviewed, and disclosed to Page users. Host environment variables do
 not enable it by themselves; the explicit bridge setting and the deployment's
 other admission checks must also pass. New Leaderbot customer Pages send Meta
 webhooks directly to `apps/image-gen`.
-
 
 ## Production Notes
 
