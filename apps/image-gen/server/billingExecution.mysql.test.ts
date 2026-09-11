@@ -25,6 +25,7 @@ import {
   readTestPaymentOperatorEnv,
 } from "./_core/billing/testPaymentOperator";
 import {
+  disableBillingSchedulerTenant,
   enableBillingSchedulerTenant,
   registerBillingSchedulerTenant,
 } from "./_core/billing/billingSchedulerStore";
@@ -200,6 +201,9 @@ suite("billing trigger MySQL runtime boundary", () => {
           databaseSchemaTransition: { runtimePrincipalSha256: principalSha256 },
           creditTestActivation: {
             operator: {
+              requestId,
+              previousEpoch: 1,
+              epoch: 2,
               operatorImage: operatorAudit.operatorImage,
               artifactSourceSha: operatorAudit.artifactSourceSha,
               runtimeImage: operatorAudit.runtimeImage,
@@ -389,6 +393,36 @@ suite("billing trigger MySQL runtime boundary", () => {
         })
       ).rejects.toThrow("request conflicts");
       expect(await snapshot()).toEqual(committed);
+      // A legitimate disable/re-enable overwrites current lane provenance.
+      // Even a fully consistent new protected audit on the same artifacts
+      // must not be mistaken for this manifest's original 1 -> 2 activation.
+      await expect(
+        disableBillingSchedulerTenant({
+          workspaceId,
+          mode: "test",
+          actorUserId: userIds[0]!,
+          requestId: randomUUID(),
+          expectedExecutionEpoch: 2,
+          reason: "synthetic operator disable check",
+        })
+      ).resolves.toEqual({ executionEpoch: 3 });
+      await expect(
+        enableBillingSchedulerTenant({
+          ...input,
+          requestId: randomUUID(),
+          expectedExecutionEpoch: 3,
+          operatorAudit: { ...input.operatorAudit, githubRunId: "457" },
+        })
+      ).resolves.toEqual({ executionEpoch: 4 });
+      const reenabled = await snapshot();
+      expect(reenabled.controls).toMatchObject([
+        { commercial_enabled: 1, authorization_epoch: 4 },
+      ]);
+      expect(reenabled.audits).toHaveLength(2);
+      await expect(readCommittedAudit()).rejects.toThrow(
+        "credit_test_activation_audit_rejected"
+      );
+      expect(await snapshot()).toEqual(reenabled);
     } finally {
       databaseMock.mockReset();
       await runtimeConnection?.end();

@@ -173,9 +173,14 @@ describe("landing page payment-status copy", () => {
       it("guides eligible users through Messenger without asserting current availability", () => {
         const guidance = messengerPremiumCopies[locale];
         expect(guidance.creditsCardBody).toMatch(/Mollie/);
-        expect(guidance.badge).toBe("Via Messenger");
+        expect(guidance.badge).toMatch(/Alleen bij|Uniquement sur|Only when/);
         expect(guidance.note).toMatch(/Messenger/);
-        expect(guidance.note).toMatch(/in aanmerking|éligible|eligible/);
+        expect(guidance.note).toMatch(
+          /kopen op dat moment niet beschikbaar|achat n'est alors pas disponible|Buying is not available at that time/
+        );
+        expect(guidance.microLine).toMatch(
+          /alleen als de bot|uniquement si le bot|only when the bot/
+        );
         expect(guidance.note).toMatch(/prijs|prix|price/);
         expect(guidance.faqAnswer).toMatch(/Test/);
         expect(guidance.faqAnswer).toMatch(

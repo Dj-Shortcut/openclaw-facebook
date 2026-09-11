@@ -124,6 +124,9 @@ function fixture() {
     ...app.reviewedRollbackConfigs[image],
   };
   app.creditTestActivation.operator = {
+    requestId: "12345678-1234-4234-8234-123456789012",
+    previousEpoch: 1,
+    epoch: 2,
     operatorImage: app.reviewedImage,
     artifactSourceSha: app.reviewedSourceCommit,
     runtimeImage: image,

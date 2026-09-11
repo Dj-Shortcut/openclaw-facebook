@@ -3943,6 +3943,10 @@ export function validateTestPaymentOperatorWorkflow(rootDir = process.cwd()) {
     /await verifyOperatorRun\(env, fetchImpl\)/g,
     /await sourceCi\(input\.workflowSourceSha, verify\)/,
     /await artifactCi\("image-gen", input\.image, verify\)/,
+    /activation\.requestId !== input\.requestId/,
+    /activation\.previousEpoch !== 1/,
+    /activation\.epoch !== 2/,
+    /input\.expectedEpoch !== activation\.previousEpoch/,
     /run\.head_sha !== input\.workflowSourceSha/,
     /run\.actor\?\.id/,
     /run\.triggering_actor\?\.id/,
@@ -8542,7 +8546,13 @@ export function validateCreditTestActivation(app, env, rootDir) {
     typeof operator !== "object" ||
     Array.isArray(operator) ||
     Object.keys(operator).sort().join(",") !==
-      "artifactSourceSha,deploymentIdentity,operatorImage,runtimeImage" ||
+      "artifactSourceSha,deploymentIdentity,epoch,operatorImage,previousEpoch,requestId,runtimeImage" ||
+    typeof operator.requestId !== "string" ||
+    !/^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(
+      operator.requestId,
+    ) ||
+    operator.previousEpoch !== 1 ||
+    operator.epoch !== 2 ||
     !isImmutableAppImage(app, operator.operatorImage) ||
     typeof operator.artifactSourceSha !== "string" ||
     !/^[a-f0-9]{40}$/.test(operator.artifactSourceSha) ||

@@ -46,8 +46,9 @@ exactly-once grant and delivered paid edit still require the demo evidence below
 No successful end-to-end Test payment or live-money enablement is claimed.
 
 Later frontend releases retain the original committed operator activation and
-its reviewed immutable artifact/predecessor anchor; they do not enable payment
-processing again. Each protected deployment still checks the current runtime
+its reviewed immutable artifact/predecessor, request and initial epoch 1→2
+anchor; they do not enable payment processing again. Each protected deployment
+still checks the current runtime
 and payment safety prerequisites afresh.
 
 | Capability                          | User-visible behavior                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Review/demo notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | Permission impact                                                                                                                                                        |

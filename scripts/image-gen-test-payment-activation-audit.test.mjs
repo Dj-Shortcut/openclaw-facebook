@@ -91,6 +91,9 @@ function fixture() {
       reviewedSourceCommit: operator.artifactSourceSha,
       creditTestActivation: {
         operator: {
+          requestId,
+          previousEpoch: 1,
+          epoch: 2,
           operatorImage: operator.operatorImage,
           artifactSourceSha: operator.artifactSourceSha,
           runtimeImage: operator.runtimeImage,
@@ -180,6 +183,9 @@ describe("read-only committed Test payment activation proof", () => {
     ).toBe(true);
   });
   it.each([
+    ["requestId", "8a62f93d-e092-4dd8-82ca-9e77bdd89d54"],
+    ["previousEpoch", 3],
+    ["epoch", 4],
     [
       "operatorImage",
       `registry.fly.io/leaderbot-fb-image-gen@sha256:${"1".repeat(64)}`,
@@ -197,6 +203,49 @@ describe("read-only committed Test payment activation proof", () => {
       validateCommittedTestPaymentActivation(f.snapshot, f.input),
     ).toThrow();
   });
+  it.each([
+    ["another initial request", 1, "22222222-2222-4222-8222-222222222222"],
+    ["same request after disable", 3, "12345678-1234-4234-8234-123456789012"],
+    [
+      "another request after disable",
+      3,
+      "22222222-2222-4222-8222-222222222222",
+    ],
+  ])(
+    "rejects a fully consistent replacement: %s",
+    (_label, previousEpoch, requestId) => {
+      const f = fixture();
+      const audit = f.snapshot.audits[0];
+      audit.requestId = requestId;
+      audit.previousEpoch = previousEpoch;
+      audit.epoch = previousEpoch + 1;
+      f.operator.githubRunId = "121";
+      f.remoteRun.id = 121;
+      const fingerprint = createHash("sha256")
+        .update(
+          JSON.stringify([
+            "billing-scheduler-enable-v1",
+            1,
+            "test",
+            audit.ownerUserId,
+            previousEpoch,
+            audit.reason,
+            f.operator,
+          ]),
+        )
+        .digest("hex");
+      f.snapshot.controls[0].epoch = audit.epoch;
+      for (const lane of f.snapshot.lanes)
+        Object.assign(lane, {
+          requestId,
+          epoch: audit.epoch,
+          fingerprint,
+        });
+      expect(() =>
+        validateCommittedTestPaymentActivation(f.snapshot, f.input),
+      ).toThrow("credit_test_activation_audit_rejected");
+    },
+  );
   it.each([undefined, null, [], {}])(
     "rejects missing or incomplete original anchor %j",
     (anchor) => {

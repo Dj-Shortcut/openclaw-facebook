@@ -241,6 +241,15 @@ release`, before any deployment or restart. The app-level Fly config
       A/AAAA addresses and timed out from the operator Mac. Verify/correct that
       separate public-domain route after this runtime rollout; do not claim the
       apex serves the new frontend merely because the app subdomain is healthy.
+      Read-only inspection on 2026-09-11 identified the apex A/AAAA as the
+      stopped OpenClaw gateway's assigned ingress addresses; that app also
+      retains the `leaderbot.live` and `www.leaderbot.live` certificates.
+      Authoritative DNS is `dns1.registrar-servers.com` /
+      `dns2.registrar-servers.com`, not the Cloudflare R2 account. Prepare
+      certificates on image-gen and a reversible DNS cutover separately; keep
+      the gateway stopped, existing email/assets records unchanged and signed
+      checkout URLs on `https://app.leaderbot.live`. No domain change has run;
+      this marketing-domain repair does not block Test checkout on the app host.
     - Staging run `34345293602/1` stopped at `scheduler_update_trigger` before
       staging a secret or restarting a Machine. Read-only metadata proved the
       three legacy billing triggers still named the active runtime account,
@@ -382,11 +391,14 @@ release`, before any deployment or restart. The app-level Fly config
       recover the original committed audit; no independent recovery command or
       new enable mutation is required. A lost response is not proof of rollback;
       inconsistent or missing committed state blocks before Fly apply. Review
-      the immutable four-field operator artifact/predecessor anchor before the
-      first execution, then retain it unchanged after commit across later
-      frontend releases. Current runtime and payment safety checks remain fresh
-      on every deployment. This proof's protected execution and the
-      actual payment-to-credit-to-delivered-edit journey remain pending.
+      the immutable operator artifact/predecessor anchor and allocated initial
+      request `8a62f93d-e092-4dd8-82ca-9e77bdd89d54`, fixed to epoch 1→2, before
+      the first execution. This UUID is allocated, not executed. Retain the
+      whole anchor unchanged after commit across later frontend releases.
+      Current runtime and payment safety checks remain fresh
+      on every deployment; a later disable/re-enable cannot replace the original
+      activation, even with the same artifacts. This proof's protected execution
+      and the actual payment-to-credit-to-delivered-edit journey remain pending.
       Review follow-up on 2026-09-11 fixes the CI scalar-row type checks, persists
       exact executable identities in the atomic audit, rejects failed billing
       outbox work and refuses missing control/lane registration without writing

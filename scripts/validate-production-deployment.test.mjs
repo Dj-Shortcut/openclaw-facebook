@@ -6431,6 +6431,16 @@ describe("production deployment contract", () => {
   it("accepts the reviewed bounded Test desired configuration with its prepared rollback", () => {
     const root = createRepositoryFixture({ boundedTest: true });
     expect(() => validateProductionRepository(root)).not.toThrow();
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(root, "deploy/production/apps.json"), "utf8"),
+    );
+    expect(
+      manifest.apps["image-gen"].creditTestActivation.operator,
+    ).toMatchObject({
+      requestId: "8a62f93d-e092-4dd8-82ca-9e77bdd89d54",
+      previousEpoch: 1,
+      epoch: 2,
+    });
   });
 
   it.each([
@@ -6442,6 +6452,14 @@ describe("production deployment contract", () => {
     { artifactSourceSha: ["a".repeat(40)] },
     { runtimeImage: "registry.fly.io/leaderbot-fb-image-gen:latest" },
     { deploymentIdentity: "unverified" },
+    { requestId: "not-a-uuid" },
+    { requestId: undefined },
+    { previousEpoch: undefined },
+    { previousEpoch: "1" },
+    { previousEpoch: 3 },
+    { epoch: undefined },
+    { epoch: "2" },
+    { epoch: 4 },
     { verified: true },
   ])(
     "rejects missing or malformed original operator identity: %j",
@@ -6462,6 +6480,24 @@ describe("production deployment contract", () => {
       );
     },
   );
+
+  it.each([
+    "activation.requestId !== input.requestId",
+    "activation.previousEpoch !== 1",
+    "activation.epoch !== 2",
+    "input.expectedEpoch !== activation.previousEpoch",
+  ])("requires the initial operator request fence: %s", (guard) => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      "scripts/image-gen-test-payment-operator.mjs",
+      guard,
+      "false",
+    );
+    expect(() => validateProductionRepository(root)).toThrow(
+      "Test payment operator controller must retain run, artifact, exact target, result and cleanup verification",
+    );
+  });
 
   it("does not silently broaden a partial older tester restriction", () => {
     const root = createRepositoryFixture();

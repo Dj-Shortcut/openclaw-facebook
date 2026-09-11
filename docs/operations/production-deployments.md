@@ -63,7 +63,9 @@ The separately approved Test-only alternative is the manually dispatched
 the `production` environment and the same image-gen deployment concurrency
 lock. It is not a public endpoint and does not create an admin session or
 change Facebook permissions. The workflow accepts the reviewed operator image,
-its exact source commit, one UUID request ID, and the observed execution epoch.
+its exact source commit, the manifest-pinned initial UUID request ID, and
+expected execution epoch 1 (resulting epoch 2). These inputs must match the
+reviewed immutable activation anchor before any SSH command.
 It resolves the owner workspace from the reviewed configuration; it never
 registers individual testers.
 
@@ -117,11 +119,17 @@ state blocks deployment before Fly apply. Protected execution of this follow-up 
 do not substitute a new request or treat its code review as production proof.
 
 The reviewed immutable `creditTestActivation.operator` anchor records
-`operatorImage`, `artifactSourceSha`, `runtimeImage` and `deploymentIdentity`.
+`operatorImage`, `artifactSourceSha`, `runtimeImage`, `deploymentIdentity`,
+`requestId`, `previousEpoch: 1` and `epoch: 2`. Request
+`8a62f93d-e092-4dd8-82ca-9e77bdd89d54` is allocated only to the future first
+approved operator execution; it is not a claim that the action has run.
 Before the first operator execution, review/update it to the exact artifact
 that will execute and its prepared runtime predecessor. Once activation commits,
 retain that original anchor unchanged across later frontend and runtime
 releases; changing the desired release must not require another enable action.
+The pinned request and initial epoch prevent a later disable/re-enable from
+being accepted as the original activation, even with the same executable and
+predecessor. Do not change the request or epochs to make that later state pass.
 The original audit is compared with this anchor, while current settled runtime,
 database principal, account/session and readiness checks remain fresh and
 separate for every deployment.
@@ -1353,11 +1361,11 @@ delivery evidence.
 The activation contract requires `MOLLIE_MODE=test`, legacy and live billing
 off, drain/notification/reconciliation on, no manual tester restriction, and
 the existing offer and cost caps. Enable paid admission before checkout.
-Use the existing authenticated admin `billingAdmin.enableSchedulerTenant`
-operation, or the approved Test-only protected operator workflow above, with
-the observed workspace/mode execution epoch and a fresh request ID to enable
-the DB control and lanes; do not fabricate profile attestations or replace
-this with ad-hoc SQL. Verify existing control/lane inventory and
+For this bounded initial activation, use the approved Test-only protected
+operator workflow above with the manifest-pinned request and epoch 1 to enable
+the DB control and lanes at epoch 2. A separate admin enable or a later
+disable/re-enable is not this original protected activation proof. Do not
+fabricate profile attestations or replace this with ad-hoc SQL. Verify existing control/lane inventory and
 notification/reconciliation readiness before exposure. Missing registration
 requires a separate scoped operational change.
 

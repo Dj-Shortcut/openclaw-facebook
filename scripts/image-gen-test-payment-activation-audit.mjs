@@ -85,7 +85,13 @@ export function validateCommittedTestPaymentActivation(
     typeof anchor !== "object" ||
     Array.isArray(anchor) ||
     Object.keys(anchor).sort().join(",") !==
-      "artifactSourceSha,deploymentIdentity,operatorImage,runtimeImage"
+      "artifactSourceSha,deploymentIdentity,epoch,operatorImage,previousEpoch,requestId,runtimeImage" ||
+    typeof anchor.requestId !== "string" ||
+    !/^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(
+      anchor.requestId,
+    ) ||
+    anchor.previousEpoch !== 1 ||
+    anchor.epoch !== 2
   )
     reject();
   const controls = snapshot?.controls;
@@ -119,8 +125,9 @@ export function validateCommittedTestPaymentActivation(
     audit.metadataFieldCount !== 7 ||
     audit.operatorFieldCount !== 11 ||
     audit.onBehalfOfOwnerUserId !== audit.ownerUserId ||
-    !id(audit.previousEpoch) ||
-    audit.previousEpoch >= 2147483647 ||
+    audit.requestId !== anchor.requestId ||
+    audit.previousEpoch !== anchor.previousEpoch ||
+    audit.epoch !== anchor.epoch ||
     audit.epoch !== audit.previousEpoch + 1 ||
     audit.epoch !== control.epoch ||
     audit.reason !== REASON ||

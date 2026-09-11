@@ -378,6 +378,7 @@ export async function runTestPaymentOperator(options = {}, dependencies = {}) {
     if (run("git", ["rev-parse", "HEAD"], baseEnv) !== input.workflowSourceSha)
       reject();
     const app = readManifest(rootDir).apps["image-gen"];
+    const activation = app.creditTestActivation?.operator;
     if (
       app.app !== APP ||
       app.reviewedImage !== input.image ||
@@ -388,6 +389,18 @@ export async function runTestPaymentOperator(options = {}, dependencies = {}) {
       !sha(app.databaseSchemaTransition.runtimePrincipalSha256)
     )
       reject();
+    // This workflow prepares only the reviewed initial 1 -> 2 activation.
+    // A later release or disable must never become another enable request.
+    if (
+      !activation ||
+      activation.requestId !== input.requestId ||
+      activation.previousEpoch !== 1 ||
+      activation.epoch !== 2 ||
+      input.expectedEpoch !== activation.previousEpoch ||
+      activation.operatorImage !== input.image ||
+      activation.artifactSourceSha !== input.artifactSourceSha
+    )
+      reject();
     evidence.stage = "source_ci";
     await sourceCi(input.workflowSourceSha, verify);
     await artifactCi("image-gen", input.image, verify);
@@ -395,7 +408,9 @@ export async function runTestPaymentOperator(options = {}, dependencies = {}) {
     baseline = await readBaseline();
     if (
       baseline.identity !== app.reviewedSettledPredecessor?.identity ||
-      baseline.expectedImage !== app.reviewedSettledPredecessor?.image
+      baseline.expectedImage !== app.reviewedSettledPredecessor?.image ||
+      baseline.identity !== activation.deploymentIdentity ||
+      baseline.expectedImage !== activation.runtimeImage
     )
       reject();
     machine = assertPreparedMachines(

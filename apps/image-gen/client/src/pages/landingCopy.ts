@@ -628,36 +628,36 @@ export const messengerPremiumCopies: Record<
   }
 > = {
   "nl-BE": {
-    badge: "Via Messenger",
-    note: "Een beschikbaar aanbod en de beveiligde link verschijnen in Messenger wanneer je in aanmerking komt. Controleer de prijs in de checkout voordat je bevestigt.",
+    badge: "Alleen bij een aanbod",
+    note: "Zie je geen betaalknop in Messenger? Dan is kopen op dat moment niet beschikbaar. Toont de bot wel een aanbod, controleer dan de prijs in de beveiligde checkout voordat je bevestigt.",
     faqAnswer:
       "Wanneer Messenger je een aankoop aanbiedt, open je daar de beveiligde link voor de eenmalige bundel van €4,99 voor 8 premiumcredits. Controleer de exacte prijs in de checkout voordat je bevestigt. Een Test-checkout is duidelijk gemarkeerd en brengt geen echt bedrag in rekening.",
     microLine:
-      "Elke dag gratis beeldtegoed • Geen abonnement • Aankoop via Messenger",
+      "Elke dag gratis beeldtegoed • Geen abonnement • Een aankoop kan alleen als de bot een betaalknop toont",
     mollieCardBody:
       "Bevestig een aangeboden aankoop pas nadat je de prijs op de beveiligde checkout van Mollie hebt gecontroleerd. Een Test-checkout is duidelijk gemarkeerd en brengt geen echt bedrag in rekening.",
     creditsCardBody:
       "Premiumcredits worden alleen toegevoegd nadat Mollie de betaling bevestigt, niet doordat je terugkeert naar deze website.",
   },
   "fr-BE": {
-    badge: "Via Messenger",
-    note: "Une offre disponible et son lien sécurisé apparaissent dans Messenger lorsque vous êtes éligible. Vérifiez le prix sur la page de paiement avant de confirmer.",
+    badge: "Uniquement sur proposition",
+    note: "Aucun bouton de paiement dans Messenger ? L'achat n'est alors pas disponible. Si le bot propose une offre, vérifiez le prix sur la page de paiement sécurisée avant de confirmer.",
     faqAnswer:
       "Lorsque Messenger vous propose un achat, ouvrez son lien sécurisé pour le pack unique de 4,99 € pour 8 crédits premium. Vérifiez le prix exact sur la page de paiement avant de confirmer. Un paiement en mode Test est clairement indiqué et ne débite aucun montant réel.",
     microLine:
-      "Crédit d'images gratuit chaque jour • Sans abonnement • Achat via Messenger",
+      "Crédit d'images gratuit chaque jour • Sans abonnement • Achat uniquement si le bot affiche un bouton de paiement",
     mollieCardBody:
       "Confirmez un achat proposé uniquement après avoir vérifié le prix sur la page sécurisée de Mollie. Un paiement en mode Test est clairement indiqué et ne débite aucun montant réel.",
     creditsCardBody:
       "Les crédits premium ne sont ajoutés qu'après confirmation du paiement par Mollie, pas simplement lors du retour sur ce site.",
   },
   en: {
-    badge: "Via Messenger",
-    note: "An available offer and its secure link appear in Messenger when you are eligible. Check the price at checkout before confirming.",
+    badge: "Only when offered",
+    note: "No payment button in Messenger? Buying is not available at that time. If the bot does show an offer, check the price at secure checkout before confirming.",
     faqAnswer:
       "When Messenger offers you a purchase, open its secure link for the one-time €4.99 pack of 8 premium credits. Check the exact price at checkout before confirming. A Test checkout is clearly marked and makes no real charge.",
     microLine:
-      "Free image credits every day • No subscription • Purchase via Messenger",
+      "Free image credits every day • No subscription • Purchase only when the bot shows a payment button",
     mollieCardBody:
       "Only confirm an offered purchase after checking the price on Mollie's secure checkout. A Test checkout is clearly marked and makes no real charge.",
     creditsCardBody:
