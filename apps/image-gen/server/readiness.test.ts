@@ -411,7 +411,7 @@ describe("readiness", () => {
     }
   );
 
-  it("fails Test Mode readiness before database access without the exact tester pin", async () => {
+  it("allows Test Mode readiness without a tester registration", async () => {
     for (const [name, value] of Object.entries({
       MOLLIE_MODE: "test",
       MOLLIE_CREDIT_CHECKOUT_ENABLED: "true",
@@ -438,10 +438,8 @@ describe("readiness", () => {
       item => item.name === "credit_checkout"
     );
 
-    await expect(check?.check()).rejects.toThrow(
-      "Test Mode credit pilot scope must be complete"
-    );
-    expect(databaseCheck).not.toHaveBeenCalled();
+    await expect(check?.check()).resolves.toBeUndefined();
+    expect(databaseCheck).toHaveBeenCalledOnce();
   });
 
   it("fails readiness before database access for a malformed credit keyring", async () => {

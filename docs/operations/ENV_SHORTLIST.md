@@ -129,12 +129,12 @@ registration. Before `MESSENGER_PAID_CREDITS_ENABLED` or
 `MOLLIE_CREDIT_CHECKOUT_ENABLED` can be enabled, configure the exact non-secret
 `MOLLIE_CREDIT_WORKSPACE_ID` and complete the reviewed activation gates. Leave
 `MOLLIE_CREDIT_TEST_CHANNEL_CONNECTION_ID`, `MOLLIE_CREDIT_TEST_BINDING_EPOCH`,
-`MOLLIE_CREDIT_TEST_PRIVACY_EPOCH` and `MOLLIE_CREDIT_TEST_USER_KEY_HASH` empty.
-The production activation contract rejects a manual tester restriction. The
-application honors an older complete restriction only for compatibility;
-partially specified restrictions fail closed. Each checkout and wallet remains
-automatically bound to the real Messenger user and current Page/privacy
-boundary. No user key or raw PSID belongs in Fly config, docs, chat or logs.
+and `MOLLIE_CREDIT_TEST_PRIVACY_EPOCH` empty. The old
+`MOLLIE_CREDIT_TEST_USER_KEY_HASH` setting is ignored and may be removed during
+secret cleanup. Eligible Messenger users on the owner Page may then use the
+same checkout path. Each checkout and wallet remains automatically bound to
+the real Messenger user and current Page/privacy boundary. No user key or raw
+PSID belongs in Fly config, docs, chat or logs.
 
 `MESSENGER_PAID_IMAGE_PROVIDER_MAX_COST_USD` is also mandatory before paid
 credits can be enabled. It is the reviewed conservative maximum reserved
