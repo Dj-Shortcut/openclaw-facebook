@@ -444,13 +444,14 @@ release`, before any deployment or restart. The app-level Fly config
       and live/legacy billing stay disabled. No operator execution, public
       checkout or payment-to-credit-to-delivery evidence is claimed by this
       build or configuration change.
-    - Frontend PR #527 merged as
-      `cff9e09733d4ba89869634b87de5c569334f86d8` after green review and CI.
+    - Frontend PR #527 is included in the final release commit
+      `ba1720e6a48a3784b800f610fb7f8dad9859945a`, after the dependency bumps
+      passed their follow-up CI.
       Protected build
-      [34582281913/2](https://github.com/Dj-Shortcut/openclaw-facebook/actions/runs/34582281913/attempts/2)
+      [34588527737](https://github.com/Dj-Shortcut/openclaw-facebook/actions/runs/34588527737)
       passed from that exact source, producing runtime
-      `sha256:7c95cf09581afd53a4909fee039ecdbcc9a7b7f8e7c4989389b548a5705cbcda`
-      with attestation `46810628` and exact 0018 container checks. This is the
+      `sha256:c04c742f56de06cddb72907ca0bdc989200babd0ea7dcb73b318bf96a327b548`
+      with attestation `46823247` and exact 0018 container checks. This is the
       desired frontend-and-Test-checkout release. Only the desired artifact
       and source pins change; the original committed `c54c1fd0...` operator
       anchor, `f2fa9d60...` rollback, offer, budgets and flags remain unchanged.
