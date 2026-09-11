@@ -131,6 +131,82 @@ function QuotaMeter({ usedToday = 1 }: { usedToday?: number }) {
   );
 }
 
+/** The hero conversation plays itself like a live Messenger thread.
+ *
+ * The finished exchange is the resting state, so the first paint, a shared
+ * link preview, and any visitor who asked for reduced motion all show the
+ * whole conversation. Playback only ever replays what is already there. */
+type ConversationBeat = 0 | 1 | 2 | 3;
+const CONVERSATION_SETTLED: ConversationBeat = 3;
+
+function useConversationPlayback(): {
+  beat: ConversationBeat;
+  typing: boolean;
+} {
+  const [beat, setBeat] = useState<ConversationBeat>(CONVERSATION_SETTLED);
+  const [typing, setTyping] = useState(false);
+
+  useEffect(() => {
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+
+    const timers: number[] = [];
+    const at = (ms: number, run: () => void) => {
+      timers.push(window.setTimeout(run, ms));
+    };
+    const play = () => {
+      setBeat(0);
+      setTyping(false);
+      at(700, () => setBeat(1));
+      at(1500, () => setTyping(true));
+      at(2700, () => {
+        setTyping(false);
+        setBeat(2);
+      });
+      at(3600, () => setTyping(true));
+      at(5200, () => {
+        setTyping(false);
+        setBeat(3);
+      });
+      at(13000, play);
+    };
+    // Hold the settled conversation first; the replay is the second thing seen.
+    at(1200, play);
+
+    return () => {
+      timers.forEach(timer => window.clearTimeout(timer));
+    };
+  }, []);
+
+  return { beat, typing };
+}
+
+function conversationBeatClass(beat: ConversationBeat, at: number): string {
+  return beat >= at
+    ? "translate-y-0 opacity-100"
+    : "pointer-events-none translate-y-2 opacity-0";
+}
+
+/** Reports whether a section is on screen, so the pinned mobile call to action
+ * can step aside once the closing one is visible. Without an observer the bar
+ * simply stays put, which is the safe direction. */
+function useSectionInView(ref: React.RefObject<HTMLElement | null>): boolean {
+  const [inView, setInView] = useState(false);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || typeof IntersectionObserver === "undefined") return;
+
+    const observer = new IntersectionObserver(
+      entries => setInView(entries.some(entry => entry.isIntersecting)),
+      { rootMargin: "-25% 0px -10% 0px" }
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [ref]);
+
+  return inView;
+}
+
 /** Subtle cursor-following spotlight over the hero mockup card — a plain
  * CSS/pointer-events micro-interaction layered on top of the WebGL orb. It is
  * skipped entirely when the visitor asked for reduced motion. */
@@ -199,6 +275,9 @@ export default function LandingPage() {
 
   const copy = landingCopies[locale];
   const unavailable = unavailablePremiumCopies[locale];
+  const { beat, typing } = useConversationPlayback();
+  const closingRef = useRef<HTMLDivElement>(null);
+  const closingInView = useSectionInView(closingRef);
   const microLine = commercialBillingAvailable
     ? copy.microLine
     : unavailable.microLine;
@@ -374,13 +453,39 @@ export default function LandingPage() {
                     </span>
                   </div>
                   <div className="mt-5 grid gap-4">
-                    <div className="ml-auto max-w-[85%] rounded-2xl rounded-br-md bg-[#2541C9] px-4 py-3 text-sm leading-6 text-white">
+                    <div
+                      className={`ml-auto max-w-[85%] rounded-2xl rounded-br-md bg-[#2541C9] px-4 py-3 text-sm leading-6 text-white transition duration-300 ease-out ${conversationBeatClass(beat, 1)}`}
+                    >
                       {copy.chat.prompt}
                     </div>
-                    <div className="max-w-[88%] rounded-2xl rounded-bl-md bg-white px-4 py-3 text-sm leading-6 text-[#14203D]/85 shadow-sm ring-1 ring-[#14203D]/10">
-                      {copy.chat.reply}
+                    <div
+                      className={`max-w-[88%] rounded-2xl rounded-bl-md bg-white px-4 py-3 text-sm leading-6 text-[#14203D]/85 shadow-sm ring-1 ring-[#14203D]/10 transition duration-300 ease-out ${
+                        typing || beat >= 2
+                          ? "translate-y-0 opacity-100"
+                          : "pointer-events-none translate-y-2 opacity-0"
+                      }`}
+                    >
+                      {typing && beat < 2 ? (
+                        <span
+                          className="flex items-center gap-1.5 py-1"
+                          role="status"
+                          aria-label={copy.chat.typingLabel}
+                        >
+                          {[0, 1, 2].map(dot => (
+                            <span
+                              key={dot}
+                              className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#14203D]/45"
+                              style={{ animationDelay: `${dot * 160}ms` }}
+                            />
+                          ))}
+                        </span>
+                      ) : (
+                        copy.chat.reply
+                      )}
                     </div>
-                    <div className="overflow-hidden rounded-2xl border border-[#14203D]/10 bg-white p-4 shadow-sm">
+                    <div
+                      className={`overflow-hidden rounded-2xl border border-[#14203D]/10 bg-white p-4 shadow-sm transition duration-300 ease-out ${conversationBeatClass(beat, 3)}`}
+                    >
                       <div className="flex min-h-32 items-end justify-between rounded-xl bg-[radial-gradient(circle_at_25%_20%,rgba(255,255,255,0.35),transparent_45%),linear-gradient(135deg,#2541C9,#6D28D9_60%,#8B2FE0)] p-4 text-white">
                         <div>
                           <div className="text-xs font-semibold uppercase tracking-[0.16em] text-white/85">
@@ -463,7 +568,7 @@ export default function LandingPage() {
             })}
           </ol>
           <div className="mt-8">
-            <MessengerCta label={copy.heroPrimaryCta} variant="solid" />
+            <MessengerCta label={copy.stepsCta} variant="solid" />
           </div>
         </div>
       </section>
@@ -734,7 +839,10 @@ export default function LandingPage() {
         aria-labelledby="closing-title"
         className="px-4 py-20 sm:px-6 lg:px-8 lg:py-24"
       >
-        <div className="mx-auto max-w-6xl overflow-hidden rounded-[2rem] bg-[#14203D] px-7 py-12 text-white sm:px-12 sm:py-16">
+        <div
+          className="mx-auto max-w-6xl overflow-hidden rounded-[2rem] bg-[#14203D] px-7 py-12 text-white sm:px-12 sm:py-16"
+          ref={closingRef}
+        >
           <div className="grid gap-8 lg:grid-cols-[1.2fr_0.8fr] lg:items-center">
             <div>
               <h2
@@ -759,7 +867,10 @@ export default function LandingPage() {
       </section>
 
       <div
-        className="fixed inset-x-0 bottom-0 z-40 border-t border-[#14203D]/10 bg-[#f6f2ea]/95 px-4 pt-3 backdrop-blur sm:hidden"
+        aria-hidden={closingInView}
+        className={`fixed inset-x-0 bottom-0 z-40 border-t border-[#14203D]/10 bg-[#f6f2ea]/95 px-4 pt-3 backdrop-blur transition-opacity duration-200 sm:hidden ${
+          closingInView ? "pointer-events-none opacity-0" : "opacity-100"
+        }`}
         style={{ paddingBottom: "calc(0.75rem + env(safe-area-inset-bottom))" }}
       >
         <MessengerCta
