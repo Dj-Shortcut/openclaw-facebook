@@ -20,9 +20,11 @@ export type LandingCopy = {
   subtitle: string;
   heroPrimaryCta: string;
   heroSecondaryCta: string;
+  stepsCta: string;
   microLine: string;
   chat: {
     label: string;
+    typingLabel: string;
     prompt: string;
     reply: string;
     resultTag: string;
@@ -86,10 +88,12 @@ export const landingCopies: Record<AppLocale, LandingCopy> = {
       "Stuur een berichtje of een foto in Messenger. Leaderbot maakt er een nieuw beeld van, of past je eigen foto aan zoals jij het beschrijft. Geen extra app en geen apart account: alles gebeurt gewoon in het gesprek.",
     heroPrimaryCta: "Open Leaderbot in Messenger",
     heroSecondaryCta: "Bekijk wat je kan vragen",
+    stepsCta: "Probeer het meteen",
     microLine:
       "Elke dag gratis beeldtegoed • Geen abonnement • Veilig betalen via Mollie",
     chat: {
       label: "Voorbeeldgesprek",
+      typingLabel: "Leaderbot typt",
       prompt: "Vervang de achtergrond door een rustig kantoor met veel licht.",
       reply: "Doe ik. Eén moment.",
       resultTag: "Nieuwe achtergrond",
@@ -149,6 +153,12 @@ export const landingCopies: Record<AppLocale, LandingCopy> = {
         title: "Licht en kleur bijstellen",
         instruction: "Maak de belichting warmer en de kleuren levendiger.",
         outcome: "Een zachtere, warmere sfeer in dezelfde foto.",
+      },
+      {
+        title: "Foto's samenvoegen",
+        instruction: "Zet deze twee foto's samen in één beeld.",
+        outcome:
+          "Stuur twee tot vier foto's en beschrijf wat uit elke foto moet komen.",
       },
     ],
     examplesCta: {
@@ -236,6 +246,11 @@ export const landingCopies: Record<AppLocale, LandingCopy> = {
           "Ja. Stuur een foto naar Leaderbot in Messenger samen met een beschrijving van de aanpassing die je wil, en je krijgt de bewerkte versie terug.",
       },
       {
+        question: "Kan ik meerdere foto's combineren?",
+        answer:
+          "Ja. Stuur twee tot vier foto's en kies Samenvoegen, of beschrijf meteen hoe ze één beeld moeten worden. Leaderbot vraagt daarna wat uit elke foto moet komen.",
+      },
+      {
         question: "Hoe worden mijn foto's en gegevens behandeld?",
         answer:
           "Leaderbot verwerkt enkel wat nodig is om je afbeeldingen te maken en je tegoed bij te houden. Je kan op elk moment vragen om je gegevens te verwijderen.",
@@ -249,7 +264,7 @@ export const landingCopies: Record<AppLocale, LandingCopy> = {
     closing: {
       title: "Zin om iets te proberen?",
       body: "Open het gesprek en stuur je eerste opdracht. Je gratis dagtegoed staat klaar.",
-      cta: "Open Leaderbot in Messenger",
+      cta: "Stuur je eerste opdracht",
     },
   },
   "fr-BE": {
@@ -267,10 +282,12 @@ export const landingCopies: Record<AppLocale, LandingCopy> = {
       "Envoyez un message ou une photo dans Messenger. Leaderbot en fait une nouvelle image, ou modifie votre propre photo comme vous le décrivez. Pas d'application en plus, pas de compte séparé : tout se passe dans la conversation.",
     heroPrimaryCta: "Ouvrir Leaderbot dans Messenger",
     heroSecondaryCta: "Voir ce que vous pouvez demander",
+    stepsCta: "Essayez tout de suite",
     microLine:
       "Crédit d'images gratuit chaque jour • Sans abonnement • Paiement sécurisé via Mollie",
     chat: {
       label: "Exemple de conversation",
+      typingLabel: "Leaderbot écrit",
       prompt: "Remplace l'arrière-plan par un bureau lumineux et calme.",
       reply: "C'est parti, un instant.",
       resultTag: "Nouvel arrière-plan",
@@ -329,6 +346,12 @@ export const landingCopies: Record<AppLocale, LandingCopy> = {
         title: "Ajuster lumière et couleurs",
         instruction: "Rends la lumière plus chaude et les couleurs plus vives.",
         outcome: "Une ambiance plus douce et plus chaleureuse.",
+      },
+      {
+        title: "Combiner des photos",
+        instruction: "Réunis ces deux photos en une seule image.",
+        outcome:
+          "Envoyez deux à quatre photos et décrivez ce qui doit venir de chacune.",
       },
     ],
     examplesCta: {
@@ -416,6 +439,11 @@ export const landingCopies: Record<AppLocale, LandingCopy> = {
           "Oui. Envoyez une photo à Leaderbot dans Messenger avec une description de la modification souhaitée, et vous recevrez la version modifiée.",
       },
       {
+        question: "Puis-je combiner plusieurs photos ?",
+        answer:
+          "Oui. Envoyez deux à quatre photos et choisissez Combiner, ou décrivez directement comment elles doivent former une seule image. Leaderbot vous demande ensuite ce qui doit venir de chaque photo.",
+      },
+      {
         question: "Comment mes photos et mes données sont-elles traitées ?",
         answer:
           "Leaderbot ne traite que ce qui est nécessaire pour créer vos images et suivre votre solde. Vous pouvez demander la suppression de vos données à tout moment.",
@@ -430,7 +458,7 @@ export const landingCopies: Record<AppLocale, LandingCopy> = {
     closing: {
       title: "Envie d'essayer ?",
       body: "Ouvrez la conversation et envoyez votre première demande. Votre crédit gratuit du jour vous attend.",
-      cta: "Ouvrir Leaderbot dans Messenger",
+      cta: "Envoyez votre première demande",
     },
   },
   en: {
@@ -448,10 +476,12 @@ export const landingCopies: Record<AppLocale, LandingCopy> = {
       "Send a message or a photo in Messenger. Leaderbot turns it into a new image, or edits your own photo the way you describe it. No extra app and no separate account: it all happens in the chat.",
     heroPrimaryCta: "Open Leaderbot in Messenger",
     heroSecondaryCta: "See what you can ask",
+    stepsCta: "Try it right away",
     microLine:
       "Free image credits every day • No subscription • Secure payment via Mollie",
     chat: {
       label: "Example conversation",
+      typingLabel: "Leaderbot is typing",
       prompt: "Replace the background with a bright, calm office.",
       reply: "On it, one moment.",
       resultTag: "New background",
@@ -510,6 +540,12 @@ export const landingCopies: Record<AppLocale, LandingCopy> = {
         title: "Adjust light and colour",
         instruction: "Make the lighting warmer and the colours more vivid.",
         outcome: "A softer, warmer mood in the same photo.",
+      },
+      {
+        title: "Combine photos",
+        instruction: "Put these two photos together into one image.",
+        outcome:
+          "Send two to four photos and describe what should come from each one.",
       },
     ],
     examplesCta: {
@@ -597,6 +633,11 @@ export const landingCopies: Record<AppLocale, LandingCopy> = {
           "Yes. Send a photo to Leaderbot in Messenger along with a description of the edit you want, and you'll get the edited version back.",
       },
       {
+        question: "Can I combine several photos?",
+        answer:
+          "Yes. Send two to four photos and choose Combine, or describe straight away how they should become one image. Leaderbot then asks what should come from each photo.",
+      },
+      {
         question: "How are my photos and data handled?",
         answer:
           "Leaderbot only processes what's needed to create your images and track your balance. You can ask for your data to be deleted at any time.",
@@ -610,7 +651,7 @@ export const landingCopies: Record<AppLocale, LandingCopy> = {
     closing: {
       title: "Feel like trying it?",
       body: "Open the chat and send your first request. Your free daily allowance is waiting.",
-      cta: "Open Leaderbot in Messenger",
+      cta: "Send your first request",
     },
   },
 };
