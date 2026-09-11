@@ -121,18 +121,39 @@ do not substitute a new request or treat its code review as production proof.
 The reviewed immutable `creditTestActivation.operator` anchor records
 `operatorImage`, `artifactSourceSha`, `runtimeImage`, `deploymentIdentity`,
 `requestId`, `previousEpoch: 1` and `epoch: 2`. Request
-`8a62f93d-e092-4dd8-82ca-9e77bdd89d54` is allocated only to the future first
-approved operator execution; it is not a claim that the action has run.
-Before the first operator execution, review/update it to the exact artifact
-that will execute and its prepared runtime predecessor. Once activation commits,
-retain that original anchor unchanged across later frontend and runtime
-releases; changing the desired release must not require another enable action.
+`8a62f93d-e092-4dd8-82ca-9e77bdd89d54` committed the initial Test activation
+at epoch 2 in protected run
+[34581138362/2](https://github.com/Dj-Shortcut/openclaw-facebook/actions/runs/34581138362/attempts/2).
+The anchor was reviewed before this execution. Retain it unchanged across later
+frontend and runtime releases; changing the desired release must not require
+another enable action.
 The pinned request and initial epoch prevent a later disable/re-enable from
 being accepted as the original activation, even with the same executable and
 predecessor. Do not change the request or epochs to make that later state pass.
 The original audit is compared with this anchor, while current settled runtime,
 database principal, account/session and readiness checks remain fresh and
 separate for every deployment.
+
+That successful operator run used workflow source
+`108379291f6cb59b196f078621ca51f3addd3cde`, operator image
+`sha256:c54c1fd026e281ada8f88ecb1acc0a26d48e736b3874d3e7aeb70dc2c64efe5f`
+from artifact source `479e43d17aab852ea6b4bbfd6b03c4eac15eb797`, and bundle
+SHA-256 `4ff44ff41de899b0ebece69d9beccb943e6d60a482513863a481ca1210441208`.
+The unchanged running predecessor was
+`sha256:f2fa9d60e1fca02c09cb2764981a7134e908f2e33f127eb0e54e77030b4a7a4b`
+/ `deploy-34496956631-1`. The run's `test-payment-operator-evidence.json` has SHA-256
+`96e407ac273acfb3b387f63e98e28c2bf6a10838624057f2954eb4d360b2c3c4` and records
+`success=true`, `committed=true`, `stage=complete`, `outcome=committed`,
+`baselineUnchanged=true`, `remoteRemoved=true` and `containerRemoved=true`.
+Attempt 1 stopped at `stage=baseline`, `outcome=not_started`, before upload or
+activation dispatch; no cause is established by that redacted result.
+
+This proves only the operator's initial processing activation and cleanup.
+The separate deployment, its fresh protected `prove`/`consume` checks, public
+Test checkout exposure, and payment-to-credit-to-delivered-edit journey remain
+open. The existing Machines still have checkout and paid image use disabled;
+live and legacy billing remain off. Do not repeat the operator for the next
+frontend artifact; retain the original committed provenance above.
 
 This does not remove the audited payment execution controls, worker lanes and
 heartbeats, notification checks, credential generation identity, spend caps,
