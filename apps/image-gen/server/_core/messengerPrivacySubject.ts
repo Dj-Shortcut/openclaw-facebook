@@ -149,12 +149,6 @@ export async function getActiveMessengerPrivacySubjectEpoch(
   return rows[0]?.privacyEpoch ?? null;
 }
 
-export async function getErasingMessengerPrivacySubjectEpoch(
-  input: SubjectScope
-): Promise<number | null> {
-  return (await getErasingMessengerPrivacySubject(input))?.privacyEpoch ?? null;
-}
-
 export async function getErasingMessengerPrivacySubject(
   input: SubjectScope
 ): Promise<MessengerErasingPrivacySubject | null> {

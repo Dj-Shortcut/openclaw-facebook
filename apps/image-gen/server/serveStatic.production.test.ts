@@ -6,6 +6,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { registerMetaWebhookRoutes } from "./_core/meta/webhookRoutes";
+import { DEFAULT_MAX_REQUESTS } from "./_core/httpRateLimit";
 import { serveStatic, setupVite } from "./_core/vite";
 
 const tempDirs: string[] = [];
@@ -13,7 +14,10 @@ const tempDirs: string[] = [];
 function createTempBuild() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "leaderbot-static-"));
   tempDirs.push(dir);
-  fs.writeFileSync(path.join(dir, "index.html"), "<html><body><h1>Landing UI</h1></body></html>");
+  fs.writeFileSync(
+    path.join(dir, "index.html"),
+    "<html><body><h1>Landing UI</h1></body></html>"
+  );
   fs.mkdirSync(path.join(dir, "assets"), { recursive: true });
   fs.writeFileSync(path.join(dir, "assets", "app.js"), "console.log('ok');");
   return dir;
@@ -23,7 +27,7 @@ async function listen(app: express.Express) {
   return await new Promise<{
     baseUrl: string;
     close: () => Promise<void>;
-  }>((resolve) => {
+  }>(resolve => {
     const server = app.listen(0, "127.0.0.1", () => {
       const address = server.address();
       if (!address || typeof address === "string") {
@@ -34,7 +38,7 @@ async function listen(app: express.Express) {
         baseUrl: `http://127.0.0.1:${address.port}`,
         close: () =>
           new Promise<void>((closeResolve, closeReject) => {
-            server.close((err) => {
+            server.close(err => {
               if (err) {
                 closeReject(err);
                 return;
@@ -129,6 +133,41 @@ describe("serveStatic production mode", () => {
       expect(payload).not.toContain("Landing UI");
     } finally {
       await server.close();
+    }
+  });
+
+  it("keeps frontend limits per app without blocking earlier health routes", async () => {
+    const staticDir = createTempBuild();
+    const firstApp = express();
+    firstApp.get("/healthz", (_req, res) => res.status(200).send("ok"));
+    serveStatic(firstApp, staticDir);
+    const secondApp = express();
+    serveStatic(secondApp, staticDir);
+    const first = await listen(firstApp);
+    const second = await listen(secondApp);
+
+    try {
+      for (let request = 0; request < DEFAULT_MAX_REQUESTS; request += 1) {
+        const response = await fetch(`${first.baseUrl}/`);
+        expect(response.status).toBe(200);
+        await response.text();
+      }
+      const limited = await fetch(`${first.baseUrl}/`);
+      expect(limited.status).toBe(429);
+      expect(limited.headers.get("ratelimit-limit")).toBe(
+        String(DEFAULT_MAX_REQUESTS)
+      );
+      await limited.text();
+
+      const health = await fetch(`${first.baseUrl}/healthz`);
+      expect(health.status).toBe(200);
+      expect(await health.text()).toBe("ok");
+
+      const independent = await fetch(`${second.baseUrl}/`);
+      expect(independent.status).toBe(200);
+      expect(await independent.text()).toContain("Landing UI");
+    } finally {
+      await Promise.all([first.close(), second.close()]);
     }
   });
 });

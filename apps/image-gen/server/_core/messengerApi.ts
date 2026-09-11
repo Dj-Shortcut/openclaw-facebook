@@ -55,6 +55,7 @@ type WebUrlButton = {
   title: string;
   url: string;
   webview_height_ratio?: "compact" | "tall" | "full";
+  messenger_extensions?: false;
 };
 
 type PostbackButton = {
@@ -759,18 +760,6 @@ export async function sendVideo(
     reason: outcome.sent ? undefined : outcome.reason,
   });
   return outcome;
-}
-
-export async function sendAudio(
-  psid: string,
-  audioUrl: string
-): Promise<MessengerSendOutcome> {
-  return await sendMessage(psid, {
-    attachment: {
-      type: "audio",
-      payload: { url: audioUrl, is_reusable: false },
-    },
-  });
 }
 
 export type { QuickReply, WebUrlButton, MessengerSendOutcome };

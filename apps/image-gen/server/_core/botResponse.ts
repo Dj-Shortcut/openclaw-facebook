@@ -9,6 +9,7 @@ export type ConversationAction = {
 export type ImageQuotaBalance = {
   daily: { used: number; limit: number; remaining: number };
   monthly: { used: number; limit: number; remaining: number };
+  premium?: { remaining: number };
 };
 
 type ImageOutput = {

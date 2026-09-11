@@ -4,22 +4,26 @@ import { sendFallbackTextIfNeeded } from "./_core/webhookFallback";
 import type { FacebookWebhookEvent } from "./_core/webhookHelpers";
 
 describe("messenger inbound classification", () => {
-  it("recognizes channel-neutral conversation action payloads", () => {
-    const event: FacebookWebhookEvent = {
-      sender: { id: "psid-1" },
-      message: {
-        quick_reply: { payload: "OPENCLAW_ACTION:Nieuwe%20afbeelding" },
-      },
-    };
+  it.each(["LEADERBOT_ACTION:", "OPENCLAW_ACTION:"])(
+    "recognizes channel-neutral conversation action payloads with prefix %s",
+    prefix => {
+      const payload = `${prefix}Nieuwe%20afbeelding`;
+      const event: FacebookWebhookEvent = {
+        sender: { id: "psid-1" },
+        message: {
+          quick_reply: { payload },
+        },
+      };
 
-    expect(classifyInboundEvent(event)).toEqual({
-      isInboundUserEvent: true,
-      eventPayload: "OPENCLAW_ACTION:Nieuwe%20afbeelding",
-      isIntentionalSilentAck: false,
-      isIntentionalSilentUnknownPayload: false,
-      isPrivacyOrConsentControl: false,
-    });
-  });
+      expect(classifyInboundEvent(event)).toEqual({
+        isInboundUserEvent: true,
+        eventPayload: payload,
+        isIntentionalSilentAck: false,
+        isIntentionalSilentUnknownPayload: false,
+        isPrivacyOrConsentControl: false,
+      });
+    }
+  );
 
   it.each([
     "CHOOSE_STYLE",

@@ -11,7 +11,7 @@ export default tseslint.config(
       "node_modules/**",
       "coverage/**",
       "client/public/**",
-     "**/*.test.js",
+      "**/*.test.js",
       "**/*.test.cjs",
       "**/*.test.mjs",
       "**/*.test.ts",
@@ -41,5 +41,5 @@ export default tseslint.config(
       "@typescript-eslint/no-floating-promises": "error",
     },
   },
-  eslintConfigPrettier,
+  eslintConfigPrettier
 );

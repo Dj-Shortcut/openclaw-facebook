@@ -52,14 +52,6 @@ export async function sendWhatsAppErasureControlTextReply(
   await sendWhatsAppErasureControlText(senderId, text, reqId);
 }
 
-export async function sendWhatsAppImageReply(
-  senderId: string,
-  imageUrl: string,
-  reqId: string
-): Promise<void> {
-  await sendWhatsAppImage(senderId, imageUrl, reqId);
-}
-
 export async function sendWhatsAppImageReplyWithReceipt(
   senderId: string,
   imageUrl: string,

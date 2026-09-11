@@ -776,3 +776,37 @@ export async function reservePaidCreditGeneration(
   });
   return { available: true, reservation };
 }
+
+/**
+ * Reads the current spendable premium-credit balance for one exact Messenger
+ * subject. This is presentation-only: it never creates a wallet or reserves
+ * a credit, and an unavailable wallet is represented as null.
+ */
+export async function readPaidCreditBalance(
+  input: PaidCreditGenerationInput,
+  dependencies: CreditGenerationAdmissionDependencies = defaultDependencies
+): Promise<number | null> {
+  assertInput(input);
+  if (!dependencies.enabled()) return null;
+  const config = dependencies.config();
+  if (!config.paidCreditsEnabled) return null;
+  if (!isCreditCheckoutMessengerScopeAllowed(config, input)) return null;
+
+  const subjectScope = messengerScope({ ...input, mode: config.mode });
+  const persistedIdentity = await dependencies.readWalletIdentity(subjectScope);
+  if (!persistedIdentity) return null;
+  const wallet = await dependencies.readWallet(
+    walletScope(subjectScope, persistedIdentity)
+  );
+  if (!wallet) return null;
+  if (
+    !Number.isSafeInteger(wallet.creditBalance) ||
+    !Number.isSafeInteger(wallet.reservedCredits) ||
+    wallet.creditBalance < 0 ||
+    wallet.reservedCredits < 0 ||
+    wallet.reservedCredits > wallet.creditBalance
+  ) {
+    fail();
+  }
+  return wallet.creditBalance - wallet.reservedCredits;
+}
