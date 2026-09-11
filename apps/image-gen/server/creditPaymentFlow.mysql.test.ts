@@ -15,10 +15,7 @@ import {
   markCreditPaymentTransportStarted,
   type CreditCheckoutProviderScope,
 } from "./_core/billing/creditCheckoutProviderStore";
-import {
-  CreditCheckoutReservationError,
-  reserveMessengerCreditCheckout,
-} from "./_core/billing/creditCheckoutReservationService";
+import { reserveMessengerCreditCheckout } from "./_core/billing/creditCheckoutReservationService";
 import { deriveCreditCheckoutTestUserKeyHash } from "./_core/billing/creditCheckoutConfig";
 import {
   claimCreditCheckoutBrowserSession,
@@ -815,24 +812,25 @@ suite("credit payment MySQL 8.4.11 end-to-end boundary", () => {
     );
     expect(provider.customerId).toBeNull();
 
-    await expect(
-      reserveMessengerCreditCheckout({
-        workspaceId: owner.workspaceId,
-        channelConnectionId: owner.channelConnectionId,
-        bindingEpoch: owner.bindingEpoch,
-        privacyEpoch: owner.privacyEpoch,
-        userKey: USER_B,
-        requestId: `mysql-cross-scope-${randomUUID()}`,
-      })
-    ).rejects.toBeInstanceOf(CreditCheckoutReservationError);
+    const otherUserCheckout = await reserveMessengerCreditCheckout({
+      workspaceId: owner.workspaceId,
+      channelConnectionId: owner.channelConnectionId,
+      bindingEpoch: owner.bindingEpoch,
+      privacyEpoch: owner.privacyEpoch,
+      userKey: USER_B,
+      requestId: `mysql-second-user-${randomUUID()}`,
+    });
+    expect(otherUserCheckout).toMatchObject({
+      intentId: expect.any(String),
+      actionUrl: expect.stringContaining("/credits/checkout/"),
+      label: "8 premiumcredits - € 4,99",
+    });
     const [[otherUser]] = await connection.query<RowDataPacket[]>(
       "SELECT COUNT(*) AS wallets,COALESCE(SUM(`credit_balance`),0) AS balance FROM `credit_wallets` WHERE `workspace_id`=? AND BINARY `current_user_key_hash`=BINARY ?",
       [owner.workspaceId, USER_B]
     );
-    expect({
-      wallets: Number(otherUser.wallets),
-      balance: Number(otherUser.balance),
-    }).toEqual({ wallets: 0, balance: 0 });
+    expect(Number(otherUser.wallets)).toBe(1);
+    expect(Number(otherUser.balance)).toBe(0);
   });
 
   it("keeps an early webhook customerless after finalize and recovers exposure without another POST", async () => {

@@ -1255,10 +1255,10 @@ describe("production deployment contract", () => {
     expect(app.deploymentEnabled).toBe(true);
     expect(app.reviewedArtifactKind).toBe("runtime");
     expect(app.reviewedImage).toBe(
-      "registry.fly.io/leaderbot-fb-image-gen@sha256:c04c742f56de06cddb72907ca0bdc989200babd0ea7dcb73b318bf96a327b548",
+      "registry.fly.io/leaderbot-fb-image-gen@sha256:a8c1b62aa35c6fba876134bca364457495397e9b53afc78653f2bd159c3eb70d",
     );
     expect(app.reviewedSourceCommit).toBe(
-      "ba1720e6a48a3784b800f610fb7f8dad9859945a",
+      "9b7f454526ce12ce0bb6fafa0d2f85ba29a5c116",
     );
     expect(app.reviewedImage).not.toBe(predecessorImage);
     expect(app.reviewedImageSchemaPhases).toEqual([

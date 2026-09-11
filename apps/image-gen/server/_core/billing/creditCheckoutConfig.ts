@@ -1,4 +1,4 @@
-import { createHash, timingSafeEqual } from "node:crypto";
+import { createHash } from "node:crypto";
 
 import type { MollieMode } from "./config";
 
@@ -13,7 +13,11 @@ export type CreditCheckoutTestPilotScope = Readonly<{
   channelConnectionId: number;
   bindingEpoch: number;
   privacyEpoch: number;
-  userKeyHash: string;
+  /**
+   * Retained for reading older rollout configuration only. Test Mode no
+   * longer registers or restricts a tester identity.
+   */
+  userKeyHash?: string;
 }>;
 
 export type CreditCheckoutMessengerScopePinInput = Readonly<{
@@ -100,18 +104,16 @@ function readTestPilotScope(
   );
   const bindingEpoch = readDatabaseId(env, "MOLLIE_CREDIT_TEST_BINDING_EPOCH");
   const privacyEpoch = readDatabaseId(env, "MOLLIE_CREDIT_TEST_PRIVACY_EPOCH");
-  const userKeyHash = env.MOLLIE_CREDIT_TEST_USER_KEY_HASH?.trim() ?? "";
+  const legacyUserKeyHash = env.MOLLIE_CREDIT_TEST_USER_KEY_HASH?.trim() ?? "";
   const hasAny =
     channelConnectionId !== null ||
     bindingEpoch !== null ||
-    privacyEpoch !== null ||
-    userKeyHash.length > 0;
+    privacyEpoch !== null;
   if (!hasAny) return null;
   if (
     channelConnectionId === null ||
     bindingEpoch === null ||
-    privacyEpoch === null ||
-    !SHA256_KEY_PATTERN.test(userKeyHash)
+    privacyEpoch === null
   ) {
     throw new CreditCheckoutConfigError(
       "The Test Mode credit pilot scope must be complete and canonical"
@@ -121,7 +123,9 @@ function readTestPilotScope(
     channelConnectionId,
     bindingEpoch,
     privacyEpoch,
-    userKeyHash,
+    ...(SHA256_KEY_PATTERN.test(legacyUserKeyHash)
+      ? { userKeyHash: legacyUserKeyHash }
+      : {}),
   });
 }
 
@@ -240,38 +244,21 @@ export function isCreditCheckoutMessengerScopeAllowed(
       ) && PRIVACY_USER_KEY_PATTERN.test(scope.userKey)
     );
   }
-  if (
-    pilot.channelConnectionId !== scope.channelConnectionId ||
-    pilot.bindingEpoch !== scope.bindingEpoch ||
-    pilot.privacyEpoch !== scope.privacyEpoch
-  ) {
-    return false;
-  }
-  let actual: Buffer;
-  try {
-    actual = Buffer.from(
-      deriveCreditCheckoutTestUserKeyHash(scope.userKey),
-      "hex"
-    );
-  } catch {
-    return false;
-  }
-  const expected = Buffer.from(pilot.userKeyHash, "hex");
-  try {
-    return (
-      actual.byteLength === expected.byteLength &&
-      timingSafeEqual(actual, expected)
-    );
-  } finally {
-    actual.fill(0);
-    expected.fill(0);
-  }
-}
-
-export function isCreditCheckoutEnabled(
-  env: NodeJS.ProcessEnv = process.env
-): boolean {
-  return env.MOLLIE_CREDIT_CHECKOUT_ENABLED === ENABLED;
+  return (
+    pilot.channelConnectionId === scope.channelConnectionId &&
+    pilot.bindingEpoch === scope.bindingEpoch &&
+    pilot.privacyEpoch === scope.privacyEpoch &&
+    Number.isSafeInteger(scope.channelConnectionId) &&
+    scope.channelConnectionId > 0 &&
+    scope.channelConnectionId <= MAX_DATABASE_ID &&
+    Number.isSafeInteger(scope.bindingEpoch) &&
+    scope.bindingEpoch > 0 &&
+    scope.bindingEpoch <= MAX_DATABASE_ID &&
+    Number.isSafeInteger(scope.privacyEpoch) &&
+    scope.privacyEpoch > 0 &&
+    scope.privacyEpoch <= MAX_DATABASE_ID &&
+    PRIVACY_USER_KEY_PATTERN.test(scope.userKey)
+  );
 }
 
 export function isPaidMessengerCreditsEnabled(

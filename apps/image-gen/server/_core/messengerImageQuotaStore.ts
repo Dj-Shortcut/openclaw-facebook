@@ -520,13 +520,6 @@ export async function getMessengerImageQuotaStatus(
   return buildStatus(counts[0], counts[1], dailyLimit, monthlyLimit);
 }
 
-export async function canGenerateMessengerImage(
-  identity: MessengerImageQuotaIdentity
-): Promise<boolean> {
-  const status = await getMessengerImageQuotaStatus(identity);
-  return status.daily.remaining > 0 && status.monthly.remaining > 0;
-}
-
 /**
  * Deletes every quota epoch for one workspace-owned user and installs exact
  * connection fences so an in-flight pre-erasure reservation cannot recreate it.

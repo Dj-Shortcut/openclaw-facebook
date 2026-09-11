@@ -378,7 +378,7 @@ describe("confirmCreditCheckoutPayment", () => {
     expect(test.createCreditPayment).not.toHaveBeenCalled();
   });
 
-  it("makes no provider or intent-state call for another Test Mode Messenger user", async () => {
+  it("allows another Test Mode Messenger user on the same Page binding", async () => {
     const test = harness();
 
     await expect(
@@ -386,13 +386,14 @@ describe("confirmCreditCheckoutPayment", () => {
         session({ messengerSenderUserKey: `u2.k1.${"b".repeat(64)}` }),
         test.dependencies
       )
-    ).rejects.toBeInstanceOf(CreditCheckoutPaymentError);
+    ).resolves.toEqual({
+      checkoutUrl: "https://www.mollie.com/checkout/select-method/x",
+    });
 
-    expect(test.claim).not.toHaveBeenCalled();
-    expect(test.createCreditPayment).not.toHaveBeenCalled();
-    expect(test.getPayment).not.toHaveBeenCalled();
-    expect(test.finalize).not.toHaveBeenCalled();
-    expect(test.expose).not.toHaveBeenCalled();
+    expect(test.claim).toHaveBeenCalledOnce();
+    expect(test.createCreditPayment).toHaveBeenCalledOnce();
+    expect(test.finalize).toHaveBeenCalledOnce();
+    expect(test.expose).toHaveBeenCalledOnce();
   });
 
   it("fails before claiming when the immutable refund policy changes", async () => {

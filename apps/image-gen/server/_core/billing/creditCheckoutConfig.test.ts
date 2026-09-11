@@ -95,8 +95,9 @@ describe("credit checkout rollout configuration", () => {
     ).toThrow(CreditCheckoutConfigError);
   });
 
-  it("preserves an explicitly configured older test restriction", () => {
-    expect(getCreditCheckoutPilotConfig(enabledEnv())).toEqual({
+  it("reads an older tester pin without restricting Messenger users", () => {
+    const config = getCreditCheckoutPilotConfig(enabledEnv());
+    expect(config).toEqual({
       checkoutEnabled: true,
       paidCreditsEnabled: true,
       workspaceId: 42,
@@ -109,6 +110,15 @@ describe("credit checkout rollout configuration", () => {
         userKeyHash: TEST_USER_KEY_HASH,
       },
     });
+    expect(
+      isCreditCheckoutMessengerScopeAllowed(config, {
+        workspaceId: 42,
+        channelConnectionId: 8,
+        bindingEpoch: 3,
+        privacyEpoch: 5,
+        userKey: `u2.k1.${"8".repeat(64)}`,
+      })
+    ).toBe(true);
   });
 
   it.each([
@@ -152,7 +162,7 @@ describe("credit checkout rollout configuration", () => {
     }
   );
 
-  it("allows only the exact pseudonymous tester on the pinned Page binding", () => {
+  it("allows every canonical user on the pinned Page binding", () => {
     const config = getCreditCheckoutPilotConfig(enabledEnv());
     const exactScope = {
       workspaceId: 42,
@@ -170,7 +180,7 @@ describe("credit checkout rollout configuration", () => {
         ...exactScope,
         userKey: `u2.k1.${"8".repeat(64)}`,
       })
-    ).toBe(false);
+    ).toBe(true);
     expect(
       isCreditCheckoutMessengerScopeAllowed(config, {
         ...exactScope,
@@ -181,12 +191,19 @@ describe("credit checkout rollout configuration", () => {
 
   it.each([
     ["missing tester hash", { MOLLIE_CREDIT_TEST_USER_KEY_HASH: "" }],
-    ["partial tester scope", { MOLLIE_CREDIT_TEST_CHANNEL_CONNECTION_ID: "" }],
     ["malformed tester hash", { MOLLIE_CREDIT_TEST_USER_KEY_HASH: "a" }],
-  ])("fails closed for a %s", (_label, override) => {
-    expect(() => getCreditCheckoutPilotConfig(enabledEnv(override))).toThrow(
-      CreditCheckoutConfigError
-    );
+  ])("ignores a %s from the retired tester restriction", (_label, override) => {
+    expect(() =>
+      getCreditCheckoutPilotConfig(enabledEnv(override))
+    ).not.toThrow();
+  });
+
+  it("fails closed for a partial Page binding pin", () => {
+    expect(() =>
+      getCreditCheckoutPilotConfig(
+        enabledEnv({ MOLLIE_CREDIT_TEST_CHANNEL_CONNECTION_ID: "" })
+      )
+    ).toThrow(CreditCheckoutConfigError);
   });
 
   it("rejects a Test Mode tester pin in live mode", () => {

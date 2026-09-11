@@ -224,19 +224,18 @@ describe("Messenger credit checkout reservation", () => {
     expect(deps.reserve).not.toHaveBeenCalled();
   });
 
-  it("rejects another Messenger user in the same workspace before any database write", async () => {
+  it("allows another Messenger user in the same workspace", async () => {
     const deps = dependencies();
 
-    await expect(
-      reserveMessengerCreditCheckout(
-        { ...INPUT, userKey: "b".repeat(64) },
-        deps
-      )
-    ).rejects.toBeInstanceOf(CreditCheckoutReservationError);
+    const result = await reserveMessengerCreditCheckout(
+      { ...INPUT, userKey: "b".repeat(64) },
+      deps
+    );
 
-    expect(deps.readAuthorization).not.toHaveBeenCalled();
-    expect(deps.readWalletIdentity).not.toHaveBeenCalled();
-    expect(deps.reserve).not.toHaveBeenCalled();
+    expect(result.actionUrl).toMatch(
+      /^https:\/\/app[.]leaderbot[.]live\/credits\/checkout\/[0-9a-f-]{36}#[A-Za-z0-9_-]{43}$/
+    );
+    expect(deps.reserve).toHaveBeenCalledOnce();
   });
 
   it.each([

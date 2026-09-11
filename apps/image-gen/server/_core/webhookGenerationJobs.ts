@@ -100,6 +100,7 @@ import {
 } from "./messengerPrivacySubject";
 import {
   commitDeliveredPaidCreditGeneration,
+  readPaidCreditBalance,
   reservePaidCreditGeneration,
   type PaidCreditGenerationInput,
   type PaidCreditGenerationReservation,
@@ -237,11 +238,15 @@ const CREDIT_GENERATION_REQUEST_ID_MAX_LENGTH = 160;
 const CREDIT_GENERATION_MAX_DATABASE_ID = 2_147_483_647;
 
 function toConversationImageQuotaBalance(
-  status: MessengerImageQuotaStatus
+  status: MessengerImageQuotaStatus,
+  premiumCreditBalance?: number
 ): ImageQuotaBalance {
   return {
     daily: { ...status.daily },
     monthly: { ...status.monthly },
+    ...(premiumCreditBalance === undefined
+      ? {}
+      : { premium: { remaining: premiumCreditBalance } }),
   };
 }
 
@@ -355,6 +360,11 @@ export function createMessengerGenerationJobRunner(
           workspacePolicy.kind === "free" && !quotaBypassApplied
             ? imageQuotaIdentityForJob(job)
             : undefined;
+        const displayQuotaIdentity =
+          workspacePolicy.kind === "free"
+            ? imageQuotaIdentityForJob(job)
+            : undefined;
+        const paidCreditInput = paidCreditGenerationInputForJob(job);
         if (
           await finishDuplicateGenerationIfCompleted({
             deps,
@@ -367,6 +377,8 @@ export function createMessengerGenerationJobRunner(
             rememberSendOutcome,
             completionFence: completionFenceForJob(job),
             successQuotaIdentity,
+            displayQuotaIdentity,
+            paidCreditInput,
             assertCurrentBinding: () => assertMessengerGenerationOwnership(job),
             onDurableCompletionFound: () => {
               durableGenerationRecoveryRequired = true;
@@ -386,13 +398,13 @@ export function createMessengerGenerationJobRunner(
         let paidCreditReservation: PaidCreditGenerationReservation | null =
           null;
         if (freeQuotaDecision?.status === "exhausted") {
-          const paidInput = paidCreditGenerationInputForJob(job);
-          if (paidInput) {
-            const paidDecision = await reservePaidCreditGeneration(paidInput);
+          if (paidCreditInput) {
+            const paidDecision =
+              await reservePaidCreditGeneration(paidCreditInput);
             if (paidDecision.available) {
               paidCreditReservation = paidDecision.reservation;
             } else if (paidDecision.reason === "empty") {
-              const checkout = await tryReserveCreditCheckout(paidInput);
+              const checkout = await tryReserveCreditCheckout(paidCreditInput);
               if (checkout) {
                 await sendCreditCheckoutNotice({
                   deps,
@@ -759,6 +771,8 @@ export function createMessengerGenerationJobRunner(
                 lang,
                 rememberSendOutcome,
                 completionFence: completionFenceForJob(job),
+                displayQuotaIdentity,
+                paidCreditInput,
                 successQuotaIdentity: paidCreditReservation
                   ? undefined
                   : successQuotaIdentity,
@@ -1393,6 +1407,8 @@ async function finishDuplicateGenerationIfCompleted(input: {
   rememberSendOutcome: (outcome: MessengerSendOutcome) => MessengerSendOutcome;
   completionFence?: MessengerGenerationCompletionFence;
   successQuotaIdentity?: MessengerImageQuotaIdentity;
+  displayQuotaIdentity?: MessengerImageQuotaIdentity;
+  paidCreditInput?: PaidCreditGenerationInput | null;
   assertCurrentBinding: () => Promise<void>;
   onDurableCompletionFound: () => void;
 }): Promise<boolean> {
@@ -1578,7 +1594,15 @@ async function finishDuplicateGenerationIfCompleted(input: {
         userId: input.userId,
         completionFence: input.completionFence,
       });
+    } else if (input.displayQuotaIdentity && !quotaStatus) {
+      quotaStatus = await readGenerationQuotaSnapshotForNotice(
+        input.displayQuotaIdentity,
+        input.reqId
+      );
     }
+    const premiumCreditBalance = await readPremiumCreditBalanceForNotice(
+      input.paidCreditInput
+    );
     await sendGenerationSuccessActions({
       deps: input.deps,
       psid: input.psid,
@@ -1586,6 +1610,7 @@ async function finishDuplicateGenerationIfCompleted(input: {
       lang: input.lang,
       rememberSendOutcome: input.rememberSendOutcome,
       quotaStatus,
+      premiumCreditBalance,
     });
     await markMessengerGenerationSuccessNoticeSent(
       input.reqId,
@@ -1834,6 +1859,8 @@ async function handleGenerationSuccess(input: {
   paidCreditMode?: "test" | "live";
   quotaReservation: MessengerImageQuotaReservation | null;
   quotaLeaseHeartbeat: MessengerGenerationQuotaLeaseHeartbeat | null;
+  displayQuotaIdentity?: MessengerImageQuotaIdentity;
+  paidCreditInput?: PaidCreditGenerationInput | null;
   assertCurrentBinding: () => Promise<void>;
   commitDeliveredOutput?: () => Promise<void>;
   onDurableRecoveryRequired: () => void;
@@ -1910,6 +1937,11 @@ async function handleGenerationSuccess(input: {
       Date.now(),
       input.completionFence
     );
+  } else if (input.displayQuotaIdentity) {
+    quotaStatus = await readGenerationQuotaSnapshotForNotice(
+      input.displayQuotaIdentity,
+      input.reqId
+    );
   }
   await setLastGenerated(input.psid, imageUrl);
   await setLastGenerationContext(input.psid, { prompt: input.promptHint });
@@ -1961,6 +1993,11 @@ async function handleGenerationSuccess(input: {
       paidCreditMode: input.paidCreditMode,
     });
   }
+  // Read the balance after a delivered paid generation has been committed so
+  // the message reflects the credits that remain available to the user.
+  const premiumCreditBalance = await readPremiumCreditBalanceForNotice(
+    input.paidCreditInput
+  );
   recordGenerationSuccess(input.resolvedGenerationKind, metrics.totalMs);
   await sendGenerationSuccessActions({
     deps: input.deps,
@@ -1969,6 +2006,7 @@ async function handleGenerationSuccess(input: {
     lang: input.lang,
     rememberSendOutcome: input.rememberSendOutcome,
     quotaStatus,
+    premiumCreditBalance,
   });
   await markMessengerGenerationSuccessNoticeSent(
     input.reqId,
@@ -2160,6 +2198,38 @@ async function refreshGenerationQuotaSnapshot(input: {
   return quotaStatus;
 }
 
+async function readGenerationQuotaSnapshotForNotice(
+  identity: MessengerImageQuotaIdentity,
+  reqId: string
+): Promise<MessengerImageQuotaStatus | undefined> {
+  try {
+    return await getMessengerImageQuotaStatus(identity);
+  } catch (error) {
+    safeLog("messenger_generation_balance_notice_unavailable", {
+      level: "warn",
+      reqId,
+      errorName: error instanceof Error ? error.name : typeof error,
+    });
+    return undefined;
+  }
+}
+
+async function readPremiumCreditBalanceForNotice(
+  input: PaidCreditGenerationInput | null | undefined
+): Promise<number | undefined> {
+  if (!input) return undefined;
+  try {
+    return (await readPaidCreditBalance(input)) ?? undefined;
+  } catch (error) {
+    safeLog("messenger_generation_premium_balance_unavailable", {
+      level: "warn",
+      reqId: input.requestId,
+      errorName: error instanceof Error ? error.name : typeof error,
+    });
+    return undefined;
+  }
+}
+
 async function sendGenerationAmbiguousBalanceNotice(input: {
   deps: GenerationJobRunnerDeps;
   psid: string;
@@ -2341,11 +2411,15 @@ async function sendGenerationSuccessActions(input: {
   lang: MessengerGenerationJob["lang"];
   rememberSendOutcome: (outcome: MessengerSendOutcome) => MessengerSendOutcome;
   quotaStatus?: MessengerImageQuotaStatus;
+  premiumCreditBalance?: number;
 }): Promise<void> {
   const successResponse = buildGenerationSuccessResponse(
     input.lang,
     input.quotaStatus
-      ? toConversationImageQuotaBalance(input.quotaStatus)
+      ? toConversationImageQuotaBalance(
+          input.quotaStatus,
+          input.premiumCreditBalance
+        )
       : undefined
   );
   let outcome: MessengerSendOutcome;

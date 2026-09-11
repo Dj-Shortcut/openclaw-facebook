@@ -131,7 +131,6 @@ describe("credit checkout browser sessions", () => {
     ["erased identity", { creditIdentityErasedAt: NOW }],
     ["already started", { status: "creating_payment" }],
     ["already claimed", { checkoutCapabilityConsumedAt: NOW }],
-    ["different Test Mode user", { messengerSenderUserKey: "c".repeat(64) }],
     [
       "expired capability",
       { checkoutCapabilityExpiresAt: new Date("2026-08-28T11:59:59.000Z") },
@@ -145,6 +144,19 @@ describe("credit checkout browser sessions", () => {
       )
     ).rejects.toBeInstanceOf(CreditCheckoutSessionError);
     expect(deps.consume).not.toHaveBeenCalled();
+  });
+
+  it("allows a different canonical Test Mode user", async () => {
+    const deps = dependencies(
+      record({ messengerSenderUserKey: "c".repeat(64) })
+    );
+    await expect(
+      claimCreditCheckoutBrowserSession(
+        { intentId: INTENT_ID, capability: CAPABILITY.toUrlFragment() },
+        deps
+      )
+    ).resolves.toEqual(expect.objectContaining({ intentId: INTENT_ID }));
+    expect(deps.consume).toHaveBeenCalledOnce();
   });
 
   it("authenticates the same browser session without reusing the capability", async () => {

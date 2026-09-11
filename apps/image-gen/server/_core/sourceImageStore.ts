@@ -8,17 +8,11 @@ import {
   getRequiredPublicBaseUrl,
   hasObjectStorageConfig,
 } from "./image-generation/imageServiceConfig";
-import { fetchExternalSourceImageForIngress } from "./image-generation/sourceImageFetcher";
 import { storagePut } from "../storage";
 import {
   buildMessengerStorageObjectKey,
   type MessengerStorageScope,
 } from "./messengerStorageObject";
-
-export type StoredSourceImage = {
-  url: string;
-  origin: "stored";
-};
 
 function buildExtension(contentType: string): string {
   if (contentType.includes("png")) {
@@ -70,24 +64,4 @@ export async function storeInboundSourceImage(
   const publicBaseUrl = getRequiredPublicBaseUrl();
   const token = putGeneratedImage(buffer, contentType);
   return buildGeneratedImageUrl(publicBaseUrl, token);
-}
-
-export async function ingestExternalSourceImage(
-  sourceImageUrl: string,
-  reqId: string
-): Promise<StoredSourceImage> {
-  const downloadedImage = await fetchExternalSourceImageForIngress({
-    sourceImageUrl,
-    reqId,
-  });
-  const storedImageUrl = await storeInboundSourceImage(
-    downloadedImage.buffer,
-    downloadedImage.contentType,
-    reqId
-  );
-
-  return {
-    url: storedImageUrl,
-    origin: "stored",
-  };
 }

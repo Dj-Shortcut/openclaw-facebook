@@ -2080,31 +2080,34 @@ describe("messenger greeting behavior", () => {
     );
   });
 
-  it("routes conversation action clicks back through normal text handling", async () => {
-    await processFacebookWebhookPayload({
-      entry: [
-        {
-          messaging: [
-            {
-              sender: { id: "action-input-user" },
-              message: {
-                mid: "mid-action-input-1",
-                quick_reply: {
-                  payload: "OPENCLAW_ACTION:new_image",
+  it.each(["LEADERBOT_ACTION:", "OPENCLAW_ACTION:"])(
+    "routes %s clicks back through normal text handling",
+    async prefix => {
+      await processFacebookWebhookPayload({
+        entry: [
+          {
+            messaging: [
+              {
+                sender: { id: "action-input-user" },
+                message: {
+                  mid: "mid-action-input-1",
+                  quick_reply: {
+                    payload: `${prefix}new_image`,
+                  },
                 },
               },
-            },
-          ],
-        },
-      ],
-    });
+            ],
+          },
+        ],
+      });
 
-    expect(sendQuickRepliesMock).not.toHaveBeenCalled();
-    expect(sendTextMock).toHaveBeenCalledWith(
-      "action-input-user",
-      t("nl", "newImagePrompt")
-    );
-  });
+      expect(sendQuickRepliesMock).not.toHaveBeenCalled();
+      expect(sendTextMock).toHaveBeenCalledWith(
+        "action-input-user",
+        t("nl", "newImagePrompt")
+      );
+    }
+  );
 
   it("routes stable background action clicks into background-edit state", async () => {
     const psid = "background-action-user";

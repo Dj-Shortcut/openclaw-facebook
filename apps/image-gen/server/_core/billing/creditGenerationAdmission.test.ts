@@ -144,7 +144,7 @@ describe("paid credit generation admission", () => {
     }
   );
 
-  it("rejects another Messenger user in the same workspace before reading or reserving a wallet", async () => {
+  it("allows another Messenger user to reach wallet admission", async () => {
     const readWalletIdentity = vi.fn();
     const readWallet = vi.fn();
     const reserve = vi.fn();
@@ -152,9 +152,9 @@ describe("paid credit generation admission", () => {
 
     await expect(
       reservePaidCreditGeneration({ ...INPUT, userKey: "b".repeat(64) }, deps)
-    ).resolves.toEqual({ available: false, reason: "outside_pilot" });
+    ).resolves.toEqual({ available: false, reason: "empty" });
 
-    expect(readWalletIdentity).not.toHaveBeenCalled();
+    expect(readWalletIdentity).toHaveBeenCalledOnce();
     expect(readWallet).not.toHaveBeenCalled();
     expect(reserve).not.toHaveBeenCalled();
   });
