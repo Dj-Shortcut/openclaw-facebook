@@ -1411,15 +1411,14 @@ wallet migration.
 
 The owner-directed Test Mode journey requires no tester registration. In the
 reviewed activation change, leave `MOLLIE_CREDIT_TEST_CHANNEL_CONNECTION_ID`,
-`MOLLIE_CREDIT_TEST_BINDING_EPOCH`, `MOLLIE_CREDIT_TEST_PRIVACY_EPOCH` and
-`MOLLIE_CREDIT_TEST_USER_KEY_HASH` all empty. Eligible Messenger users on the
-owner Page may then use the same checkout path. Each intent, capability,
-payment and wallet still binds the actual user, channel connection, Page
-binding and privacy epoch automatically; this is not an anonymous shared
-wallet or an unbound payment URL. Consent, the messaging window, quota and
-budget admission remain mandatory. For compatibility an existing complete
-four-field tester restriction is honored; partial or malformed restrictions
-fail closed. The source change alone does not activate checkout: the protected
+`MOLLIE_CREDIT_TEST_BINDING_EPOCH`, and `MOLLIE_CREDIT_TEST_PRIVACY_EPOCH` all
+empty. The old `MOLLIE_CREDIT_TEST_USER_KEY_HASH` setting is ignored and may be
+removed during secret cleanup. Eligible Messenger users on the owner Page may
+then use the same checkout path. Each intent, capability, payment and wallet
+still binds the actual user, channel connection, Page binding and privacy epoch
+automatically; this is not an anonymous shared wallet or an unbound payment
+URL. Consent, the messaging window, quota and budget admission remain
+mandatory. The source change alone does not activate checkout: the protected
 activation, payment workers and production evidence gates above remain open.
 
 Set the non-secret `MESSENGER_PAID_IMAGE_PROVIDER_MAX_COST_USD=1.00` in the same
