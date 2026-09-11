@@ -344,13 +344,35 @@ release`, before any deployment or restart. The app-level Fly config
       protected-source config, SHA-256
       `05ffded5fb93abca68e275fe174f20db55f9e0dd1a679cd94c6378fc10053380`,
       as the sole runtime recovery configuration; the older physical files
-      remain retained. Merge settlement before reviewing checkout activation.
+      remain retained. PR #525, including corrected recovery references, merged
+      as `0535cb879f477891bfb49ff6025886b48194d7a7`. This closes the reviewed
+      recovery settlement only, not checkout activation or the payment test.
     - A browser check of the existing operator login reached Facebook, but
       Facebook refused authentication with a supported-permission error.
       A 302 from the login route is not successful sign-in. The existing
       audited `billingAdmin.enableSchedulerTenant` action still needs a
       legitimate admin session; do not forge one or register a tester to
       bypass this. Public checkout does not require operator login.
+    - The owner explicitly approved a separate protected operator command on
+      2026-09-10 to enable Test payment processing without Facebook login.
+      PR #526 implements the existing epoch-fenced audited
+      scheduler service, resolve the existing owner/admin, and record the
+      actual GitHub operator/run rather than fabricate a web session. No new
+      login, Facebook permission, database account/grant, tester registration,
+      payment, or live exposure is authorized by this code change.
+      A metadata-only precheck at `16:44:35Z` found exactly one existing
+      owner/admin for workspace 1; commercial controls remained false at
+      epoch 1 and all lane pending/dead counters were zero. The exact Test
+      workspace had zero provider operations, subscriptions, payment routes,
+      ledger rows, exposed intents, pending/dead outbox work and notifications.
+      This is not
+      execution evidence for the new command. After reviewed CI/build/merge,
+      run that command through its protected workflow, then separately review
+      the checkout exposure configuration and prove the complete payment flow.
+      Review follow-up on 2026-09-11 fixes the CI scalar-row type checks, persists
+      exact executable identities in the atomic audit, rejects failed billing
+      outbox work and refuses missing control/lane registration without writing
+      new rows. This code is not merged or executed production evidence.
     - The completed payment-processing preparation changed only notification, drain and
       reconciliation flags to true; checkout, paid image use, legacy sales and
       live billing remain false. It reuses the reviewed `f2fa9d60...` runtime,

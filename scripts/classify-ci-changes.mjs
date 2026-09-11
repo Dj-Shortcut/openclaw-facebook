@@ -6,6 +6,9 @@ import { fileURLToPath } from "node:url";
 
 const SHA_PATTERN = /^[a-f0-9]{40}$/;
 const IMAGE_GEN_CREDIT_DATABASE_CONTROL_PATHS = new Set([
+  ".github/workflows/enable-image-gen-test-payments.yml",
+  "scripts/image-gen-test-payment-operator.mjs",
+  "scripts/image-gen-test-payment-operator.test.mjs",
   ".github/workflows/cleanup-image-gen-migration-super.yml",
   ".github/workflows/retire-image-gen-credit-provisioners.yml",
   ".github/workflows/image-gen-schema-transition.yml",

@@ -58,6 +58,48 @@ its audited activation with the expected execution epoch. Do not create a fake
 consumer attestation to initialize credit processing. No customer login or new
 management UI is required; this retains the existing operator-only authority.
 
+The separately approved Test-only alternative is the manually dispatched
+`enable-image-gen-test-payments.yml` workflow on reviewed `main`, protected by
+the `production` environment and the same image-gen deployment concurrency
+lock. It is not a public endpoint and does not create an admin session or
+change Facebook permissions. The workflow accepts the reviewed operator image,
+its exact source commit, one UUID request ID, and the observed execution epoch.
+It resolves the owner workspace from the reviewed configuration; it never
+registers individual testers.
+
+The operator bundle `dist/enable-test-payments.cjs` must come from the trusted,
+attested runtime artifact whose digest and source are reviewed in the manifest.
+The workflow extracts and hashes that bundle, copies it to a run-scoped
+temporary path on the exact verified running app Machine, verifies its hash,
+and invokes it once using that Machine's existing restricted runtime database
+connection. This reuses the deployment probe's temporary-bundle pattern; it
+does not deploy the candidate application, copy database credentials to the
+runner, or use the migration provisioner. Persist the exact operator image,
+artifact source, extracted bundle hash and running image alongside the workflow
+source and deployment identity in the transactional audit and replay fingerprint;
+the short-lived GitHub evidence artifact is not the durable audit.
+
+Before the existing scheduler transaction can enable processing, the command
+requires Test Mode, the exact pinned owner workspace, prepared drain,
+notifications and reconciliation, and closed legacy sales, live billing,
+checkout and paid image use. It requires the persisted owner/admin and records
+explicit protected-workflow actor/run/source/deployment metadata in the audit;
+operator authority must not be represented as a fabricated browser login.
+Current ownership, existing control and four registered lanes, epoch and
+work-state checks must pass before mutation. Missing registration is rejected,
+not created by this action. Failed billing outbox items and notification dead
+letters both block initial activation.
+No provider request or credit grant is made by the command.
+
+Retain its metadata-only outcome and cleanup evidence. An SSH timeout, missing
+result, or cleanup failure after dispatch is not proof that the transaction
+rolled back. Do not create a new request ID or retry automatically; inspect the
+original audited request and exact control/lane epochs first. Temporary bundle
+removal is always attempted and verified. A successful operator action is only
+processing activation: checkout/paid-use flags remain off, and the later
+protected exposure deploy must still perform its fresh same-run account,
+runtime, database, readiness and rollback checks before a user can test payment.
+
 This does not remove the audited payment execution controls, worker lanes and
 heartbeats, notification checks, credential generation identity, spend caps,
 or credit schema/privilege checks. Do not delete old handoff secrets or financial
@@ -1271,9 +1313,10 @@ The activation contract requires `MOLLIE_MODE=test`, legacy and live billing
 off, drain/notification/reconciliation on, no manual tester restriction, and
 the existing offer and cost caps. Enable paid admission before checkout.
 Use the existing authenticated admin `billingAdmin.enableSchedulerTenant`
-operation with the observed workspace/mode execution epoch and a fresh request
-ID to enable the DB control and lanes; do not fabricate profile attestations
-or replace this with ad-hoc SQL. Verify existing control/lane inventory and
+operation, or the approved Test-only protected operator workflow above, with
+the observed workspace/mode execution epoch and a fresh request ID to enable
+the DB control and lanes; do not fabricate profile attestations or replace
+this with ad-hoc SQL. Verify existing control/lane inventory and
 notification/reconciliation readiness before exposure. Missing registration
 requires a separate scoped operational change.
 
