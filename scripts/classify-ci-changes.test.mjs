@@ -46,6 +46,9 @@ describe("CI change classification", () => {
   });
 
   it.each([
+    ".github/workflows/enable-image-gen-test-payments.yml",
+    "scripts/image-gen-test-payment-operator.mjs",
+    "scripts/image-gen-test-payment-operator.test.mjs",
     ".github/workflows/cleanup-image-gen-migration-super.yml",
     ".github/workflows/retire-image-gen-credit-provisioners.yml",
     ".github/workflows/image-gen-schema-transition.yml",

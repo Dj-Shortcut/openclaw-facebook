@@ -24,6 +24,7 @@ import {
   resolveImmutableReleaseImage,
   validateDeploymentEnabled,
   validateProductionRepository,
+  validateTestPaymentOperatorWorkflow,
   validateRecoveryProtocol,
   validateReviewedImage,
   validateReviewedArtifactSchemaPhase,
@@ -77,6 +78,7 @@ function createRepositoryFixture() {
     ".github/workflows/cleanup-image-gen-runtime-principals.yml",
     ".github/workflows/retire-image-gen-credit-provisioners.yml",
     ".github/workflows/deploy-production.yml",
+    ".github/workflows/enable-image-gen-test-payments.yml",
     ".github/workflows/gateway-state-rebaseline.yml",
     ".github/workflows/image-gen-ci.yml",
     ".github/workflows/image-gen-migration-smoke.yml",
@@ -108,6 +110,7 @@ function createRepositoryFixture() {
     "scripts/provision-image-gen-credit-provisioner.test.mjs",
     "scripts/retire-image-gen-credit-provisioners.mjs",
     "scripts/retire-image-gen-credit-provisioners.test.mjs",
+    "scripts/image-gen-test-payment-operator.mjs",
     "scripts/verify-gateway-state-rebaseline.mjs",
     "scripts/validate-production-deployment.mjs",
   ]) {
@@ -3277,6 +3280,160 @@ describe("production deployment contract", () => {
       "image-gen build:docker must bundle the reversible billing-trigger runtime probe",
     );
   });
+
+  it("accepts the protected one-shot Test payment operator workflow", () => {
+    expect(() =>
+      validateTestPaymentOperatorWorkflow(createRepositoryFixture()),
+    ).not.toThrow();
+  });
+
+  it.each([
+    ["workflow_dispatch:", "push:", "only a manual event"],
+    ["if: github.ref == 'refs/heads/main'", "if: always()", "protected main"],
+    [
+      "environment: production",
+      "environment: production-inspection",
+      "protected main",
+    ],
+    [
+      "group: production-deploy-image-gen",
+      "group: operator-independent",
+      "shared deployment lock",
+    ],
+    [
+      "cancel-in-progress: false",
+      "cancel-in-progress: true",
+      "shared deployment lock",
+    ],
+    [
+      "secrets.FLY_IMAGE_GEN_DEPLOY_TOKEN",
+      "secrets.FLY_DATABASE_MIGRATION_TOKEN",
+      "only the existing app token",
+    ],
+    [
+      "OPERATOR_EXPECTED_EPOCH: ${{ inputs.expected_epoch }}",
+      "OPERATOR_EXPECTED_EPOCH: 1",
+      "all four reviewed inputs",
+    ],
+    [
+      "persist-credentials: false",
+      "persist-credentials: true",
+      "without persisted credentials",
+    ],
+    ["npm run production:validate", "true", "validate checked-out source"],
+    [
+      "node scripts/image-gen-test-payment-operator.mjs",
+      "node scripts/image-gen-test-payment-operator.mjs\n          node scripts/image-gen-test-payment-operator.mjs",
+      "exactly once",
+    ],
+    [
+      "node scripts/image-gen-test-payment-operator.mjs",
+      "node scripts/image-gen-test-payment-operator.mjs ${{ inputs.request_id }}",
+      "pass GitHub expressions through step env",
+    ],
+  ])(
+    "rejects weakened Test operator workflow: %s",
+    (original, replacement, message) => {
+      const root = createRepositoryFixture();
+      replaceFixtureText(
+        root,
+        ".github/workflows/enable-image-gen-test-payments.yml",
+        original,
+        replacement,
+      );
+      expect(() => validateTestPaymentOperatorWorkflow(root)).toThrow(message);
+    },
+  );
+
+  it.each([
+    ["run.head_sha !== input.workflowSourceSha", "false"],
+    ["run.actor?.id", "input.actorId"],
+    ["run.triggering_actor?.id", "input.actorId"],
+    ["main.object?.sha !== input.workflowSourceSha", "false"],
+    ['await artifactCi("image-gen", input.image, verify)', "Promise.resolve()"],
+    ['"--source-digest"', '"--unbound-source"'],
+    ["if (remoteHash !==", "if (false && remoteHash !=="],
+    ["fresh.releaseWatermark !== baseline.releaseWatermark", "false"],
+    ["evidence.remoteRemoved = true", "evidence.remoteRemoved = false"],
+    ["evidence.containerRemoved = true", "evidence.containerRemoved = false"],
+    ["/bin/rm -f ${remote}", "test -e ${remote}"],
+    [
+      "if (!evidence.success) process.exitCode = 1",
+      "if (!evidence.success) process.exitCode = 0",
+    ],
+  ])(
+    "rejects removed Test operator controller binding: %s",
+    (original, replacement) => {
+      const root = createRepositoryFixture();
+      replaceFixtureText(
+        root,
+        "scripts/image-gen-test-payment-operator.mjs",
+        original,
+        replacement,
+      );
+      expect(() => validateTestPaymentOperatorWorkflow(root)).toThrow(
+        /Test payment operator/,
+      );
+    },
+  );
+
+  it.each([
+    [
+      "apps/image-gen/package.json",
+      "server/cli/enableTestPayments.ts",
+      "server/cli/other.ts",
+      "must bundle the exact Test payment operator command",
+    ],
+    [
+      "apps/image-gen/package.json",
+      "pnpm run build:test-payment-operator && ",
+      "",
+      "must bundle the exact Test payment operator command",
+    ],
+    [
+      "apps/image-gen/Dockerfile",
+      "test -s /app/dist/enable-test-payments.cjs",
+      "true",
+      "must package and syntax-check the Test payment operator command",
+    ],
+    [
+      "apps/image-gen/Dockerfile",
+      "node --check /app/dist/enable-test-payments.cjs",
+      "true",
+      "must package and syntax-check the Test payment operator command",
+    ],
+    [
+      ".github/workflows/build-production-artifacts.yml",
+      'docker run --rm "$ARTIFACT_IMAGE" test -s /app/dist/enable-test-payments.cjs',
+      'docker run --rm "$ARTIFACT_IMAGE" true',
+      "must inspect the bundled Test payment operator command",
+    ],
+    [
+      ".github/workflows/build-production-artifacts.yml",
+      'docker run --rm --entrypoint node "$ARTIFACT_IMAGE" --check /app/dist/enable-test-payments.cjs',
+      'docker run --rm "$ARTIFACT_IMAGE" true',
+      "must syntax-check the bundled Test payment operator command",
+    ],
+    [
+      ".github/workflows/image-gen-ci.yml",
+      'docker run --rm "$image" test -s /app/dist/enable-test-payments.cjs',
+      'docker run --rm "$image" true',
+      "must inspect and syntax-check the Test payment operator command",
+    ],
+    [
+      ".github/workflows/image-gen-ci.yml",
+      'docker run --rm --entrypoint node "$image" --check /app/dist/enable-test-payments.cjs',
+      'docker run --rm "$image" true',
+      "must inspect and syntax-check the Test payment operator command",
+    ],
+  ])(
+    "guards Test payment operator packaging in %s: %s",
+    (file, original, replacement, message) => {
+      const root = createRepositoryFixture();
+      replaceFixtureText(root, file, original, replacement);
+      expect(() => validateProductionRepository(root)).toThrow(message);
+    },
+  );
 
   it("requires the reversible billing-trigger probe in the migration bridge", () => {
     const root = createRepositoryFixture();

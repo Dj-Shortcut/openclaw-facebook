@@ -1,4 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MySqlDialect } from "drizzle-orm/mysql-core";
+import {
+  billingExecutionControls,
+  billingSchedulerTenants,
+  workspaces,
+} from "../../../drizzle/schema";
 
 const { getDatabaseOrThrowMock } = vi.hoisted(() => ({
   getDatabaseOrThrowMock: vi.fn(),
@@ -10,12 +16,285 @@ vi.mock("../../db", () => ({
 
 import {
   assertBillingTenantLeaseOwnedInTransaction,
+  assertTestPaymentOperatorReadback,
   disableBillingSchedulerTenant,
   enableBillingSchedulerTenant,
   registerBillingSchedulerTenant,
+  resolveBillingOperatorOwner,
   releaseBillingTenantLease,
   wakeBillingSchedulerTenant,
 } from "./billingSchedulerStore";
+
+const OPERATOR_AUDIT = Object.freeze({
+  source: "protected_workflow" as const,
+  githubActorId: "123",
+  githubRunId: "456",
+  githubRunAttempt: 1,
+  sourceSha: "a".repeat(40),
+  deploymentIdentity: "deploy-789-1",
+  runtimePrincipalSha256: "b".repeat(64),
+});
+const OPERATOR_INPUT = {
+  workspaceId: 10,
+  mode: "test" as const,
+  actorUserId: 7,
+  requestId: "77777777-7777-4777-8777-777777777777",
+  expectedExecutionEpoch: 1,
+  reason: "protected workflow test payment preparation",
+  operatorAudit: OPERATOR_AUDIT,
+};
+
+function operatorDatabase() {
+  const state = {
+    owners: [{ ownerUserId: 7, userRole: "admin" }],
+    principal: OPERATOR_AUDIT.runtimePrincipalSha256,
+    blocked: 0,
+    control: { commercialEnabled: false, authorizationEpoch: 1 },
+    lanes: [
+      "ai_finalization",
+      "outbox",
+      "profile_expiry",
+      "reconciliation",
+    ].map(kind => ({
+      kind,
+      enabled: kind === "outbox",
+      executionEpoch: 1,
+      operatorRequestId: null as string | null,
+      operatorRequestFingerprint: null as string | null,
+    })),
+  };
+  const queries: Array<{ sql: string; params: unknown[] }> = [];
+  const locks: unknown[] = [];
+  const audit = vi.fn(async () => undefined);
+  const dialect = new MySqlDialect();
+  const tx = {
+    select: vi.fn(() => ({
+      from(table: unknown) {
+        const rows =
+          table === workspaces
+            ? state.owners
+            : table === billingExecutionControls
+              ? [state.control]
+              : state.lanes;
+        const promise = Promise.resolve(rows);
+        const query = {
+          innerJoin: vi.fn(() => query),
+          leftJoin: vi.fn(() => query),
+          where: vi.fn(predicate => {
+            queries.push(dialect.sqlToQuery(predicate));
+            return query;
+          }),
+          limit: vi.fn(() => query),
+          orderBy: vi.fn(() => query),
+          for: vi.fn(async () => {
+            locks.push(table);
+            return rows;
+          }),
+          then: promise.then.bind(promise),
+        };
+        return query;
+      },
+    })),
+    execute: vi.fn(async statement => {
+      const query = dialect.sqlToQuery(statement);
+      queries.push(query);
+      return query.sql.includes("CURRENT_USER()")
+        ? [[{ principalSha256: state.principal }]]
+        : [[{ blocked: state.blocked }]];
+    }),
+    update: vi.fn((table: unknown) => ({
+      set: vi.fn(values => ({
+        where: vi.fn(async () => {
+          if (table === billingExecutionControls)
+            Object.assign(state.control, values);
+          else state.lanes.forEach(row => Object.assign(row, values));
+          return [{ affectedRows: table === billingExecutionControls ? 1 : 4 }];
+        }),
+      })),
+    })),
+    insert: vi.fn(() => ({ values: audit })),
+  };
+  getDatabaseOrThrowMock.mockResolvedValue({
+    ...tx,
+    transaction: vi.fn(async callback => callback(tx)),
+  });
+  return { state, tx, audit, locks, queries };
+}
+
+describe("protected workflow scheduler audit", () => {
+  beforeEach(() => getDatabaseOrThrowMock.mockReset());
+
+  it.each([
+    "matching",
+    "missing_lane",
+    "epoch",
+    "control",
+    "disabled_lane",
+    "request",
+    "owner",
+  ])(
+    "validates persisted %s state with one exact scoped readback",
+    async scenario => {
+      const rows = [
+        "ai_finalization",
+        "outbox",
+        "profile_expiry",
+        "reconciliation",
+      ].map(kind => ({
+        kind,
+        commercialEnabled: true,
+        authorizationEpoch: 2,
+        enabled: true,
+        executionEpoch: 2,
+        actorUserId: 7,
+        requestId: OPERATOR_INPUT.requestId,
+      }));
+      if (scenario === "missing_lane") rows.pop();
+      if (scenario === "epoch") rows[0]!.executionEpoch = 3;
+      if (scenario === "control") rows[0]!.commercialEnabled = false;
+      if (scenario === "disabled_lane") rows[0]!.enabled = false;
+      if (scenario === "request") rows[0]!.requestId = "other-request";
+      if (scenario === "owner") rows[0]!.actorUserId = 8;
+      const limit = vi.fn(async () => rows);
+      const where = vi.fn(() => ({ limit }));
+      const database = {
+        select: vi.fn(() => ({
+          from: vi.fn(() => ({ innerJoin: vi.fn(() => ({ where })) })),
+        })),
+      };
+      getDatabaseOrThrowMock.mockResolvedValue(database);
+      const result = assertTestPaymentOperatorReadback({
+        workspaceId: 10,
+        actorUserId: 7,
+        requestId: OPERATOR_INPUT.requestId,
+        executionEpoch: 2,
+      });
+      if (scenario === "matching")
+        await expect(result).resolves.toBeUndefined();
+      else await expect(result).rejects.toThrow("readback mismatch");
+      expect(
+        new MySqlDialect().sqlToQuery(where.mock.calls[0]![0]).params
+      ).toEqual([10, "test"]);
+      expect(limit).toHaveBeenCalledWith(5);
+    }
+  );
+
+  it("locks the actual owner and scopes the empty-work check before audited activation", async () => {
+    const { tx, audit, locks, queries } = operatorDatabase();
+    await expect(enableBillingSchedulerTenant(OPERATOR_INPUT)).resolves.toEqual(
+      { executionEpoch: 2 }
+    );
+    expect(locks).toEqual([
+      workspaces,
+      billingExecutionControls,
+      billingSchedulerTenants,
+    ]);
+    expect(tx.execute).toHaveBeenCalledTimes(2);
+    expect(queries[1].params).toEqual([10, "owner"]);
+    const workQuery = queries.find(query => query.sql.includes("AS blocked"))!;
+    expect(workQuery.params).toEqual(Array(7).fill(10));
+    for (const table of [
+      "billing_provider_operations",
+      "billing_subscriptions",
+      "billing_webhook_routes",
+      "payment_ledger",
+      "billing_intents",
+      "billing_outbox",
+      "billing_notification_receiver_outbox",
+    ]) {
+      expect(workQuery.sql).toContain(table);
+    }
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 7,
+        metadata: expect.objectContaining({
+          operator: OPERATOR_AUDIT,
+          onBehalfOfOwnerUserId: 7,
+        }),
+      })
+    );
+  });
+
+  it("replays exact provenance without a second audit, but rejects changed run evidence", async () => {
+    const { audit, tx } = operatorDatabase();
+    await enableBillingSchedulerTenant(OPERATOR_INPUT);
+    await expect(enableBillingSchedulerTenant(OPERATOR_INPUT)).resolves.toEqual(
+      { executionEpoch: 2 }
+    );
+    expect(audit).toHaveBeenCalledOnce();
+    expect(tx.update).toHaveBeenCalledTimes(2);
+    await expect(
+      enableBillingSchedulerTenant({
+        ...OPERATOR_INPUT,
+        operatorAudit: { ...OPERATOR_AUDIT, githubRunId: "457" },
+      })
+    ).rejects.toThrow("request conflicts");
+    expect(audit).toHaveBeenCalledOnce();
+  });
+
+  it.each(["missing", "ambiguous", "non_admin", "changed"])(
+    "rejects %s ownership before mutations",
+    async reason => {
+      const { state, tx } = operatorDatabase();
+      if (reason === "missing") state.owners = [];
+      if (reason === "ambiguous")
+        state.owners.push({ ownerUserId: 8, userRole: "admin" });
+      if (reason === "non_admin") state.owners[0]!.userRole = "user";
+      if (reason === "changed") state.owners[0]!.ownerUserId = 8;
+      await expect(
+        enableBillingSchedulerTenant(OPERATOR_INPUT)
+      ).rejects.toThrow("billing operator owner");
+      expect(tx.update).not.toHaveBeenCalled();
+      expect(tx.insert).not.toHaveBeenCalled();
+    }
+  );
+
+  it("resolves ownership without mutating or accepting two owners", async () => {
+    const { state, tx } = operatorDatabase();
+    await expect(resolveBillingOperatorOwner(10)).resolves.toBe(7);
+    state.owners.push({ ownerUserId: 8, userRole: "admin" });
+    await expect(resolveBillingOperatorOwner(10)).rejects.toThrow(
+      "owner unavailable"
+    );
+    expect(tx.update).not.toHaveBeenCalled();
+  });
+
+  it.each(["principal", "work", "epoch", "lane"])(
+    "rejects %s drift before mutation",
+    async reason => {
+      const { state, tx } = operatorDatabase();
+      if (reason === "principal") state.principal = "c".repeat(64);
+      if (reason === "work") state.blocked = 1;
+      if (reason === "epoch") state.control.authorizationEpoch = 2;
+      if (reason === "lane") state.lanes[0]!.executionEpoch = 2;
+      await expect(
+        enableBillingSchedulerTenant(OPERATOR_INPUT)
+      ).rejects.toThrow();
+      expect(tx.update).not.toHaveBeenCalled();
+    }
+  );
+
+  it("rejects live or malformed operator provenance before database access", async () => {
+    await expect(
+      enableBillingSchedulerTenant({ ...OPERATOR_INPUT, mode: "live" })
+    ).rejects.toThrow("test-only");
+    await expect(
+      enableBillingSchedulerTenant({
+        ...OPERATOR_INPUT,
+        operatorAudit: { ...OPERATOR_AUDIT, sourceSha: "private-input" },
+      })
+    ).rejects.toThrow("provenance");
+    expect(getDatabaseOrThrowMock).not.toHaveBeenCalled();
+  });
+
+  it("propagates an audit write failure through the transaction", async () => {
+    const { audit } = operatorDatabase();
+    audit.mockRejectedValue(new Error("audit unavailable"));
+    await expect(enableBillingSchedulerTenant(OPERATOR_INPUT)).rejects.toThrow(
+      "audit unavailable"
+    );
+  });
+});
 
 describe("billing scheduler lifecycle boundaries", () => {
   beforeEach(() => {
