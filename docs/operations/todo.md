@@ -456,14 +456,16 @@ release`, before any deployment or restart. The app-level Fly config
       [34588527737](https://github.com/Dj-Shortcut/openclaw-facebook/actions/runs/34588527737)
       passed from that exact source, producing runtime
       `sha256:c04c742f56de06cddb72907ca0bdc989200babd0ea7dcb73b318bf96a327b548`
-      with attestation `46823247` and exact 0018 container checks. This is the
-      desired frontend-and-Test-checkout release. Only the desired artifact
-      and source pins change; the original committed `c54c1fd0...` operator
-      anchor, `f2fa9d60...` rollback, offer, budgets and flags remain unchanged.
-      Build attempt 1 stopped before construction because the exact-source
-      migration CI was still running; attempt 2 began only after it passed.
-      The exposure deployment and payment-to-credit-to-delivered-edit evidence
-      remain pending. No additional processing-enable action is required.
+      with attestation `46823247` and exact 0018 container checks. Protected
+      deployment
+      [34590370389](https://github.com/Dj-Shortcut/openclaw-facebook/actions/runs/34590370389)
+      then recorded this c04c runtime as the settled payment-enabled
+      predecessor (`deploy-34590370389-1`). The active manifest keeps that
+      bright predecessor separate from the emergency-dark rollback profile,
+      which disables checkout and paid credits. The remaining gate is evidence,
+      not exposure: run one any-user Messenger Test Mode checkout, verify the
+      trusted webhook grant to that user, one premium edit/debit, and the
+      negative, retry, and refund paths. Live billing remains disabled.
     - The completed payment-processing preparation changed only notification, drain and
       reconciliation flags to true; checkout, paid image use, legacy sales and
       live billing remain false. It reuses the reviewed `f2fa9d60...` runtime,
@@ -496,8 +498,10 @@ release`, before any deployment or restart. The app-level Fly config
       no existing key. Its value was not logged or written to disk. The later
       reviewed deployment `34484419576/1` applied it; Fly now reports `Deployed`
       and no staged secrets. This is not evidence that checkout is active.
-      Automatic per-user checkout binding, payment drain/notification configuration and
-      real Test Mode payment-to-credit-to-delivery proof are still required.
+      The per-user checkout binding and payment drain/notification configuration
+      are now part of the reviewed release. The remaining proof is one real Test
+      Mode payment through Messenger, followed by webhook credit grant,
+      premium-image debit, and the documented negative/retry/refund checks.
 
 - [ ] **P5 - Bounded live pilot and legacy removal.** Obtain legal/accounting
       approval, enable one reviewed live offer for a bounded audience, monitor
