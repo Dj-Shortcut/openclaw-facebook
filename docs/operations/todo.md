@@ -275,7 +275,9 @@ release`, before any deployment or restart. The app-level Fly config
         the same deployment run under the shared lock; a historical lock
         artifact or a manifest assertion is not current proof. Keep a proven
         drain-on, checkout-off rollback and all payment/privacy/budget gates.
-        Current manifest/config remain dark until that separate activation.
+        The reviewed desired Test configuration does not itself expose checkout;
+        the running Machines remain closed until the protected activation
+        and subsequent deployment both succeed.
   - [ ] Retain the obsolete account's 24-hour recovery window before its
         separately approved irreversible drop. Unlock is blocked while the
         reviewed Test request exists or any Machine still exposes credits or
@@ -355,8 +357,8 @@ release`, before any deployment or restart. The app-level Fly config
       bypass this. Public checkout does not require operator login.
     - The owner explicitly approved a separate protected operator command on
       2026-09-10 to enable Test payment processing without Facebook login.
-      PR #526 implements the existing epoch-fenced audited
-      scheduler service, resolve the existing owner/admin, and record the
+      PR #526 reuses the existing epoch-fenced audited
+      scheduler service, resolves the existing owner/admin, and records the
       actual GitHub operator/run rather than fabricate a web session. No new
       login, Facebook permission, database account/grant, tester registration,
       payment, or live exposure is authorized by this code change.
@@ -365,14 +367,37 @@ release`, before any deployment or restart. The app-level Fly config
       epoch 1 and all lane pending/dead counters were zero. The exact Test
       workspace had zero provider operations, subscriptions, payment routes,
       ledger rows, exposed intents, pending/dead outbox work and notifications.
-      This is not
-      execution evidence for the new command. After reviewed CI/build/merge,
-      run that command through its protected workflow, then separately review
-      the checkout exposure configuration and prove the complete payment flow.
+      This is not execution evidence for the new command. Build the merged
+      command as an attested runtime artifact, review its immutable reference
+      together with the desired Test exposure configuration, run the protected
+      command on the unchanged checkout-off predecessor, and require its
+      audited committed readback before dispatching the exposure deployment.
+      These manual workflows do not deploy automatically when a PR is merged.
       Review follow-up on 2026-09-11 fixes the CI scalar-row type checks, persists
       exact executable identities in the atomic audit, rejects failed billing
       outbox work and refuses missing control/lane registration without writing
-      new rows. This code is not merged or executed production evidence.
+      new rows. PR #526 merged as
+      `3f0b7d01b0daef28f6f9abf8d514a128d68eeb62` at
+      `2026-09-11T06:42:21Z`, after green CI and review. Image Gen CI
+      `34570157440` actually ran both dedicated MySQL operator cases;
+      migration smoke `34570157395` also passed. A fresh metadata-only
+      production inspection at `2026-09-11T06:37:54Z` confirmed the same
+      disabled epoch, existing owner/admin and zero pending/dead or financial
+      work, without changing data. Operator execution, checkout exposure and
+      the payment-to-credit-to-delivered-edit proof remain open.
+    - Protected artifact build
+      [34571665119/1](https://github.com/Dj-Shortcut/openclaw-facebook/actions/runs/34571665119)
+      passed from exact merged source
+      `3f0b7d01b0daef28f6f9abf8d514a128d68eeb62`, producing runtime
+      `sha256:70c608aa90473aa9da6fe671a486d757e3041328ba61f9d4ba564b3548a6c4ad`
+      with attestation `46783444`. Its exact-container checks reject pre-credit
+      schemas and accept 0018. The desired Test activation pins this artifact
+      while retaining `f2fa9d60...` / `deploy-34496956631-1` as the unchanged
+      checkout-off, processing-on predecessor and rollback. The offer remains
+      EUR 4.99 for eight medium credits; all manual tester pins remain empty,
+      and live/legacy billing stay disabled. No operator execution, public
+      checkout or payment-to-credit-to-delivery evidence is claimed by this
+      build or configuration change.
     - The completed payment-processing preparation changed only notification, drain and
       reconciliation flags to true; checkout, paid image use, legacy sales and
       live billing remain false. It reuses the reviewed `f2fa9d60...` runtime,

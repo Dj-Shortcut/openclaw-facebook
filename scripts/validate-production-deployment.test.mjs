@@ -37,7 +37,7 @@ import {
 const repoRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const tempDirs = [];
 
-function createRepositoryFixture() {
+function createRepositoryFixture({ boundedTest = false } = {}) {
   const root = fs.mkdtempSync(
     path.join(os.tmpdir(), "leaderbot-production-contract-"),
   );
@@ -125,6 +125,25 @@ function createRepositoryFixture() {
   const manifest = JSON.parse(
     fs.readFileSync(path.join(root, "deploy/production/apps.json"), "utf8"),
   );
+  // General mutation cases start from an explicitly closed exposure fixture,
+  // independent of the reviewed desired activation stage in the real config.
+  if (!boundedTest) {
+    delete manifest.apps["image-gen"].creditTestActivation;
+    fs.writeFileSync(
+      path.join(root, "deploy/production/apps.json"),
+      JSON.stringify(manifest),
+    );
+    const config = path.join(root, manifest.apps["image-gen"].config);
+    fs.writeFileSync(
+      config,
+      fs
+        .readFileSync(config, "utf8")
+        .replace(
+          /((?:MESSENGER_PAID_CREDITS_ENABLED|MOLLIE_CREDIT_CHECKOUT_ENABLED)\s*=\s*)"(?:true|false)"/g,
+          '$1"false"',
+        ),
+    );
+  }
   for (const app of Object.values(manifest.apps)) {
     for (const config of Object.values(app.reviewedRollbackConfigs ?? {})) {
       const destination = path.join(root, config.path);
@@ -1210,7 +1229,7 @@ describe("production deployment contract", () => {
     });
   });
 
-  it("settles the proven payment-processing runtime as the sole 0018 rollback", () => {
+  it("pins the desired Test operator runtime while retaining the proven sole 0018 rollback", () => {
     const manifest = JSON.parse(
       fs.readFileSync(
         path.join(repoRoot, "deploy/production/apps.json"),
@@ -1233,11 +1252,12 @@ describe("production deployment contract", () => {
     expect(app.deploymentEnabled).toBe(true);
     expect(app.reviewedArtifactKind).toBe("runtime");
     expect(app.reviewedImage).toBe(
-      "registry.fly.io/leaderbot-fb-image-gen@sha256:f2fa9d60e1fca02c09cb2764981a7134e908f2e33f127eb0e54e77030b4a7a4b",
+      "registry.fly.io/leaderbot-fb-image-gen@sha256:70c608aa90473aa9da6fe671a486d757e3041328ba61f9d4ba564b3548a6c4ad",
     );
     expect(app.reviewedSourceCommit).toBe(
-      "b9caea7951b44d1f97bbd1bc742c25aca68264e9",
+      "3f0b7d01b0daef28f6f9abf8d514a128d68eeb62",
     );
+    expect(app.reviewedImage).not.toBe(predecessorImage);
     expect(app.reviewedImageSchemaPhases).toEqual([
       "0018_credit_checkout_reservation",
     ]);
@@ -6405,6 +6425,11 @@ describe("production deployment contract", () => {
     );
   });
 
+  it("accepts the reviewed bounded Test desired configuration with its prepared rollback", () => {
+    const root = createRepositoryFixture({ boundedTest: true });
+    expect(() => validateProductionRepository(root)).not.toThrow();
+  });
+
   it("does not silently broaden a partial older tester restriction", () => {
     const root = createRepositoryFixture();
     replaceFixtureText(
@@ -9454,7 +9479,7 @@ describe("production deployment contract", () => {
     const runFly = (args) => {
       const command = args.slice(0, 2).join(" ");
       if (command === "config show") {
-        return JSON.stringify(imageGenLiveConfig("deploy-124-1"));
+        return JSON.stringify(imageGenLiveConfig("deploy-124-1", { root }));
       }
       if (command === "machine list") {
         const machines = [];
@@ -9474,6 +9499,7 @@ describe("production deployment contract", () => {
           const currentConfig = imageGenMachineConfig(
             bridgeImage,
             processGroup,
+            { root },
           );
           currentConfig.env.LEADERBOT_DEPLOYMENT_IDENTITY = "deploy-124-1";
           machines.push({
@@ -9676,6 +9702,7 @@ describe("production deployment contract", () => {
             const currentConfig = imageGenMachineConfig(
               bridgeImage,
               processGroup,
+              { root },
             );
             currentConfig.env.LEADERBOT_DEPLOYMENT_IDENTITY = "deploy-124-1";
             machines.push({
@@ -10500,6 +10527,9 @@ ${workflow.slice(start, end)}
       ];
       // Model the pre-settlement transition explicitly: a dark same-image
       // predecessor and a distinct older rollback, independent of today's pins.
+      app.reviewedImage = predecessor.image;
+      app.reviewedSourceCommit =
+        app.reviewedRollbackSourceCommits[predecessor.image];
       const rollbackImage = `registry.fly.io/${app.app}@sha256:${"e".repeat(64)}`;
       const previousRollbackImage = app.reviewedRollbackImages[0];
       app.reviewedRollbackImages = [rollbackImage];

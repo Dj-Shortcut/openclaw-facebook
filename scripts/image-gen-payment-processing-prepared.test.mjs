@@ -3,19 +3,26 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
+import {
+  getReviewedSettledPredecessorConfig,
+  loadProductionManifest,
+} from "./validate-production-deployment.mjs";
 
 /**
- * The runtime config must reach the shape a later bounded Test Mode activation
- * can roll back to: payment processing prepared, commercial exposure closed.
- *
- * `validateCreditTestActivation` already enforces this on every reviewed
- * rollback config at activation time. This test pins the same values on the
- * live runtime config now, so the deployment that becomes that rollback record
- * is prepared before the activation request exists.
+ * Desired Test exposure and the exact prepared predecessor are separate.
+ * Preserve checkout-off/processing-on recovery while enabling only the desired
+ * Test configuration; neither this test nor a merged config proves a rollout.
  */
 
 const rootDir = path.resolve(fileURLToPath(import.meta.url), "..", "..");
-const configPath = path.join(rootDir, "apps/image-gen/fly.toml");
+const app = loadProductionManifest(rootDir).apps["image-gen"];
+const predecessor = app.reviewedSettledPredecessor;
+const predecessorConfig = getReviewedSettledPredecessorConfig(
+  "image-gen",
+  predecessor.identity,
+  predecessor.image,
+  rootDir,
+);
 
 /** Reads the `[env]` table of a Fly config as plain string assignments. */
 function readEnvAssignments(file) {
@@ -35,18 +42,24 @@ function readEnvAssignments(file) {
   return assignments;
 }
 
-const env = readEnvAssignments(configPath);
-
-describe("image-gen runtime payment processing preparation", () => {
+describe.each([
+  { stage: "desired bounded Test", config: app.config, exposure: "true" },
+  {
+    stage: "prepared predecessor",
+    config: predecessorConfig,
+    exposure: "false",
+  },
+])("image-gen $stage payment processing", ({ config, exposure }) => {
+  const env = readEnvAssignments(path.join(rootDir, config));
   it("keeps the drain, notification plane and reconciliation prepared", () => {
     expect(env.MOLLIE_BILLING_DRAIN_ENABLED).toBe("true");
     expect(env.BILLING_NOTIFICATION_PLANE_ENABLED).toBe("true");
     expect(env.MOLLIE_RECONCILIATION_ENABLED).toBe("true");
   });
 
-  it("keeps checkout and paid image use closed", () => {
-    expect(env.MOLLIE_CREDIT_CHECKOUT_ENABLED).toBe("false");
-    expect(env.MESSENGER_PAID_CREDITS_ENABLED).toBe("false");
+  it("pins exact stage exposure while keeping live and legacy billing closed", () => {
+    expect(env.MOLLIE_CREDIT_CHECKOUT_ENABLED).toBe(exposure);
+    expect(env.MESSENGER_PAID_CREDITS_ENABLED).toBe(exposure);
     expect(env.MOLLIE_BILLING_ENABLED).toBe("false");
     expect(env.MOLLIE_LIVE_BILLING_ENABLED).toBe("false");
     expect(env.MOLLIE_MODE).toBe("test");
@@ -106,5 +119,21 @@ describe("image-gen runtime payment processing preparation", () => {
     ]) {
       expect(env[secret]).toBeUndefined();
     }
+  });
+});
+
+it("binds the Test request and retains the exact prepared f2fa predecessor", () => {
+  expect(app.creditTestActivation).toEqual({
+    state: "bounded_test",
+    obsoletePrincipalSha256:
+      "db3013fb364b7486dabd6520c68beb4a7f5df05530ce90febb30049418a509b5",
+  });
+  expect(predecessor.image).toBe(
+    "registry.fly.io/leaderbot-fb-image-gen@sha256:f2fa9d60e1fca02c09cb2764981a7134e908f2e33f127eb0e54e77030b4a7a4b",
+  );
+  expect(predecessor.identity).toBe("deploy-34496956631-1");
+  expect(app.reviewedRollbackConfigs[predecessor.image]).toEqual({
+    path: predecessor.path,
+    sha256: predecessor.sha256,
   });
 });
