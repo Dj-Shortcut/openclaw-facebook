@@ -94,9 +94,9 @@
       "sourceDeployEnabled": false,
       "sourceDeployBlockReason": "Production deploys require an immutable image built from reviewed source and recorded in this manifest before rollout.",
       "trustedBuilderWorkflow": ".github/workflows/build-production-artifacts.yml",
-      "reviewedImage": "registry.fly.io/leaderbot-fb-image-gen@sha256:70c608aa90473aa9da6fe671a486d757e3041328ba61f9d4ba564b3548a6c4ad",
+      "reviewedImage": "registry.fly.io/leaderbot-fb-image-gen@sha256:c54c1fd026e281ada8f88ecb1acc0a26d48e736b3874d3e7aeb70dc2c64efe5f",
       "reviewedArtifactKind": "runtime",
-      "reviewedSourceCommit": "3f0b7d01b0daef28f6f9abf8d514a128d68eeb62",
+      "reviewedSourceCommit": "479e43d17aab852ea6b4bbfd6b03c4eac15eb797",
       "reviewedSettledPredecessor": {
         "identity": "deploy-34496956631-1",
         "image": "registry.fly.io/leaderbot-fb-image-gen@sha256:f2fa9d60e1fca02c09cb2764981a7134e908f2e33f127eb0e54e77030b4a7a4b",
@@ -126,8 +126,8 @@
           "requestId": "8a62f93d-e092-4dd8-82ca-9e77bdd89d54",
           "previousEpoch": 1,
           "epoch": 2,
-          "operatorImage": "registry.fly.io/leaderbot-fb-image-gen@sha256:70c608aa90473aa9da6fe671a486d757e3041328ba61f9d4ba564b3548a6c4ad",
-          "artifactSourceSha": "3f0b7d01b0daef28f6f9abf8d514a128d68eeb62",
+          "operatorImage": "registry.fly.io/leaderbot-fb-image-gen@sha256:c54c1fd026e281ada8f88ecb1acc0a26d48e736b3874d3e7aeb70dc2c64efe5f",
+          "artifactSourceSha": "479e43d17aab852ea6b4bbfd6b03c4eac15eb797",
           "runtimeImage": "registry.fly.io/leaderbot-fb-image-gen@sha256:f2fa9d60e1fca02c09cb2764981a7134e908f2e33f127eb0e54e77030b4a7a4b",
           "deploymentIdentity": "deploy-34496956631-1"
         }
