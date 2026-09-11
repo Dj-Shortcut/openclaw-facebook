@@ -11,6 +11,7 @@ export type MessengerWebUrlButton = {
   title: string;
   url: string;
   webview_height_ratio: "full";
+  messenger_extensions: false;
 };
 
 export type MessengerPostbackButton = {
@@ -131,6 +132,7 @@ export function renderMessengerUrlButtons(
           title,
           url,
           webview_height_ratio: "full" as const,
+          messenger_extensions: false as const,
         },
       ];
     })

@@ -90,6 +90,18 @@ describe("conversation actions", () => {
     );
   });
 
+  it("includes remaining premium credits after a purchase", () => {
+    expect(
+      buildGenerationSuccessResponse("nl", {
+        daily: { used: 1, limit: 5, remaining: 4 },
+        monthly: { used: 1, limit: 20, remaining: 19 },
+        premium: { remaining: 7 },
+      }).text
+    ).toBe(
+      "Klaar.\nVandaag nog 4 van 5 foto's. Deze maand nog 19 van 20. Je hebt nog 7 premiumcredits."
+    );
+  });
+
   it("never presents an OpenAI account failure as the customer's monthly quota", () => {
     expect(t("nl", "generationProviderUnavailable")).toBe(
       "Ik kan nu even geen afbeelding maken. Probeer later opnieuw."
@@ -134,6 +146,7 @@ describe("conversation actions", () => {
         title: "Open klantenportaal",
         url: "https://app.leaderbot.live/api/oauth/start?returnTo=%2Fportal",
         webview_height_ratio: "full",
+        messenger_extensions: false,
       },
     ]);
   });

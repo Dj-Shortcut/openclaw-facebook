@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   billingSchedulerTenants,
@@ -31,7 +31,13 @@ const quota = {
   imageQuality: "images_2",
 } as const;
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-08-01T12:00:00.000Z"));
+});
+
+afterEach(() => vi.useRealTimers());
 
 describe("Startpilot finite entitlement usage", () => {
   it("accepts only the exact cost-bounded quota snapshot", () => {

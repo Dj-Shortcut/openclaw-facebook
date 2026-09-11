@@ -188,9 +188,15 @@ export function formatImageQuotaBalance(
   status: ImageQuotaBalance
 ): string {
   if (lang === "nl") {
-    return `Vandaag nog ${status.daily.remaining} van ${status.daily.limit} foto's. Deze maand nog ${status.monthly.remaining} van ${status.monthly.limit}.`;
+    const premium = status.premium
+      ? ` Je hebt nog ${status.premium.remaining} premiumcredits.`
+      : "";
+    return `Vandaag nog ${status.daily.remaining} van ${status.daily.limit} foto's. Deze maand nog ${status.monthly.remaining} van ${status.monthly.limit}.${premium}`;
   }
-  return `Today you have ${status.daily.remaining} of ${status.daily.limit} photos left. This month you have ${status.monthly.remaining} of ${status.monthly.limit} left.`;
+  const premium = status.premium
+    ? ` You have ${status.premium.remaining} premium credits left.`
+    : "";
+  return `Today you have ${status.daily.remaining} of ${status.daily.limit} photos left. This month you have ${status.monthly.remaining} of ${status.monthly.limit} left.${premium}`;
 }
 
 /** Neutral balance-only response for an image whose Meta outcome is unknown. */

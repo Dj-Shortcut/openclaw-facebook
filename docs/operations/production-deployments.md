@@ -822,8 +822,3 @@ At every stage `historicalResources` forbids automatic deletion and preserves
 unlisted Machines and volumes. Cleanup is a separate, human-reviewed operation
 after the canonical state is proven; it is never an implicit side effect of
 rebaseline, deploy, rollback or reconciliation.
-
-Longer term, move gateway state into tenant-scoped durable storage so two or
-more interchangeable gateway Machines can run without shared customer-content
-paths or host-bound state. Terraform may own stable infrastructure resources,
-but it must not co-own Machines that `fly deploy` manages.

@@ -9,6 +9,7 @@ const {
   admitStartpilotImageProviderAttemptMock,
   recoverStartpilotImageProviderAdmissionMock,
   commitDeliveredPaidCreditGenerationMock,
+  readPaidCreditBalanceMock,
   reservePaidCreditGenerationMock,
   reserveMessengerCreditCheckoutMock,
   assertMessengerPrivacySubjectMock,
@@ -28,6 +29,7 @@ const {
   admitStartpilotImageProviderAttemptMock: vi.fn(),
   recoverStartpilotImageProviderAdmissionMock: vi.fn(),
   commitDeliveredPaidCreditGenerationMock: vi.fn(),
+  readPaidCreditBalanceMock: vi.fn(),
   reservePaidCreditGenerationMock: vi.fn(),
   reserveMessengerCreditCheckoutMock: vi.fn(),
   assertMessengerPrivacySubjectMock: vi.fn(),
@@ -63,6 +65,7 @@ vi.mock("./_core/billing/creditGenerationAdmission", async importOriginal => {
     ...actual,
     commitDeliveredPaidCreditGeneration:
       commitDeliveredPaidCreditGenerationMock,
+    readPaidCreditBalance: readPaidCreditBalanceMock,
     reservePaidCreditGeneration: reservePaidCreditGenerationMock,
   };
 });
@@ -259,6 +262,8 @@ beforeEach(() => {
   recoverStartpilotImageProviderAdmissionMock.mockResolvedValue(undefined);
   commitDeliveredPaidCreditGenerationMock.mockReset();
   commitDeliveredPaidCreditGenerationMock.mockResolvedValue(undefined);
+  readPaidCreditBalanceMock.mockReset();
+  readPaidCreditBalanceMock.mockResolvedValue(null);
   reservePaidCreditGenerationMock.mockReset();
   reservePaidCreditGenerationMock.mockResolvedValue({
     available: false,
@@ -2743,6 +2748,33 @@ describe("messenger generation job safety", () => {
     expect(commitDeliveredPaidCreditGenerationMock).toHaveBeenCalledOnce();
   });
 
+  it("shows daily and remaining premium credits after a paid image", async () => {
+    process.env.MESSENGER_FREE_DAILY_LIMIT = "0";
+    const job = paidCreditGenerationJob("paid-balance-notice");
+    readPaidCreditBalanceMock.mockResolvedValueOnce(7);
+    reservePaidCreditGenerationMock.mockResolvedValueOnce({
+      available: true,
+      reservation: paidCreditReservationFixture({}),
+    });
+    executeGenerationFlowMock.mockImplementationOnce(async input => {
+      await (await input.onProviderAttempt())?.markTransportStarted();
+      await input.onProviderSuccess?.();
+      return successGenerationResult();
+    });
+    sendImageMock.mockResolvedValueOnce({
+      sent: true,
+      messageId: "mid-paid-balance-notice",
+    });
+
+    await createTestRunner().processMessengerGenerationJob(job);
+
+    expect(sendQuickRepliesMock).toHaveBeenCalledWith(
+      job.psid,
+      "Klaar.\nVandaag nog 0 van 0 foto's. Deze maand nog 20 van 20. Je hebt nog 7 premiumcredits.",
+      expect.any(Array)
+    );
+  });
+
   it("rejects a generic delivered marker without exact Meta receipt provenance", async () => {
     process.env.MESSENGER_FREE_DAILY_LIMIT = "0";
     const job = paidCreditGenerationJob("paid-generic-delivered-marker");
@@ -3143,6 +3175,7 @@ describe("messenger generation job safety", () => {
             /^https:\/\/app[.]leaderbot[.]live\/credits\/checkout\//
           ),
           webview_height_ratio: "full",
+          messenger_extensions: false,
         },
       ],
       { providerAttemptKey: "premium-credit-checkout-offer-v1" }

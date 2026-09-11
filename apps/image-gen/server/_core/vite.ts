@@ -1,10 +1,14 @@
 import express, { type Express } from "express";
-import fs from "fs";
-import { type Server } from "http";
-import { nanoid } from "nanoid";
-import path from "path";
-import { createGlobalHttpRateLimiter, DEFAULT_MAX_REQUESTS, DEFAULT_WINDOW_MS } from "./httpRateLimit";
 import rateLimit from "express-rate-limit";
+import fs from "node:fs";
+import { type Server } from "node:http";
+import path from "node:path";
+import { nanoid } from "nanoid";
+import {
+  createGlobalHttpRateLimiter,
+  DEFAULT_MAX_REQUESTS,
+  DEFAULT_WINDOW_MS,
+} from "./httpRateLimit";
 import { safeLog } from "./logger";
 
 type ViteCreateServer = (typeof import("vite"))["createServer"];
@@ -37,6 +41,15 @@ function resolveProjectRoot(): string {
   return cwd;
 }
 
+function createFrontendRateLimiter() {
+  return rateLimit({
+    windowMs: DEFAULT_WINDOW_MS,
+    limit: DEFAULT_MAX_REQUESTS,
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
+}
+
 // fallow-ignore-next-line unused-export
 export async function setupVite(
   app: Express,
@@ -45,7 +58,7 @@ export async function setupVite(
 ) {
   app.use(createGlobalHttpRateLimiter());
 
-  app.use(rateLimit({windowMs:DEFAULT_WINDOW_MS,limit:DEFAULT_MAX_REQUESTS,standardHeaders:true,legacyHeaders:false}));
+  app.use(createFrontendRateLimiter());
 
   const serverOptions = {
     middlewareMode: true,
@@ -72,7 +85,7 @@ export async function setupVite(
           "index.html"
         );
 
-        // always reload the index.html file from disk incase it changes
+        // Reload the template on each request so edits appear without a restart.
         let template = await fs.promises.readFile(clientTemplate, "utf-8");
         template = template.replace(
           `src="/src/main.tsx"`,
@@ -89,14 +102,7 @@ export async function setupVite(
 }
 
 export function serveStatic(app: Express, staticRoot?: string) {
-  const staticRateLimiter = rateLimit({
-    windowMs: DEFAULT_WINDOW_MS,
-    limit: DEFAULT_MAX_REQUESTS,
-    standardHeaders: true,
-    legacyHeaders: false,
-  });
-
-  app.use(staticRateLimiter);
+  app.use(createFrontendRateLimiter());
   const projectRoot = resolveProjectRoot();
   const distPathCandidates = staticRoot
     ? [path.resolve(staticRoot)]
@@ -104,7 +110,9 @@ export function serveStatic(app: Express, staticRoot?: string) {
         path.resolve(projectRoot, "dist", "public"),
         path.resolve(projectRoot, "public"),
       ];
-  const distPath = distPathCandidates.find((candidate) => fs.existsSync(candidate));
+  const distPath = distPathCandidates.find(candidate =>
+    fs.existsSync(candidate)
+  );
 
   if (!distPath) {
     safeLog("static_build_directory_missing", {

@@ -270,12 +270,6 @@ export function isCreditCheckoutMessengerScopeAllowed(
   }
 }
 
-export function isCreditCheckoutEnabled(
-  env: NodeJS.ProcessEnv = process.env
-): boolean {
-  return env.MOLLIE_CREDIT_CHECKOUT_ENABLED === ENABLED;
-}
-
 export function isPaidMessengerCreditsEnabled(
   env: NodeJS.ProcessEnv = process.env
 ): boolean {

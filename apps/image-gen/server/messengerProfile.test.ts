@@ -69,7 +69,7 @@ describe("messenger profile start-screen pills", () => {
     });
   });
 
-  it("uses the channel Page token names shared by the OpenClaw gateway", async () => {
+  it("accepts the supported Facebook Page token environment alias", async () => {
     delete process.env.FB_PAGE_ACCESS_TOKEN;
     process.env.FACEBOOK_PAGE_ACCESS_TOKEN = "facebook-token";
     const fetchImpl = vi
