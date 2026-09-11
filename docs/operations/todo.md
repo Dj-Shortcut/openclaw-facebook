@@ -437,13 +437,27 @@ release`, before any deployment or restart. The app-level Fly config
       with attestation `46800613`. Its exact-container checks reject pre-credit
       schemas and accept 0018. This supersedes the unexecuted `70c608aa...`
       candidate and includes the reviewed conditional purchase copy and original
-      activation-audit checks. The desired Test activation pins this artifact
-      while retaining `f2fa9d60...` / `deploy-34496956631-1` as the unchanged
+      activation-audit checks. The original committed operator anchor retains
+      this artifact, with `f2fa9d60...` / `deploy-34496956631-1` as the unchanged
       checkout-off, processing-on predecessor and rollback. The offer remains
       EUR 4.99 for eight medium credits; all manual tester pins remain empty,
       and live/legacy billing stay disabled. No operator execution, public
       checkout or payment-to-credit-to-delivery evidence is claimed by this
       build or configuration change.
+    - Frontend PR #527 merged as
+      `cff9e09733d4ba89869634b87de5c569334f86d8` after green review and CI.
+      Protected build
+      [34582281913/2](https://github.com/Dj-Shortcut/openclaw-facebook/actions/runs/34582281913/attempts/2)
+      passed from that exact source, producing runtime
+      `sha256:7c95cf09581afd53a4909fee039ecdbcc9a7b7f8e7c4989389b548a5705cbcda`
+      with attestation `46810628` and exact 0018 container checks. This is the
+      desired frontend-and-Test-checkout release. Only the desired artifact
+      and source pins change; the original committed `c54c1fd0...` operator
+      anchor, `f2fa9d60...` rollback, offer, budgets and flags remain unchanged.
+      Build attempt 1 stopped before construction because the exact-source
+      migration CI was still running; attempt 2 began only after it passed.
+      The exposure deployment and payment-to-credit-to-delivered-edit evidence
+      remain pending. No additional processing-enable action is required.
     - The completed payment-processing preparation changed only notification, drain and
       reconciliation flags to true; checkout, paid image use, legacy sales and
       live billing remain false. It reuses the reviewed `f2fa9d60...` runtime,
