@@ -1236,14 +1236,24 @@ trusted production artifact` with `image-gen-bridge`. The workflow proves
 
 The optional image-gen manifest object `creditTestActivation` accepts exactly
 `state: "bounded_test"` and `obsoletePrincipalSha256`, the SHA-256 of the exact
-old runtime account name. It is a reviewed request, not evidence. It is absent
-from the current dark manifest. Reviewers must match that hash to the actual
+old runtime account name. It is a reviewed request, not execution evidence.
+Reviewers must match that hash to the actual
 old runtime/cutover and protected cleanup evidence; never choose an arbitrary
-or newly generated hash. A later activation PR must retain the exact
+or newly generated hash. An activation PR must retain the exact
 healthy 0018 runtime predecessor, runtime-only rollback entries, and a proven
 rollback configuration with both checkout and paid admission off, and drain,
 notifications and reconciliation on. After any provider transport, a drain-off rollback is unsafe
 and fails the runtime's durable-activity guard.
+
+The reviewed operator artifact reference and desired Test exposure flags may
+share one configuration PR while the actual Fly Machines remain on the exact
+checkout-off predecessor. Merge does not deploy either workflow. First run the
+protected Test processing operator on that unchanged predecessor and confirm
+its committed audit/readback. Only then dispatch `Deploy production` for the
+desired image/configuration. The shared deployment lock prevents overlap; it
+does not replace this ordering or the deployment's fresh account/session and
+runtime-principal proof. Keep live billing and the manual tester restrictions
+off throughout this Test Mode transition.
 
 The following inspection was merged in PR #517 after disposable MySQL validation
 passed on PR run `34485670813` and main run `34486831012`. The owner separately
