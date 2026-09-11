@@ -45,9 +45,9 @@ function readEnvAssignments(file) {
 describe.each([
   { stage: "desired bounded Test", config: app.config, exposure: "true" },
   {
-    stage: "prepared predecessor",
+    stage: "settled payment predecessor",
     config: predecessorConfig,
-    exposure: "false",
+    exposure: "true",
   },
 ])("image-gen $stage payment processing", ({ config, exposure }) => {
   const env = readEnvAssignments(path.join(rootDir, config));
@@ -122,7 +122,7 @@ describe.each([
   });
 });
 
-it("binds the Test request and retains the exact prepared f2fa predecessor", () => {
+it("binds the Test request and retains the exact settled payment predecessor", () => {
   expect(app.creditTestActivation).toEqual({
     state: "bounded_test",
     obsoletePrincipalSha256:
@@ -140,11 +140,12 @@ it("binds the Test request and retains the exact prepared f2fa predecessor", () 
     },
   });
   expect(predecessor.image).toBe(
-    "registry.fly.io/leaderbot-fb-image-gen@sha256:f2fa9d60e1fca02c09cb2764981a7134e908f2e33f127eb0e54e77030b4a7a4b",
+    "registry.fly.io/leaderbot-fb-image-gen@sha256:c04c742f56de06cddb72907ca0bdc989200babd0ea7dcb73b318bf96a327b548",
   );
-  expect(predecessor.identity).toBe("deploy-34496956631-1");
+  expect(predecessor.identity).toBe("deploy-34590370389-1");
   expect(app.reviewedRollbackConfigs[predecessor.image]).toEqual({
-    path: predecessor.path,
-    sha256: predecessor.sha256,
+    path: "deploy/production/rollback-configs/image-gen-c04c742f56de-emergency-dark.toml",
+    sha256:
+      "96954feccc90b1885c4b6b6684b56b83b5fbd64f07fbfa15057b0a0a52400649",
   });
 });

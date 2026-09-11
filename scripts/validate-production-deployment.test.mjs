@@ -1232,7 +1232,7 @@ describe("production deployment contract", () => {
     });
   });
 
-  it("pins the desired Test operator runtime while retaining the proven sole 0018 rollback", () => {
+  it("pins the desired Test operator runtime while retaining the settled payment predecessor and dark emergency rollback", () => {
     const manifest = JSON.parse(
       fs.readFileSync(
         path.join(repoRoot, "deploy/production/apps.json"),
@@ -1241,6 +1241,8 @@ describe("production deployment contract", () => {
     );
     const app = manifest.apps["image-gen"];
     const predecessorImage =
+      "registry.fly.io/leaderbot-fb-image-gen@sha256:c04c742f56de06cddb72907ca0bdc989200babd0ea7dcb73b318bf96a327b548";
+    const emergencyRollbackImage =
       "registry.fly.io/leaderbot-fb-image-gen@sha256:f2fa9d60e1fca02c09cb2764981a7134e908f2e33f127eb0e54e77030b4a7a4b";
 
     expect(app.databaseSchemaPhase).toBe("0018_credit_checkout_reservation");
@@ -1255,10 +1257,10 @@ describe("production deployment contract", () => {
     expect(app.deploymentEnabled).toBe(true);
     expect(app.reviewedArtifactKind).toBe("runtime");
     expect(app.reviewedImage).toBe(
-      "registry.fly.io/leaderbot-fb-image-gen@sha256:a8c1b62aa35c6fba876134bca364457495397e9b53afc78653f2bd159c3eb70d",
+      "registry.fly.io/leaderbot-fb-image-gen@sha256:b1f3996faff2406eba3383465974895dc2dcbacd6432f5ab1591cb1e76be4bdf",
     );
     expect(app.reviewedSourceCommit).toBe(
-      "9b7f454526ce12ce0bb6fafa0d2f85ba29a5c116",
+      "df8d5d840272e05934916797cf84e802b0fdae42",
     );
     expect(app.reviewedImage).not.toBe(predecessorImage);
     expect(app.reviewedImageSchemaPhases).toEqual([
@@ -1267,23 +1269,34 @@ describe("production deployment contract", () => {
     expect(app.databaseSchemaTransition.runtimePrincipalSha256).toBe(
       "972e89225a2d25540d6abfa7bb4e75303f6a94b2f80b4ec26152a95b9b44eeb9",
     );
-    expect(app.reviewedRollbackImages).toEqual([predecessorImage]);
+    expect(app.reviewedRollbackImages).toEqual([
+      predecessorImage,
+      emergencyRollbackImage,
+    ]);
     expect(app.reviewedRollbackArtifactKinds).toEqual({
       [predecessorImage]: "runtime",
+      [emergencyRollbackImage]: "runtime",
     });
     expect(app.reviewedRollbackSourceCommits).toEqual({
-      [predecessorImage]: "b9caea7951b44d1f97bbd1bc742c25aca68264e9",
+      [predecessorImage]: "ba1720e6a48a3784b800f610fb7f8dad9859945a",
+      [emergencyRollbackImage]: "b9caea7951b44d1f97bbd1bc742c25aca68264e9",
     });
     expect(app.reviewedRollbackImageSchemaPhases).toEqual({
       [predecessorImage]: ["0018_credit_checkout_reservation"],
+      [emergencyRollbackImage]: ["0018_credit_checkout_reservation"],
     });
     expect(app.reviewedSettledPredecessor).toEqual({
-      identity: "deploy-34496956631-1",
+      identity: "deploy-34590370389-1",
       image:
-        "registry.fly.io/leaderbot-fb-image-gen@sha256:f2fa9d60e1fca02c09cb2764981a7134e908f2e33f127eb0e54e77030b4a7a4b",
-      path: "deploy/production/rollback-configs/image-gen-f2fa9d60e1fc-deploy-34496956631-1.toml",
+        "registry.fly.io/leaderbot-fb-image-gen@sha256:c04c742f56de06cddb72907ca0bdc989200babd0ea7dcb73b318bf96a327b548",
+      path: "deploy/production/rollback-configs/image-gen-c04c742f56de-deploy-34590370389-1.toml",
       sha256:
-        "05ffded5fb93abca68e275fe174f20db55f9e0dd1a679cd94c6378fc10053380",
+        "4311fd1f4a6075a16ee16f08d83aadf63447bbc439044eb256f2206a37c44d99",
+    });
+    expect(app.reviewedRollbackConfigs[predecessorImage]).toEqual({
+      path: "deploy/production/rollback-configs/image-gen-c04c742f56de-emergency-dark.toml",
+      sha256:
+        "96954feccc90b1885c4b6b6684b56b83b5fbd64f07fbfa15057b0a0a52400649",
     });
   });
 
