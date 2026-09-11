@@ -123,6 +123,12 @@ function fixture() {
     identity: "deploy-100-1",
     ...app.reviewedRollbackConfigs[image],
   };
+  app.creditTestActivation.operator = {
+    operatorImage: app.reviewedImage,
+    artifactSourceSha: app.reviewedSourceCommit,
+    runtimeImage: image,
+    deploymentIdentity: app.reviewedSettledPredecessor.identity,
+  };
   for (const [relative, content] of [
     [app.config, config],
     [rollbackPath, rollback],
@@ -189,6 +195,69 @@ function collectorFixture(overrides = {}) {
     releaseVersion: "10",
     releaseWatermark: "d".repeat(64),
   };
+  const operator = {
+    source: "protected_workflow",
+    githubActorId: "11",
+    githubRunId: "120",
+    githubRunAttempt: 1,
+    sourceSha: SOURCE,
+    deploymentIdentity: baseline.identity,
+    runtimePrincipalSha256: app.databaseSchemaTransition.runtimePrincipalSha256,
+    operatorImage: app.reviewedImage,
+    artifactSourceSha: app.reviewedSourceCommit,
+    bundleSha256: "e".repeat(64),
+    runtimeImage: baseline.expectedImage,
+  };
+  const requestId = "12345678-1234-4234-8234-123456789012";
+  const reason = "protected workflow test payment preparation";
+  const fingerprint = createHash("sha256")
+    .update(
+      JSON.stringify([
+        "billing-scheduler-enable-v1",
+        1,
+        "test",
+        7,
+        1,
+        reason,
+        operator,
+      ]),
+    )
+    .digest("hex");
+  const activation = {
+    controls: [{ workspaceId: 1, mode: "test", enabled: 1, epoch: 2 }],
+    lanes: [
+      "ai_finalization",
+      "outbox",
+      "profile_expiry",
+      "reconciliation",
+    ].map((kind) => ({
+      workspaceId: 1,
+      mode: "test",
+      kind,
+      enabled: 1,
+      epoch: 2,
+      requestId,
+      fingerprint,
+      ownerUserId: 7,
+    })),
+    audits: [
+      {
+        id: 9,
+        workspaceId: 1,
+        ownerUserId: 7,
+        event: "billing_scheduler_enabled",
+        metadataFieldCount: 7,
+        operatorFieldCount: 11,
+        mode: "test",
+        requestId,
+        previousEpoch: 1,
+        epoch: 2,
+        reason,
+        onBehalfOfOwnerUserId: 7,
+        operator,
+      },
+    ],
+  };
   let settledReads = 0;
   const execute = vi.fn((command, args, childEnv) => {
     expect(childEnv.DATABASE_PROVISIONER_URL).toBeUndefined();
@@ -215,12 +284,21 @@ function collectorFixture(overrides = {}) {
     return JSON.stringify(args[0] === "volumes" ? [volume] : [machine]);
   });
   let accountReads = 0;
+  let activationReads = 0;
   const session = {
     expectedSessionId: "7",
     initialize: vi.fn(async () => {}),
     close: vi.fn(async () => {}),
     execute: vi.fn(async (sql) => {
       expect(sql).toMatch(/^(SELECT|SHOW GLOBAL) /);
+      if (sql.startsWith("SELECT CAST(JSON_OBJECT("))
+        return [
+          JSON.stringify(
+            (activationReads++ ? overrides.afterActivation : undefined) ??
+              overrides.activation ??
+              activation,
+          ),
+        ];
       if (sql.includes("mysql.user"))
         return [
           (accountReads++ ? overrides.afterAccount : undefined) ??
@@ -243,9 +321,26 @@ function collectorFixture(overrides = {}) {
     rootDir: root,
     execute,
     sessionFactory: () => session,
-    fetchImpl: fetchRun(),
+    fetchImpl: vi.fn(async (url) => ({
+      ok: true,
+      json: async () =>
+        url.includes("/runs/120/attempts/1")
+          ? {
+              ...remoteRun,
+              id: 120,
+              run_attempt: 1,
+              path: ".github/workflows/enable-image-gen-test-payments.yml",
+              status: "completed",
+              conclusion: "success",
+              actor: { id: 11 },
+              triggering_actor: { id: 11 },
+              ...overrides.operatorRun,
+            }
+          : remoteRun,
+    })),
     now: () => NOW,
     session,
+    activation,
   };
 }
 
@@ -588,6 +683,14 @@ describe("protected metadata proof", () => {
       obsoleteSessionCount: 0,
       candidateIdentity: "deploy-123-2",
       databaseName: "leaderbot",
+      activation: {
+        verified: true,
+        committed: true,
+        readOnly: true,
+        workspaceId: 1,
+        executionEpoch: 2,
+        operator: { githubRunId: "120" },
+      },
     });
     expect(f.session.close).toHaveBeenCalledWith();
     expect(f.session.initialize).toHaveBeenCalledTimes(2);
@@ -610,6 +713,9 @@ describe("protected metadata proof", () => {
     { visibility: "0" },
     { afterAccount: "1\t0" },
     { afterAccount: "0\t0" },
+    { activation: { controls: [], lanes: [], audits: [] } },
+    { afterActivation: { controls: [], lanes: [], audits: [] } },
+    { operatorRun: { actor: { id: 99 } } },
   ])(
     "rejects drift, incomplete visibility or failed probe %j",
     async (change) => {
@@ -629,6 +735,13 @@ describe("protected metadata proof", () => {
       { obsoleteAccountState: "unlocked" },
       { obsoleteSessionCount: 1 },
       { runtimeMachineIds: [] },
+      { activation: { ...proof.activation, executionEpoch: 3 } },
+      {
+        activation: {
+          ...proof.activation,
+          operator: { ...proof.activation.operator, githubRunId: "121" },
+        },
+      },
     ])
       expect(() =>
         assertCreditTestEvidence({ ...proof, ...change }, proof, NOW),
@@ -636,6 +749,41 @@ describe("protected metadata proof", () => {
     const incomplete = { ...proof };
     delete incomplete.runtimePrincipalSha256;
     expect(() => assertCreditTestEvidence(incomplete, proof, NOW)).toThrow();
+    const missingActivation = { ...proof };
+    delete missingActivation.activation;
+    expect(() =>
+      assertCreditTestEvidence(missingActivation, proof, NOW),
+    ).toThrow();
+  });
+  it("rechecks persisted activation on every consume, refusing later disable", async () => {
+    const f = collectorFixture();
+    const recorded = await collectCreditTestProof(f);
+    const current = await collectCreditTestProof(f);
+    expect(() =>
+      assertCreditTestEvidence(recorded, current, NOW),
+    ).not.toThrow();
+    f.activation.controls[0].enabled = 0;
+    await expect(collectCreditTestProof(f)).rejects.toThrow(
+      "credit_test_activation_audit_rejected",
+    );
+    expect(f.session.close).toHaveBeenCalledTimes(3);
+  });
+  it("recovers original persisted execution after a failed operator response without retrying it", async () => {
+    const f = collectorFixture({ operatorRun: { conclusion: "failure" } });
+    const proof = await collectCreditTestProof(f);
+    expect(proof.activation.operator.githubRunId).toBe("120");
+    expect(proof.runId).toBe("123");
+    expect(proof.activation.readOnly).toBe(true);
+    expect(
+      f.session.execute.mock.calls.every(([sql]) =>
+        /^(SELECT|SHOW GLOBAL) /.test(sql),
+      ),
+    ).toBe(true);
+    expect(
+      f.execute.mock.calls.some(([, args]) =>
+        args.some((value) => String(value).includes("enable-test-payments")),
+      ),
+    ).toBe(false);
   });
   it("proves absent plus zero sessions distinctly after the separately approved drop", async () => {
     const proof = await collectCreditTestProof(

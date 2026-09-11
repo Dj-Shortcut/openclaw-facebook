@@ -93,12 +93,38 @@ No provider request or credit grant is made by the command.
 
 Retain its metadata-only outcome and cleanup evidence. An SSH timeout, missing
 result, or cleanup failure after dispatch is not proof that the transaction
-rolled back. Do not create a new request ID or retry automatically; inspect the
-original audited request and exact control/lane epochs first. Temporary bundle
+rolled back. Never rerun the mutation with a changed request ID, workflow
+run/attempt/source or executable provenance, and never retry it automatically.
+Normally retain the successful operator receipt before dispatching deployment.
+If the response is lost, preserve the original request: the same protected
+deployment's read-only `prove`/`consume` steps can recover its committed audit
+and exact control/lane epochs before any Fly apply. This does not require an
+independent recovery command. An unsuccessful workflow conclusion alone does
+not invalidate a transaction that durably committed. Temporary bundle
 removal is always attempted and verified. A successful operator action is only
 processing activation: checkout/paid-use flags remain off, and the later
 protected exposure deploy must still perform its fresh same-run account,
 runtime, database, readiness and rollback checks before a user can test payment.
+
+The reviewed audit-preflight follow-up uses
+`inspectCommittedTestPaymentActivation` inside the existing
+`image-gen-credit-test-proof.mjs` `prove` and `consume` steps. Before deployment,
+both steps must read the original committed audit, require the enabled Test
+execution epoch and all four matching lanes, and verify the original request,
+fingerprint, owner and operator/executable provenance. This is read-only recovery
+of evidence, not another enable operation. Missing or inconsistent committed
+state blocks deployment before Fly apply. Protected execution of this follow-up remains pending;
+do not substitute a new request or treat its code review as production proof.
+
+The reviewed immutable `creditTestActivation.operator` anchor records
+`operatorImage`, `artifactSourceSha`, `runtimeImage` and `deploymentIdentity`.
+Before the first operator execution, review/update it to the exact artifact
+that will execute and its prepared runtime predecessor. Once activation commits,
+retain that original anchor unchanged across later frontend and runtime
+releases; changing the desired release must not require another enable action.
+The original audit is compared with this anchor, while current settled runtime,
+database principal, account/session and readiness checks remain fresh and
+separate for every deployment.
 
 This does not remove the audited payment execution controls, worker lanes and
 heartbeats, notification checks, credential generation identity, spend caps,
@@ -1234,9 +1260,10 @@ trusted production artifact` with `image-gen-bridge`. The workflow proves
     state `complete`, a successful historical lock, and this sequencing
     exception are not payment-readiness evidence. Live billing remains off.
 
-The optional image-gen manifest object `creditTestActivation` accepts exactly
-`state: "bounded_test"` and `obsoletePrincipalSha256`, the SHA-256 of the exact
-old runtime account name. It is a reviewed request, not execution evidence.
+The optional image-gen manifest object `creditTestActivation` records
+`state: "bounded_test"`, `obsoletePrincipalSha256` (the SHA-256 of the exact
+old runtime account name), and the immutable original operator anchor described
+above. It is a reviewed request, not execution evidence.
 Reviewers must match that hash to the actual
 old runtime/cutover and protected cleanup evidence; never choose an arbitrary
 or newly generated hash. An activation PR must retain the exact
@@ -1248,11 +1275,15 @@ and fails the runtime's durable-activity guard.
 The reviewed operator artifact reference and desired Test exposure flags may
 share one configuration PR while the actual Fly Machines remain on the exact
 checkout-off predecessor. Merge does not deploy either workflow. First run the
-protected Test processing operator on that unchanged predecessor and confirm
-its committed audit/readback. Only then dispatch `Deploy production` for the
-desired image/configuration. The shared deployment lock prevents overlap; it
-does not replace this ordering or the deployment's fresh account/session and
-runtime-principal proof. Keep live billing and the manual tester restrictions
+protected Test processing operator on that unchanged predecessor. Normally
+confirm its successful receipt before dispatching `Deploy production` for the
+desired image/configuration. If the response is lost, that same protected
+deployment's read-only proof path must recover the exact original committed
+audit or stop before Fly apply; never dispatch another enable mutation to
+resolve the ambiguity. The shared deployment lock prevents overlap; it
+does not replace this ordering. The deployment proof must independently verify
+the original committed activation audit and enabled epoch as well as fresh
+account/session and runtime-principal proof. Keep live billing and the manual tester restrictions
 off throughout this Test Mode transition.
 
 The following inspection was merged in PR #517 after disposable MySQL validation

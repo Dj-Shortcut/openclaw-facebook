@@ -370,9 +370,23 @@ release`, before any deployment or restart. The app-level Fly config
       This is not execution evidence for the new command. Build the merged
       command as an attested runtime artifact, review its immutable reference
       together with the desired Test exposure configuration, run the protected
-      command on the unchanged checkout-off predecessor, and require its
-      audited committed readback before dispatching the exposure deployment.
+      command on the unchanged checkout-off predecessor, and normally retain
+      its successful receipt before dispatching the exposure deployment.
       These manual workflows do not deploy automatically when a PR is merged.
+      If the operator response is ambiguous, never rerun the mutation with a
+      changed request, run/attempt/source or executable provenance. The reviewed
+      audit-preflight follow-up adds read-only inspection of the original
+      committed audit to the existing protected `prove`/`consume` path and
+      requires the enabled Test epoch and all four matching lanes before Fly
+      apply. If the response is lost, this same protected deployment proof can
+      recover the original committed audit; no independent recovery command or
+      new enable mutation is required. A lost response is not proof of rollback;
+      inconsistent or missing committed state blocks before Fly apply. Review
+      the immutable four-field operator artifact/predecessor anchor before the
+      first execution, then retain it unchanged after commit across later
+      frontend releases. Current runtime and payment safety checks remain fresh
+      on every deployment. This proof's protected execution and the
+      actual payment-to-credit-to-delivered-edit journey remain pending.
       Review follow-up on 2026-09-11 fixes the CI scalar-row type checks, persists
       exact executable identities in the atomic audit, rejects failed billing
       outbox work and refuses missing control/lane registration without writing
