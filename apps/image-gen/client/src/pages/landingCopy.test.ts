@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { landingCopies, unavailablePremiumCopies } from "./landingCopy";
+import { landingCopies, messengerPremiumCopies } from "./landingCopy";
 import { parseCreditCheckoutOffer } from "./creditCheckoutOffer";
 import { SUPPORTED_LOCALES } from "./appLocales";
 
@@ -49,7 +49,7 @@ describe("landing page premium bundle copy", () => {
     expect(Object.keys(landingCopies).sort()).toEqual(
       [...SUPPORTED_LOCALES].sort()
     );
-    expect(Object.keys(unavailablePremiumCopies).sort()).toEqual(
+    expect(Object.keys(messengerPremiumCopies).sort()).toEqual(
       [...SUPPORTED_LOCALES].sort()
     );
   });
@@ -105,9 +105,8 @@ describe("landing page premium bundle copy", () => {
  *
  * 1. An unconfirmed payment does not prove the bank was left untouched, and it
  *    is not safe to invite a second attempt while the first is still open.
- * 2. "No purchase option is shown" only proves that a new purchase cannot be
- *    started here. It does not prove that an already-confirmed or test payment
- *    can no longer add credits.
+ * 2. This static page cannot assert current purchase availability or mode.
+ *    Only the scoped checkout displays the actual offer and Test/live mode.
  */
 const forbiddenClaims: Record<string, RegExp[]> = {
   "nl-BE": [
@@ -116,6 +115,8 @@ const forbiddenClaims: Record<string, RegExp[]> = {
     /tot dan blijft alles gratis/i,
     /worden (er )?nog geen premiumcredits toegevoegd/i,
     /betalen is nog niet actief/i,
+    /nu geen aankoopoptie|geen nieuwe aankoop mogelijk|geen nieuwe bundel starten/i,
+    /testbetalingen zijn (nu )?actief|live betalen is (nu )?actief/i,
   ],
   "fr-BE": [
     /rien n'est débité/i,
@@ -123,6 +124,7 @@ const forbiddenClaims: Record<string, RegExp[]> = {
     /tout reste gratuit/i,
     /aucun crédit premium n'est encore ajouté/i,
     /le paiement n'est pas encore actif/i,
+    /pas d'option d'achat|pas de nouvel achat|pas lancer de nouveau pack/i,
   ],
   en: [
     /nothing is charged/i,
@@ -130,6 +132,8 @@ const forbiddenClaims: Record<string, RegExp[]> = {
     /everything stays free/i,
     /no premium credits are added yet/i,
     /payment is not live yet/i,
+    /no purchase option|no new purchase right now|cannot start a new pack/i,
+    /test payments are (now )?enabled|live payments are (now )?enabled/i,
   ],
 };
 
@@ -147,7 +151,7 @@ describe("landing page payment-status copy", () => {
     describe(locale, () => {
       const haystack = [
         JSON.stringify(landingCopies[locale]),
-        JSON.stringify(unavailablePremiumCopies[locale]),
+        JSON.stringify(messengerPremiumCopies[locale]),
       ].join(" ");
 
       it("makes no unproven claim about charges or availability", () => {
@@ -166,10 +170,27 @@ describe("landing page payment-status copy", () => {
         expect(haystack).toContain("privacy@leaderbot.live");
       });
 
-      it("scopes the unavailable state to starting a new purchase", () => {
-        const unavailable = unavailablePremiumCopies[locale];
-        expect(unavailable.creditsCardBody).toMatch(/Mollie/);
-        expect(unavailable.badge.length).toBeGreaterThan(0);
+      it("guides eligible users through Messenger without asserting current availability", () => {
+        const guidance = messengerPremiumCopies[locale];
+        expect(guidance.creditsCardBody).toMatch(/Mollie/);
+        expect(guidance.badge).toMatch(/Alleen bij|Uniquement sur|Only when/);
+        expect(guidance.note).toMatch(/Messenger/);
+        expect(guidance.note).toMatch(
+          /kopen op dat moment niet beschikbaar|achat n'est alors pas disponible|Buying is not available at that time/
+        );
+        expect(guidance.microLine).toMatch(
+          /alleen als de bot|uniquement si le bot|only when the bot/
+        );
+        expect(guidance.note).toMatch(/prijs|prix|price/);
+        expect(guidance.faqAnswer).toMatch(/Test/);
+        expect(guidance.faqAnswer).toMatch(
+          /geen echt bedrag|aucun montant réel|no real charge/
+        );
+        expect(guidance.faqAnswer).toMatch(
+          /voordat je bevestigt|avant de confirmer|before confirming/
+        );
+        expect(creditCountsIn(guidance.faqAnswer)).toEqual([offer.creditCount]);
+        expect(guidance.faqAnswer).toContain(localisedPrices[locale][0]);
       });
     });
   }
@@ -232,26 +253,25 @@ describe("landing page free daily allowance copy", () => {
   for (const locale of SUPPORTED_LOCALES) {
     describe(locale, () => {
       const copy = landingCopies[locale];
-      const unavailable = unavailablePremiumCopies[locale];
+      const guidance = messengerPremiumCopies[locale];
 
       // Everything that describes the free allowance. The premium FAQ answer is
       // excluded on purpose: it legitimately names the bundle price and size.
       const allowanceCopy = [
         copy.microLine,
-        unavailable.microLine,
+        guidance.microLine,
         copy.pricingBody,
         copy.free.suffix,
         ...copy.free.features,
         copy.credits.note,
-        unavailable.note,
+        guidance.note,
         copy.closing.body,
       ].join(" ");
 
       it("never claims a single free image per day", () => {
-        const haystack = [
-          JSON.stringify(copy),
-          JSON.stringify(unavailable),
-        ].join(" ");
+        const haystack = [JSON.stringify(copy), JSON.stringify(guidance)].join(
+          " "
+        );
         for (const pattern of singularDailyClaims) {
           expect(haystack).not.toMatch(pattern);
         }

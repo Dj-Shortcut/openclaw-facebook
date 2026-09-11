@@ -24,6 +24,7 @@ import {
   resolveImmutableReleaseImage,
   validateDeploymentEnabled,
   validateProductionRepository,
+  validateTestPaymentOperatorWorkflow,
   validateRecoveryProtocol,
   validateReviewedImage,
   validateReviewedArtifactSchemaPhase,
@@ -36,7 +37,7 @@ import {
 const repoRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const tempDirs = [];
 
-function createRepositoryFixture() {
+function createRepositoryFixture({ boundedTest = false } = {}) {
   const root = fs.mkdtempSync(
     path.join(os.tmpdir(), "leaderbot-production-contract-"),
   );
@@ -77,6 +78,7 @@ function createRepositoryFixture() {
     ".github/workflows/cleanup-image-gen-runtime-principals.yml",
     ".github/workflows/retire-image-gen-credit-provisioners.yml",
     ".github/workflows/deploy-production.yml",
+    ".github/workflows/enable-image-gen-test-payments.yml",
     ".github/workflows/gateway-state-rebaseline.yml",
     ".github/workflows/image-gen-ci.yml",
     ".github/workflows/image-gen-migration-smoke.yml",
@@ -108,6 +110,10 @@ function createRepositoryFixture() {
     "scripts/provision-image-gen-credit-provisioner.test.mjs",
     "scripts/retire-image-gen-credit-provisioners.mjs",
     "scripts/retire-image-gen-credit-provisioners.test.mjs",
+    "scripts/image-gen-test-payment-operator.mjs",
+    "scripts/image-gen-credit-test-proof.mjs",
+    "scripts/image-gen-test-payment-activation-audit.mjs",
+    "scripts/image-gen-test-payment-activation-audit.test.mjs",
     "scripts/verify-gateway-state-rebaseline.mjs",
     "scripts/validate-production-deployment.mjs",
   ]) {
@@ -122,6 +128,25 @@ function createRepositoryFixture() {
   const manifest = JSON.parse(
     fs.readFileSync(path.join(root, "deploy/production/apps.json"), "utf8"),
   );
+  // General mutation cases start from an explicitly closed exposure fixture,
+  // independent of the reviewed desired activation stage in the real config.
+  if (!boundedTest) {
+    delete manifest.apps["image-gen"].creditTestActivation;
+    fs.writeFileSync(
+      path.join(root, "deploy/production/apps.json"),
+      JSON.stringify(manifest),
+    );
+    const config = path.join(root, manifest.apps["image-gen"].config);
+    fs.writeFileSync(
+      config,
+      fs
+        .readFileSync(config, "utf8")
+        .replace(
+          /((?:MESSENGER_PAID_CREDITS_ENABLED|MOLLIE_CREDIT_CHECKOUT_ENABLED)\s*=\s*)"(?:true|false)"/g,
+          '$1"false"',
+        ),
+    );
+  }
   for (const app of Object.values(manifest.apps)) {
     for (const config of Object.values(app.reviewedRollbackConfigs ?? {})) {
       const destination = path.join(root, config.path);
@@ -1207,7 +1232,7 @@ describe("production deployment contract", () => {
     });
   });
 
-  it("settles the proven payment-processing runtime as the sole 0018 rollback", () => {
+  it("pins the desired Test operator runtime while retaining the proven sole 0018 rollback", () => {
     const manifest = JSON.parse(
       fs.readFileSync(
         path.join(repoRoot, "deploy/production/apps.json"),
@@ -1230,11 +1255,12 @@ describe("production deployment contract", () => {
     expect(app.deploymentEnabled).toBe(true);
     expect(app.reviewedArtifactKind).toBe("runtime");
     expect(app.reviewedImage).toBe(
-      "registry.fly.io/leaderbot-fb-image-gen@sha256:f2fa9d60e1fca02c09cb2764981a7134e908f2e33f127eb0e54e77030b4a7a4b",
+      "registry.fly.io/leaderbot-fb-image-gen@sha256:70c608aa90473aa9da6fe671a486d757e3041328ba61f9d4ba564b3548a6c4ad",
     );
     expect(app.reviewedSourceCommit).toBe(
-      "b9caea7951b44d1f97bbd1bc742c25aca68264e9",
+      "3f0b7d01b0daef28f6f9abf8d514a128d68eeb62",
     );
+    expect(app.reviewedImage).not.toBe(predecessorImage);
     expect(app.reviewedImageSchemaPhases).toEqual([
       "0018_credit_checkout_reservation",
     ]);
@@ -3277,6 +3303,160 @@ describe("production deployment contract", () => {
       "image-gen build:docker must bundle the reversible billing-trigger runtime probe",
     );
   });
+
+  it("accepts the protected one-shot Test payment operator workflow", () => {
+    expect(() =>
+      validateTestPaymentOperatorWorkflow(createRepositoryFixture()),
+    ).not.toThrow();
+  });
+
+  it.each([
+    ["workflow_dispatch:", "push:", "only a manual event"],
+    ["if: github.ref == 'refs/heads/main'", "if: always()", "protected main"],
+    [
+      "environment: production",
+      "environment: production-inspection",
+      "protected main",
+    ],
+    [
+      "group: production-deploy-image-gen",
+      "group: operator-independent",
+      "shared deployment lock",
+    ],
+    [
+      "cancel-in-progress: false",
+      "cancel-in-progress: true",
+      "shared deployment lock",
+    ],
+    [
+      "secrets.FLY_IMAGE_GEN_DEPLOY_TOKEN",
+      "secrets.FLY_DATABASE_MIGRATION_TOKEN",
+      "only the existing app token",
+    ],
+    [
+      "OPERATOR_EXPECTED_EPOCH: ${{ inputs.expected_epoch }}",
+      "OPERATOR_EXPECTED_EPOCH: 1",
+      "all four reviewed inputs",
+    ],
+    [
+      "persist-credentials: false",
+      "persist-credentials: true",
+      "without persisted credentials",
+    ],
+    ["npm run production:validate", "true", "validate checked-out source"],
+    [
+      "node scripts/image-gen-test-payment-operator.mjs",
+      "node scripts/image-gen-test-payment-operator.mjs\n          node scripts/image-gen-test-payment-operator.mjs",
+      "exactly once",
+    ],
+    [
+      "node scripts/image-gen-test-payment-operator.mjs",
+      "node scripts/image-gen-test-payment-operator.mjs ${{ inputs.request_id }}",
+      "pass GitHub expressions through step env",
+    ],
+  ])(
+    "rejects weakened Test operator workflow: %s",
+    (original, replacement, message) => {
+      const root = createRepositoryFixture();
+      replaceFixtureText(
+        root,
+        ".github/workflows/enable-image-gen-test-payments.yml",
+        original,
+        replacement,
+      );
+      expect(() => validateTestPaymentOperatorWorkflow(root)).toThrow(message);
+    },
+  );
+
+  it.each([
+    ["run.head_sha !== input.workflowSourceSha", "false"],
+    ["run.actor?.id", "input.actorId"],
+    ["run.triggering_actor?.id", "input.actorId"],
+    ["main.object?.sha !== input.workflowSourceSha", "false"],
+    ['await artifactCi("image-gen", input.image, verify)', "Promise.resolve()"],
+    ['"--source-digest"', '"--unbound-source"'],
+    ["if (remoteHash !==", "if (false && remoteHash !=="],
+    ["fresh.releaseWatermark !== baseline.releaseWatermark", "false"],
+    ["evidence.remoteRemoved = true", "evidence.remoteRemoved = false"],
+    ["evidence.containerRemoved = true", "evidence.containerRemoved = false"],
+    ["/bin/rm -f ${remote}", "test -e ${remote}"],
+    [
+      "if (!evidence.success) process.exitCode = 1",
+      "if (!evidence.success) process.exitCode = 0",
+    ],
+  ])(
+    "rejects removed Test operator controller binding: %s",
+    (original, replacement) => {
+      const root = createRepositoryFixture();
+      replaceFixtureText(
+        root,
+        "scripts/image-gen-test-payment-operator.mjs",
+        original,
+        replacement,
+      );
+      expect(() => validateTestPaymentOperatorWorkflow(root)).toThrow(
+        /Test payment operator/,
+      );
+    },
+  );
+
+  it.each([
+    [
+      "apps/image-gen/package.json",
+      "server/cli/enableTestPayments.ts",
+      "server/cli/other.ts",
+      "must bundle the exact Test payment operator command",
+    ],
+    [
+      "apps/image-gen/package.json",
+      "pnpm run build:test-payment-operator && ",
+      "",
+      "must bundle the exact Test payment operator command",
+    ],
+    [
+      "apps/image-gen/Dockerfile",
+      "test -s /app/dist/enable-test-payments.cjs",
+      "true",
+      "must package and syntax-check the Test payment operator command",
+    ],
+    [
+      "apps/image-gen/Dockerfile",
+      "node --check /app/dist/enable-test-payments.cjs",
+      "true",
+      "must package and syntax-check the Test payment operator command",
+    ],
+    [
+      ".github/workflows/build-production-artifacts.yml",
+      'docker run --rm "$ARTIFACT_IMAGE" test -s /app/dist/enable-test-payments.cjs',
+      'docker run --rm "$ARTIFACT_IMAGE" true',
+      "must inspect the bundled Test payment operator command",
+    ],
+    [
+      ".github/workflows/build-production-artifacts.yml",
+      'docker run --rm --entrypoint node "$ARTIFACT_IMAGE" --check /app/dist/enable-test-payments.cjs',
+      'docker run --rm "$ARTIFACT_IMAGE" true',
+      "must syntax-check the bundled Test payment operator command",
+    ],
+    [
+      ".github/workflows/image-gen-ci.yml",
+      'docker run --rm "$image" test -s /app/dist/enable-test-payments.cjs',
+      'docker run --rm "$image" true',
+      "must inspect and syntax-check the Test payment operator command",
+    ],
+    [
+      ".github/workflows/image-gen-ci.yml",
+      'docker run --rm --entrypoint node "$image" --check /app/dist/enable-test-payments.cjs',
+      'docker run --rm "$image" true',
+      "must inspect and syntax-check the Test payment operator command",
+    ],
+  ])(
+    "guards Test payment operator packaging in %s: %s",
+    (file, original, replacement, message) => {
+      const root = createRepositoryFixture();
+      replaceFixtureText(root, file, original, replacement);
+      expect(() => validateProductionRepository(root)).toThrow(message);
+    },
+  );
 
   it("requires the reversible billing-trigger probe in the migration bridge", () => {
     const root = createRepositoryFixture();
@@ -6248,6 +6428,77 @@ describe("production deployment contract", () => {
     );
   });
 
+  it("accepts the reviewed bounded Test desired configuration with its prepared rollback", () => {
+    const root = createRepositoryFixture({ boundedTest: true });
+    expect(() => validateProductionRepository(root)).not.toThrow();
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(root, "deploy/production/apps.json"), "utf8"),
+    );
+    expect(
+      manifest.apps["image-gen"].creditTestActivation.operator,
+    ).toMatchObject({
+      requestId: "8a62f93d-e092-4dd8-82ca-9e77bdd89d54",
+      previousEpoch: 1,
+      epoch: 2,
+    });
+  });
+
+  it.each([
+    undefined,
+    null,
+    [],
+    { operatorImage: "latest" },
+    { operatorImage: "registry.fly.io/another-app@sha256:" + "a".repeat(64) },
+    { artifactSourceSha: ["a".repeat(40)] },
+    { runtimeImage: "registry.fly.io/leaderbot-fb-image-gen:latest" },
+    { deploymentIdentity: "unverified" },
+    { requestId: "not-a-uuid" },
+    { requestId: undefined },
+    { previousEpoch: undefined },
+    { previousEpoch: "1" },
+    { previousEpoch: 3 },
+    { epoch: undefined },
+    { epoch: "2" },
+    { epoch: 4 },
+    { verified: true },
+  ])(
+    "rejects missing or malformed original operator identity: %j",
+    (mutation) => {
+      const root = createRepositoryFixture({ boundedTest: true });
+      const file = path.join(root, "deploy/production/apps.json");
+      const manifest = JSON.parse(fs.readFileSync(file, "utf8"));
+      const request = manifest.apps["image-gen"].creditTestActivation;
+      request.operator =
+        mutation && !Array.isArray(mutation)
+          ? { ...request.operator, ...mutation }
+          : mutation;
+      fs.writeFileSync(file, JSON.stringify(manifest));
+      expect(() => validateProductionRepository(root)).toThrow(
+        mutation === undefined
+          ? "image-gen bounded Test activation must bind the completed restricted runtime and a distinct obsolete principal"
+          : "image-gen bounded Test activation must retain exact original operator and predecessor identities",
+      );
+    },
+  );
+
+  it.each([
+    "activation.requestId !== input.requestId",
+    "activation.previousEpoch !== 1",
+    "activation.epoch !== 2",
+    "input.expectedEpoch !== activation.previousEpoch",
+  ])("requires the initial operator request fence: %s", (guard) => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      "scripts/image-gen-test-payment-operator.mjs",
+      guard,
+      "false",
+    );
+    expect(() => validateProductionRepository(root)).toThrow(
+      "Test payment operator controller must retain run, artifact, exact target, result and cleanup verification",
+    );
+  });
+
   it("does not silently broaden a partial older tester restriction", () => {
     const root = createRepositoryFixture();
     replaceFixtureText(
@@ -6279,6 +6530,29 @@ describe("production deployment contract", () => {
       "must require protected proof only for the explicit bounded Test request",
     );
   });
+
+  it.each([
+    [
+      "activation = await inspectCommittedTestPaymentActivation(session, {",
+      "activation = await inspectAnotherState(session, {",
+    ],
+    ["workspaceId: 1,", "workspaceId: 2,"],
+    ["    activation,\n    checkedAt:", "    checkedAt:"],
+  ])(
+    "requires the committed Test operator audit in the collected proof: %s",
+    (before, after) => {
+      const root = createRepositoryFixture();
+      replaceFixtureText(
+        root,
+        "scripts/image-gen-credit-test-proof.mjs",
+        before,
+        after,
+      );
+      expect(() => validateProductionRepository(root)).toThrow(
+        "image-gen must collect the original committed Test activation audit for workspace 1 before deployment",
+      );
+    },
+  );
 
   it("rejects privileged Test proof on ordinary dark deployments", () => {
     const root = createRepositoryFixture();
@@ -9297,7 +9571,7 @@ describe("production deployment contract", () => {
     const runFly = (args) => {
       const command = args.slice(0, 2).join(" ");
       if (command === "config show") {
-        return JSON.stringify(imageGenLiveConfig("deploy-124-1"));
+        return JSON.stringify(imageGenLiveConfig("deploy-124-1", { root }));
       }
       if (command === "machine list") {
         const machines = [];
@@ -9317,6 +9591,7 @@ describe("production deployment contract", () => {
           const currentConfig = imageGenMachineConfig(
             bridgeImage,
             processGroup,
+            { root },
           );
           currentConfig.env.LEADERBOT_DEPLOYMENT_IDENTITY = "deploy-124-1";
           machines.push({
@@ -9519,6 +9794,7 @@ describe("production deployment contract", () => {
             const currentConfig = imageGenMachineConfig(
               bridgeImage,
               processGroup,
+              { root },
             );
             currentConfig.env.LEADERBOT_DEPLOYMENT_IDENTITY = "deploy-124-1";
             machines.push({
@@ -10343,6 +10619,9 @@ ${workflow.slice(start, end)}
       ];
       // Model the pre-settlement transition explicitly: a dark same-image
       // predecessor and a distinct older rollback, independent of today's pins.
+      app.reviewedImage = predecessor.image;
+      app.reviewedSourceCommit =
+        app.reviewedRollbackSourceCommits[predecessor.image];
       const rollbackImage = `registry.fly.io/${app.app}@sha256:${"e".repeat(64)}`;
       const previousRollbackImage = app.reviewedRollbackImages[0];
       app.reviewedRollbackImages = [rollbackImage];

@@ -60,6 +60,8 @@ COPY --from=build /app/drizzle ./drizzle
 COPY --from=build /app/public ./public
 RUN test -s /app/dist/billing-trigger-runtime-preflight.cjs && \
     test -s /app/dist/rotate-facebook-page-token.cjs && \
+    test -s /app/dist/enable-test-payments.cjs && \
+    node --check /app/dist/enable-test-payments.cjs && \
     node --check /app/dist/rotate-facebook-page-token.cjs
 
 EXPOSE 8080

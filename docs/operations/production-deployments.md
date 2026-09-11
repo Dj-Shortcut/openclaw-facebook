@@ -58,6 +58,82 @@ its audited activation with the expected execution epoch. Do not create a fake
 consumer attestation to initialize credit processing. No customer login or new
 management UI is required; this retains the existing operator-only authority.
 
+The separately approved Test-only alternative is the manually dispatched
+`enable-image-gen-test-payments.yml` workflow on reviewed `main`, protected by
+the `production` environment and the same image-gen deployment concurrency
+lock. It is not a public endpoint and does not create an admin session or
+change Facebook permissions. The workflow accepts the reviewed operator image,
+its exact source commit, the manifest-pinned initial UUID request ID, and
+expected execution epoch 1 (resulting epoch 2). These inputs must match the
+reviewed immutable activation anchor before any SSH command.
+It resolves the owner workspace from the reviewed configuration; it never
+registers individual testers.
+
+The operator bundle `dist/enable-test-payments.cjs` must come from the trusted,
+attested runtime artifact whose digest and source are reviewed in the manifest.
+The workflow extracts and hashes that bundle, copies it to a run-scoped
+temporary path on the exact verified running app Machine, verifies its hash,
+and invokes it once using that Machine's existing restricted runtime database
+connection. This reuses the deployment probe's temporary-bundle pattern; it
+does not deploy the candidate application, copy database credentials to the
+runner, or use the migration provisioner. Persist the exact operator image,
+artifact source, extracted bundle hash and running image alongside the workflow
+source and deployment identity in the transactional audit and replay fingerprint;
+the short-lived GitHub evidence artifact is not the durable audit.
+
+Before the existing scheduler transaction can enable processing, the command
+requires Test Mode, the exact pinned owner workspace, prepared drain,
+notifications and reconciliation, and closed legacy sales, live billing,
+checkout and paid image use. It requires the persisted owner/admin and records
+explicit protected-workflow actor/run/source/deployment metadata in the audit;
+operator authority must not be represented as a fabricated browser login.
+Current ownership, existing control and four registered lanes, epoch and
+work-state checks must pass before mutation. Missing registration is rejected,
+not created by this action. Failed billing outbox items and notification dead
+letters both block initial activation.
+No provider request or credit grant is made by the command.
+
+Retain its metadata-only outcome and cleanup evidence. An SSH timeout, missing
+result, or cleanup failure after dispatch is not proof that the transaction
+rolled back. Never rerun the mutation with a changed request ID, workflow
+run/attempt/source or executable provenance, and never retry it automatically.
+Normally retain the successful operator receipt before dispatching deployment.
+If the response is lost, preserve the original request: the same protected
+deployment's read-only `prove`/`consume` steps can recover its committed audit
+and exact control/lane epochs before any Fly apply. This does not require an
+independent recovery command. An unsuccessful workflow conclusion alone does
+not invalidate a transaction that durably committed. Temporary bundle
+removal is always attempted and verified. A successful operator action is only
+processing activation: checkout/paid-use flags remain off, and the later
+protected exposure deploy must still perform its fresh same-run account,
+runtime, database, readiness and rollback checks before a user can test payment.
+
+The reviewed audit-preflight follow-up uses
+`inspectCommittedTestPaymentActivation` inside the existing
+`image-gen-credit-test-proof.mjs` `prove` and `consume` steps. Before deployment,
+both steps must read the original committed audit, require the enabled Test
+execution epoch and all four matching lanes, and verify the original request,
+fingerprint, owner and operator/executable provenance. This is read-only recovery
+of evidence, not another enable operation. Missing or inconsistent committed
+state blocks deployment before Fly apply. Protected execution of this follow-up remains pending;
+do not substitute a new request or treat its code review as production proof.
+
+The reviewed immutable `creditTestActivation.operator` anchor records
+`operatorImage`, `artifactSourceSha`, `runtimeImage`, `deploymentIdentity`,
+`requestId`, `previousEpoch: 1` and `epoch: 2`. Request
+`8a62f93d-e092-4dd8-82ca-9e77bdd89d54` is allocated only to the future first
+approved operator execution; it is not a claim that the action has run.
+Before the first operator execution, review/update it to the exact artifact
+that will execute and its prepared runtime predecessor. Once activation commits,
+retain that original anchor unchanged across later frontend and runtime
+releases; changing the desired release must not require another enable action.
+The pinned request and initial epoch prevent a later disable/re-enable from
+being accepted as the original activation, even with the same executable and
+predecessor. Do not change the request or epochs to make that later state pass.
+The original audit is compared with this anchor, while current settled runtime,
+database principal, account/session and readiness checks remain fresh and
+separate for every deployment.
+
 This does not remove the audited payment execution controls, worker lanes and
 heartbeats, notification checks, credential generation identity, spend caps,
 or credit schema/privilege checks. Do not delete old handoff secrets or financial
@@ -1192,16 +1268,31 @@ trusted production artifact` with `image-gen-bridge`. The workflow proves
     state `complete`, a successful historical lock, and this sequencing
     exception are not payment-readiness evidence. Live billing remains off.
 
-The optional image-gen manifest object `creditTestActivation` accepts exactly
-`state: "bounded_test"` and `obsoletePrincipalSha256`, the SHA-256 of the exact
-old runtime account name. It is a reviewed request, not evidence. It is absent
-from the current dark manifest. Reviewers must match that hash to the actual
+The optional image-gen manifest object `creditTestActivation` records
+`state: "bounded_test"`, `obsoletePrincipalSha256` (the SHA-256 of the exact
+old runtime account name), and the immutable original operator anchor described
+above. It is a reviewed request, not execution evidence.
+Reviewers must match that hash to the actual
 old runtime/cutover and protected cleanup evidence; never choose an arbitrary
-or newly generated hash. A later activation PR must retain the exact
+or newly generated hash. An activation PR must retain the exact
 healthy 0018 runtime predecessor, runtime-only rollback entries, and a proven
 rollback configuration with both checkout and paid admission off, and drain,
 notifications and reconciliation on. After any provider transport, a drain-off rollback is unsafe
 and fails the runtime's durable-activity guard.
+
+The reviewed operator artifact reference and desired Test exposure flags may
+share one configuration PR while the actual Fly Machines remain on the exact
+checkout-off predecessor. Merge does not deploy either workflow. First run the
+protected Test processing operator on that unchanged predecessor. Normally
+confirm its successful receipt before dispatching `Deploy production` for the
+desired image/configuration. If the response is lost, that same protected
+deployment's read-only proof path must recover the exact original committed
+audit or stop before Fly apply; never dispatch another enable mutation to
+resolve the ambiguity. The shared deployment lock prevents overlap; it
+does not replace this ordering. The deployment proof must independently verify
+the original committed activation audit and enabled epoch as well as fresh
+account/session and runtime-principal proof. Keep live billing and the manual tester restrictions
+off throughout this Test Mode transition.
 
 The following inspection was merged in PR #517 after disposable MySQL validation
 passed on PR run `34485670813` and main run `34486831012`. The owner separately
@@ -1270,10 +1361,11 @@ delivery evidence.
 The activation contract requires `MOLLIE_MODE=test`, legacy and live billing
 off, drain/notification/reconciliation on, no manual tester restriction, and
 the existing offer and cost caps. Enable paid admission before checkout.
-Use the existing authenticated admin `billingAdmin.enableSchedulerTenant`
-operation with the observed workspace/mode execution epoch and a fresh request
-ID to enable the DB control and lanes; do not fabricate profile attestations
-or replace this with ad-hoc SQL. Verify existing control/lane inventory and
+For this bounded initial activation, use the approved Test-only protected
+operator workflow above with the manifest-pinned request and epoch 1 to enable
+the DB control and lanes at epoch 2. A separate admin enable or a later
+disable/re-enable is not this original protected activation proof. Do not
+fabricate profile attestations or replace this with ad-hoc SQL. Verify existing control/lane inventory and
 notification/reconciliation readiness before exposure. Missing registration
 requires a separate scoped operational change.
 

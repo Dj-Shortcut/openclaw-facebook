@@ -348,6 +348,8 @@ jobs:
         run: |
           docker run --rm "$ARTIFACT_IMAGE" timeout -k 1s 1s true
           docker run --rm --entrypoint node "$ARTIFACT_IMAGE" --check /app/dist/index.cjs
+          docker run --rm "$ARTIFACT_IMAGE" test -s /app/dist/enable-test-payments.cjs
+          docker run --rm --entrypoint node "$ARTIFACT_IMAGE" --check /app/dist/enable-test-payments.cjs
           if docker run --rm --network host \
             --env DATABASE_URL=mysql://runtime_base:runtime_base@127.0.0.1:3306/leaderbot_artifact_base \
             --env LEADERBOT_PRODUCTION_MIGRATION_MODE=verify-artifact \

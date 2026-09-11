@@ -6,6 +6,8 @@ import { pathToFileURL } from "node:url";
 
 const MANIFEST_PATH = "deploy/production/apps.json";
 const PRODUCTION_WORKFLOW_PATH = ".github/workflows/deploy-production.yml";
+const TEST_PAYMENT_OPERATOR_WORKFLOW_PATH =
+  ".github/workflows/enable-image-gen-test-payments.yml";
 const PRODUCTION_UPTIME_WORKFLOW_PATH =
   ".github/workflows/production-uptime.yml";
 const TRUSTED_ARTIFACT_WORKFLOW_PATH =
@@ -90,6 +92,7 @@ const STORAGE_PROXY_ROLLBACK_LIFECYCLE_SECRET_GATE = String.raw`fly secrets list
             | jq -e '[.[] | select((.name == "R2_LIFECYCLE_ACCESS_KEY_ID" or .name == "R2_LIFECYCLE_SECRET_ACCESS_KEY") and (.status == "Deployed" or .status == "Staged" or .status == "Partial")) | .name] | sort == ["R2_LIFECYCLE_ACCESS_KEY_ID", "R2_LIFECYCLE_SECRET_ACCESS_KEY"]' \
             >/dev/null`;
 const VERIFIED_FLYCTL_WORKFLOW_JOBS = Object.freeze({
+  [TEST_PAYMENT_OPERATOR_WORKFLOW_PATH]: ["enable"],
   [TRUSTED_ARTIFACT_WORKFLOW_PATH]: ["build"],
   [SCHEMA_PROBE_CLEANUP_WORKFLOW_PATH]: ["cleanup"],
   [GATEWAY_STATE_REBASELINE_WORKFLOW_PATH]: ["rehearse"],
@@ -2319,6 +2322,23 @@ export function resolveImmutableReleaseImage(
 }
 
 export function validateProductionWorkflow(rootDir = process.cwd()) {
+  const proofSource = fs.readFileSync(
+    path.join(rootDir, "scripts/image-gen-credit-test-proof.mjs"),
+    "utf8",
+  );
+  if (
+    !proofSource.includes(
+      'import { inspectCommittedTestPaymentActivation } from "./image-gen-test-payment-activation-audit.mjs";',
+    ) ||
+    !/activation = await inspectCommittedTestPaymentActivation\(session, \{\s*workspaceId: 1,/.test(
+      proofSource,
+    ) ||
+    !/\n\s+activation,\s+checkedAt:/.test(proofSource)
+  ) {
+    fail(
+      "image-gen must collect the original committed Test activation audit for workspace 1 before deployment",
+    );
+  }
   const creditWorkflow = fs.readFileSync(
     path.join(rootDir, PRODUCTION_WORKFLOW_PATH),
     "utf8",
@@ -3820,6 +3840,147 @@ function validateImageGenMigrationCi(rootDir) {
   }
 }
 
+export function validateTestPaymentOperatorWorkflow(rootDir = process.cwd()) {
+  const file = path.join(rootDir, TEST_PAYMENT_OPERATOR_WORKFLOW_PATH);
+  if (!fs.existsSync(file))
+    fail(`Missing ${TEST_PAYMENT_OPERATOR_WORKFLOW_PATH}`);
+  const workflow = fs.readFileSync(file, "utf8");
+  assertNoDirectGithubExpressionsInRunBlocks(
+    workflow,
+    TEST_PAYMENT_OPERATOR_WORKFLOW_PATH,
+  );
+  const triggers = workflow.split(/^on:\s*$/m)[1]?.split(/^\S/m)[0] ?? "";
+  const events = [...triggers.matchAll(/^  ([a-z_]+):/gm)].map(
+    (match) => match[1],
+  );
+  const jobNames = [
+    ...(workflow.split(/^jobs:\s*$/m)[1] ?? "").matchAll(/^  ([a-z_-]+):/gm),
+  ].map((match) => match[1]);
+  if (events.join(",") !== "workflow_dispatch" || jobNames.length !== 1)
+    fail(
+      "Test payment operator must have only a manual event and one protected job",
+    );
+  const job = namedWorkflowJobBody(workflow, jobNames[0]);
+  const condition = job
+    .match(/^    if:\s*(.+)$/m)?.[1]
+    .replace(/^\$\{\{\s*|\s*\}\}$/g, "")
+    .trim();
+  if (
+    condition !== "github.ref == 'refs/heads/main'" ||
+    !/^    environment: production\s*$/m.test(job) ||
+    !/^  group: production-deploy-image-gen\s*$/m.test(workflow) ||
+    !/^  cancel-in-progress: false\s*$/m.test(workflow)
+  )
+    fail(
+      "Test payment operator must preserve protected main and the non-canceling shared deployment lock",
+    );
+  const executionSteps = namedWorkflowStepBodies(
+    job,
+    "Run the exact attested Test payment operator once",
+  );
+  const execution = executionSteps[0] ?? "";
+  const invocations = yamlRunBlocks(execution).filter(
+    (block) =>
+      block
+        .trim()
+        .split("\n")
+        .map((line) => line.trim())
+        .join("\n") ===
+      "set -euo pipefail\nnode scripts/image-gen-test-payment-operator.mjs",
+  );
+  if (
+    executionSteps.length !== 1 ||
+    invocations.length !== 1 ||
+    occurrenceCount(
+      workflow,
+      "node scripts/image-gen-test-payment-operator.mjs",
+    ) !== 1
+  )
+    fail(
+      "Test payment operator must invoke its reviewed controller exactly once",
+    );
+  if (
+    occurrenceCount(workflow, "secrets.") !== 1 ||
+    occurrenceCount(workflow, "secrets.FLY_IMAGE_GEN_DEPLOY_TOKEN") !== 1 ||
+    occurrenceCount(workflow, "FLY_API_TOKEN:") !== 1 ||
+    !execution.includes("GITHUB_TOKEN: ${{ github.token }}") ||
+    !execution.includes(
+      "FLY_API_TOKEN: ${{ secrets.FLY_IMAGE_GEN_DEPLOY_TOKEN }}",
+    ) ||
+    /\b(?:DATABASE_URL|DATABASE_PROVISIONER_URL|MOLLIE_API_KEY)\b|\b(?:fly|flyctl)\s+(?:deploy|secrets|machine|machines)\b/.test(
+      yamlRunBlocks(workflow).join("\n"),
+    )
+  )
+    fail(
+      "Test payment operator must expose only the existing app token and no direct deployment or database action",
+    );
+  const stepsIndex = job.indexOf("\n    steps:");
+  if (stepsIndex < 0 || job.slice(0, stepsIndex).includes("FLY_API_TOKEN"))
+    fail("Test payment operator credentials must remain step scoped");
+  for (const [key, input] of Object.entries({
+    OPERATOR_IMAGE: "operator_image",
+    OPERATOR_SOURCE_SHA: "operator_source_sha",
+    OPERATOR_REQUEST_ID: "request_id",
+    OPERATOR_EXPECTED_EPOCH: "expected_epoch",
+  })) {
+    if (!execution.includes(`${key}: \${{ inputs.${input} }}`))
+      fail(
+        "Test payment operator must bind all four reviewed inputs through step env",
+      );
+  }
+  if (
+    !job.includes("persist-credentials: false") ||
+    !job.includes("npm run production:validate")
+  )
+    fail(
+      "Test payment operator must validate checked-out source without persisted credentials",
+    );
+  const runner = fs.readFileSync(
+    path.join(rootDir, "scripts/image-gen-test-payment-operator.mjs"),
+    "utf8",
+  );
+  for (const required of [
+    /await verifyOperatorRun\(env, fetchImpl\)/g,
+    /await sourceCi\(input\.workflowSourceSha, verify\)/,
+    /await artifactCi\("image-gen", input\.image, verify\)/,
+    /activation\.requestId !== input\.requestId/,
+    /activation\.previousEpoch !== 1/,
+    /activation\.epoch !== 2/,
+    /input\.expectedEpoch !== activation\.previousEpoch/,
+    /run\.head_sha !== input\.workflowSourceSha/,
+    /run\.actor\?\.id/,
+    /run\.triggering_actor\?\.id/,
+    /main\.object\?\.sha !== input\.workflowSourceSha/,
+    /"attestation",\s*"verify"/,
+    /"--signer-workflow"/,
+    /"--source-digest",\s*input\.artifactSourceSha/,
+    /"--deny-self-hosted-runners"/,
+    /:\/app\/dist\/enable-test-payments\.cjs/,
+    /if \(remoteHash !==/,
+    /parseOperatorResult\(\s*raw,\s*input,\s*baseline/,
+    /fresh\.releaseWatermark !== baseline\.releaseWatermark/,
+    /after\.releaseWatermark !== baseline\.releaseWatermark/,
+    /evidence\.remoteRemoved = true/,
+    /evidence\.containerRemoved = true/,
+    /"logout",\s*"registry\.fly\.io"/,
+    /if \(!evidence\.success\) process\.exitCode = 1/,
+  ]) {
+    if (!required.test(runner))
+      fail(
+        "Test payment operator controller must retain run, artifact, exact target, result and cleanup verification",
+      );
+  }
+  if (
+    occurrenceCount(runner, "await verifyOperatorRun(env, fetchImpl)") !== 2 ||
+    [...runner.matchAll(/\bssh\(\s*operatorCommand\(/g)].length !== 1 ||
+    !runner.includes("test ! -e ${remote}") ||
+    !runner.includes("/bin/rm -f ${remote}")
+  )
+    fail(
+      "Test payment operator must recheck authority, invoke once and verify remote cleanup",
+    );
+}
+
 function validateTrustedArtifactWorkflow(rootDir) {
   const workflow = fs.readFileSync(
     path.join(rootDir, TRUSTED_ARTIFACT_WORKFLOW_PATH),
@@ -3999,6 +4160,14 @@ function validateTrustedArtifactWorkflow(rootDir) {
     [
       'docker run --rm --entrypoint node "$ARTIFACT_IMAGE" --check /app/dist/billing-trigger-runtime-preflight.cjs',
       "must syntax-check the bridge billing-trigger runtime probe at the deploy extraction path",
+    ],
+    [
+      'docker run --rm "$ARTIFACT_IMAGE" test -s /app/dist/enable-test-payments.cjs',
+      "must inspect the bundled Test payment operator command",
+    ],
+    [
+      'docker run --rm --entrypoint node "$ARTIFACT_IMAGE" --check /app/dist/enable-test-payments.cjs',
+      "must syntax-check the bundled Test payment operator command",
     ],
   ]) {
     if (!workflow.includes(needle)) {
@@ -8355,7 +8524,8 @@ export function validateCreditTestActivation(app, env, rootDir) {
     !request ||
     typeof request !== "object" ||
     Array.isArray(request) ||
-    Object.keys(request).sort().join(",") !== "obsoletePrincipalSha256,state" ||
+    Object.keys(request).sort().join(",") !==
+      "obsoletePrincipalSha256,operator,state" ||
     request.state !== "bounded_test" ||
     !/^[a-f0-9]{64}$/.test(request.obsoletePrincipalSha256 ?? "") ||
     request.obsoletePrincipalSha256 ===
@@ -8365,6 +8535,33 @@ export function validateCreditTestActivation(app, env, rootDir) {
   ) {
     fail(
       "image-gen bounded Test activation must bind the completed restricted runtime and a distinct obsolete principal",
+    );
+  }
+  // Retain the originally reviewed activation executable and predecessor even
+  // when a later frontend/runtime release advances the desired image/baseline.
+  // This request is not evidence: the deploy still verifies the original audit.
+  const operator = request.operator;
+  if (
+    !operator ||
+    typeof operator !== "object" ||
+    Array.isArray(operator) ||
+    Object.keys(operator).sort().join(",") !==
+      "artifactSourceSha,deploymentIdentity,epoch,operatorImage,previousEpoch,requestId,runtimeImage" ||
+    typeof operator.requestId !== "string" ||
+    !/^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(
+      operator.requestId,
+    ) ||
+    operator.previousEpoch !== 1 ||
+    operator.epoch !== 2 ||
+    !isImmutableAppImage(app, operator.operatorImage) ||
+    typeof operator.artifactSourceSha !== "string" ||
+    !/^[a-f0-9]{40}$/.test(operator.artifactSourceSha) ||
+    !isImmutableAppImage(app, operator.runtimeImage) ||
+    typeof operator.deploymentIdentity !== "string" ||
+    !/^deploy-[1-9][0-9]*-[1-9][0-9]*$/.test(operator.deploymentIdentity)
+  ) {
+    fail(
+      "image-gen bounded Test activation must retain exact original operator and predecessor identities",
     );
   }
   validateImageGenSchemaTransition(app);
@@ -8774,6 +8971,7 @@ export function validateProductionRepository(rootDir = process.cwd()) {
   validateStorageProxySafety(rootDir);
   validateImageGenMigrationCi(rootDir);
   validateTrustedArtifactWorkflow(rootDir);
+  validateTestPaymentOperatorWorkflow(rootDir);
   validateCreditMigrationDefinerGrant(rootDir);
   validateCreditMigrationPrincipalRepair(rootDir);
   validateCreditProvisionerBootstrapHelper(rootDir);
@@ -9285,6 +9483,17 @@ export function validateProductionRepository(rootDir = process.cwd()) {
       const dockerBuild = String(
         imageGenPackage.scripts?.["build:docker"] ?? "",
       );
+      if (
+        imageGenPackage.scripts?.["build:test-payment-operator"] !==
+          "esbuild server/cli/enableTestPayments.ts --platform=node --bundle --format=cjs --outfile=dist/enable-test-payments.cjs" ||
+        !dockerBuild
+          .split("&&")
+          .map((command) => command.trim())
+          .includes("pnpm run build:test-payment-operator")
+      )
+        fail(
+          "image-gen build:docker must bundle the exact Test payment operator command",
+        );
       for (const requiredBuildFragment of [
         "scripts/run-production-migrations.mjs",
         "--format=cjs",
@@ -9372,6 +9581,16 @@ export function validateProductionRepository(rootDir = process.cwd()) {
         );
       }
       const runtimeStage = dockerfile.split(" AS runtime", 2)[1] ?? "";
+      for (const required of [
+        "COPY --from=build /app/dist ./dist",
+        "test -s /app/dist/enable-test-payments.cjs",
+        "node --check /app/dist/enable-test-payments.cjs",
+      ]) {
+        if (!runtimeStage.includes(required))
+          fail(
+            "image-gen runtime must package and syntax-check the Test payment operator command",
+          );
+      }
       if (
         !runtimeStage.includes(
           'io.leaderbot.schema.minimum="0018_credit_checkout_reservation"',
@@ -9389,6 +9608,15 @@ export function validateProductionRepository(rootDir = process.cwd()) {
         path.join(rootDir, ".github/workflows/image-gen-ci.yml"),
         "utf8",
       );
+      for (const required of [
+        'docker run --rm "$image" test -s /app/dist/enable-test-payments.cjs',
+        'docker run --rm --entrypoint node "$image" --check /app/dist/enable-test-payments.cjs',
+      ]) {
+        if (!imageGenCi.includes(required))
+          fail(
+            "image-gen CI must inspect and syntax-check the Test payment operator command",
+          );
+      }
       if (
         !imageGenCi.includes(
           'docker run --rm "$image" test -s /app/dist/billing-trigger-runtime-preflight.cjs',
