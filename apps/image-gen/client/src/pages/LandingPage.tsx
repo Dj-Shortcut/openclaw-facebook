@@ -149,9 +149,12 @@ function useConversationPlayback(): {
   const [typing, setTyping] = useState(false);
 
   useEffect(() => {
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-
-    const timers: number[] = [];
+    const motion = window.matchMedia("(prefers-reduced-motion: reduce)");
+    let timers: number[] = [];
+    const stop = () => {
+      timers.forEach(timer => window.clearTimeout(timer));
+      timers = [];
+    };
     const at = (ms: number, run: () => void) => {
       timers.push(window.setTimeout(run, ms));
     };
@@ -171,11 +174,24 @@ function useConversationPlayback(): {
       });
       at(13000, play);
     };
-    // Hold the settled conversation first; the replay is the second thing seen.
-    at(1200, play);
+    const apply = () => {
+      stop();
+      if (motion.matches) {
+        // Settle immediately: a visitor who asks for stillness mid-cycle should
+        // be left with the whole conversation, not a half-played one.
+        setBeat(CONVERSATION_SETTLED);
+        setTyping(false);
+        return;
+      }
+      // Hold the settled conversation first; the replay is the second thing seen.
+      at(1200, play);
+    };
 
+    apply();
+    motion.addEventListener("change", apply);
     return () => {
-      timers.forEach(timer => window.clearTimeout(timer));
+      motion.removeEventListener("change", apply);
+      stop();
     };
   }, []);
 
@@ -191,23 +207,19 @@ function conversationBeatClass(beat: ConversationBeat, at: number): string {
 /** Reports whether a section is on screen, so the pinned mobile call to action
  * can step aside once the closing one is visible. Without an observer the bar
  * simply stays put, which is the safe direction. */
-function useSectionInView(
-  ref: React.RefObject<HTMLElement | null>,
-  rootMargin = "0px"
-): boolean {
+function useSectionInView(ref: React.RefObject<HTMLElement | null>): boolean {
   const [inView, setInView] = useState(false);
 
   useEffect(() => {
     const el = ref.current;
     if (!el || typeof IntersectionObserver === "undefined") return;
 
-    const observer = new IntersectionObserver(
-      entries => setInView(entries.some(entry => entry.isIntersecting)),
-      { rootMargin }
+    const observer = new IntersectionObserver(entries =>
+      setInView(entries.some(entry => entry.isIntersecting))
     );
     observer.observe(el);
     return () => observer.disconnect();
-  }, [ref, rootMargin]);
+  }, [ref]);
 
   return inView;
 }
@@ -284,7 +296,7 @@ export default function LandingPage() {
   const heroCtaRef = useRef<HTMLDivElement>(null);
   const heroCtaInView = useSectionInView(heroCtaRef);
   const closingRef = useRef<HTMLDivElement>(null);
-  const closingInView = useSectionInView(closingRef, "-25% 0px -10% 0px");
+  const closingInView = useSectionInView(closingRef);
   // The pinned bar is a safety net for the scroll, not a third button on the
   // first screen: it waits until the hero call to action is gone and steps
   // aside again at the closing one.
@@ -471,17 +483,23 @@ export default function LandingPage() {
                       {copy.chat.prompt}
                     </div>
                     <div
-                      className={`max-w-[88%] rounded-2xl rounded-bl-md bg-white px-4 py-3 text-sm leading-6 text-[#14203D]/85 shadow-sm ring-1 ring-[#14203D]/10 transition duration-300 ease-out ${
+                      className={`relative max-w-[88%] rounded-2xl rounded-bl-md bg-white px-4 py-3 text-sm leading-6 text-[#14203D]/85 shadow-sm ring-1 ring-[#14203D]/10 transition duration-300 ease-out ${
                         typing || beat >= 2
                           ? "translate-y-0 opacity-100"
                           : "pointer-events-none translate-y-2 opacity-0"
                       }`}
                     >
+                      <span
+                        className={
+                          typing && beat < 2 ? "opacity-0" : "opacity-100"
+                        }
+                      >
+                        {copy.chat.reply}
+                      </span>
                       {typing && beat < 2 ? (
                         <span
-                          className="flex items-center gap-1.5 py-1"
-                          role="status"
-                          aria-label={copy.chat.typingLabel}
+                          aria-hidden="true"
+                          className="absolute inset-0 flex items-center gap-1.5 px-4"
                         >
                           {[0, 1, 2].map(dot => (
                             <span
@@ -491,9 +509,7 @@ export default function LandingPage() {
                             />
                           ))}
                         </span>
-                      ) : (
-                        copy.chat.reply
-                      )}
+                      ) : null}
                     </div>
                     <div
                       className={`overflow-hidden rounded-2xl border border-[#14203D]/10 bg-white p-4 shadow-sm transition duration-300 ease-out ${conversationBeatClass(beat, 3)}`}
@@ -851,10 +867,7 @@ export default function LandingPage() {
         aria-labelledby="closing-title"
         className="px-4 py-20 sm:px-6 lg:px-8 lg:py-24"
       >
-        <div
-          className="mx-auto max-w-6xl overflow-hidden rounded-[2rem] bg-[#14203D] px-7 py-12 text-white sm:px-12 sm:py-16"
-          ref={closingRef}
-        >
+        <div className="mx-auto max-w-6xl overflow-hidden rounded-[2rem] bg-[#14203D] px-7 py-12 text-white sm:px-12 sm:py-16">
           <div className="grid gap-8 lg:grid-cols-[1.2fr_0.8fr] lg:items-center">
             <div>
               <h2
@@ -867,7 +880,7 @@ export default function LandingPage() {
                 {copy.closing.body}
               </p>
             </div>
-            <div className="lg:justify-self-end">
+            <div className="lg:justify-self-end" ref={closingRef}>
               <MessengerCta
                 label={copy.closing.cta}
                 variant="onDark"
@@ -879,7 +892,9 @@ export default function LandingPage() {
       </section>
 
       <div
-        aria-hidden={pinnedCtaHidden}
+        // `inert` takes the faded bar out of the tab order and the
+        // accessibility tree together, so nobody can focus an invisible link.
+        inert={pinnedCtaHidden}
         className={`fixed inset-x-0 bottom-0 z-40 border-t border-[#14203D]/10 bg-[#f6f2ea]/95 px-4 pt-3 backdrop-blur transition-opacity duration-200 sm:hidden ${
           pinnedCtaHidden ? "pointer-events-none opacity-0" : "opacity-100"
         }`}
