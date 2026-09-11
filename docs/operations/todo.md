@@ -1,8 +1,12 @@
 # Leaderbot production outcomes
 
-This is the only source of truth for open product and production work.
+This is the only source of truth for open product and production work. It is
+not an incident archive: completed deployment transcripts belong in Git history
+or a dedicated incident record and should be summarized here only when they
+change an open gate.
 
-Last reset: **2026-08-27**.
+Last reviewed: **2026-09-11**.
+Last state reset: **2026-08-27**.
 
 ## Product decision
 
@@ -58,14 +62,15 @@ Live payment enablement remains gated by the relevant P1 through P4 evidence.
         `c251a5e34c46bd327ffa5c015ed038f1fced545e` on
         `2026-08-30T17:44:08Z`. That exact SHA and UTC timestamp start the
         observation clock.
-  - [ ] After that start, collect continuous metadata-only gateway ingress
-        evidence for all 168 hours. The scheduled end is
-        `2026-09-06T17:44:08Z` only if the full window remains uninterrupted. A
-        green health check is not user-traffic evidence. Any evidence gap,
+  - [ ] Collect continuous metadata-only gateway ingress evidence for all 168
+        hours. The originally scheduled end,
+        `2026-09-06T17:44:08Z`, has passed and is not evidence that the window
+        completed. Record the evidence link and mark the window complete, or
+        record the first gap and approve a new reviewed start and scheduled end.
+        A green health check is not user-traffic evidence. Any evidence gap,
         gateway probe, gateway Machine mutation, or direct Page-callback drift
-        resets the clock and requires a new reviewed start and scheduled end.
-        Do not stop, delete, scale, or replace the gateway Machine or its
-        volumes during this window.
+        resets the clock. Do not stop, delete, scale, or replace the gateway
+        Machine or its volumes during an active observation window.
 
 - [ ] **P2 - User-scoped purchased-credit ledger.** Add an append-only credit
       ledger, wallet projection, and idempotent reservation/commit/release model

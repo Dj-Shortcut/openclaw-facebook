@@ -1,5 +1,12 @@
 # Facebook Page Messenger Setup
 
+> [!IMPORTANT]
+> This is the **transitional OpenClaw plugin setup**, not the active Leaderbot
+> production runtime setup. New Leaderbot customer Pages point directly to
+> `apps/image-gen`; follow the active production and deployment documentation
+> first. Use this guide only for the retained `@dj-shortcut/facebook` plugin,
+> its standalone extraction, or an explicitly approved legacy gateway.
+
 This repository contains the OpenClaw `facebook` channel plugin. V1 connects
 OpenClaw to Facebook Page Messenger direct messages through Meta webhooks:
 
