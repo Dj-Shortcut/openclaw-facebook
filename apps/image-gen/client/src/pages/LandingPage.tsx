@@ -3,6 +3,7 @@ import {
   ArrowRight,
   Check,
   CheckCircle2,
+  Combine,
   CreditCard,
   Layers,
   Lock,
@@ -26,7 +27,7 @@ import { SUPPORTED_LOCALES, type AppLocale } from "./appLocales";
 
 const HeroOrbCanvas = lazy(() => import("@/components/HeroOrbCanvas"));
 
-const exampleIcons = [Layers, Sparkles, Package, Type, SunMedium];
+const exampleIcons = [Layers, Sparkles, Package, Type, SunMedium, Combine];
 
 /** One abstract gradient per example card. These are decorative illustrations
  * on purpose: the landing page never shows a real generated result, so no
@@ -37,6 +38,7 @@ const exampleTileGradients = [
   "bg-[linear-gradient(140deg,#0F766E,#2541C9_60%,#4F46E5)]",
   "bg-[linear-gradient(140deg,#8B2FE0,#DB2777_60%,#F97316)]",
   "bg-[linear-gradient(140deg,#B45309,#DB2777_55%,#8B2FE0)]",
+  "bg-[linear-gradient(140deg,#4F46E5,#2541C9_55%,#0F766E)]",
 ];
 
 const trustCardIcons = [Lock, ShieldCheck, CheckCircle2, Trash2];
