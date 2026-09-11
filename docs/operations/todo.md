@@ -241,6 +241,15 @@ release`, before any deployment or restart. The app-level Fly config
       A/AAAA addresses and timed out from the operator Mac. Verify/correct that
       separate public-domain route after this runtime rollout; do not claim the
       apex serves the new frontend merely because the app subdomain is healthy.
+      Read-only inspection on 2026-09-11 identified the apex A/AAAA as the
+      stopped OpenClaw gateway's assigned ingress addresses; that app also
+      retains the `leaderbot.live` and `www.leaderbot.live` certificates.
+      Authoritative DNS is `dns1.registrar-servers.com` /
+      `dns2.registrar-servers.com`, not the Cloudflare R2 account. Prepare
+      certificates on image-gen and a reversible DNS cutover separately; keep
+      the gateway stopped, existing email/assets records unchanged and signed
+      checkout URLs on `https://app.leaderbot.live`. No domain change has run;
+      this marketing-domain repair does not block Test checkout on the app host.
     - Staging run `34345293602/1` stopped at `scheduler_update_trigger` before
       staging a secret or restarting a Machine. Read-only metadata proved the
       three legacy billing triggers still named the active runtime account,
@@ -275,7 +284,9 @@ release`, before any deployment or restart. The app-level Fly config
         the same deployment run under the shared lock; a historical lock
         artifact or a manifest assertion is not current proof. Keep a proven
         drain-on, checkout-off rollback and all payment/privacy/budget gates.
-        Current manifest/config remain dark until that separate activation.
+        The reviewed desired Test configuration does not itself expose checkout;
+        the running Machines remain closed until the protected activation
+        and subsequent deployment both succeed.
   - [ ] Retain the obsolete account's 24-hour recovery window before its
         separately approved irreversible drop. Unlock is blocked while the
         reviewed Test request exists or any Machine still exposes credits or
@@ -355,8 +366,8 @@ release`, before any deployment or restart. The app-level Fly config
       bypass this. Public checkout does not require operator login.
     - The owner explicitly approved a separate protected operator command on
       2026-09-10 to enable Test payment processing without Facebook login.
-      PR #526 implements the existing epoch-fenced audited
-      scheduler service, resolve the existing owner/admin, and record the
+      PR #526 reuses the existing epoch-fenced audited
+      scheduler service, resolves the existing owner/admin, and records the
       actual GitHub operator/run rather than fabricate a web session. No new
       login, Facebook permission, database account/grant, tester registration,
       payment, or live exposure is authorized by this code change.
@@ -365,14 +376,54 @@ release`, before any deployment or restart. The app-level Fly config
       epoch 1 and all lane pending/dead counters were zero. The exact Test
       workspace had zero provider operations, subscriptions, payment routes,
       ledger rows, exposed intents, pending/dead outbox work and notifications.
-      This is not
-      execution evidence for the new command. After reviewed CI/build/merge,
-      run that command through its protected workflow, then separately review
-      the checkout exposure configuration and prove the complete payment flow.
+      This is not execution evidence for the new command. Build the merged
+      command as an attested runtime artifact, review its immutable reference
+      together with the desired Test exposure configuration, run the protected
+      command on the unchanged checkout-off predecessor, and normally retain
+      its successful receipt before dispatching the exposure deployment.
+      These manual workflows do not deploy automatically when a PR is merged.
+      If the operator response is ambiguous, never rerun the mutation with a
+      changed request, run/attempt/source or executable provenance. The reviewed
+      audit-preflight follow-up adds read-only inspection of the original
+      committed audit to the existing protected `prove`/`consume` path and
+      requires the enabled Test epoch and all four matching lanes before Fly
+      apply. If the response is lost, this same protected deployment proof can
+      recover the original committed audit; no independent recovery command or
+      new enable mutation is required. A lost response is not proof of rollback;
+      inconsistent or missing committed state blocks before Fly apply. Review
+      the immutable operator artifact/predecessor anchor and allocated initial
+      request `8a62f93d-e092-4dd8-82ca-9e77bdd89d54`, fixed to epoch 1→2, before
+      the first execution. This UUID is allocated, not executed. Retain the
+      whole anchor unchanged after commit across later frontend releases.
+      Current runtime and payment safety checks remain fresh
+      on every deployment; a later disable/re-enable cannot replace the original
+      activation, even with the same artifacts. This proof's protected execution
+      and the actual payment-to-credit-to-delivered-edit journey remain pending.
       Review follow-up on 2026-09-11 fixes the CI scalar-row type checks, persists
       exact executable identities in the atomic audit, rejects failed billing
       outbox work and refuses missing control/lane registration without writing
-      new rows. This code is not merged or executed production evidence.
+      new rows. PR #526 merged as
+      `3f0b7d01b0daef28f6f9abf8d514a128d68eeb62` at
+      `2026-09-11T06:42:21Z`, after green CI and review. Image Gen CI
+      `34570157440` actually ran both dedicated MySQL operator cases;
+      migration smoke `34570157395` also passed. A fresh metadata-only
+      production inspection at `2026-09-11T06:37:54Z` confirmed the same
+      disabled epoch, existing owner/admin and zero pending/dead or financial
+      work, without changing data. Operator execution, checkout exposure and
+      the payment-to-credit-to-delivered-edit proof remain open.
+    - Protected artifact build
+      [34571665119/1](https://github.com/Dj-Shortcut/openclaw-facebook/actions/runs/34571665119)
+      passed from exact merged source
+      `3f0b7d01b0daef28f6f9abf8d514a128d68eeb62`, producing runtime
+      `sha256:70c608aa90473aa9da6fe671a486d757e3041328ba61f9d4ba564b3548a6c4ad`
+      with attestation `46783444`. Its exact-container checks reject pre-credit
+      schemas and accept 0018. The desired Test activation pins this artifact
+      while retaining `f2fa9d60...` / `deploy-34496956631-1` as the unchanged
+      checkout-off, processing-on predecessor and rollback. The offer remains
+      EUR 4.99 for eight medium credits; all manual tester pins remain empty,
+      and live/legacy billing stay disabled. No operator execution, public
+      checkout or payment-to-credit-to-delivery evidence is claimed by this
+      build or configuration change.
     - The completed payment-processing preparation changed only notification, drain and
       reconciliation flags to true; checkout, paid image use, legacy sales and
       live billing remain false. It reuses the reviewed `f2fa9d60...` runtime,

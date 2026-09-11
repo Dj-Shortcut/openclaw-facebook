@@ -70,6 +70,8 @@ describe("CI change classification", () => {
     "scripts/retire-image-gen-credit-provisioners.mjs",
     "scripts/retire-image-gen-credit-provisioners.test.mjs",
     "scripts/credit-test-session-inventory.mjs",
+    "scripts/image-gen-test-payment-activation-audit.mjs",
+    "scripts/image-gen-test-payment-activation-audit.test.mjs",
     "scripts/credit-test-session-inventory.test.mjs",
     "scripts/credit-test-session-inventory.mysql.test.mjs",
   ])("runs image-gen and migration checks for %s", (file) => {

@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 
 import mysql, {
   type Connection,
@@ -156,15 +157,27 @@ suite("expired pristine credit checkout retention", () => {
     return client;
   }
 
-  async function waitForLockWait(): Promise<void> {
+  async function connectionId(client: Connection): Promise<number> {
+    const [[row]] = await client.query<RowDataPacket[]>(
+      "SELECT CONNECTION_ID() AS id"
+    );
+    return Number(row.id);
+  }
+
+  async function waitForLockWait(
+    requestingConnectionId: number,
+    blockingConnectionId: number
+  ): Promise<void> {
     const deadline = Date.now() + 5_000;
     while (Date.now() < deadline) {
       const [rows] = await connection.query<RowDataPacket[]>(
-        "SELECT COUNT(*) AS count FROM performance_schema.data_lock_waits"
+        "SELECT COUNT(*) AS count FROM performance_schema.data_lock_waits w JOIN performance_schema.threads requesting ON requesting.THREAD_ID=w.REQUESTING_THREAD_ID JOIN performance_schema.threads blocking ON blocking.THREAD_ID=w.BLOCKING_THREAD_ID WHERE requesting.PROCESSLIST_ID=? AND blocking.PROCESSLIST_ID=?",
+        [requestingConnectionId, blockingConnectionId]
       );
-      if (Number(rows[0]?.count) >= 2) return;
+      if (Number(rows[0]?.count) > 0) return;
+      await delay(10);
     }
-    throw new Error("expected two checkout retention lock waits");
+    throw new Error("expected exact checkout retention connection lock wait");
   }
 
   it("atomically removes the expired unused intent and empty wallet and replays", async () => {
@@ -312,11 +325,15 @@ suite("expired pristine credit checkout retention", () => {
     const blocker = await peer();
     const consumer = await peer();
     const cleaner = await peer();
+    const pendingOperations: Promise<unknown>[] = [];
     try {
+      const [blockerId, consumerId, cleanerId] = await Promise.all(
+        [blocker, consumer, cleaner].map(connectionId)
+      );
       await blocker.beginTransaction();
       await blocker.query(
-        "SELECT `workspace_id` FROM `billing_execution_controls` WHERE `workspace_id`=? AND `mode`='test' FOR UPDATE",
-        [value.workspaceId]
+        "SELECT `wallet_id` FROM `credit_wallets` WHERE `wallet_id`=? AND `workspace_id`=? AND `mode`='test' FOR UPDATE",
+        [value.walletId, value.workspaceId]
       );
       await consumer.query("SET timestamp=?", [expiry]);
       await cleaner.query("SET timestamp=?", [expiry + 1]);
@@ -333,8 +350,15 @@ suite("expired pristine credit checkout retention", () => {
           hash(`race-session:${value.intentId}`),
         ]
       );
+      // Observe rejection immediately while preserving the original promise
+      // for the outcome assertion below and settling it during failure cleanup.
+      pendingOperations.push(Promise.allSettled([consumePromise]));
+      // The consumer now owns the control lock and waits for our exact wallet.
+      // Only then start cleanup; no FIFO assumption across connections remains.
+      await waitForLockWait(consumerId, blockerId);
       const cleanupPromise = cleanup(cleaner, value);
-      await waitForLockWait();
+      pendingOperations.push(Promise.allSettled([cleanupPromise]));
+      await waitForLockWait(cleanerId, consumerId);
       await blocker.commit();
       await expect(consumePromise).resolves.toBeDefined();
       await expect(cleanupPromise).resolves.toMatchObject({
@@ -342,12 +366,16 @@ suite("expired pristine credit checkout retention", () => {
       });
       expect(await counts(value)).toEqual({ intents: 0, wallets: 0 });
     } finally {
-      await Promise.allSettled([
-        blocker.rollback(),
-        blocker.end(),
-        consumer.end(),
-        cleaner.end(),
-      ]);
+      // Release the blocking lock before waiting for queued work or closing
+      // peers, including when a lock-wait assertion fails before commit.
+      try {
+        await blocker.rollback();
+      } finally {
+        // Closing the blocker also releases its transaction if rollback failed.
+        await Promise.allSettled([blocker.end()]);
+        await Promise.all(pendingOperations);
+        await Promise.allSettled([consumer.end(), cleaner.end()]);
+      }
     }
   });
 });

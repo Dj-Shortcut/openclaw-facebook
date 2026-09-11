@@ -62,6 +62,17 @@ function fixture(overrides = {}) {
     reviewedImage: image,
     reviewedSourceCommit: artifactSource,
     reviewedArtifactKind: "runtime",
+    creditTestActivation: {
+      operator: {
+        requestId: baseEnv.OPERATOR_REQUEST_ID,
+        previousEpoch: 1,
+        epoch: 2,
+        operatorImage: image,
+        artifactSourceSha: artifactSource,
+        runtimeImage,
+        deploymentIdentity: baseline.identity,
+      },
+    },
     databaseSchemaPhase: "0018_credit_checkout_reservation",
     databaseSchemaTransition: {
       state: "complete",
@@ -73,6 +84,7 @@ function fixture(overrides = {}) {
     },
     desiredScale: { app: { count: 2 }, worker: { count: 2 } },
   };
+  overrides.mutateApp?.(app);
   const machines = ["app", "app", "worker", "worker"].map((group, index) => ({
     id: `${index + 1}`.padEnd(14, "a"),
     state: "started",
@@ -336,6 +348,69 @@ describe("protected Test payment operator", () => {
     expect(result.outcome).toBe("not_started");
     expect(mutations(f)).toHaveLength(0);
   });
+  it.each([
+    { env: { OPERATOR_REQUEST_ID: "22222222-2222-4222-8222-222222222222" } },
+    { env: { OPERATOR_EXPECTED_EPOCH: "3" } },
+    {
+      env: {
+        OPERATOR_REQUEST_ID: "22222222-2222-4222-8222-222222222222",
+        OPERATOR_EXPECTED_EPOCH: "3",
+      },
+    },
+    {
+      mutateApp: (app) => {
+        delete app.creditTestActivation;
+      },
+    },
+    {
+      mutateApp: (app) => {
+        app.creditTestActivation.operator.previousEpoch = 3;
+        app.creditTestActivation.operator.epoch = 4;
+      },
+      env: { OPERATOR_EXPECTED_EPOCH: "3" },
+    },
+    {
+      mutateApp: (app) => {
+        app.creditTestActivation.operator.epoch = 3;
+      },
+    },
+    {
+      mutateApp: (app) => {
+        app.creditTestActivation.operator.operatorImage = runtimeImage;
+      },
+    },
+    {
+      mutateApp: (app) => {
+        app.creditTestActivation.operator.artifactSourceSha = source;
+      },
+    },
+    {
+      mutateApp: (app) => {
+        app.creditTestActivation.operator.runtimeImage = image;
+      },
+    },
+    {
+      mutateApp: (app) => {
+        app.creditTestActivation.operator.deploymentIdentity = "deploy-98-1";
+      },
+    },
+  ])(
+    "rejects an unpinned initial activation before any SSH: %j",
+    async (options) => {
+      const f = fixture(options);
+      expect(await f.run()).toMatchObject({
+        success: false,
+        outcome: "not_started",
+      });
+      expect(
+        f.deps.execute.mock.calls.filter(
+          ([command, args]) => command === "flyctl" && args[0] === "ssh",
+        ),
+      ).toHaveLength(0);
+      expect(mutations(f)).toHaveLength(0);
+    },
+  );
+
   it("does not retry an ambiguous mutation and redacts command errors", async () => {
     const f = fixture({ activationFailure: true });
     const result = await f.run();
