@@ -3936,7 +3936,7 @@ export function validateTestPaymentOperatorWorkflow(rootDir = process.cwd()) {
     /"--deny-self-hosted-runners"/,
     /:\/app\/dist\/enable-test-payments\.cjs/,
     /if \(remoteHash !==/,
-    /parseOperatorResult\(raw, input, baseline/,
+    /parseOperatorResult\(\s*raw,\s*input,\s*baseline/,
     /fresh\.releaseWatermark !== baseline\.releaseWatermark/,
     /after\.releaseWatermark !== baseline\.releaseWatermark/,
     /evidence\.remoteRemoved = true/,

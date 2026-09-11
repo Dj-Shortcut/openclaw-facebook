@@ -33,6 +33,10 @@ const OPERATOR_AUDIT = Object.freeze({
   sourceSha: "a".repeat(40),
   deploymentIdentity: "deploy-789-1",
   runtimePrincipalSha256: "b".repeat(64),
+  operatorImage: `registry.fly.io/leaderbot-fb-image-gen@sha256:${"c".repeat(64)}`,
+  artifactSourceSha: "d".repeat(40),
+  bundleSha256: "e".repeat(64),
+  runtimeImage: `registry.fly.io/leaderbot-fb-image-gen@sha256:${"f".repeat(64)}`,
 });
 const OPERATOR_INPUT = {
   workspaceId: 10,
@@ -59,6 +63,8 @@ function operatorDatabase() {
       kind,
       enabled: kind === "outbox",
       executionEpoch: 1,
+      pendingWorkCount: 0,
+      deadLetterCount: 0,
       operatorRequestId: null as string | null,
       operatorRequestFingerprint: null as string | null,
     })),
@@ -95,7 +101,7 @@ function operatorDatabase() {
         return query;
       },
     })),
-    execute: vi.fn(async statement => {
+    execute: vi.fn(async (statement): Promise<unknown[][]> => {
       const query = dialect.sqlToQuery(statement);
       queries.push(query);
       return query.sql.includes("CURRENT_USER()")
@@ -193,6 +199,12 @@ describe("protected workflow scheduler audit", () => {
     expect(queries[1].params).toEqual([10, "owner"]);
     const workQuery = queries.find(query => query.sql.includes("AS blocked"))!;
     expect(workQuery.params).toEqual(Array(7).fill(10));
+    expect(workQuery.sql).toMatch(
+      /billing_outbox` WHERE[^)]*'pending','processing','failed'/
+    );
+    expect(workQuery.sql).toMatch(
+      /billing_notification_receiver_outbox` WHERE[^)]*'pending','processing','dead_letter'/
+    );
     for (const table of [
       "billing_provider_operations",
       "billing_subscriptions",
@@ -249,6 +261,58 @@ describe("protected workflow scheduler audit", () => {
     }
   );
 
+  it.each([
+    "operatorImage",
+    "artifactSourceSha",
+    "bundleSha256",
+    "runtimeImage",
+  ] as const)("binds the durable replay to %s", async field => {
+    const { audit, tx } = operatorDatabase();
+    await enableBillingSchedulerTenant(OPERATOR_INPUT);
+    const replacement = field.endsWith("Image")
+      ? `registry.fly.io/leaderbot-fb-image-gen@sha256:${"1".repeat(64)}`
+      : "1".repeat(field === "artifactSourceSha" ? 40 : 64);
+    await expect(
+      enableBillingSchedulerTenant({
+        ...OPERATOR_INPUT,
+        operatorAudit: { ...OPERATOR_AUDIT, [field]: replacement },
+      })
+    ).rejects.toThrow("request conflicts");
+    expect(audit).toHaveBeenCalledOnce();
+    expect(tx.update).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    null,
+    [],
+    {},
+    [{ principalSha256: OPERATOR_AUDIT.runtimePrincipalSha256 }],
+    "invalid",
+  ])("rejects malformed scalar query rows before writes: %j", async row => {
+    const { tx } = operatorDatabase();
+    tx.execute.mockResolvedValueOnce([[row]]);
+    await expect(enableBillingSchedulerTenant(OPERATOR_INPUT)).rejects.toThrow(
+      "principal mismatch"
+    );
+    expect(tx.update).not.toHaveBeenCalled();
+  });
+
+  it.each([null, [], {}, { blocked: false }, { blocked: 1 }, { blocked: "" }])(
+    "rejects malformed or nonempty work rows before writes: %j",
+    async row => {
+      const { tx } = operatorDatabase();
+      tx.execute
+        .mockResolvedValueOnce([
+          [{ principalSha256: OPERATOR_AUDIT.runtimePrincipalSha256 }],
+        ])
+        .mockResolvedValueOnce([[row]]);
+      await expect(
+        enableBillingSchedulerTenant(OPERATOR_INPUT)
+      ).rejects.toThrow("work is not empty");
+      expect(tx.update).not.toHaveBeenCalled();
+    }
+  );
+
   it("resolves ownership without mutating or accepting two owners", async () => {
     const { state, tx } = operatorDatabase();
     await expect(resolveBillingOperatorOwner(10)).resolves.toBe(7);
@@ -259,20 +323,26 @@ describe("protected workflow scheduler audit", () => {
     expect(tx.update).not.toHaveBeenCalled();
   });
 
-  it.each(["principal", "work", "epoch", "lane"])(
-    "rejects %s drift before mutation",
-    async reason => {
-      const { state, tx } = operatorDatabase();
-      if (reason === "principal") state.principal = "c".repeat(64);
-      if (reason === "work") state.blocked = 1;
-      if (reason === "epoch") state.control.authorizationEpoch = 2;
-      if (reason === "lane") state.lanes[0]!.executionEpoch = 2;
-      await expect(
-        enableBillingSchedulerTenant(OPERATOR_INPUT)
-      ).rejects.toThrow();
-      expect(tx.update).not.toHaveBeenCalled();
-    }
-  );
+  it.each([
+    "principal",
+    "work",
+    "epoch",
+    "lane",
+    "pending_counter",
+    "failed_counter",
+  ])("rejects %s drift before mutation", async reason => {
+    const { state, tx } = operatorDatabase();
+    if (reason === "principal") state.principal = "c".repeat(64);
+    if (reason === "work") state.blocked = 1;
+    if (reason === "epoch") state.control.authorizationEpoch = 2;
+    if (reason === "lane") state.lanes[0]!.executionEpoch = 2;
+    if (reason === "pending_counter") state.lanes[0]!.pendingWorkCount = 1;
+    if (reason === "failed_counter") state.lanes[0]!.deadLetterCount = 1;
+    await expect(
+      enableBillingSchedulerTenant(OPERATOR_INPUT)
+    ).rejects.toThrow();
+    expect(tx.update).not.toHaveBeenCalled();
+  });
 
   it("rejects live or malformed operator provenance before database access", async () => {
     await expect(

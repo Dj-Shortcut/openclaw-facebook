@@ -355,7 +355,7 @@ release`, before any deployment or restart. The app-level Fly config
       bypass this. Public checkout does not require operator login.
     - The owner explicitly approved a separate protected operator command on
       2026-09-10 to enable Test payment processing without Facebook login.
-      Implementation is in progress: reuse the existing epoch-fenced audited
+      PR #526 implements the existing epoch-fenced audited
       scheduler service, resolve the existing owner/admin, and record the
       actual GitHub operator/run rather than fabricate a web session. No new
       login, Facebook permission, database account/grant, tester registration,
@@ -369,6 +369,10 @@ release`, before any deployment or restart. The app-level Fly config
       execution evidence for the new command. After reviewed CI/build/merge,
       run that command through its protected workflow, then separately review
       the checkout exposure configuration and prove the complete payment flow.
+      Review follow-up on 2026-09-11 fixes the CI scalar-row type checks, persists
+      exact executable identities in the atomic audit, rejects failed billing
+      outbox work and refuses missing control/lane registration without writing
+      new rows. This code is not merged or executed production evidence.
     - The completed payment-processing preparation changed only notification, drain and
       reconciliation flags to true; checkout, paid image use, legacy sales and
       live billing remain false. It reuses the reviewed `f2fa9d60...` runtime,

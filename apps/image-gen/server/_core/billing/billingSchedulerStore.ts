@@ -58,9 +58,15 @@ export type BillingSchedulerOperatorAudit = Readonly<{
   sourceSha: string;
   deploymentIdentity: string;
   runtimePrincipalSha256: string;
+  operatorImage: string;
+  artifactSourceSha: string;
+  bundleSha256: string;
+  runtimeImage: string;
 }>;
 
 function validateOperatorAudit(value: BillingSchedulerOperatorAudit) {
+  const imagePattern =
+    /^registry\.fly\.io\/leaderbot-fb-image-gen@sha256:[a-f0-9]{64}$/;
   if (
     value.source !== "protected_workflow" ||
     !/^[1-9][0-9]{0,19}$/.test(value.githubActorId) ||
@@ -72,8 +78,12 @@ function validateOperatorAudit(value: BillingSchedulerOperatorAudit) {
       value.deploymentIdentity
     ) ||
     !SHA256_PATTERN.test(value.runtimePrincipalSha256) ||
+    !imagePattern.test(value.operatorImage) ||
+    !/^[a-f0-9]{40}$/.test(value.artifactSourceSha) ||
+    !SHA256_PATTERN.test(value.bundleSha256) ||
+    !imagePattern.test(value.runtimeImage) ||
     Object.keys(value).sort().join(",") !==
-      "deploymentIdentity,githubActorId,githubRunAttempt,githubRunId,runtimePrincipalSha256,source,sourceSha"
+      "artifactSourceSha,bundleSha256,deploymentIdentity,githubActorId,githubRunAttempt,githubRunId,operatorImage,runtimeImage,runtimePrincipalSha256,source,sourceSha"
   )
     throw new Error("invalid billing operator provenance");
   return Object.freeze({
@@ -84,6 +94,10 @@ function validateOperatorAudit(value: BillingSchedulerOperatorAudit) {
     sourceSha: value.sourceSha,
     deploymentIdentity: value.deploymentIdentity,
     runtimePrincipalSha256: value.runtimePrincipalSha256,
+    operatorImage: value.operatorImage,
+    artifactSourceSha: value.artifactSourceSha,
+    bundleSha256: value.bundleSha256,
+    runtimeImage: value.runtimeImage,
   });
 }
 
@@ -139,10 +153,14 @@ export async function assertBillingOperatorPrincipal(
     sql`SELECT SHA2(SUBSTRING_INDEX(CURRENT_USER(),'@',1),256) AS principalSha256`
   );
   const rows = result[0] as unknown;
+  const row: unknown =
+    Array.isArray(rows) && rows.length === 1 ? rows[0] : undefined;
   if (
-    !Array.isArray(rows) ||
-    rows.length !== 1 ||
-    rows[0]?.principalSha256 !== expectedSha256
+    !row ||
+    typeof row !== "object" ||
+    Array.isArray(row) ||
+    !("principalSha256" in row) ||
+    row.principalSha256 !== expectedSha256
   ) {
     throw new Error("billing operator principal mismatch");
   }
@@ -162,15 +180,19 @@ async function assertNoInitialOperatorWork(
     EXISTS(SELECT 1 FROM ${billingIntents} WHERE workspace_id=${workspaceId} AND mode='test'
       AND (mollie_payment_id IS NOT NULL OR status IN ('creating_payment','open','api_unknown'))) OR
     EXISTS(SELECT 1 FROM ${billingOutbox} WHERE workspace_id=${workspaceId} AND mode='test'
-      AND status IN ('pending','processing','dead_letter')) OR
+      AND status IN ('pending','processing','failed')) OR
     EXISTS(SELECT 1 FROM ${billingNotificationReceiverOutbox} WHERE workspace_id=${workspaceId} AND mode='test'
       AND status IN ('pending','processing','dead_letter'))
   ) AS blocked`);
   const rows = result[0] as unknown;
+  const row: unknown =
+    Array.isArray(rows) && rows.length === 1 ? rows[0] : undefined;
   if (
-    !Array.isArray(rows) ||
-    rows.length !== 1 ||
-    ![0, "0"].includes(rows[0]?.blocked)
+    !row ||
+    typeof row !== "object" ||
+    Array.isArray(row) ||
+    !("blocked" in row) ||
+    (row.blocked !== 0 && row.blocked !== "0")
   ) {
     throw new Error("billing operator initial work is not empty");
   }
@@ -380,7 +402,16 @@ export async function enableBillingSchedulerTenant(input: {
     ) {
       throw new Error("billing scheduler enable epoch mismatch");
     }
-    if (operatorAudit) await assertNoInitialOperatorWork(tx, input.workspaceId);
+    if (operatorAudit) {
+      if (
+        rows.some(
+          row => row.pendingWorkCount !== 0 || row.deadLetterCount !== 0
+        )
+      ) {
+        throw new Error("billing operator initial work is not empty");
+      }
+      await assertNoInitialOperatorWork(tx, input.workspaceId);
+    }
     const now = new Date();
     const resultingEpoch = input.expectedExecutionEpoch + 1;
     const controlResult = await tx

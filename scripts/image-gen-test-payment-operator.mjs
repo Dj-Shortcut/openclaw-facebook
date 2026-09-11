@@ -165,7 +165,13 @@ export function assertPreparedMachines(machines, baseline, app) {
     .sort((a, b) => a.id.localeCompare(b.id))[0];
 }
 
-export function parseOperatorResult(raw, input, baseline, principal) {
+export function parseOperatorResult(
+  raw,
+  input,
+  baseline,
+  principal,
+  bundleSha256,
+) {
   const result = JSON.parse(raw);
   const expected = {
     event: "test_payment_operator_completed",
@@ -182,6 +188,10 @@ export function parseOperatorResult(raw, input, baseline, principal) {
     sourceSha: input.workflowSourceSha,
     deploymentIdentity: baseline.identity,
     runtimePrincipalSha256: principal,
+    operatorImage: input.image,
+    artifactSourceSha: input.artifactSourceSha,
+    bundleSha256,
+    runtimeImage: baseline.expectedImage,
   };
   if (
     !result ||
@@ -192,7 +202,7 @@ export function parseOperatorResult(raw, input, baseline, principal) {
   return expected;
 }
 
-function reportedCommitted(error, input, baseline, principal) {
+function reportedCommitted(error, input, baseline, principal, bundleSha256) {
   // Inspect only a strict receipt schema in memory. Never return raw command
   // diagnostics, even when the trusted CLI closed its pool after committing.
   const text = (value) =>
@@ -202,7 +212,13 @@ function reportedCommitted(error, input, baseline, principal) {
         ? value.toString("utf8")
         : "";
   try {
-    parseOperatorResult(text(error?.stdout).trim(), input, baseline, principal);
+    parseOperatorResult(
+      text(error?.stdout).trim(),
+      input,
+      baseline,
+      principal,
+      bundleSha256,
+    );
     return true;
   } catch {
     /* A missing success receipt is not proof of rollback. */
@@ -242,13 +258,28 @@ function reportedCommitted(error, input, baseline, principal) {
 }
 
 // Only fixed code and already validated opaque values enter the SSH command.
-export function operatorCommand(remotePath, input, baseline, principal) {
+export function operatorCommand(
+  remotePath,
+  input,
+  baseline,
+  principal,
+  bundleSha256,
+) {
   if (
     !/^\/tmp\/leaderbot-test-payment-operator-[1-9][0-9]*-[1-9][0-9]*\.cjs$/.test(
       remotePath,
     ) ||
     !/^deploy-[0-9]+-[0-9]+$/.test(baseline.identity) ||
-    !sha(principal)
+    !sha(principal) ||
+    !sha(bundleSha256) ||
+    !/^[a-f0-9]{40}$/.test(input.artifactSourceSha ?? "") ||
+    ![input.image, baseline.expectedImage].every(
+      (value) =>
+        typeof value === "string" &&
+        /^registry\.fly\.io\/leaderbot-fb-image-gen@sha256:[a-f0-9]{64}$/.test(
+          value,
+        ),
+    )
   )
     reject();
   const values = {
@@ -260,8 +291,12 @@ export function operatorCommand(remotePath, input, baseline, principal) {
     GITHUB_RUN_ATTEMPT: input.runAttempt,
     SOURCE_SHA: input.workflowSourceSha,
     DEPLOYMENT_IDENTITY: baseline.identity,
+    OPERATOR_IMAGE: input.image,
+    ARTIFACT_SOURCE_SHA: input.artifactSourceSha,
+    BUNDLE_SHA256: bundleSha256,
+    RUNTIME_IMAGE: baseline.expectedImage,
   };
-  if (Object.values(values).some((v) => !/^[A-Za-z0-9-]+$/.test(String(v))))
+  if (Object.values(values).some((v) => !/^[A-Za-z0-9:/@.-]+$/.test(String(v))))
     reject();
   return [
     "env",
@@ -497,6 +532,7 @@ export async function runTestPaymentOperator(options = {}, dependencies = {}) {
           input,
           baseline,
           app.databaseSchemaTransition.runtimePrincipalSha256,
+          evidence.bundleSha256,
         ),
       );
     } catch (error) {
@@ -505,6 +541,7 @@ export async function runTestPaymentOperator(options = {}, dependencies = {}) {
         input,
         baseline,
         app.databaseSchemaTransition.runtimePrincipalSha256,
+        evidence.bundleSha256,
       );
       reject();
     }
@@ -513,6 +550,7 @@ export async function runTestPaymentOperator(options = {}, dependencies = {}) {
       input,
       baseline,
       app.databaseSchemaTransition.runtimePrincipalSha256,
+      evidence.bundleSha256,
     );
     evidence.committed = true;
     evidence.outcome = "committed";

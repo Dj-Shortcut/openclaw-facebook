@@ -113,6 +113,10 @@ function fixture(overrides = {}) {
     sourceSha: source,
     deploymentIdentity: baseline.identity,
     runtimePrincipalSha256: principal,
+    operatorImage: image,
+    artifactSourceSha: artifactSource,
+    bundleSha256: bundleSha,
+    runtimeImage,
   };
   const fetchImpl = vi.fn(async (url) => ({
     ok: true,
@@ -254,6 +258,22 @@ describe("protected Test payment operator", () => {
     expect(mutations(f)[0][1].at(-1)).toContain(
       `LEADERBOT_TEST_PAYMENT_OPERATOR_SOURCE_SHA=${source}`,
     );
+    for (const [key, value] of Object.entries({
+      OPERATOR_IMAGE: image,
+      ARTIFACT_SOURCE_SHA: artifactSource,
+      BUNDLE_SHA256: bundleSha,
+      RUNTIME_IMAGE: runtimeImage,
+    })) {
+      expect(mutations(f)[0][1].at(-1)).toContain(
+        `LEADERBOT_TEST_PAYMENT_OPERATOR_${key}=${value}`,
+      );
+    }
+    expect(result.result).toMatchObject({
+      operatorImage: image,
+      artifactSourceSha: artifactSource,
+      bundleSha256: bundleSha,
+      runtimeImage,
+    });
     expect(f.deps.sourceCi).toHaveBeenCalledWith(source, expect.any(Object));
     expect(f.deps.artifactCi).toHaveBeenCalledWith(
       "image-gen",
@@ -374,6 +394,21 @@ describe("protected Test payment operator", () => {
   it.each([
     { result: { executionEpoch: 77 } },
     { result: { extra: "private-secret" } },
+    ...[
+      "operatorImage",
+      "artifactSourceSha",
+      "bundleSha256",
+      "runtimeImage",
+    ].flatMap((field) => [
+      { result: { [field]: undefined } },
+      {
+        result: {
+          [field]: field.endsWith("Image")
+            ? `${image.slice(0, -1)}0`
+            : "0".repeat(field === "artifactSourceSha" ? 40 : 64),
+        },
+      },
+    ]),
   ])(
     "rejects malformed mutation receipts without repeating the action",
     async (options) => {
@@ -425,6 +460,7 @@ describe("protected Test payment operator", () => {
       f.input,
       baseline,
       principal,
+      bundleSha,
     ).split(" ");
     expect(cmd.shift()).toBe("env");
     const assignments = cmd.slice(0, cmd.indexOf("node"));
@@ -440,6 +476,59 @@ describe("protected Test payment operator", () => {
     );
     expect(result).toBe(f.input.requestId);
   });
+  it.each([
+    "operatorImage",
+    "artifactSourceSha",
+    "bundleSha256",
+    "runtimeImage",
+  ])(
+    "rejects malformed executable provenance in %s before constructing a command",
+    (field) => {
+      const f = fixture();
+      const unsafe = "unsafe; touch /tmp/example";
+      expect(() =>
+        operatorCommand(
+          "/tmp/leaderbot-test-payment-operator-123-1.cjs",
+          {
+            ...f.input,
+            ...(field === "operatorImage"
+              ? { image: unsafe }
+              : field === "artifactSourceSha"
+                ? { artifactSourceSha: unsafe }
+                : {}),
+          },
+          {
+            ...baseline,
+            ...(field === "runtimeImage" ? { expectedImage: unsafe } : {}),
+          },
+          principal,
+          field === "bundleSha256" ? unsafe : bundleSha,
+        ),
+      ).toThrow("rejected");
+    },
+  );
+  it.each([
+    "operatorImage",
+    "artifactSourceSha",
+    "bundleSha256",
+    "runtimeImage",
+  ])(
+    "does not trust a failed command's success receipt with mismatched %s",
+    async (field) => {
+      const original = fixture();
+      const f = fixture({
+        activationError: Object.assign(Error("private"), {
+          stdout: JSON.stringify({ ...original.result, [field]: "wrong" }),
+        }),
+      });
+      expect(await f.run()).toMatchObject({
+        success: false,
+        outcome: "unknown",
+        committed: false,
+      });
+      expect(mutations(f)).toHaveLength(1);
+    },
+  );
   it("requires all four desired runtime Machines and exact result provenance", () => {
     const f = fixture();
     expect(() =>
@@ -451,6 +540,7 @@ describe("protected Test payment operator", () => {
         f.input,
         baseline,
         principal,
+        bundleSha,
       ),
     ).toThrow();
   });

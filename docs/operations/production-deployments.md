@@ -74,8 +74,10 @@ temporary path on the exact verified running app Machine, verifies its hash,
 and invokes it once using that Machine's existing restricted runtime database
 connection. This reuses the deployment probe's temporary-bundle pattern; it
 does not deploy the candidate application, copy database credentials to the
-runner, or use the migration provisioner. Record the operator artifact source
-separately from the running predecessor's image and deployment identity.
+runner, or use the migration provisioner. Persist the exact operator image,
+artifact source, extracted bundle hash and running image alongside the workflow
+source and deployment identity in the transactional audit and replay fingerprint;
+the short-lived GitHub evidence artifact is not the durable audit.
 
 Before the existing scheduler transaction can enable processing, the command
 requires Test Mode, the exact pinned owner workspace, prepared drain,
@@ -83,7 +85,10 @@ notifications and reconciliation, and closed legacy sales, live billing,
 checkout and paid image use. It requires the persisted owner/admin and records
 explicit protected-workflow actor/run/source/deployment metadata in the audit;
 operator authority must not be represented as a fabricated browser login.
-Current ownership, epoch and work-state checks must pass before mutation.
+Current ownership, existing control and four registered lanes, epoch and
+work-state checks must pass before mutation. Missing registration is rejected,
+not created by this action. Failed billing outbox items and notification dead
+letters both block initial activation.
 No provider request or credit grant is made by the command.
 
 Retain its metadata-only outcome and cleanup evidence. An SSH timeout, missing

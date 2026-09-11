@@ -3,13 +3,11 @@ import {
   assertBillingOperatorPrincipal,
   assertTestPaymentOperatorReadback,
   enableBillingSchedulerTenant,
-  registerBillingSchedulerTenant,
   resolveBillingOperatorOwner,
   type BillingSchedulerOperatorAudit,
 } from "./billingSchedulerStore";
 
-type OperatorStage =
-  "config" | "owner" | "registration" | "activation" | "readback";
+type OperatorStage = "config" | "owner" | "activation" | "readback";
 export class TestPaymentOperatorError extends Error {
   constructor(
     readonly failedStage: OperatorStage,
@@ -24,6 +22,7 @@ export class TestPaymentOperatorError extends Error {
 const PREFIX = "LEADERBOT_TEST_PAYMENT_OPERATOR_";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const POSITIVE_ID = /^[1-9][0-9]{0,19}$/;
+const IMAGE = /^registry\.fly\.io\/leaderbot-fb-image-gen@sha256:[a-f0-9]{64}$/;
 
 function rejectConfig(): never {
   throw new TestPaymentOperatorError("config", "not_started");
@@ -97,6 +96,14 @@ export function readTestPaymentOperatorEnv(
     githubRunAttempt: databaseId(env, `${PREFIX}GITHUB_RUN_ATTEMPT`),
     sourceSha: exactValue(env, `${PREFIX}SOURCE_SHA`, /^[a-f0-9]{40}$/),
     deploymentIdentity,
+    operatorImage: exactValue(env, `${PREFIX}OPERATOR_IMAGE`, IMAGE),
+    artifactSourceSha: exactValue(
+      env,
+      `${PREFIX}ARTIFACT_SOURCE_SHA`,
+      /^[a-f0-9]{40}$/
+    ),
+    bundleSha256: exactValue(env, `${PREFIX}BUNDLE_SHA256`, /^[a-f0-9]{64}$/),
+    runtimeImage: exactValue(env, `${PREFIX}RUNTIME_IMAGE`, IMAGE),
     runtimePrincipalSha256: exactValue(
       env,
       "EXPECTED_RUNTIME_PRINCIPAL_SHA256",
@@ -126,9 +133,9 @@ export async function enableTestPayments(env: NodeJS.ProcessEnv = process.env) {
       input.operatorAudit.runtimePrincipalSha256
     );
     const actorUserId = await resolveBillingOperatorOwner(input.workspaceId);
-    stage = "registration";
-    await registerBillingSchedulerTenant(input.workspaceId, "test");
     stage = "activation";
+    // Only activate existing control and lane rows; this operation may not
+    // bootstrap missing scheduler state.
     // Do not retry this call automatically. Replays must retain the original
     // request ID, expected epoch and complete protected-workflow provenance.
     const result = await enableBillingSchedulerTenant({

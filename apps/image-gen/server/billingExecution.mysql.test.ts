@@ -20,7 +20,10 @@ import {
   enableTestPayments,
   readTestPaymentOperatorEnv,
 } from "./_core/billing/testPaymentOperator";
-import { enableBillingSchedulerTenant } from "./_core/billing/billingSchedulerStore";
+import {
+  enableBillingSchedulerTenant,
+  registerBillingSchedulerTenant,
+} from "./_core/billing/billingSchedulerStore";
 
 const suite = describe.runIf(
   process.env.RUN_MYSQL_INTEGRATION === "1" && Boolean(process.env.DATABASE_URL)
@@ -164,36 +167,18 @@ suite("billing trigger MySQL runtime boundary", () => {
         LEADERBOT_TEST_PAYMENT_OPERATOR_GITHUB_RUN_ATTEMPT: "1",
         LEADERBOT_TEST_PAYMENT_OPERATOR_SOURCE_SHA: "a".repeat(40),
         LEADERBOT_TEST_PAYMENT_OPERATOR_DEPLOYMENT_IDENTITY: "deploy-123-1",
+        LEADERBOT_TEST_PAYMENT_OPERATOR_OPERATOR_IMAGE: `registry.fly.io/leaderbot-fb-image-gen@sha256:${"b".repeat(64)}`,
+        LEADERBOT_TEST_PAYMENT_OPERATOR_ARTIFACT_SOURCE_SHA: "c".repeat(40),
+        LEADERBOT_TEST_PAYMENT_OPERATOR_BUNDLE_SHA256: "d".repeat(64),
+        LEADERBOT_TEST_PAYMENT_OPERATOR_RUNTIME_IMAGE: `registry.fly.io/leaderbot-fb-image-gen@sha256:${"e".repeat(64)}`,
       };
-      // A persisted but non-admin owner must fail before even registration.
-      await connection.query("UPDATE users SET role='user' WHERE id=?", [
-        userIds[0],
-      ]);
-      await expect(enableTestPayments(env)).rejects.toMatchObject({
-        failedStage: "owner",
-      });
-      const [[unregistered]] = await connection.query<RowDataPacket[]>(
-        "SELECT COUNT(*) AS total FROM billing_execution_controls WHERE workspace_id=?",
-        [workspaceId]
-      );
-      expect(Number(unregistered.total)).toBe(0);
-      await connection.query("UPDATE users SET role='admin' WHERE id=?", [
-        userIds[0],
-      ]);
-      const first = await enableTestPayments(env);
-      expect(first).toMatchObject({
-        executionEpoch: 2,
-        committed: true,
-        workspaceId,
-      });
-      await expect(enableTestPayments(env)).resolves.toEqual(first);
       const snapshot = async () => {
         const [controls] = await connection.query<RowDataPacket[]>(
           "SELECT commercial_enabled,authorization_epoch FROM billing_execution_controls WHERE workspace_id=? AND mode='test'",
           [workspaceId]
         );
         const [lanes] = await connection.query<RowDataPacket[]>(
-          "SELECT kind,enabled,execution_epoch,operator_request_id,operator_request_fingerprint,enabled_by_user_id FROM billing_scheduler_tenants WHERE workspace_id=? AND mode='test' ORDER BY kind",
+          "SELECT kind,enabled,execution_epoch,pending_work_count,dead_letter_count,operator_request_id,operator_request_fingerprint,enabled_by_user_id FROM billing_scheduler_tenants WHERE workspace_id=? AND mode='test' ORDER BY kind",
           [workspaceId]
         );
         const [audits] = await connection.query<RowDataPacket[]>(
@@ -202,6 +187,73 @@ suite("billing trigger MySQL runtime boundary", () => {
         );
         return { controls, lanes, audits };
       };
+      // Neither a non-admin owner nor missing registration may create controls.
+      await connection.query("UPDATE users SET role='user' WHERE id=?", [
+        userIds[0],
+      ]);
+      await expect(enableTestPayments(env)).rejects.toMatchObject({
+        failedStage: "owner",
+      });
+      expect(await snapshot()).toEqual({ controls: [], lanes: [], audits: [] });
+      await connection.query("UPDATE users SET role='admin' WHERE id=?", [
+        userIds[0],
+      ]);
+      await expect(enableTestPayments(env)).rejects.toMatchObject({
+        failedStage: "activation",
+        committed: false,
+      });
+      expect(await snapshot()).toEqual({ controls: [], lanes: [], audits: [] });
+
+      // Provision only this disposable fixture explicitly; the operator does
+      // not create or reset scheduler state as a side effect of an enable.
+      await registerBillingSchedulerTenant(workspaceId, "test");
+      const failedDeliveryId = randomUUID();
+      const [failedOutbox] = await connection.query<ResultSetHeader>(
+        "INSERT INTO billing_outbox (delivery_id,workspace_id,mode,event_type,deduplication_key,payload,status,attempt_count,max_attempts,last_error_code) VALUES (?,?,'test','manual_review',?,JSON_OBJECT('reason','synthetic_operator_failed_outbox'),'failed',1,1,'synthetic_operator_failure')",
+        [failedDeliveryId, workspaceId, `operator-ci-failed-${suffix}`]
+      );
+      const blocked = await snapshot();
+      expect(blocked.controls).toMatchObject([
+        { commercial_enabled: 0, authorization_epoch: 1 },
+      ]);
+      expect(blocked.lanes).toHaveLength(4);
+      expect(blocked.lanes.find(lane => lane.kind === "outbox")).toMatchObject({
+        pending_work_count: 0,
+        dead_letter_count: 1,
+      });
+      expect(blocked.audits).toEqual([]);
+      await expect(enableTestPayments(env)).rejects.toMatchObject({
+        failedStage: "activation",
+        committed: false,
+      });
+      expect(await snapshot()).toEqual(blocked);
+      // The real counter trigger handles status transitions, not DELETE.
+      // Complete only this synthetic row before removing it from the fixture.
+      await connection.query(
+        "UPDATE billing_outbox SET status='completed' WHERE id=? AND workspace_id=? AND delivery_id=? AND status='failed'",
+        [failedOutbox.insertId, workspaceId, failedDeliveryId]
+      );
+      await connection.query(
+        "DELETE FROM billing_outbox WHERE id=? AND workspace_id=? AND delivery_id=?",
+        [failedOutbox.insertId, workspaceId, failedDeliveryId]
+      );
+      const cleared = await snapshot();
+      expect(cleared.controls).toEqual(blocked.controls);
+      expect(cleared.audits).toEqual([]);
+      for (const lane of cleared.lanes) {
+        expect(lane).toMatchObject({
+          pending_work_count: 0,
+          dead_letter_count: 0,
+          execution_epoch: 1,
+        });
+      }
+      const first = await enableTestPayments(env);
+      expect(first).toMatchObject({
+        executionEpoch: 2,
+        committed: true,
+        workspaceId,
+      });
+      await expect(enableTestPayments(env)).resolves.toEqual(first);
       const committed = await snapshot();
       expect(committed.controls).toMatchObject([
         { commercial_enabled: 1, authorization_epoch: 2 },
@@ -247,6 +299,7 @@ suite("billing trigger MySQL runtime boundary", () => {
       if (workspaceId !== undefined) {
         for (const [table, key] of [
           ["auditLog", "workspaceId"],
+          ["billing_outbox", "workspace_id"],
           ["billing_scheduler_tenants", "workspace_id"],
           ["billing_execution_controls", "workspace_id"],
           ["workspaceMembers", "workspaceId"],
