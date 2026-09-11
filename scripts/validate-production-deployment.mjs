@@ -6,10 +6,16 @@ import { pathToFileURL } from "node:url";
 
 const MANIFEST_PATH = "deploy/production/apps.json";
 const PRODUCTION_WORKFLOW_PATH = ".github/workflows/deploy-production.yml";
+const TEST_PAYMENT_OPERATOR_WORKFLOW_PATH =
+  ".github/workflows/enable-image-gen-test-payments.yml";
+const PRODUCTION_UPTIME_WORKFLOW_PATH =
+  ".github/workflows/production-uptime.yml";
 const TRUSTED_ARTIFACT_WORKFLOW_PATH =
   ".github/workflows/build-production-artifacts.yml";
 const SCHEMA_TRANSITION_WORKFLOW_PATH =
   ".github/workflows/image-gen-schema-transition.yml";
+const MIGRATION_SUPER_CLEANUP_WORKFLOW_PATH =
+  ".github/workflows/cleanup-image-gen-migration-super.yml";
 const CREDIT_MIGRATION_DEFINER_GRANT_PATH =
   "apps/image-gen/scripts/credit-migration-definer-grants.mjs";
 const CREDIT_MIGRATION_DEFINER_GRANT_RUNNER_PATH =
@@ -22,6 +28,22 @@ const CREDIT_PROVISIONER_BOOTSTRAP_RUNNER_PATH =
   "scripts/provision-image-gen-credit-provisioner.mjs";
 const CREDIT_PROVISIONER_BOOTSTRAP_RUNNER_TEST_PATH =
   "scripts/provision-image-gen-credit-provisioner.test.mjs";
+const CREDIT_MIGRATION_PRINCIPAL_REPAIR_CONTRACT_PATH =
+  "scripts/image-gen-credit-migration-principal-repair-contract.mjs";
+const CREDIT_MIGRATION_PRINCIPAL_REPAIR_RUNNER_PATH =
+  "scripts/repair-image-gen-credit-migration-principal.mjs";
+const CREDIT_MIGRATION_PRINCIPAL_REPAIR_TEST_PATH =
+  "scripts/image-gen-credit-migration-principal-repair-contract.test.mjs";
+const MIGRATION_SUPER_CLEANUP_EXEC_PATH =
+  "scripts/image-gen-super-cleanup-exec.mjs";
+const MIGRATION_SUPER_CLEANUP_EXEC_TEST_PATH =
+  "scripts/image-gen-super-cleanup-exec.test.mjs";
+const MIGRATION_PREPARE_DRIVER_PATH =
+  "scripts/image-gen-principal-prepare-driver.mjs";
+const MIGRATION_PREPARE_BATCH_PATH =
+  "scripts/image-gen-principal-prepare-exec.mjs";
+const MIGRATION_PREPARE_TRANSPORT_PATH =
+  "scripts/provision-image-gen-credit-provisioner-exec.mjs";
 const CREDIT_PROVISIONER_RETIREMENT_WORKFLOW_PATH =
   ".github/workflows/retire-image-gen-credit-provisioners.yml";
 const CREDIT_PROVISIONER_RETIREMENT_RUNNER_PATH =
@@ -41,6 +63,13 @@ const PRODUCTION_RECONCILIATION_WORKFLOW_PATH =
 const PRODUCTION_COMPLETION_RECOVERY_WORKFLOW_PATH =
   ".github/workflows/recover-completed-production-deployment.yml";
 const FRESH_SNAPSHOT_SELECTOR_PATH = "scripts/select-fresh-fly-snapshot.mjs";
+const FLY_RESTORE_PROBE_STATUS_PATH = "scripts/fly-restore-probe-status.mjs";
+const FLY_RESTORE_PROBE_STATUS_TEST_PATH =
+  "scripts/fly-restore-probe-status.test.mjs";
+const REPAIR_EXEC_TOKEN_RETIREMENT_PATH =
+  "scripts/retire-image-gen-repair-exec-token.mjs";
+const REPAIR_EXEC_TOKEN_RETIREMENT_TEST_PATH =
+  "scripts/retire-image-gen-repair-exec-token.test.mjs";
 const PINNED_NODE_BASE_IMAGE =
   "node:24-alpine@sha256:d32cdf619f63fe0471182d08996dd516c6275bb5fd31ae06e55a570bd9e1ad43";
 const PINNED_GATEWAY_NODE_BASE_IMAGE =
@@ -63,6 +92,7 @@ const STORAGE_PROXY_ROLLBACK_LIFECYCLE_SECRET_GATE = String.raw`fly secrets list
             | jq -e '[.[] | select((.name == "R2_LIFECYCLE_ACCESS_KEY_ID" or .name == "R2_LIFECYCLE_SECRET_ACCESS_KEY") and (.status == "Deployed" or .status == "Staged" or .status == "Partial")) | .name] | sort == ["R2_LIFECYCLE_ACCESS_KEY_ID", "R2_LIFECYCLE_SECRET_ACCESS_KEY"]' \
             >/dev/null`;
 const VERIFIED_FLYCTL_WORKFLOW_JOBS = Object.freeze({
+  [TEST_PAYMENT_OPERATOR_WORKFLOW_PATH]: ["enable"],
   [TRUSTED_ARTIFACT_WORKFLOW_PATH]: ["build"],
   [SCHEMA_PROBE_CLEANUP_WORKFLOW_PATH]: ["cleanup"],
   [GATEWAY_STATE_REBASELINE_WORKFLOW_PATH]: ["rehearse"],
@@ -73,7 +103,9 @@ const VERIFIED_FLYCTL_WORKFLOW_JOBS = Object.freeze({
     "deploy-storage-proxy",
   ],
   [SCHEMA_TRANSITION_WORKFLOW_PATH]: ["preflight", "expand"],
+  [MIGRATION_SUPER_CLEANUP_WORKFLOW_PATH]: ["cleanup"],
   [RUNTIME_PRINCIPAL_STAGING_WORKFLOW_PATH]: ["stage"],
+  [".github/workflows/repair-image-gen-runtime-database-host.yml"]: ["repair"],
   [RUNTIME_PRINCIPAL_CLEANUP_WORKFLOW_PATH]: ["preflight", "mutate"],
   [CREDIT_PROVISIONER_RETIREMENT_WORKFLOW_PATH]: ["mutate"],
   [PRODUCTION_RECONCILIATION_WORKFLOW_PATH]: [
@@ -185,6 +217,18 @@ function referencesExactHttpUrl(source, expected) {
     }
   }
   return false;
+}
+
+function referencesExactHostnameToken(source, expectedHostname) {
+  const executableSource = source.replace(/^\s*#.*$/gmu, "");
+  const escapedHostname = expectedHostname.replace(
+    /[.*+?^${}()|[\]\\]/g,
+    "\\$&",
+  );
+  return new RegExp(
+    `(^|[^a-z0-9.-])${escapedHostname}\\.?(?=$|[^a-z0-9.-])`,
+    "iu",
+  ).test(executableSource);
 }
 
 function readJson(filePath) {
@@ -2278,6 +2322,137 @@ export function resolveImmutableReleaseImage(
 }
 
 export function validateProductionWorkflow(rootDir = process.cwd()) {
+  const proofSource = fs.readFileSync(
+    path.join(rootDir, "scripts/image-gen-credit-test-proof.mjs"),
+    "utf8",
+  );
+  if (
+    !proofSource.includes(
+      'import { inspectCommittedTestPaymentActivation } from "./image-gen-test-payment-activation-audit.mjs";',
+    ) ||
+    !/activation = await inspectCommittedTestPaymentActivation\(session, \{\s*workspaceId: 1,/.test(
+      proofSource,
+    ) ||
+    !/\n\s+activation,\s+checkedAt:/.test(proofSource)
+  ) {
+    fail(
+      "image-gen must collect the original committed Test activation audit for workspace 1 before deployment",
+    );
+  }
+  const creditWorkflow = fs.readFileSync(
+    path.join(rootDir, PRODUCTION_WORKFLOW_PATH),
+    "utf8",
+  );
+  const requestName = "Read explicit bounded Test activation request";
+  const proofName = "Produce fresh bounded Test database and runtime proof";
+  const consumeName =
+    "Recheck and consume bounded Test proof under the deployment lock";
+  const imageJobIndex = creditWorkflow.indexOf("  deploy-image-gen:");
+  const requestIndex = creditWorkflow.indexOf(`      - name: ${requestName}`);
+  const proofIndex = creditWorkflow.indexOf(`      - name: ${proofName}`);
+  const consumeIndex = creditWorkflow.indexOf(`      - name: ${consumeName}`);
+  const deploymentIndex = creditWorkflow.indexOf(
+    "      - name: Deploy reviewed image-gen config",
+  );
+  const nextJobIndex = creditWorkflow.indexOf("  deploy-storage-proxy:");
+  if (
+    imageJobIndex < 0 ||
+    requestIndex <= imageJobIndex ||
+    proofIndex <= requestIndex ||
+    consumeIndex <= proofIndex ||
+    deploymentIndex <= consumeIndex ||
+    nextJobIndex <= deploymentIndex ||
+    !creditWorkflow.includes("group: production-deploy-${{ inputs.target }}")
+  ) {
+    fail(
+      "image-gen must produce and freshly consume bounded Test proof before deployment under the shared lock",
+    );
+  }
+  const [requestStep] = namedWorkflowStepBodies(creditWorkflow, requestName);
+  if (
+    !requestStep?.includes("id: credit-test-request") ||
+    !requestStep.includes(
+      "run: node scripts/image-gen-credit-test-proof.mjs request",
+    ) ||
+    /\n\s+(?:if|env):/.test(requestStep)
+  ) {
+    fail(
+      "image-gen must read the explicit Test request without credentials or conditional skipping",
+    );
+  }
+  let dependencyIndex = requestIndex;
+  for (const [name, requirements] of [
+    [
+      "Prepare pinned package manager for Test inspection",
+      [
+        "uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4",
+        "version: 10.28.1",
+      ],
+    ],
+    [
+      "Install locked Test inspection dependencies without credentials",
+      [
+        "run: pnpm --dir apps/image-gen install --prod --frozen-lockfile --ignore-scripts",
+      ],
+    ],
+  ]) {
+    const steps = namedWorkflowStepBodies(creditWorkflow, name);
+    const step = steps[0];
+    const index = creditWorkflow.indexOf(`      - name: ${name}`);
+    if (
+      steps.length !== 1 ||
+      !step?.includes(
+        "if: steps.credit-test-request.outputs.active == 'true'",
+      ) ||
+      requirements.some((requirement) => !step.includes(requirement)) ||
+      /\n\s+env:|secrets\.|continue-on-error:/.test(step) ||
+      index <= dependencyIndex ||
+      index >= proofIndex
+    ) {
+      fail(
+        "image-gen must prepare locked Test inspection dependencies without credentials before proof in the deployment job",
+      );
+    }
+    dependencyIndex = index;
+  }
+  for (const [name, operation] of [
+    [proofName, "prove"],
+    [consumeName, "consume"],
+  ]) {
+    const [step] = namedWorkflowStepBodies(creditWorkflow, name);
+    if (
+      !step?.includes(
+        "if: steps.credit-test-request.outputs.active == 'true'",
+      ) ||
+      !step.includes(
+        `run: node scripts/image-gen-credit-test-proof.mjs ${operation}`,
+      ) ||
+      !step.includes(
+        "CREDIT_TEST_IMAGE_TOKEN: ${{ secrets.FLY_IMAGE_GEN_DEPLOY_TOKEN }}",
+      ) ||
+      !step.includes(
+        "CREDIT_TEST_DATABASE_TOKEN: ${{ secrets.FLY_DATABASE_MIGRATION_TOKEN }}",
+      ) ||
+      !step.includes(
+        "DATABASE_PROVISIONER_URL: ${{ secrets.IMAGE_GEN_DATABASE_PROVISIONER_URL }}",
+      ) ||
+      !step.includes("GITHUB_TOKEN: ${{ github.token }}") ||
+      step.includes("continue-on-error:")
+    ) {
+      fail(
+        "image-gen must require protected proof only for the explicit bounded Test request",
+      );
+    }
+  }
+  if (
+    occurrenceCount(creditWorkflow, "IMAGE_GEN_DATABASE_PROVISIONER_URL") !==
+      2 ||
+    occurrenceCount(creditWorkflow, "DATABASE_PROVISIONER_URL:") !== 2
+  ) {
+    fail(
+      "image-gen must expose the provisioner only to the two conditional Test-proof steps",
+    );
+  }
   const workflowPath = path.join(rootDir, PRODUCTION_WORKFLOW_PATH);
   if (!fs.existsSync(workflowPath)) {
     fail(`Missing ${PRODUCTION_WORKFLOW_PATH}`);
@@ -2456,10 +2631,6 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
     [
       "--validate-legacy-transition-rollback",
       "must narrowly validate the pre-expand bootstrap rollback exception",
-    ],
-    [
-      "--allow-first-trusted-bootstrap-drift",
-      "must narrowly reconcile the exact legacy image-gen predecessor",
     ],
     [
       "FLY_IMAGE_GEN_REVIEWED_IMAGE: ${{ inputs.rollback_image }}",
@@ -2852,7 +3023,7 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
       '.config.metadata.fly_process_group == "app" or .config.metadata.fly_process_group == "worker"',
     ) ||
     !runtimePrincipalCutoverStep.includes(
-      "EXPECTED_RUNTIME_PRINCIPAL_SHA256=$expected_principal_sha256 node $remote_probe",
+      '--command "env EXPECTED_RUNTIME_PRINCIPAL_SHA256=$expected_principal_sha256 node $remote_probe"',
     ) ||
     !runtimePrincipalCutoverStep.includes(
       'test "$probe_output" = "Billing trigger runtime preflight passed."',
@@ -2966,15 +3137,33 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
     ) ?? -1;
   const capturedIdentityIndex =
     imageRollbackCaptureStep?.indexOf(
-      'rollback_identity="$(jq -er \'.env.LEADERBOT_DEPLOYMENT_IDENTITY // "none"\' <<<"$live_config")"',
+      'rollback_identity="$(jq -er --arg image "$rollback_image"',
     ) ?? -1;
   const restoreConfigIndex =
     imageRollbackCaptureStep?.indexOf(
       '--reviewed-restore-config image-gen "$rollback_image" \\\n            "$rollback_identity")',
     ) ?? -1;
   const restoredReleaseIndex =
-    imageRollbackCaptureStep?.indexOf("--verify-restored-release image-gen") ??
-    -1;
+    imageRollbackCaptureStep?.indexOf('confirmed_settled_state="$(node') ?? -1;
+  if (
+    !imageRollbackCaptureStep?.includes("GITHUB_TOKEN: ${{ github.token }}") ||
+    occurrenceCount(
+      imageRollbackCaptureStep,
+      "--settled-live image-gen --output-json",
+    ) !== 2 ||
+    !imageRollbackCaptureStep.includes(
+      "'select(.expectedImage == $image) | .identity' <<<\"$settled_state\"",
+    ) ||
+    !imageRollbackCaptureStep.includes(
+      'test "$(jq -cS . <<<"$settled_state")" = "$(jq -cS . <<<"$confirmed_settled_state")"',
+    ) ||
+    imageRollbackCaptureStep.includes("fly config show") ||
+    imageRollbackCaptureStep.includes(".env.LEADERBOT_DEPLOYMENT_IDENTITY")
+  ) {
+    fail(
+      `${PRODUCTION_WORKFLOW_PATH} must capture and reprove the exact settled image-gen rollback tuple, not the app-level shadow config`,
+    );
+  }
   if (
     rollbackCaptureSteps.length !== 3 ||
     rollbackCaptureSteps.some(
@@ -3002,7 +3191,9 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
         : `--reviewed-rollback-config ${target} "$rollback_image"`;
     const configIndex = workflow.indexOf(configCommand);
     const verifyIndex = workflow.indexOf(
-      `--verify-restored-release ${target} "$rollback_image"`,
+      target === "image-gen"
+        ? 'confirmed_settled_state="$(node'
+        : `--verify-restored-release ${target} "$rollback_image"`,
       configIndex,
     );
     const predecessorIndex = workflow.indexOf(
@@ -3132,7 +3323,7 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
     ],
     [
       /^\s*timeout-minutes: 3\s*$/gm,
-      17,
+      18,
       "must bound setup, rollback-plan, and diagnostic uploads",
     ],
     [
@@ -3142,7 +3333,7 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
     ],
     [
       /^\s*timeout-minutes: 5\s*$/gm,
-      11,
+      12,
       "must bound drift, trigger probing, rollback capture, and recovery dispatch",
     ],
     [
@@ -3649,6 +3840,147 @@ function validateImageGenMigrationCi(rootDir) {
   }
 }
 
+export function validateTestPaymentOperatorWorkflow(rootDir = process.cwd()) {
+  const file = path.join(rootDir, TEST_PAYMENT_OPERATOR_WORKFLOW_PATH);
+  if (!fs.existsSync(file))
+    fail(`Missing ${TEST_PAYMENT_OPERATOR_WORKFLOW_PATH}`);
+  const workflow = fs.readFileSync(file, "utf8");
+  assertNoDirectGithubExpressionsInRunBlocks(
+    workflow,
+    TEST_PAYMENT_OPERATOR_WORKFLOW_PATH,
+  );
+  const triggers = workflow.split(/^on:\s*$/m)[1]?.split(/^\S/m)[0] ?? "";
+  const events = [...triggers.matchAll(/^  ([a-z_]+):/gm)].map(
+    (match) => match[1],
+  );
+  const jobNames = [
+    ...(workflow.split(/^jobs:\s*$/m)[1] ?? "").matchAll(/^  ([a-z_-]+):/gm),
+  ].map((match) => match[1]);
+  if (events.join(",") !== "workflow_dispatch" || jobNames.length !== 1)
+    fail(
+      "Test payment operator must have only a manual event and one protected job",
+    );
+  const job = namedWorkflowJobBody(workflow, jobNames[0]);
+  const condition = job
+    .match(/^    if:\s*(.+)$/m)?.[1]
+    .replace(/^\$\{\{\s*|\s*\}\}$/g, "")
+    .trim();
+  if (
+    condition !== "github.ref == 'refs/heads/main'" ||
+    !/^    environment: production\s*$/m.test(job) ||
+    !/^  group: production-deploy-image-gen\s*$/m.test(workflow) ||
+    !/^  cancel-in-progress: false\s*$/m.test(workflow)
+  )
+    fail(
+      "Test payment operator must preserve protected main and the non-canceling shared deployment lock",
+    );
+  const executionSteps = namedWorkflowStepBodies(
+    job,
+    "Run the exact attested Test payment operator once",
+  );
+  const execution = executionSteps[0] ?? "";
+  const invocations = yamlRunBlocks(execution).filter(
+    (block) =>
+      block
+        .trim()
+        .split("\n")
+        .map((line) => line.trim())
+        .join("\n") ===
+      "set -euo pipefail\nnode scripts/image-gen-test-payment-operator.mjs",
+  );
+  if (
+    executionSteps.length !== 1 ||
+    invocations.length !== 1 ||
+    occurrenceCount(
+      workflow,
+      "node scripts/image-gen-test-payment-operator.mjs",
+    ) !== 1
+  )
+    fail(
+      "Test payment operator must invoke its reviewed controller exactly once",
+    );
+  if (
+    occurrenceCount(workflow, "secrets.") !== 1 ||
+    occurrenceCount(workflow, "secrets.FLY_IMAGE_GEN_DEPLOY_TOKEN") !== 1 ||
+    occurrenceCount(workflow, "FLY_API_TOKEN:") !== 1 ||
+    !execution.includes("GITHUB_TOKEN: ${{ github.token }}") ||
+    !execution.includes(
+      "FLY_API_TOKEN: ${{ secrets.FLY_IMAGE_GEN_DEPLOY_TOKEN }}",
+    ) ||
+    /\b(?:DATABASE_URL|DATABASE_PROVISIONER_URL|MOLLIE_API_KEY)\b|\b(?:fly|flyctl)\s+(?:deploy|secrets|machine|machines)\b/.test(
+      yamlRunBlocks(workflow).join("\n"),
+    )
+  )
+    fail(
+      "Test payment operator must expose only the existing app token and no direct deployment or database action",
+    );
+  const stepsIndex = job.indexOf("\n    steps:");
+  if (stepsIndex < 0 || job.slice(0, stepsIndex).includes("FLY_API_TOKEN"))
+    fail("Test payment operator credentials must remain step scoped");
+  for (const [key, input] of Object.entries({
+    OPERATOR_IMAGE: "operator_image",
+    OPERATOR_SOURCE_SHA: "operator_source_sha",
+    OPERATOR_REQUEST_ID: "request_id",
+    OPERATOR_EXPECTED_EPOCH: "expected_epoch",
+  })) {
+    if (!execution.includes(`${key}: \${{ inputs.${input} }}`))
+      fail(
+        "Test payment operator must bind all four reviewed inputs through step env",
+      );
+  }
+  if (
+    !job.includes("persist-credentials: false") ||
+    !job.includes("npm run production:validate")
+  )
+    fail(
+      "Test payment operator must validate checked-out source without persisted credentials",
+    );
+  const runner = fs.readFileSync(
+    path.join(rootDir, "scripts/image-gen-test-payment-operator.mjs"),
+    "utf8",
+  );
+  for (const required of [
+    /await verifyOperatorRun\(env, fetchImpl\)/g,
+    /await sourceCi\(input\.workflowSourceSha, verify\)/,
+    /await artifactCi\("image-gen", input\.image, verify\)/,
+    /activation\.requestId !== input\.requestId/,
+    /activation\.previousEpoch !== 1/,
+    /activation\.epoch !== 2/,
+    /input\.expectedEpoch !== activation\.previousEpoch/,
+    /run\.head_sha !== input\.workflowSourceSha/,
+    /run\.actor\?\.id/,
+    /run\.triggering_actor\?\.id/,
+    /main\.object\?\.sha !== input\.workflowSourceSha/,
+    /"attestation",\s*"verify"/,
+    /"--signer-workflow"/,
+    /"--source-digest",\s*input\.artifactSourceSha/,
+    /"--deny-self-hosted-runners"/,
+    /:\/app\/dist\/enable-test-payments\.cjs/,
+    /if \(remoteHash !==/,
+    /parseOperatorResult\(\s*raw,\s*input,\s*baseline/,
+    /fresh\.releaseWatermark !== baseline\.releaseWatermark/,
+    /after\.releaseWatermark !== baseline\.releaseWatermark/,
+    /evidence\.remoteRemoved = true/,
+    /evidence\.containerRemoved = true/,
+    /"logout",\s*"registry\.fly\.io"/,
+    /if \(!evidence\.success\) process\.exitCode = 1/,
+  ]) {
+    if (!required.test(runner))
+      fail(
+        "Test payment operator controller must retain run, artifact, exact target, result and cleanup verification",
+      );
+  }
+  if (
+    occurrenceCount(runner, "await verifyOperatorRun(env, fetchImpl)") !== 2 ||
+    [...runner.matchAll(/\bssh\(\s*operatorCommand\(/g)].length !== 1 ||
+    !runner.includes("test ! -e ${remote}") ||
+    !runner.includes("/bin/rm -f ${remote}")
+  )
+    fail(
+      "Test payment operator must recheck authority, invoke once and verify remote cleanup",
+    );
+}
+
 function validateTrustedArtifactWorkflow(rootDir) {
   const workflow = fs.readFileSync(
     path.join(rootDir, TRUSTED_ARTIFACT_WORKFLOW_PATH),
@@ -3829,6 +4161,14 @@ function validateTrustedArtifactWorkflow(rootDir) {
       'docker run --rm --entrypoint node "$ARTIFACT_IMAGE" --check /app/dist/billing-trigger-runtime-preflight.cjs',
       "must syntax-check the bridge billing-trigger runtime probe at the deploy extraction path",
     ],
+    [
+      'docker run --rm "$ARTIFACT_IMAGE" test -s /app/dist/enable-test-payments.cjs',
+      "must inspect the bundled Test payment operator command",
+    ],
+    [
+      'docker run --rm --entrypoint node "$ARTIFACT_IMAGE" --check /app/dist/enable-test-payments.cjs',
+      "must syntax-check the bundled Test payment operator command",
+    ],
   ]) {
     if (!workflow.includes(needle)) {
       fail(`${TRUSTED_ARTIFACT_WORKFLOW_PATH} ${message}`);
@@ -3916,6 +4256,34 @@ function validateTrustedArtifactWorkflow(rootDir) {
 }
 
 function validateSchemaTransitionWorkflow(rootDir) {
+  for (const requiredPath of [
+    FLY_RESTORE_PROBE_STATUS_PATH,
+    FLY_RESTORE_PROBE_STATUS_TEST_PATH,
+  ]) {
+    if (!fs.existsSync(path.join(rootDir, requiredPath))) {
+      fail(`Missing ${requiredPath}`);
+    }
+  }
+  let packageJson;
+  try {
+    packageJson = JSON.parse(
+      fs.readFileSync(path.join(rootDir, "package.json"), "utf8"),
+    );
+  } catch {
+    fail("package.json must contain the reviewed production-contract command");
+  }
+  const productionContractTokens = String(
+    packageJson?.scripts?.["test:production-contracts"] ?? "",
+  ).split(/\s+/);
+  if (
+    productionContractTokens.filter(
+      (token) => token === FLY_RESTORE_PROBE_STATUS_TEST_PATH,
+    ).length !== 1
+  ) {
+    fail(
+      `package.json test:production-contracts must include exact ${FLY_RESTORE_PROBE_STATUS_TEST_PATH}`,
+    );
+  }
   const workflowPath = path.join(rootDir, SCHEMA_TRANSITION_WORKFLOW_PATH);
   if (!fs.existsSync(workflowPath)) {
     fail(`Missing ${SCHEMA_TRANSITION_WORKFLOW_PATH}`);
@@ -3957,7 +4325,6 @@ function validateSchemaTransitionWorkflow(rootDir) {
       "--format json",
       "must request JSON before querying the bridge attestation predicate",
     ],
-    ["--live image-gen", "must prove all app and worker Machines"],
     [
       "FLY_PRODUCTION_READONLY_TOKEN",
       "must inspect only production metadata before environment approval",
@@ -3967,16 +4334,32 @@ function validateSchemaTransitionWorkflow(rootDir) {
       "must refuse unresolved image deployment state before schema approval",
     ],
     [
+      "--output-json",
+      "must return the release-bound settled identity without reading shadow config",
+    ],
+    [
+      '(.identity | type == "string" and test("^deploy-[0-9]+-[0-9]+$"))',
+      "must parse only an exact release-bound deployment identity",
+    ],
+    [
+      '(.releaseVersion | type == "number")',
+      "must bind the pre-DDL proof to an exact Fly release version",
+    ],
+    [
+      '(.releaseWatermark | type == "string" and test("^[a-f0-9]{64}$"))',
+      "must bind the pre-DDL proof to the exact observed Fly release history",
+    ],
+    [
       '[[ "$settled_identity" =~ ^deploy-[0-9]+-[0-9]+$ ]]',
       "must refuse bootstrap, rollback, and malformed identities before schema DDL",
     ],
     [
-      '--expected-deployment-identity "$settled_identity"',
-      "must bind bridge drift to the exact live deployment identity",
+      "settled-live.json",
+      "must retain the exact first settled release tuple until the DDL boundary",
     ],
     [
-      '--verify-settled-baseline image-gen "$settled_identity"',
-      "must prove the live bridge came from a completed successful canonical deploy",
+      'test "$current_tuple" = "$settled_tuple"',
+      "must refuse a release or Machine change immediately before schema DDL",
     ],
     [
       '--verify-source-ci "$GITHUB_SHA"',
@@ -4081,7 +4464,6 @@ function validateSchemaTransitionWorkflow(rootDir) {
       "must verify the restored volume is isolated before probing",
     ],
     ["--restart no", "must disable restart of the isolated probe"],
-    ["--rm", "must request automatic removal of the isolated probe"],
     ["--detach", "must start the isolated probe without blocking the job"],
     [
       '--metadata "leaderbot_restore_probe=$GITHUB_RUN_ID"',
@@ -4112,8 +4494,8 @@ function validateSchemaTransitionWorkflow(rootDir) {
       "must cap probe Machine cleanup before any destroy operation",
     ],
     [
-      "timeout --signal=TERM 8m flyctl ssh console",
-      "must bound the remote restore verification and propagate its exit status",
+      "node scripts/fly-restore-probe-status.mjs",
+      "must verify structured exit evidence instead of accepting a stopped Machine",
     ],
     [
       "mysql-restore-check.sql",
@@ -4128,7 +4510,7 @@ function validateSchemaTransitionWorkflow(rootDir) {
       "must run restore cleanup after failures and cancellation",
     ],
     [
-      '.state|IN("started","stopped","suspended","created","failed")',
+      '.state|IN("starting","started","stopping","stopped","suspended","created","failed")',
       "must allow exact restore-probe cleanup in every known removable state",
     ],
     ["machine destroy", "must remove the isolated restore Machine"],
@@ -4217,7 +4599,7 @@ function validateSchemaTransitionWorkflow(rootDir) {
   if (
     occurrenceCount(
       workflow,
-      '.state|IN("started","stopped","suspended","created","failed")',
+      '.state|IN("starting","started","stopping","stopped","suspended","created","failed")',
     ) !== 2
   ) {
     fail(
@@ -4249,8 +4631,59 @@ function validateSchemaTransitionWorkflow(rootDir) {
       `${SCHEMA_TRANSITION_WORKFLOW_PATH} must use pinned flyctl config-show JSON output without unsupported --json`,
     );
   }
+  if (
+    workflow.includes("flyctl config show --app leaderbot-fb-image-gen") ||
+    workflow.includes("--live image-gen")
+  ) {
+    fail(
+      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must derive the bridge identity only from the release-bound settled-live result`,
+    );
+  }
+  if ((workflow.match(/--output-json/g) ?? []).length !== 2) {
+    fail(
+      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must parse both settled release proofs as structured JSON`,
+    );
+  }
+  if (
+    (
+      workflow.match(
+        /\(\.identity \| type == "string" and test\("\^deploy-\[0-9\]\+-\[0-9\]\+\$"\)\)/g,
+      ) ?? []
+    ).length !== 2
+  ) {
+    fail(
+      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must validate the exact deployment identity in both settled release tuples`,
+    );
+  }
+  if (
+    (workflow.match(/\(\.releaseVersion \| type == "number"\)/g) ?? [])
+      .length !== 2
+  ) {
+    fail(
+      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must validate the exact Fly release version in both settled release tuples`,
+    );
+  }
+  if (
+    (
+      workflow.match(
+        /\(\.releaseWatermark \| type == "string" and test\("\^\[a-f0-9\]\{64\}\$"\)\)/g,
+      ) ?? []
+    ).length !== 2
+  ) {
+    fail(
+      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must validate the exact Fly release history in both settled release tuples`,
+    );
+  }
   const preflightJob = namedWorkflowJobBody(workflow, "preflight");
   const expandJob = namedWorkflowJobBody(workflow, "expand");
+  if (
+    (preflightJob?.match(/--settled-live image-gen/g) ?? []).length !== 1 ||
+    (expandJob?.match(/--settled-live image-gen/g) ?? []).length !== 2
+  ) {
+    fail(
+      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must prove the exact settled release once before approval and twice around protected recovery work`,
+    );
+  }
   const [preflightStep] = namedWorkflowStepBodies(
     workflow,
     "Preflight settled image-gen baseline before approval",
@@ -4283,40 +4716,89 @@ function validateSchemaTransitionWorkflow(rootDir) {
   }
   const [restoreProbeStep] = namedWorkflowStepBodies(
     workflow,
-    "Prove the restored MySQL copy and remote command exit status",
+    "Prove the restored MySQL copy from the isolated Machine exit status",
   );
+  if (/flyctl\s+(?:ssh|machine\s+exec)\b/.test(workflow)) {
+    fail(
+      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must not use SSH or Machine-exec with the migration token`,
+    );
+  }
+  if (restoreProbeStep?.includes("--rm")) {
+    fail(
+      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must retain the probe until its exact exit evidence is verified`,
+    );
+  }
   for (const [required, message] of [
     ["flyctl machine run", "must create one isolated restore probe"],
     ["--restart no", "must disable restart of the isolated probe"],
-    ["--rm", "must request automatic removal of the isolated probe"],
     ["--detach", "must start the isolated probe without blocking the job"],
     [
-      "timeout --signal=TERM 8m flyctl ssh console",
-      "must bound the remote restore verification and propagate its exit status",
+      '-- -c "$probe" || probe_launch_status=$?',
+      "must run the fixed restore probe as the Machine entrypoint",
     ],
     [
-      'probe_b64="$(printf \'%s\' "$probe" | base64 --wrap=0)"',
-      "must encode the fixed restore probe without shell-quoting ambiguity",
+      '.state|IN("started","stopped")',
+      "must capture probes that already exited",
     ],
     [
-      'probe_command="/bin/sh -lc',
-      "must execute the restore probe through an explicit remote shell",
+      "probe_deadline=$((SECONDS + 480))",
+      "must bound the restore-probe status poll",
     ],
     [
-      "decoded=\\$(printf %s $probe_b64 | base64 -d) || exit 70; exec /bin/sh -c",
-      "must fail closed on decode errors and propagate the probe exit status",
+      'while test "$SECONDS" -lt "$probe_deadline"',
+      "must enforce the restore-probe status deadline",
     ],
     [
-      '--command "$probe_command"',
-      "must pass only the explicit shell command to flyctl SSH",
+      '--app "$db_app"',
+      "must bind the restore-probe API read to the reviewed database app",
     ],
     [
-      'printf "%s\\n" mysql_restore_probe_failed',
-      "must emit a metadata-only failure marker for a failed restore probe",
+      "node scripts/fly-restore-probe-status.mjs",
+      "must verify structured exit evidence instead of accepting a stopped Machine",
     ],
     [
-      "tail -n 120 /tmp/mysql-restore-probe.log",
-      "must emit a bounded MySQL startup diagnostic before failing closed",
+      '--machine-id "$probe_machine_id"',
+      "must bind probe results to the exact Machine",
+    ],
+    [
+      '--volume-id "$RESTORE_VOLUME_ID"',
+      "must bind probe results to the restored volume",
+    ],
+    [
+      "probe_sha256=\"$(printf '%s' \"$probe\" | sha256sum | cut -d' ' -f1)\"",
+      "must hash the runner-owned restore command before launch",
+    ],
+    [
+      '--expected-image "$mysql_image"',
+      "must bind probe results to the reviewed immutable MySQL image",
+    ],
+    [
+      '--expected-probe-sha256 "$probe_sha256"',
+      "must bind probe results to the exact runner-owned restore command",
+    ],
+    [
+      '--run-id "$GITHUB_RUN_ID"',
+      "must bind probe results to this workflow run",
+    ],
+    [
+      '--run-attempt "$GITHUB_RUN_ATTEMPT" || result=$?',
+      "must bind and propagate the probe verification result",
+    ],
+    [
+      'if test "$result" = 0; then',
+      "must require a successful probe verification",
+    ],
+    [
+      'if test "$result" != 2; then',
+      "must retry only pending probe verification",
+    ],
+    [
+      'if test "$probe_verified" != true; then',
+      "must fail closed when exit evidence never arrives",
+    ],
+    [
+      "printf '%s\\n' mysql_restore_probe_failed",
+      "must emit a metadata-only runner failure marker when restore exit evidence never arrives",
     ],
     [
       "chown mysql:root /var/lib/mysql",
@@ -4336,28 +4818,56 @@ function validateSchemaTransitionWorkflow(rootDir) {
       `${SCHEMA_TRANSITION_WORKFLOW_PATH} must not recursively rewrite restored snapshot ownership`,
     );
   }
+  if (restoreProbeStep?.includes("tail -n")) {
+    fail(
+      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must not emit raw restored database diagnostics`,
+    );
+  }
   if (
     namedWorkflowStepTimeout(
       workflow,
-      "Prove the restored MySQL copy and remote command exit status",
+      "Prove the restored MySQL copy from the isolated Machine exit status",
     ) < 22
   ) {
     fail(
-      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must give the bounded Machine start, start poll, and 8m SSH probe enough outer time`,
+      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must give the bounded Machine start and exit poll enough outer time`,
     );
   }
-  const snapshotBaselineIndex = workflow.indexOf("snapshots-before.json");
-  const snapshotCreateIndex = workflow.indexOf("volumes snapshots create");
+  const credentialSnapshotBaselineIndex = workflow.indexOf(
+    "credential-snapshots-before.json",
+  );
+  const credentialSnapshotCreateIndex = workflow.indexOf(
+    "volumes snapshots create",
+    credentialSnapshotBaselineIndex,
+  );
+  const credentialSnapshotSelectorIndex = workflow.indexOf(
+    "scripts/select-fresh-fly-snapshot.mjs",
+    credentialSnapshotCreateIndex,
+  );
+  const snapshotBaselineIndex = workflow.indexOf(
+    'before="$RUNNER_TEMP/leaderbot-schema-transition/snapshots-before.json"',
+  );
+  const snapshotCreateIndex = workflow.indexOf(
+    "volumes snapshots create",
+    snapshotBaselineIndex,
+  );
   const snapshotSelectorIndex = workflow.indexOf(
     "scripts/select-fresh-fly-snapshot.mjs",
+    snapshotCreateIndex,
   );
   if (
+    credentialSnapshotBaselineIndex < 0 ||
+    credentialSnapshotCreateIndex <= credentialSnapshotBaselineIndex ||
+    credentialSnapshotSelectorIndex <= credentialSnapshotCreateIndex ||
     snapshotBaselineIndex < 0 ||
     snapshotCreateIndex <= snapshotBaselineIndex ||
-    snapshotSelectorIndex <= snapshotCreateIndex
+    snapshotSelectorIndex <= snapshotCreateIndex ||
+    (workflow.match(/node scripts\/select-fresh-fly-snapshot[.]mjs/g) ?? [])
+      .length !== 2 ||
+    (workflow.match(/flyctl volumes snapshots create/g) ?? []).length !== 2
   ) {
     fail(
-      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must capture the old snapshot ids before selecting the one fresh result`,
+      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must capture each old snapshot inventory before selecting each fresh result`,
     );
   }
   const recoveryUploadIndex = workflow.indexOf(
@@ -4369,34 +4879,274 @@ function validateSchemaTransitionWorkflow(rootDir) {
   const schemaInspectionIndex = workflow.indexOf(
     "Inspect the exact live schema phase without changing it",
   );
+  const migrationPrincipalRepairIndex = workflow.indexOf(
+    "Repair and verify only the approved migration-principal rights",
+  );
+  const credentialRecoveryUploadIndex = workflow.indexOf(
+    "Upload pre-repair credential-boundary recovery reference",
+  );
+  const preSnapshotSuperCleanupIndex = workflow.indexOf(
+    "Verify temporary SUPER is absent before the recovery snapshot",
+  );
+  const postRecoveryRepairIndex = workflow.indexOf(
+    "Restore approved migration rights only after recovery proof",
+  );
   const applyExpandIndex = workflow.indexOf(
     "LEADERBOT_PRODUCTION_MIGRATION_MODE=apply-credit-wallet-expand",
   );
-  const strictBridgeIndex = workflow.indexOf(
-    '--expected-deployment-identity "$settled_identity"',
+  const releaseBoundBridgeIndex = workflow.indexOf(
+    'settled_state="$(node scripts/validate-production-deployment.mjs',
   );
-  const settledBridgeIndex = workflow.indexOf(
-    '--verify-settled-baseline image-gen "$settled_identity"',
+  const settledTupleWriteIndex = workflow.indexOf(
+    '> "$evidence_dir/settled-live.json"',
+  );
+  const preDdlReleaseBoundBridgeIndex = workflow.indexOf(
+    "--settled-live image-gen",
+    recoveryUploadIndex,
+  );
+  const settledTupleComparisonIndex = workflow.indexOf(
+    'test "$current_tuple" = "$settled_tuple"',
   );
   if (
-    strictBridgeIndex < 0 ||
-    settledBridgeIndex <= strictBridgeIndex ||
+    releaseBoundBridgeIndex < 0 ||
+    settledTupleWriteIndex <= releaseBoundBridgeIndex ||
     recoveryUploadIndex < 0 ||
     definerGrantIndex < 0 ||
     schemaInspectionIndex < 0 ||
-    schemaInspectionIndex >= snapshotCreateIndex ||
+    credentialRecoveryUploadIndex <= credentialSnapshotSelectorIndex ||
+    migrationPrincipalRepairIndex <= credentialRecoveryUploadIndex ||
+    schemaInspectionIndex <= migrationPrincipalRepairIndex ||
+    preSnapshotSuperCleanupIndex <= schemaInspectionIndex ||
+    preSnapshotSuperCleanupIndex >= snapshotCreateIndex ||
+    postRecoveryRepairIndex <= settledTupleComparisonIndex ||
+    postRecoveryRepairIndex >= definerGrantIndex ||
     definerGrantIndex <= recoveryUploadIndex ||
+    preDdlReleaseBoundBridgeIndex <= recoveryUploadIndex ||
+    preDdlReleaseBoundBridgeIndex >= definerGrantIndex ||
+    settledTupleComparisonIndex <= preDdlReleaseBoundBridgeIndex ||
+    settledTupleComparisonIndex >= definerGrantIndex ||
     applyExpandIndex < 0 ||
     applyExpandIndex <= definerGrantIndex ||
     recoveryUploadIndex > applyExpandIndex ||
-    settledBridgeIndex > applyExpandIndex
+    settledTupleWriteIndex > recoveryUploadIndex
   ) {
     fail(
-      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must inspect first and durably upload verified snapshot evidence before grant mutation or credit DDL`,
+      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must snapshot and repair the exact migration role, inspect the schema, and durably upload recovery evidence before definer grants or credit DDL`,
+    );
+  }
+  const [preSnapshotSuperCleanupStep] = namedWorkflowStepBodies(
+    workflow,
+    "Verify temporary SUPER is absent before the recovery snapshot",
+  );
+  const [postRecoveryRepairStep] = namedWorkflowStepBodies(
+    workflow,
+    "Restore approved migration rights only after recovery proof",
+  );
+  for (const [step, operation, marker] of [
+    [
+      preSnapshotSuperCleanupStep,
+      "revoke-super",
+      "credit_migration_principal_super_revoked",
+    ],
+    [postRecoveryRepairStep, "prepare", "credit_migration_principal_ready"],
+  ]) {
+    for (const required of [
+      "secrets.IMAGE_GEN_DATABASE_MIGRATION_URL",
+      "secrets.FLY_DATABASE_REPAIR_EXEC_TOKEN",
+      "node scripts/repair-image-gen-credit-migration-principal.mjs",
+      '--database-machine-id "$DATABASE_MACHINE_ID"',
+      'kill -0 "$proxy_pid"',
+      'n.createConnection(13306,"127.0.0.1"',
+      `--operation ${operation}`,
+      `test "$output" = "${marker}"`,
+    ]) {
+      if (!step?.includes(required)) {
+        fail(
+          `${SCHEMA_TRANSITION_WORKFLOW_PATH} must verify exact temporary rights on both sides of recovery proof`,
+        );
+      }
+    }
+    if (step.includes("secrets.FLY_DATABASE_MIGRATION_TOKEN")) {
+      fail(
+        `${SCHEMA_TRANSITION_WORKFLOW_PATH} must not expose snapshot authority to temporary-rights changes`,
+      );
+    }
+  }
+  const [freshRecoverySnapshotStep] = namedWorkflowStepBodies(
+    workflow,
+    "Create fresh snapshot from the exact 0016 base",
+  );
+  const [recoveryRecordStep] = namedWorkflowStepBodies(
+    workflow,
+    "Record exact pre-credit recovery point",
+  );
+  const [loadRecoveryStep] = namedWorkflowStepBodies(
+    workflow,
+    "Load exact prior 0016 recovery point for a resume",
+  );
+  const [validateRecoveryStep] = namedWorkflowStepBodies(
+    workflow,
+    "Validate exact 0016 recovery evidence before DDL",
+  );
+  if (
+    !preSnapshotSuperCleanupStep.includes(
+      'echo "RECOVERY_TEMPORARY_SUPER_ABSENT=true" >> "$GITHUB_ENV"',
+    ) ||
+    !freshRecoverySnapshotStep?.includes(
+      'test "$RECOVERY_TEMPORARY_SUPER_ABSENT" = true',
+    ) ||
+    !recoveryRecordStep?.includes(
+      'test "$RECOVERY_TEMPORARY_SUPER_ABSENT" = true',
+    ) ||
+    !recoveryRecordStep.includes(
+      "restoreVerified:true,temporarySuperAbsent:true",
+    ) ||
+    !loadRecoveryStep?.includes(".snapshot.temporarySuperAbsent==true") ||
+    !validateRecoveryStep?.includes(".snapshot.temporarySuperAbsent==true")
+  ) {
+    fail(
+      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must prove and retain temporary SUPER absence in recovery evidence`,
+    );
+  }
+  const [credentialRecoveryUploadStep] = namedWorkflowStepBodies(
+    workflow,
+    "Upload pre-repair credential-boundary recovery reference",
+  );
+  if (
+    !credentialRecoveryUploadStep?.includes(
+      "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+    ) ||
+    !credentialRecoveryUploadStep.includes(
+      "credential-boundary-snapshot.json",
+    ) ||
+    !credentialRecoveryUploadStep.includes("if-no-files-found: error")
+  ) {
+    fail(
+      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must durably upload the pre-repair recovery reference before root mutation`,
+    );
+  }
+  const [migrationPrincipalRepairStep] = namedWorkflowStepBodies(
+    workflow,
+    "Repair and verify only the approved migration-principal rights",
+  );
+  for (const [required, message] of [
+    [
+      "secrets.IMAGE_GEN_DATABASE_MIGRATION_URL",
+      "must use only the protected migration URL for migration-role verification",
+    ],
+    [
+      "secrets.FLY_DATABASE_REPAIR_EXEC_TOKEN",
+      "must use only the short-lived Machine-exec token for the private root session",
+    ],
+    [
+      "repair-image-gen-credit-migration-principal.mjs",
+      "must call the reviewed fixed-output repair runner",
+    ],
+    [
+      "--operation prepare",
+      "must explicitly select the bounded migration-role preparation",
+    ],
+    [
+      '[[ "$repair_status" -eq 0 && "$output" = "credit_migration_principal_ready" ]]',
+      "must accept only the fixed successful repair marker",
+    ],
+  ]) {
+    if (!migrationPrincipalRepairStep?.includes(required)) {
+      fail(`${SCHEMA_TRANSITION_WORKFLOW_PATH} ${message}`);
+    }
+  }
+  if (
+    migrationPrincipalRepairStep?.includes(
+      "secrets.FLY_DATABASE_MIGRATION_TOKEN",
+    )
+  ) {
+    fail(
+      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must not expose the snapshot and tunnel token to the private root session`,
+    );
+  }
+  for (const required of [
+    'kill -0 "$proxy_pid"',
+    'n.createConnection(13306,"127.0.0.1"',
+    'repair_status="$?"',
+    "credit_migration_principal_repair_failed",
+    "credit_migration_principal_repair_cleanup_incomplete",
+    "credit_migration_principal_repair_output_invalid",
+  ]) {
+    if (!migrationPrincipalRepairStep?.includes(required)) {
+      fail(
+        `${SCHEMA_TRANSITION_WORKFLOW_PATH} must verify the live tunnel and surface only fixed migration-repair outcomes`,
+      );
+    }
+  }
+  const [migrationSuperCleanupStep] = namedWorkflowStepBodies(
+    workflow,
+    "Revoke temporary migration SUPER privilege",
+  );
+  for (const [required, message] of [
+    [
+      "if: always() && env.DATABASE_MIGRATION_TUNNEL_STARTED == 'true'",
+      "must revoke temporary SUPER after both successful and failed migration attempts",
+    ],
+    [
+      "secrets.FLY_DATABASE_REPAIR_EXEC_TOKEN",
+      "must use only the short-lived Machine-exec token for SUPER cleanup",
+    ],
+    [
+      "--operation revoke-super",
+      "must invoke the reviewed SUPER cleanup operation",
+    ],
+    [
+      '[[ "$cleanup_status" -eq 0 && "$output" = "credit_migration_principal_super_revoked" ]]',
+      "must accept only the fixed successful SUPER cleanup marker",
+    ],
+    [
+      "credit_migration_principal_repair_cleanup_incomplete",
+      "must fail closed with the fixed cleanup-incomplete marker",
+    ],
+    [
+      'kill -0 "$proxy_pid"',
+      "must revalidate the isolated tunnel before cleanup",
+    ],
+    [
+      'n.createConnection(13306,"127.0.0.1"',
+      "must revalidate database connectivity before cleanup",
+    ],
+  ]) {
+    if (!migrationSuperCleanupStep?.includes(required)) {
+      fail(`${SCHEMA_TRANSITION_WORKFLOW_PATH} ${message}`);
+    }
+  }
+  if (
+    migrationSuperCleanupStep?.includes("secrets.FLY_DATABASE_MIGRATION_TOKEN")
+  ) {
+    fail(
+      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must not expose snapshot authority to SUPER cleanup`,
+    );
+  }
+  const exactCreditVerificationIndex = workflow.indexOf(
+    "Verify the exact 0018 credit schema",
+  );
+  const migrationSuperCleanupIndex = workflow.indexOf(
+    "Revoke temporary migration SUPER privilege",
+  );
+  const transitionResultIndex = workflow.indexOf(
+    "Record metadata-only successful transition",
+  );
+  const tunnelStopIndex = workflow.indexOf(
+    "Stop isolated database migration tunnel",
+  );
+  if (
+    exactCreditVerificationIndex < 0 ||
+    migrationSuperCleanupIndex <= exactCreditVerificationIndex ||
+    transitionResultIndex <= migrationSuperCleanupIndex ||
+    tunnelStopIndex <= migrationSuperCleanupIndex
+  ) {
+    fail(
+      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must revoke temporary SUPER after schema verification and before success evidence or tunnel shutdown`,
     );
   }
   const probeStepIndex = workflow.indexOf(
-    "Prove the restored MySQL copy and remote command exit status",
+    "Prove the restored MySQL copy from the isolated Machine exit status",
   );
   const [databaseBindingStep] = namedWorkflowStepBodies(
     workflow,
@@ -4839,6 +5589,15 @@ function validateCreditProvisionerBootstrapHelper(rootDir) {
       fail(`${CREDIT_PROVISIONER_BOOTSTRAP_RUNNER_PATH} ${message}`);
     }
   }
+  if (
+    !/export const ROOT_MYSQL_REMOTE_COMMAND_FLYCTL_CSV\s*=\s*`"\$\{ROOT_MYSQL_REMOTE_COMMAND\.replaceAll\(\s*'"'\s*,\s*'""'\s*\)\}"`;/u.test(
+      runner,
+    )
+  ) {
+    fail(
+      `${CREDIT_PROVISIONER_BOOTSTRAP_RUNNER_PATH} must expose the exact RFC 4180 flyctl StringSlice field`,
+    );
+  }
   const accountMutation = runner.indexOf(
     "await rootSession.execute(sql.createStatement",
   );
@@ -4978,6 +5737,407 @@ function validateCreditProvisionerBootstrapHelper(rootDir) {
   }
 }
 
+function validateMigrationSuperCleanupExec(rootDir) {
+  const source = fs.readFileSync(
+    path.join(rootDir, MIGRATION_SUPER_CLEANUP_EXEC_PATH),
+    "utf8",
+  );
+  const compact = source.replace(/\s+/g, " ");
+  // These wiring checks complement the registered module's behavioral tests;
+  // they do not treat source-token presence as proof of a production cleanup.
+  for (const [required, message] of [
+    [
+      'const API_ORIGIN = "https://api.machines.dev";',
+      "must use only the fixed Machines API origin",
+    ],
+    [
+      'const DATABASE_APP = "leaderbot-portal-mysql";',
+      "must target only the reviewed database app",
+    ],
+    [
+      "const url = `${API_ORIGIN}/v1/apps/${DATABASE_APP}/machines/${machineId}/exec`;",
+      "must bind Exec to the exact database Machine endpoint",
+    ],
+    [
+      'method: "POST", redirect: "error", signal,',
+      "must refuse redirects and bind the single POST to cancellation",
+    ],
+    [
+      "body: JSON.stringify({ command: buildSuperCleanupExecArgv(stdin), timeout: EXEC_SECONDS, }),",
+      "must deliver bounded SQL as one quoted argument through the reviewed cleanup command",
+    ],
+    [
+      "Buffer.byteLength(stdin) > MAX_STDIN_BYTES",
+      "must bound the SQL request body before dispatch",
+    ],
+    [
+      "response.status !== 200 || response.redirected || (response.url && response.url !== url)",
+      "must reject unsuccessful or redirected Exec responses",
+    ],
+    [
+      "if (bytes > MAX_RESPONSE_BYTES) fail();",
+      "must bound streamed response bytes",
+    ],
+    [
+      '!Object.hasOwn(value, "exit_code") || value.exit_code !== 0 || (Object.hasOwn(value, "exit_signal") && value.exit_signal !== 0) || value.stderr !== ""',
+      "must reject missing exit status, remote failure, signals and SQL stderr",
+    ],
+    [
+      "if (value.stdout === resultMarker(nonce, result)) return result;",
+      "must require the exact invocation-bound terminal marker",
+    ],
+    [
+      "const LOCK = CREDIT_MIGRATION_PRINCIPAL_REPAIR_LOCK;",
+      "must retain the existing principal repair lock",
+    ],
+    [
+      'operation: "revoke", privileges: ["SUPER"],',
+      "must limit the batch mutation to revoking temporary SUPER",
+    ],
+    [
+      "assertCreditMigrationSuperCleanupBoundary( current, allowIncompleteDefinerTablePrivileges, );",
+      "must recheck the observed grant boundary before approving mutation",
+    ],
+    [
+      "completed.failed || !verifiedBefore || !verifiedAfter ||",
+      "must require both verifier approvals before accepting success",
+    ],
+    [
+      "AbortSignal.timeout(DEADLINE_MS)",
+      "must bound the complete handshake and response lifecycle",
+    ],
+  ]) {
+    if (!compact.includes(required)) {
+      fail(`${MIGRATION_SUPER_CLEANUP_EXEC_PATH} ${message}`);
+    }
+  }
+  if (
+    occurrenceCount(source, "await fetchImpl(") !== 1 ||
+    occurrenceCount(
+      compact,
+      "request({ app, machineId, stdin, nonce, signal: combined })",
+    ) !== 1 ||
+    /node:child_process|RootMysqlSession|buildRootFlyctlEnvironment|recoverRoot\s*\(/.test(
+      source,
+    )
+  ) {
+    fail(
+      `${MIGRATION_SUPER_CLEANUP_EXEC_PATH} must make one Exec request without automatic retry or SSH fallback`,
+    );
+  }
+  if (
+    /console[.]|process[.](?:stdout|stderr)|error[.](?:message|stack)|String\(error/.test(
+      source,
+    )
+  ) {
+    fail(
+      `${MIGRATION_SUPER_CLEANUP_EXEC_PATH} must not expose transport bodies, stderr or credentials`,
+    );
+  }
+}
+
+function validateCreditMigrationPrincipalRepair(rootDir) {
+  for (const relativePath of [
+    CREDIT_MIGRATION_PRINCIPAL_REPAIR_CONTRACT_PATH,
+    CREDIT_MIGRATION_PRINCIPAL_REPAIR_RUNNER_PATH,
+    CREDIT_MIGRATION_PRINCIPAL_REPAIR_TEST_PATH,
+    MIGRATION_SUPER_CLEANUP_EXEC_PATH,
+    MIGRATION_SUPER_CLEANUP_EXEC_TEST_PATH,
+    MIGRATION_PREPARE_DRIVER_PATH,
+    MIGRATION_PREPARE_BATCH_PATH,
+    MIGRATION_PREPARE_TRANSPORT_PATH,
+    REPAIR_EXEC_TOKEN_RETIREMENT_PATH,
+    REPAIR_EXEC_TOKEN_RETIREMENT_TEST_PATH,
+    MIGRATION_SUPER_CLEANUP_WORKFLOW_PATH,
+    "scripts/image-gen-migration-super-cleanup-evidence.mjs",
+    "scripts/image-gen-migration-super-cleanup-evidence.test.mjs",
+  ]) {
+    if (!fs.existsSync(path.join(rootDir, relativePath))) {
+      fail(`Missing ${relativePath}`);
+    }
+  }
+  const contract = fs.readFileSync(
+    path.join(rootDir, CREDIT_MIGRATION_PRINCIPAL_REPAIR_CONTRACT_PATH),
+    "utf8",
+  );
+  for (const [required, message] of [
+    [
+      '"CREATE",\n  "TRIGGER",\n  "CREATE ROUTINE",\n  "ALTER ROUTINE",\n  "SUPER"',
+      "must limit repair to the exact four reviewed schema privileges plus conditional SUPER",
+    ],
+    [
+      "detectMissingCreditMigrationPrivileges",
+      "must prove the existing boundary is otherwise exact before mutation",
+    ],
+    [
+      'superOnly && missing.some((privilege) => privilege !== "SUPER")',
+      "must reject schema-rights mutation when resuming completed credit history",
+    ],
+    [
+      "assertCreditMigrationSuperCleanupBoundary(\n      state,\n      allowIncompleteDefinerTablePrivileges,\n    )",
+      "must revalidate the exact grant boundary before every cleanup mutation",
+    ],
+    [
+      "(superOnly && allowIncompleteDefinerTablePrivileges)",
+      "must reject incomplete definer rights during SUPER-only resume",
+    ],
+    [
+      'operation: "revoke"',
+      "must revoke only newly added privileges after failed verification",
+    ],
+    [
+      "const lockedState = await readState();",
+      "must decide the privilege delta only after the repair lock is held",
+    ],
+    [
+      "attemptedPrivileges = [...missing];",
+      "must arm uncertain-GRANT recovery before sending the mutation",
+    ],
+    [
+      "const observed = await readState();",
+      "must observe effective grants after an uncertain mutation result",
+    ],
+    [
+      "const recovered = await recoverRoot(activeRoot);",
+      "must reconnect under a fresh lock after root transport loss",
+    ],
+    [
+      "verifyRollback(attemptedPrivileges)",
+      "must verify the exact pre-repair boundary after rollback",
+    ],
+    [
+      "CreditMigrationPrincipalCleanupError",
+      "must distinguish an incomplete rollback from a clean refusal",
+    ],
+    [
+      "revokeTemporaryCreditMigrationSuper",
+      "must provide an idempotent fail-closed temporary SUPER cleanup",
+    ],
+    [
+      'privileges: ["SUPER"]',
+      "must revoke only temporary global SUPER during terminal cleanup",
+    ],
+  ]) {
+    if (!contract.includes(required)) {
+      fail(`${CREDIT_MIGRATION_PRINCIPAL_REPAIR_CONTRACT_PATH} ${message}`);
+    }
+  }
+  if (/console[.]|process[.](?:stdout|stderr)/.test(contract)) {
+    fail(
+      `${CREDIT_MIGRATION_PRINCIPAL_REPAIR_CONTRACT_PATH} must not log database identities or failures`,
+    );
+  }
+  const runner = fs.readFileSync(
+    path.join(rootDir, CREDIT_MIGRATION_PRINCIPAL_REPAIR_RUNNER_PATH),
+    "utf8",
+  );
+  const prepareStart = runner.indexOf("export async function executeRepair(");
+  const cleanupStart = runner.indexOf(
+    "export async function executeSuperCleanup(",
+  );
+  const cleanupEnd = runner.indexOf("function normalizeMarker(", cleanupStart);
+  const prepare = runner.slice(prepareStart, cleanupStart);
+  const cleanup = runner.slice(cleanupStart, cleanupEnd);
+  if (
+    prepareStart < 0 ||
+    cleanupStart <= prepareStart ||
+    cleanupEnd <= cleanupStart ||
+    !runner.includes('from "./image-gen-principal-prepare-driver.mjs"') ||
+    !prepare.includes("runPrepare = prepareCreditMigrationPrincipalViaExec,") ||
+    !prepare.includes("return await runPrepare({") ||
+    !prepare.includes("      app,\n      machineId,\n      connection,") ||
+    !prepare.includes("      signal,\n      onStage,") ||
+    /RootMysqlSession|openRoot|recoverRoot|buildRootFlyctlEnvironment/.test(
+      prepare,
+    )
+  ) {
+    fail(
+      `${CREDIT_MIGRATION_PRINCIPAL_REPAIR_RUNNER_PATH} must bind prepare to the single-Exec controller without root SSH fallback`,
+    );
+  }
+  const compactCleanup = cleanup.replace(/\s+/g, " ");
+  if (
+    !runner.includes('from "./image-gen-super-cleanup-exec.mjs"') ||
+    !compactCleanup.includes(
+      "runCleanup = revokeTemporaryCreditMigrationSuperViaExec,",
+    ) ||
+    !compactCleanup.includes('operation !== "revoke-super"') ||
+    !compactCleanup.includes(
+      "return await runCleanup({ app, machineId, connection, account: initial.account, databaseName: initial.databaseName, allowIncompleteDefinerTablePrivileges: pregrant,",
+    ) ||
+    !compactCleanup.includes(
+      "readState: async () => { if ((await readPhase(connection)) !== initialPhase) fail(); return readState(connection); }, verify, signal, onStage,",
+    ) ||
+    /RootMysqlSession|openRoot|recoverRoot|buildRootFlyctlEnvironment/.test(
+      cleanup,
+    )
+  ) {
+    fail(
+      `${CREDIT_MIGRATION_PRINCIPAL_REPAIR_RUNNER_PATH} must bind revoke-only Exec to the current account, phase, verifier and signal without root SSH fallback`,
+    );
+  }
+  validateMigrationSuperCleanupExec(rootDir);
+  const prepareDriver = fs.readFileSync(
+    path.join(rootDir, MIGRATION_PREPARE_DRIVER_PATH),
+    "utf8",
+  );
+  const prepareBatch = fs.readFileSync(
+    path.join(rootDir, MIGRATION_PREPARE_BATCH_PATH),
+    "utf8",
+  );
+  const prepareTransport = fs.readFileSync(
+    path.join(rootDir, MIGRATION_PREPARE_TRANSPORT_PATH),
+    "utf8",
+  );
+  for (const required of [
+    "const LOCK = CREDIT_MIGRATION_PRINCIPAL_REPAIR_LOCK;",
+    "const state = await bounded(readState);",
+    "await acquire(locks[`delta${PRIVILEGES.indexOf(privilege)}`]);",
+    "await bounded(verify);",
+    "verifyRollback(missing)",
+    "if (!verificationFailed) await acquire(locks.accept);",
+    "if (completed.failed) fail();",
+    "AbortSignal.timeout(DEADLINE_MS)",
+  ]) {
+    if (!prepareDriver.includes(required))
+      fail(
+        `${MIGRATION_PREPARE_DRIVER_PATH} must retain exact grant approval, verification and bounded failure handling`,
+      );
+  }
+  for (const required of [
+    "CONNECTION_ID()=@root_id AND IS_USED_LOCK(",
+    "(@delta & @before_mask)=0",
+    'schemaStatementCases(parsed, databaseName, "grant", "@delta")',
+    'schemaStatementCases(parsed, databaseName, "revoke", "@added")',
+    "currentMask}=IF(@accepted=1,@before_mask | @delta,@before_mask)",
+  ]) {
+    if (!prepareBatch.includes(required))
+      fail(
+        `${MIGRATION_PREPARE_BATCH_PATH} must hold the same lock and compensate only its approved delta`,
+      );
+  }
+  if (
+    occurrenceCount(prepareTransport, "await fetchImpl(") !== 1 ||
+    !prepareTransport.includes('redirect: "error"') ||
+    !prepareTransport.includes('test "$#" -eq 1 || exit 64;') ||
+    !prepareTransport.includes('"leaderbot-prepare-root"') ||
+    !prepareTransport.includes('!Object.hasOwn(value, "exit_code")') ||
+    !prepareTransport.includes("value.exit_code !== 0") ||
+    /node:child_process|new RootMysqlSession|recoverRoot\s*\(/.test(
+      prepareDriver + prepareBatch + prepareTransport,
+    )
+  )
+    fail(
+      `${MIGRATION_PREPARE_TRANSPORT_PATH} must use only one bounded fixed-wrapper Exec request`,
+    );
+  for (const [required, message] of [
+    [
+      "classifyCreditMigrationHistory",
+      "must bind repair and resume verification to exact credit histories",
+    ],
+    [
+      "superOnly: postDdl",
+      "must restrict completed 0017 and 0018 preparation to conditional SUPER only",
+    ],
+    [
+      'pregrant\n          ? "credit-expand-pregrant"\n          : !requireSuper\n            ? "credit-expand-postddl"\n            : "credit-expand"',
+      "must strictly verify both unprivileged resume and conditional inspection grants",
+    ],
+    [
+      'return phase === "0016_expand";',
+      "must allow incomplete definer rights only for the exact pregrant history",
+    ],
+    [
+      "prepareCreditMigrationPrincipalViaExec",
+      "must keep root access inside the exact reviewed database Machine",
+    ],
+    [
+      "runPrepare = prepareCreditMigrationPrincipalViaExec,",
+      "must use the restricted Exec transport by default",
+    ],
+    [
+      "CREDIT_MIGRATION_PRINCIPAL_CLEANUP_FAILURE_MARKER",
+      "must preserve the fixed cleanup-incomplete result",
+    ],
+    [
+      "executeSuperCleanup",
+      "must expose only the reviewed temporary SUPER cleanup operation",
+    ],
+  ]) {
+    if (!runner.includes(required)) {
+      fail(`${CREDIT_MIGRATION_PRINCIPAL_REPAIR_RUNNER_PATH} ${message}`);
+    }
+  }
+  if (
+    occurrenceCount(
+      runner,
+      "const pregrant = isPregrantPhase(initialPhase);",
+    ) !== 2 ||
+    occurrenceCount(
+      runner,
+      "allowIncompleteDefinerTablePrivileges: pregrant,",
+    ) !== 3
+  ) {
+    fail(
+      `${CREDIT_MIGRATION_PRINCIPAL_REPAIR_RUNNER_PATH} must bind prepare, rollback, and cleanup definer checks to the observed phase`,
+    );
+  }
+  if (/console[.]|error[.](?:message|stack)|String\(error/.test(runner)) {
+    fail(
+      `${CREDIT_MIGRATION_PRINCIPAL_REPAIR_RUNNER_PATH} must emit only fixed metadata markers`,
+    );
+  }
+  let packageJson;
+  try {
+    packageJson = JSON.parse(
+      fs.readFileSync(path.join(rootDir, "package.json"), "utf8"),
+    );
+  } catch {
+    fail("package.json must contain the reviewed production-contract command");
+  }
+  const tokens = String(
+    packageJson?.scripts?.["test:production-contracts"] ?? "",
+  ).split(/\s+/);
+  for (const testPath of [
+    CREDIT_MIGRATION_PRINCIPAL_REPAIR_TEST_PATH,
+    MIGRATION_SUPER_CLEANUP_EXEC_TEST_PATH,
+    REPAIR_EXEC_TOKEN_RETIREMENT_TEST_PATH,
+    "scripts/image-gen-migration-super-cleanup-evidence.test.mjs",
+  ]) {
+    if (tokens.filter((token) => token === testPath).length !== 1) {
+      fail(
+        `package.json test:production-contracts must include exact ${testPath}`,
+      );
+    }
+  }
+  const cleanupWorkflow = fs.readFileSync(
+    path.join(rootDir, MIGRATION_SUPER_CLEANUP_WORKFLOW_PATH),
+    "utf8",
+  );
+  try {
+    // Recovery copies this controller as a standalone file. Load the optional
+    // cleanup validator only for full repository validation, never at startup.
+    execFileSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        `
+      import fs from "node:fs";
+      import { assertProtectedCleanupWorkflow } from ${JSON.stringify(new URL("./retire-image-gen-repair-exec-token.mjs", import.meta.url).href)};
+      const workflow = fs.readFileSync(0, "utf8");
+      assertProtectedCleanupWorkflow(workflow, workflow);
+    `,
+      ],
+      { input: cleanupWorkflow, stdio: ["pipe", "pipe", "pipe"] },
+    );
+  } catch {
+    fail(
+      `${MIGRATION_SUPER_CLEANUP_WORKFLOW_PATH} must preserve protected revoke-only cleanup evidence`,
+    );
+  }
+}
+
 function validateRuntimePrincipalStagingWorkflow(rootDir) {
   const workflowPath = path.join(
     rootDir,
@@ -5084,7 +6244,7 @@ function validateRuntimePrincipalStagingWorkflow(rootDir) {
       "must verify the new principal only through the isolated local tunnel",
     ],
     [
-      'runtime_database_url="mysql://${runtime_principal}:${runtime_password}@[${RUNTIME_PRINCIPAL_DATABASE_PRIVATE_IP}]:3306/${RUNTIME_PRINCIPAL_DATABASE_NAME}"',
+      'runtime_database_url="mysql://${runtime_principal}:${runtime_password}@${RUNTIME_PRINCIPAL_DATABASE_MACHINE_ID}.vm.${RUNTIME_PRINCIPAL_DATABASE_APP}.internal:3306/${RUNTIME_PRINCIPAL_DATABASE_NAME}"',
       "must stage the Fly-reachable private database URL",
     ],
     [
@@ -5498,7 +6658,7 @@ function validateCreditProvisionerRetirementWorkflow(rootDir) {
       "must require the exact reviewed worker Machine count",
     ],
     [
-      "EXPECTED_RUNTIME_PRINCIPAL_SHA256=$EXPECTED_RUNTIME_PRINCIPAL_SHA256 node /app/dist/billing-trigger-runtime-preflight.cjs",
+      '--command "env EXPECTED_RUNTIME_PRINCIPAL_SHA256=$EXPECTED_RUNTIME_PRINCIPAL_SHA256 node /app/dist/billing-trigger-runtime-preflight.cjs"',
       "must reprove the restricted principal on every Machine",
     ],
     [
@@ -5670,7 +6830,7 @@ function validateCreditProvisionerRetirementWorkflow(rootDir) {
     'for machine_id in "${machine_ids[@]}"; do',
   );
   const preflightCommand = topologyStep?.indexOf(
-    "EXPECTED_RUNTIME_PRINCIPAL_SHA256=$EXPECTED_RUNTIME_PRINCIPAL_SHA256 node /app/dist/billing-trigger-runtime-preflight.cjs",
+    '--command "env EXPECTED_RUNTIME_PRINCIPAL_SHA256=$EXPECTED_RUNTIME_PRINCIPAL_SHA256 node /app/dist/billing-trigger-runtime-preflight.cjs"',
   );
   const loopEnd = topologyStep?.indexOf("          done", loopStart ?? -1);
   if (
@@ -5724,6 +6884,29 @@ function validateRuntimePrincipalCleanupWorkflow(rootDir) {
     fail(`Missing ${RUNTIME_PRINCIPAL_CLEANUP_WORKFLOW_PATH}`);
   }
   const workflow = fs.readFileSync(workflowPath, "utf8");
+  const guardIndex = workflow.indexOf(
+    "      - name: Reject unlock while reviewed or live Test exposure remains",
+  );
+  const mutationIndex = workflow.indexOf(
+    "      - name: Lock, unlock, or drop only the exact obsolete broad principal",
+  );
+  const [guardStep] = namedWorkflowStepBodies(
+    workflow,
+    "Reject unlock while reviewed or live Test exposure remains",
+  );
+  if (
+    guardIndex < 0 ||
+    mutationIndex <= guardIndex ||
+    !guardStep?.includes("if: inputs.operation == 'unlock'") ||
+    !guardStep.includes(
+      "run: node scripts/image-gen-credit-test-proof.mjs guard-unlock",
+    ) ||
+    guardStep.includes("continue-on-error:")
+  ) {
+    fail(
+      "runtime-principal cleanup must guard unlock against reviewed and live Test exposure",
+    );
+  }
   assertNoDirectGithubExpressionsInRunBlocks(
     workflow,
     RUNTIME_PRINCIPAL_CLEANUP_WORKFLOW_PATH,
@@ -5764,7 +6947,7 @@ function validateRuntimePrincipalCleanupWorkflow(rootDir) {
       "must derive the exact successor count from reviewed desiredScale",
     ],
     [
-      "EXPECTED_RUNTIME_PRINCIPAL_SHA256=$EXPECTED_RUNTIME_PRINCIPAL_SHA256 node /app/dist/billing-trigger-runtime-preflight.cjs",
+      '--command "env EXPECTED_RUNTIME_PRINCIPAL_SHA256=$EXPECTED_RUNTIME_PRINCIPAL_SHA256 node /app/dist/billing-trigger-runtime-preflight.cjs"',
       "must reprove the exact principal and DML boundary on every Machine",
     ],
     [
@@ -7322,6 +8505,138 @@ function validateStorageProxyArtifactTransition(app) {
   }
 }
 
+// This is an explicit reviewed request, never proof of database state. The
+// protected deploy independently produces and consumes fresh metadata proof.
+export function validateCreditTestActivation(app, env, rootDir) {
+  const request = app.creditTestActivation;
+  const exposed = [
+    "MESSENGER_PAID_CREDITS_ENABLED",
+    "MOLLIE_CREDIT_CHECKOUT_ENABLED",
+  ].some((key) => String(env[key]) === "true");
+  if (request === undefined) {
+    if (exposed)
+      fail(
+        "image-gen credit exposure requires an explicit bounded Test activation contract",
+      );
+    return false;
+  }
+  if (
+    !request ||
+    typeof request !== "object" ||
+    Array.isArray(request) ||
+    Object.keys(request).sort().join(",") !==
+      "obsoletePrincipalSha256,operator,state" ||
+    request.state !== "bounded_test" ||
+    !/^[a-f0-9]{64}$/.test(request.obsoletePrincipalSha256 ?? "") ||
+    request.obsoletePrincipalSha256 ===
+      app.databaseSchemaTransition?.runtimePrincipalSha256 ||
+    app.databaseSchemaTransition?.state !== "complete" ||
+    app.databaseSchemaPhase !== "0018_credit_checkout_reservation"
+  ) {
+    fail(
+      "image-gen bounded Test activation must bind the completed restricted runtime and a distinct obsolete principal",
+    );
+  }
+  // Retain the originally reviewed activation executable and predecessor even
+  // when a later frontend/runtime release advances the desired image/baseline.
+  // This request is not evidence: the deploy still verifies the original audit.
+  const operator = request.operator;
+  if (
+    !operator ||
+    typeof operator !== "object" ||
+    Array.isArray(operator) ||
+    Object.keys(operator).sort().join(",") !==
+      "artifactSourceSha,deploymentIdentity,epoch,operatorImage,previousEpoch,requestId,runtimeImage" ||
+    typeof operator.requestId !== "string" ||
+    !/^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(
+      operator.requestId,
+    ) ||
+    operator.previousEpoch !== 1 ||
+    operator.epoch !== 2 ||
+    !isImmutableAppImage(app, operator.operatorImage) ||
+    typeof operator.artifactSourceSha !== "string" ||
+    !/^[a-f0-9]{40}$/.test(operator.artifactSourceSha) ||
+    !isImmutableAppImage(app, operator.runtimeImage) ||
+    typeof operator.deploymentIdentity !== "string" ||
+    !/^deploy-[1-9][0-9]*-[1-9][0-9]*$/.test(operator.deploymentIdentity)
+  ) {
+    fail(
+      "image-gen bounded Test activation must retain exact original operator and predecessor identities",
+    );
+  }
+  validateImageGenSchemaTransition(app);
+  for (const [key, value] of Object.entries({
+    MOLLIE_MODE: "test",
+    MOLLIE_LIVE_BILLING_ENABLED: "false",
+    MOLLIE_BILLING_ENABLED: "false",
+    MOLLIE_CREDIT_WORKSPACE_ID: "1",
+    MOLLIE_BILLING_DRAIN_ENABLED: "true",
+    BILLING_NOTIFICATION_PLANE_ENABLED: "true",
+    MOLLIE_RECONCILIATION_ENABLED: "true",
+    MESSENGER_PAID_IMAGE_PROVIDER_MAX_COST_USD: "1.00",
+    MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD: "5.00",
+    MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD: "25.00",
+    MESSENGER_USER_DAILY_SPEND_CAP_USD: "2.00",
+  })) {
+    if (String(env[key]) !== value)
+      fail(`image-gen bounded Test activation requires ${key}=${value}`);
+  }
+  for (const key of [
+    "MESSENGER_PAID_CREDITS_ENABLED",
+    "MOLLIE_CREDIT_CHECKOUT_ENABLED",
+  ]) {
+    if (!["true", "false"].includes(String(env[key])))
+      fail("image-gen bounded Test flags must be explicit booleans");
+  }
+  if (
+    String(env.MOLLIE_CREDIT_CHECKOUT_ENABLED) === "true" &&
+    String(env.MESSENGER_PAID_CREDITS_ENABLED) !== "true"
+  )
+    fail("image-gen checkout requires paid admission");
+  for (const key of [
+    "MOLLIE_CREDIT_TEST_CHANNEL_CONNECTION_ID",
+    "MOLLIE_CREDIT_TEST_BINDING_EPOCH",
+    "MOLLIE_CREDIT_TEST_PRIVACY_EPOCH",
+    "MOLLIE_CREDIT_TEST_USER_KEY_HASH",
+  ]) {
+    if (String(env[key] ?? "").trim() !== "")
+      fail(
+        "image-gen Test activation must not require manual tester registration",
+      );
+  }
+  // A rollback after any provider transport must retain the durable drain.
+  for (const image of app.reviewedRollbackImages) {
+    const config = getReviewedRollbackConfig("image-gen", image, rootDir);
+    const rollbackEnv = tableAssignments(
+      readTomlTables(fs.readFileSync(path.join(rootDir, config), "utf8")),
+      "env",
+    );
+    for (const [key, value] of Object.entries({
+      MOLLIE_MODE: "test",
+      MOLLIE_LIVE_BILLING_ENABLED: "false",
+      MOLLIE_BILLING_ENABLED: "false",
+      MOLLIE_BILLING_DRAIN_ENABLED: "true",
+      MOLLIE_RECONCILIATION_ENABLED: "true",
+      BILLING_NOTIFICATION_PLANE_ENABLED: "true",
+      MESSENGER_PAID_CREDITS_ENABLED: "false",
+      MOLLIE_CREDIT_CHECKOUT_ENABLED: "false",
+    })) {
+      if (String(rollbackEnv[key]) !== value)
+        fail(`image-gen Test rollback requires ${key}=${value}`);
+    }
+  }
+  return true;
+}
+
+export function readCreditTestActivation(rootDir = process.cwd()) {
+  const app = loadProductionManifest(rootDir).apps["image-gen"];
+  const env = tableAssignments(
+    readTomlTables(fs.readFileSync(path.join(rootDir, app.config), "utf8")),
+    "env",
+  );
+  return { app, env, active: validateCreditTestActivation(app, env, rootDir) };
+}
+
 export function validateProductionRepository(rootDir = process.cwd()) {
   const manifest = loadProductionManifest(rootDir);
   const packageJson = readJson(path.join(rootDir, "package.json"));
@@ -7499,10 +8814,34 @@ export function validateProductionRepository(rootDir = process.cwd()) {
       "never from hardcoded counts",
       "must derive recovery scale only from validated interrupted data",
     ],
+    [
+      "PREPARE_ROOT_EXEC_COMMAND_FLYCTL_CSV",
+      "must import the reviewed repair-command CSV field",
+    ],
+    [
+      '--expiry 4h --command-prefix "$prepare_command_csv" --command-prefix "$cleanup_command_csv" --json',
+      "must pass only the reviewed repair-command CSV field to flyctl",
+    ],
+    [
+      '--expiry 4h --command-prefix "$root_mysql_command_csv" --json',
+      "must pass the complete reviewed cleanup-command prefix CSV field to flyctl",
+    ],
+    [
+      "parses\n`--command-prefix` as RFC 4180 CSV fields",
+      "must explain the pinned flyctl StringSlice transport encoding",
+    ],
   ]) {
     if (!productionRunbook.includes(needle)) {
       fail(`Production deployment runbook ${message}`);
     }
+  }
+  if (
+    productionRunbook.includes('--command "$root_mysql_command"') ||
+    productionRunbook.includes('--command-prefix "$root_mysql_command"')
+  ) {
+    fail(
+      "Production deployment runbook must not pass the raw root command to flyctl StringSlice parsing",
+    );
   }
   if (
     productionRunbook.includes("IMAGE_GEN_DATABASE_RECOVERY_INSPECTION_URL") ||
@@ -7593,13 +8932,14 @@ export function validateProductionRepository(rootDir = process.cwd()) {
     JSON.stringify(provisionerSecretHolders) !==
     JSON.stringify([
       "cleanup-image-gen-runtime-principals.yml",
+      "deploy-production.yml",
       "image-gen-schema-transition.yml",
       "retire-image-gen-credit-provisioners.yml",
       "stage-image-gen-credit-runtime-principal.yml",
     ])
   ) {
     fail(
-      "IMAGE_GEN_DATABASE_PROVISIONER_URL may exist only in the four protected image-gen database workflows",
+      "IMAGE_GEN_DATABASE_PROVISIONER_URL may exist only in the five protected image-gen database workflows",
     );
   }
   for (const [target, script] of [
@@ -7631,7 +8971,9 @@ export function validateProductionRepository(rootDir = process.cwd()) {
   validateStorageProxySafety(rootDir);
   validateImageGenMigrationCi(rootDir);
   validateTrustedArtifactWorkflow(rootDir);
+  validateTestPaymentOperatorWorkflow(rootDir);
   validateCreditMigrationDefinerGrant(rootDir);
+  validateCreditMigrationPrincipalRepair(rootDir);
   validateCreditProvisionerBootstrapHelper(rootDir);
   validateCreditProvisionerRetirementRunner(rootDir);
   validateCreditProvisionerRetirementWorkflow(rootDir);
@@ -7983,13 +9325,14 @@ export function validateProductionRepository(rootDir = process.cwd()) {
       if (
         creditExposureEnabled &&
         String(envAssignments.MOLLIE_MODE ?? "") === "test" &&
+        Object.values(testPilotValues).some((value) => value !== "") &&
         (!canonicalDatabaseId(testPilotValues.channelConnectionId) ||
           !canonicalDatabaseId(testPilotValues.bindingEpoch) ||
           !canonicalDatabaseId(testPilotValues.privacyEpoch) ||
           !/^[a-f0-9]{64}$/.test(testPilotValues.userKeyHash))
       ) {
         fail(
-          `${app.config} must pin Test Mode paid credits to one hashed Messenger user and exact Page binding`,
+          `${app.config} must not contain a partial or malformed legacy tester pin`,
         );
       }
       if (
@@ -7998,6 +9341,11 @@ export function validateProductionRepository(rootDir = process.cwd()) {
       ) {
         fail(`${app.config} must remove the Test Mode tester pin in live mode`);
       }
+      const boundedTest = validateCreditTestActivation(
+        app,
+        envAssignments,
+        rootDir,
+      );
       for (const [name, expected] of [
         [
           "PUBLIC_BASE_URL",
@@ -8006,9 +9354,15 @@ export function validateProductionRepository(rootDir = process.cwd()) {
         ["MESSENGER_FREE_DAILY_LIMIT", "5"],
         ["MESSENGER_FREE_MONTHLY_LIMIT", "20"],
         ["MESSENGER_IMAGE_QUOTA_TIME_ZONE", "Europe/Brussels"],
-        ["MESSENGER_PAID_CREDITS_ENABLED", "false"],
+        [
+          "MESSENGER_PAID_CREDITS_ENABLED",
+          boundedTest ? paidCreditsEnabled : "false",
+        ],
         ["MESSENGER_PAID_IMAGE_PROVIDER_MAX_COST_USD", "1.00"],
-        ["MOLLIE_CREDIT_CHECKOUT_ENABLED", "false"],
+        [
+          "MOLLIE_CREDIT_CHECKOUT_ENABLED",
+          boundedTest ? creditCheckoutEnabled : "false",
+        ],
         ["MOLLIE_CREDIT_WORKSPACE_ID", "1"],
         ["OPENAI_IMAGE_MAX_RETRIES", "0"],
         [
@@ -8129,6 +9483,17 @@ export function validateProductionRepository(rootDir = process.cwd()) {
       const dockerBuild = String(
         imageGenPackage.scripts?.["build:docker"] ?? "",
       );
+      if (
+        imageGenPackage.scripts?.["build:test-payment-operator"] !==
+          "esbuild server/cli/enableTestPayments.ts --platform=node --bundle --format=cjs --outfile=dist/enable-test-payments.cjs" ||
+        !dockerBuild
+          .split("&&")
+          .map((command) => command.trim())
+          .includes("pnpm run build:test-payment-operator")
+      )
+        fail(
+          "image-gen build:docker must bundle the exact Test payment operator command",
+        );
       for (const requiredBuildFragment of [
         "scripts/run-production-migrations.mjs",
         "--format=cjs",
@@ -8137,16 +9502,6 @@ export function validateProductionRepository(rootDir = process.cwd()) {
         if (!dockerBuild.includes(requiredBuildFragment)) {
           fail(
             `image-gen build:docker must bundle the reviewed production migrator`,
-          );
-        }
-      }
-      for (const requiredProvisioningFragment of [
-        "server/cli/provisionWhatsAppBinding.ts",
-        "--outfile=dist/provision-whatsapp-binding.cjs",
-      ]) {
-        if (!dockerBuild.includes(requiredProvisioningFragment)) {
-          fail(
-            "image-gen build:docker must bundle the provider-silent WhatsApp provisioning command",
           );
         }
       }
@@ -8193,7 +9548,6 @@ export function validateProductionRepository(rootDir = process.cwd()) {
         'io.leaderbot.schema.minimum="0018_credit_checkout_reservation"',
         "'migration-bridge' > /app/.leaderbot-artifact-kind",
         "'runtime' > /app/.leaderbot-artifact-kind",
-        "RUN test -s /app/dist/provision-whatsapp-binding.cjs",
         "RUN test -s /app/dist/billing-trigger-runtime-preflight.cjs",
       ]) {
         if (!dockerfile.includes(requiredDockerFragment)) {
@@ -8227,6 +9581,16 @@ export function validateProductionRepository(rootDir = process.cwd()) {
         );
       }
       const runtimeStage = dockerfile.split(" AS runtime", 2)[1] ?? "";
+      for (const required of [
+        "COPY --from=build /app/dist ./dist",
+        "test -s /app/dist/enable-test-payments.cjs",
+        "node --check /app/dist/enable-test-payments.cjs",
+      ]) {
+        if (!runtimeStage.includes(required))
+          fail(
+            "image-gen runtime must package and syntax-check the Test payment operator command",
+          );
+      }
       if (
         !runtimeStage.includes(
           'io.leaderbot.schema.minimum="0018_credit_checkout_reservation"',
@@ -8244,14 +9608,14 @@ export function validateProductionRepository(rootDir = process.cwd()) {
         path.join(rootDir, ".github/workflows/image-gen-ci.yml"),
         "utf8",
       );
-      if (
-        !imageGenCi.includes(
-          'docker run --rm "$image" test -s /app/dist/provision-whatsapp-binding.cjs',
-        )
-      ) {
-        fail(
-          "image-gen CI must inspect the bundled WhatsApp provisioning command",
-        );
+      for (const required of [
+        'docker run --rm "$image" test -s /app/dist/enable-test-payments.cjs',
+        'docker run --rm --entrypoint node "$image" --check /app/dist/enable-test-payments.cjs',
+      ]) {
+        if (!imageGenCi.includes(required))
+          fail(
+            "image-gen CI must inspect and syntax-check the Test payment operator command",
+          );
       }
       if (
         !imageGenCi.includes(
@@ -8489,6 +9853,24 @@ export function validateProductionRepository(rootDir = process.cwd()) {
     }
     if (new Set(config.allowedFields).size !== config.allowedFields.length) {
       fail(`${object} allowed Meta fields must not contain duplicates`);
+    }
+  }
+
+  const pageCallback = manifest.meta.page;
+  const legacyGatewayHostname = `${CANONICAL_TARGETS.gateway.app}.fly.dev`;
+  if (
+    pageCallback?.migrationState === "canonical" &&
+    new URL(normalizeUrl(pageCallback.expectedCallback)).hostname !==
+      legacyGatewayHostname
+  ) {
+    const uptimeWorkflow = fs.readFileSync(
+      path.join(rootDir, PRODUCTION_UPTIME_WORKFLOW_PATH),
+      "utf8",
+    );
+    if (referencesExactHostnameToken(uptimeWorkflow, legacyGatewayHostname)) {
+      fail(
+        `${PRODUCTION_UPTIME_WORKFLOW_PATH} must not probe the legacy OpenClaw gateway after the Page callback is canonical`,
+      );
     }
   }
 
@@ -9497,9 +10879,20 @@ export function checkLiveFlyDrift(target, options = {}) {
       strategy: expectedDeploy.strategy ?? app.strategy,
       ...expectedDeploy,
     };
-    compareExactObject(live.deploy, canonicalDeploy, "deploy", blockingErrors, [
-      "release_command_timeout",
-    ]);
+    const normalizedLiveDeploy =
+      liveDeployIsObject &&
+      !Object.hasOwn(live.deploy, "strategy") &&
+      canonicalDeploy.strategy === "rolling" &&
+      app.strategy === "rolling"
+        ? { strategy: "rolling", ...live.deploy }
+        : live.deploy;
+    compareExactObject(
+      normalizedLiveDeploy,
+      canonicalDeploy,
+      "deploy",
+      blockingErrors,
+      ["release_command_timeout"],
+    );
   }
   compareObject(liveEnv, canonicalEnv, "env", blockingErrors);
   for (const liveKey of Object.keys(liveEnv)) {
@@ -10199,15 +11592,135 @@ export async function checkSettledLiveFlyDrift(target, options = {}) {
   const configArgs = ["config", "show", "--app", app.app];
   const machineArgs = ["machine", "list", "--app", app.app, "--json"];
   const scaleArgs = ["scale", "show", "--app", app.app, "--json"];
+  const releasesArgs = ["releases", "--app", app.app, "--image", "--json"];
   const cachedOutputs = new Map();
-  for (const args of [configArgs, machineArgs, scaleArgs]) {
+  for (const args of [configArgs, machineArgs, scaleArgs, releasesArgs]) {
     cachedOutputs.set(args.join("\0"), run(args));
   }
   const live = JSON.parse(cachedOutputs.get(configArgs.join("\0")));
   const machines = JSON.parse(cachedOutputs.get(machineArgs.join("\0")));
-  const identity = live?.env?.LEADERBOT_DEPLOYMENT_IDENTITY ?? "none";
-  if (!/^(?:none|deploy-[0-9]+-[0-9]+)$/.test(identity)) {
-    fail("live deployment identity is not a trusted settled baseline");
+  const releases = JSON.parse(cachedOutputs.get(releasesArgs.join("\0")));
+  if (!Array.isArray(machines)) {
+    fail("settled-live preflight requires a Fly Machine list");
+  }
+  const machineIds = machines.map((machine) => machine?.id);
+  if (
+    machineIds.some(
+      (machineId) =>
+        typeof machineId !== "string" || !/^[a-f0-9]{14}$/.test(machineId),
+    )
+  ) {
+    fail("settled-live preflight contains an invalid Fly Machine id");
+  }
+  if (new Set(machineIds).size !== machineIds.length) {
+    fail("settled-live preflight contains duplicate Fly Machine ids");
+  }
+  const runtimeMachines = machines.filter(
+    (machine) => !hasReleaseCommandMarker(machine),
+  );
+  if (runtimeMachines.length === 0) {
+    fail("settled-live preflight found no production runtime Machine");
+  }
+  const machineIdentities = new Set(
+    runtimeMachines.map((machine) => {
+      const env = machine?.config?.env ?? {};
+      const value = Object.hasOwn(env, "LEADERBOT_DEPLOYMENT_IDENTITY")
+        ? env.LEADERBOT_DEPLOYMENT_IDENTITY
+        : "none";
+      if (
+        typeof value !== "string" ||
+        !/^(?:none|deploy-[0-9]+-[0-9]+)$/.test(value)
+      ) {
+        fail(
+          `settled-live preflight Machine ${machine.id} deployment identity is invalid`,
+        );
+      }
+      return value;
+    }),
+  );
+  if (machineIdentities.size !== 1) {
+    fail(
+      "settled-live preflight requires one uniform Machine deployment identity",
+    );
+  }
+  const identity = [...machineIdentities][0];
+  const liveEnv = live?.env ?? {};
+  if (!Array.isArray(releases)) {
+    fail("settled-live preflight requires a Fly release list");
+  }
+  const normalizedReleases = releases.map((release) => {
+    if (
+      typeof release?.Version !== "number" ||
+      !Number.isSafeInteger(release.Version) ||
+      release.Version <= 0
+    ) {
+      fail("settled-live preflight contains an invalid Fly release version");
+    }
+    if (typeof release.InProgress !== "boolean") {
+      fail("settled-live preflight contains invalid Fly release progress");
+    }
+    return { ...release, normalizedVersion: release.Version };
+  });
+  if (
+    new Set(normalizedReleases.map((release) => release.normalizedVersion))
+      .size !== normalizedReleases.length
+  ) {
+    fail("settled-live preflight contains duplicate Fly release versions");
+  }
+  if (normalizedReleases.some((release) => release.InProgress === true)) {
+    fail("settled-live preflight found an in-progress Fly release");
+  }
+  const activeRelease = normalizedReleases
+    .filter(
+      (release) =>
+        (release?.Status === "complete" || release?.Status === "running") &&
+        typeof release?.ImageRef === "string",
+    )
+    .sort((left, right) => right.normalizedVersion - left.normalizedVersion)[0];
+  if (!activeRelease) {
+    fail("settled-live preflight could not bind the active Fly release");
+  }
+  const newerReleases = normalizedReleases.filter(
+    (release) => release.normalizedVersion > activeRelease.normalizedVersion,
+  );
+  if (newerReleases.some((release) => release.Status !== "failed")) {
+    fail("settled-live preflight found a newer non-terminal Fly release");
+  }
+  if (
+    newerReleases.length === 0 &&
+    Object.hasOwn(liveEnv, "LEADERBOT_DEPLOYMENT_IDENTITY") &&
+    (typeof liveEnv.LEADERBOT_DEPLOYMENT_IDENTITY !== "string" ||
+      liveEnv.LEADERBOT_DEPLOYMENT_IDENTITY !== identity)
+  ) {
+    fail("live config deployment identity differs from the settled Machines");
+  }
+  const releaseWatermark = createHash("sha256")
+    .update(
+      JSON.stringify(
+        [...normalizedReleases]
+          .sort(
+            (left, right) => left.normalizedVersion - right.normalizedVersion,
+          )
+          .map((release) => [
+            release.normalizedVersion,
+            release.Status,
+            release.InProgress,
+            release.ImageRef ?? null,
+          ]),
+      ),
+    )
+    .digest("hex");
+  const activeReleaseVersion = String(activeRelease.normalizedVersion);
+  for (const machine of runtimeMachines) {
+    const releaseVersion = machine?.config?.metadata?.fly_release_version;
+    if (
+      typeof releaseVersion !== "string" ||
+      releaseVersion !== activeReleaseVersion
+    ) {
+      fail(
+        `settled-live preflight Machine ${machine.id} is not bound to the active Fly release`,
+      );
+    }
   }
   const rawMachineImages = new Set(
     machines.map((machine) => machine?.config?.image).filter(Boolean),
@@ -10219,26 +11732,15 @@ export async function checkSettledLiveFlyDrift(target, options = {}) {
     fail("settled-live preflight found no production Machine image");
   }
   let imageRecords = [];
-  let releaseImage;
-  if ([...rawMachineImages].some((image) => !isImmutableAppImage(app, image))) {
+  const releaseImage = activeRelease.ImageRef;
+  if (
+    [...rawMachineImages, releaseImage].some(
+      (image) => !isImmutableAppImage(app, image),
+    )
+  ) {
     imageRecords = JSON.parse(
       run(["image", "show", "--app", app.app, "--json"]),
     );
-    const releases = JSON.parse(
-      run(["releases", "--app", app.app, "--image", "--json"]),
-    );
-    releaseImage = releases
-      .filter(
-        (release) =>
-          (release?.Status === "complete" || release?.Status === "running") &&
-          typeof release?.ImageRef === "string",
-      )
-      .sort(
-        (left, right) => Number(right.Version) - Number(left.Version),
-      )[0]?.ImageRef;
-    if (!releaseImage) {
-      fail("settled-live preflight could not bind the current release image");
-    }
   }
   const resolvedImages = new Map(
     [...rawMachineImages].map((image) => [
@@ -10275,20 +11777,13 @@ export async function checkSettledLiveFlyDrift(target, options = {}) {
     fail("settled-live preflight requires one uniform immutable Machine image");
   }
   const expectedImage = [...immutableImages][0];
-  if (releaseImage) {
-    const resolvedReleaseImage = isImmutableAppImage(app, releaseImage)
-      ? releaseImage
-      : resolveImmutableReleaseImage(
-          target,
-          releaseImage,
-          imageRecords,
-          rootDir,
-        );
-    if (resolvedReleaseImage !== expectedImage) {
-      fail(
-        "settled-live preflight Machine image does not match the current release",
-      );
-    }
+  const resolvedReleaseImage = isImmutableAppImage(app, releaseImage)
+    ? releaseImage
+    : resolveImmutableReleaseImage(target, releaseImage, imageRecords, rootDir);
+  if (resolvedReleaseImage !== expectedImage) {
+    fail(
+      "settled-live preflight Machine image does not match the current release",
+    );
   }
   if (!reviewedProductionImages(app).has(expectedImage)) {
     fail("settled-live preflight image is outside the reviewed allowlist");
@@ -10328,6 +11823,20 @@ export async function checkSettledLiveFlyDrift(target, options = {}) {
       fail(`Unexpected uncached Fly read: ${args.join(" ")}`);
     return cachedOutputs.get(key);
   };
+  const effectiveLive = structuredClone(live);
+  if (newerReleases.length > 0) {
+    const activeMachineEnv = { ...(runtimeMachines[0]?.config?.env ?? {}) };
+    delete activeMachineEnv.FLY_PROCESS_GROUP;
+    delete activeMachineEnv.PRIMARY_REGION;
+    delete activeMachineEnv.LEADERBOT_DEPLOYMENT_IDENTITY;
+    effectiveLive.env = {
+      ...activeMachineEnv,
+      ...(identity === "none"
+        ? {}
+        : { LEADERBOT_DEPLOYMENT_IDENTITY: identity }),
+    };
+  }
+  cachedOutputs.set(configArgs.join("\0"), JSON.stringify(effectiveLive));
   const reviewedLegacyConfig =
     identity === "none" &&
     allowsFirstTrustedBootstrap(target, app, expectedImage)
@@ -10360,13 +11869,28 @@ export async function checkSettledLiveFlyDrift(target, options = {}) {
         candidate.reconcilableDrift.length === 0,
     ) ?? results[0];
   const errors = [...result.blockingErrors, ...result.reconcilableDrift];
-  if (errors.length) return { ...result, identity, expectedImage };
+  const releaseVersion = activeRelease.normalizedVersion;
+  if (errors.length) {
+    return {
+      ...result,
+      identity,
+      expectedImage,
+      releaseVersion,
+      releaseWatermark,
+    };
+  }
   await verifySettledBaseline(target, identity, {
     ...options,
     rootDir,
     expectedImage,
   });
-  return { ...result, identity, expectedImage };
+  return {
+    ...result,
+    identity,
+    expectedImage,
+    releaseVersion,
+    releaseWatermark,
+  };
 }
 
 const isMain =
@@ -10743,6 +12267,17 @@ if (isMain) {
         `${result.app} unsettled production drift:\n- ${errors.join("\n- ")}\n`,
       );
       process.exitCode = 1;
+    } else if (process.argv.includes("--output-json")) {
+      process.stdout.write(
+        `${JSON.stringify({
+          target: result.target,
+          app: result.app,
+          identity: result.identity,
+          expectedImage: result.expectedImage,
+          releaseVersion: result.releaseVersion,
+          releaseWatermark: result.releaseWatermark,
+        })}\n`,
+      );
     } else {
       process.stdout.write(
         `${result.app} matches settled identity ${result.identity}.\n`,

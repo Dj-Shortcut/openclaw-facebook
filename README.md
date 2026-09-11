@@ -26,9 +26,10 @@ Meta webhook -> Leaderbot runtime -> conversation layer
                                         Messenger
 ```
 
-The paid wallet and checkout are not live product claims yet. The current code
-still contains a tenant portal, subscriptions, recurring billing workers, and
-OpenClaw integration while the migration is completed. See
+The paid wallet and checkout are not live product claims yet. The active
+runtime is the direct Messenger bot; the repository still retains only the
+reviewed migration and drain paths needed to retire historical portal,
+subscription, and OpenClaw state safely. See
 [`docs/operations/todo.md`](docs/operations/todo.md) for the only active plan.
 
 ## Repository layout
@@ -42,7 +43,6 @@ OpenClaw integration while the migration is completed. See
   will move to a standalone plugin project after its package identity, channel
   index entry, install path, and ClawHub release route are proven there.
 - `deploy/fly-gateway`: legacy personal OpenClaw gateway; retirement-only.
-- `apps/customer-app`: legacy multi-tenant portal; pending safe removal.
 
 New Leaderbot product work belongs in `apps/image-gen`. Do not route the owner
 bot through OpenClaw or add commercial features to the root plugin. Until the
@@ -119,7 +119,8 @@ npm run pack:dry
 
 CI classifies exact changed paths. Product contracts always run; expensive
 image-gen and migration suites run only when their source boundary changes;
-plugin packaging and the legacy gateway each have their own path-scoped lane.
+plugin packaging has its own path-scoped lane. Tests for retained gateway
+recovery run in Production contract CI without starting or deploying a gateway.
 
 ## Documentation
 

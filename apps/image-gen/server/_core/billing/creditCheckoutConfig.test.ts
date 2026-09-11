@@ -34,7 +34,68 @@ function enabledEnv(override: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
 }
 
 describe("credit checkout rollout configuration", () => {
-  it("accepts only an explicitly pinned Test Mode credit checkout", () => {
+  function openTestEnv() {
+    return enabledEnv({
+      MOLLIE_CREDIT_TEST_CHANNEL_CONNECTION_ID: "",
+      MOLLIE_CREDIT_TEST_BINDING_EPOCH: "",
+      MOLLIE_CREDIT_TEST_PRIVACY_EPOCH: "",
+      MOLLIE_CREDIT_TEST_USER_KEY_HASH: "",
+    });
+  }
+
+  it("allows distinct Messenger users to test without registration", () => {
+    const config = getCreditCheckoutPilotConfig(openTestEnv());
+    expect(config.testPilotScope).toBeNull();
+    for (const userKey of [TEST_USER_KEY, `u2.k1.${"8".repeat(64)}`]) {
+      expect(
+        isCreditCheckoutMessengerScopeAllowed(config, {
+          workspaceId: 42,
+          channelConnectionId: 8,
+          bindingEpoch: 3,
+          privacyEpoch: 5,
+          userKey,
+        })
+      ).toBe(true);
+    }
+  });
+
+  it.each([
+    { workspaceId: 43 },
+    { channelConnectionId: 0 },
+    { bindingEpoch: -1 },
+    { privacyEpoch: 1.5 },
+    { userKey: "raw-sender-id" },
+  ])(
+    "keeps the owner and canonical identity boundary without a tester pin: %j",
+    override => {
+      expect(
+        isCreditCheckoutMessengerScopeAllowed(
+          getCreditCheckoutPilotConfig(openTestEnv()),
+          {
+            workspaceId: 42,
+            channelConnectionId: 8,
+            bindingEpoch: 3,
+            privacyEpoch: 5,
+            userKey: TEST_USER_KEY,
+            ...override,
+          }
+        )
+      ).toBe(false);
+    }
+  );
+
+  it.each([
+    { MOLLIE_BILLING_DRAIN_ENABLED: "false" },
+    { BILLING_NOTIFICATION_PLANE_ENABLED: "false" },
+    { MOLLIE_LIVE_BILLING_ENABLED: "true" },
+    { MESSENGER_PAID_IMAGE_PROVIDER_MAX_COST_USD: "0" },
+  ])("keeps payment and cost protections for open Test Mode: %j", override => {
+    expect(() =>
+      getCreditCheckoutPilotConfig({ ...openTestEnv(), ...override })
+    ).toThrow(CreditCheckoutConfigError);
+  });
+
+  it("preserves an explicitly configured older test restriction", () => {
     expect(getCreditCheckoutPilotConfig(enabledEnv())).toEqual({
       checkoutEnabled: true,
       paidCreditsEnabled: true,

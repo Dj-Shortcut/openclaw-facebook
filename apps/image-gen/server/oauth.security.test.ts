@@ -248,7 +248,9 @@ describe("OAuth callback security", () => {
     expect(authorizationUrl.searchParams.has("config_id")).toBe(false);
     expect(
       new Set(authorizationUrl.searchParams.get("scope")?.split(","))
-    ).toEqual(new Set(["public_profile", "pages_show_list"]));
+    // Operator login proves identity only. It must not request Page access it
+    // no longer consumes; Messenger Page tokens carry their own permissions.
+    ).toEqual(new Set(["public_profile"]));
     const pageConnectUrl = new URL(
       getFacebookOAuthUrl("page-connect-state") ?? "https://invalid"
     );
@@ -284,15 +286,14 @@ describe("OAuth callback security", () => {
         Authorization: "Bearer facebook-user-token",
       },
     });
-    const pagesUrl = new URL(String(fetchMock.mock.calls[2]?.[0]));
-    expect(pagesUrl.pathname).toContain("/me/accounts");
-    expect(pagesUrl.searchParams.has("access_token")).toBe(false);
-    expect(fetchMock.mock.calls[2]?.[1]).toMatchObject({
-      headers: {
-        Accept: "application/json",
-        Authorization: "Bearer facebook-user-token",
-      },
-    });
+    // Login stops at identity: a token exchange and a profile read, and no
+    // Page listing at all.
+    expect(fetchMock.mock.calls).toHaveLength(2);
+    expect(
+      fetchMock.mock.calls.some(call =>
+        String(call?.[0]).includes("/me/accounts")
+      )
+    ).toBe(false);
     expect(mocks.upsertUser).toHaveBeenCalledWith(
       expect.objectContaining({
         openId: "facebook:facebook-user-7",
@@ -303,124 +304,52 @@ describe("OAuth callback security", () => {
       "facebook:facebook-user-7",
       expect.any(Object)
     );
-    expect(mocks.upsertChannelConnection).toHaveBeenCalledWith(
-      expect.objectContaining({
-        workspaceId: 42,
-        channel: "facebook_messenger",
-        status: "connected",
-        externalId: "page-42",
-        encryptedAccessToken: expect.stringMatching(/^v1:/),
-      }),
-      { updatePolicy: "preserve_exact_facebook_binding" }
-    );
-    expect(
-      mocks.upsertChannelConnection.mock.calls[0]?.[0]?.encryptedAccessToken
-    ).not.toContain("facebook-page-token");
+    // The owner Page is bound out of band, never by someone signing in.
+    expect(mocks.upsertChannelConnection).not.toHaveBeenCalled();
+    expect(mocks.getOrCreateUserWorkspace).not.toHaveBeenCalled();
   });
 
-  it("uses the login authorization for Page selection without a second OAuth redirect", async () => {
-    vi.stubEnv("FACEBOOK_CONNECT_STORAGE_MODE", "sealed_compat");
-    vi.stubEnv("FB_APP_ID", "facebook-app-123");
-    vi.stubEnv("FB_APP_SECRET", "server-only-secret");
-    vi.stubEnv("APP_BASE_URL", "https://leaderbot.live");
-    vi.stubEnv("NODE_ENV", "production");
-    mocks.getUserByOpenId.mockResolvedValue({
-      id: 7,
-      openId: "facebook:facebook-user-7",
-      name: "Test User",
+  it("never starts a Page selection flow during login", async () => {
+    process.env.APP_ID = "app-id";
+    process.env.FACEBOOK_APP_ID = "facebook-app-id";
+    process.env.FACEBOOK_APP_SECRET = "facebook-app-secret";
+    process.env.OAUTH_PORTAL_URL = "https://leaderbot.example";
+
+    mocks.exchangeCodeForToken.mockResolvedValue({
+      accessToken: "token",
+    });
+    mocks.getUserInfo.mockResolvedValue({
+      openId: "open-id-pages",
+      name: "Operator",
       email: null,
       loginMethod: "facebook",
-      role: "user",
-      createdAt: new Date(0),
-      updatedAt: new Date(0),
-      lastSignedIn: new Date(0),
+      platform: "facebook",
     });
-    mocks.getOrCreateUserWorkspace.mockResolvedValue({
-      id: 42,
-      name: "Test workspace",
-      slug: "workspace-7",
-      createdAt: new Date(0),
-      updatedAt: new Date(0),
+    mocks.getUserByOpenId.mockResolvedValue({
+      id: 9,
+      openId: "open-id-pages",
+      loginMethod: "facebook",
     });
-    mocks.createSessionToken.mockResolvedValue("session-token");
-    vi.stubGlobal(
-      "fetch",
-      vi
-        .fn<typeof fetch>()
-        .mockResolvedValueOnce(
-          new Response(
-            JSON.stringify({ access_token: "facebook-user-token" }),
-            {
-              status: 200,
-              headers: { "Content-Type": "application/json" },
-            }
-          )
-        )
-        .mockResolvedValueOnce(
-          new Response(
-            JSON.stringify({ id: "facebook-user-7", name: "Test User" }),
-            { status: 200, headers: { "Content-Type": "application/json" } }
-          )
-        )
-        .mockResolvedValueOnce(
-          new Response(
-            JSON.stringify({
-              data: [
-                {
-                  id: "page-a",
-                  name: "Page A",
-                  access_token: "page-token-a",
-                  perms: ["MANAGE"],
-                  tasks: ["MESSAGING"],
-                },
-                {
-                  id: "page-b",
-                  name: "Page B",
-                  access_token: "page-token-b",
-                  perms: ["MODERATE"],
-                  tasks: ["MESSAGING"],
-                },
-              ],
-            }),
-            { status: 200, headers: { "Content-Type": "application/json" } }
-          )
-        )
-    );
+    mocks.createSessionToken.mockResolvedValue("session");
 
-    const start = await sendGetRequest("/api/oauth/start?returnTo=%2Fportal");
-    const authorizationUrl = new URL(
-      start.headers.location ?? "https://invalid"
-    );
-    expect(
-      new Set(authorizationUrl.searchParams.get("scope")?.split(","))
-    ).toEqual(new Set(["public_profile", "pages_show_list"]));
-    const state = authorizationUrl.searchParams.get("state") ?? "";
-    const stateCookie = start.headers["set-cookie"]?.[0]?.split(";", 1)[0];
-    const callback = await sendGetRequest(
-      `/api/oauth/callback?code=facebook-code&state=${encodeURIComponent(state)}`,
-      stateCookie
-    );
+    const nonce = "nonce-pages-1234567890ab";
+    const response = await sendCallbackRequest({
+      code: "code-pages",
+      state: buildState(
+        "https://leaderbot.example/api/oauth/callback",
+        nonce,
+        "/"
+      ),
+      cookie: `${OAUTH_STATE_COOKIE_NAME}=${nonce}`,
+    });
 
-    expect(callback.status).toBe(302);
-    const redirect = new URL(
-      callback.headers.location ?? "/",
-      "https://leaderbot.live"
-    );
-    expect(redirect.pathname).toBe("/portal");
-    const connectState = redirect.searchParams.get("facebookConnectState");
-    expect(connectState).toMatch(/^[A-Za-z0-9_-]{32}$/);
-    expect(callback.headers.location).not.toContain("page-token-a");
-    expect(callback.headers.location).not.toContain("page-token-b");
-    expect(
-      (await getStoredFacebookState(connectState ?? ""))?.pages
-    ).toHaveLength(2);
+    expect(response.status).toBe(302);
+    // No Page picker, no connect state, no channel binding: the redirect goes
+    // straight back to where the operator started.
+    expect(response.headers.location).toBe("/");
+    expect(mocks.getOrCreateUserWorkspace).not.toHaveBeenCalled();
     expect(mocks.upsertChannelConnection).not.toHaveBeenCalled();
-    expect(mocks.insertAuditLog).toHaveBeenCalledWith({
-      workspaceId: 42,
-      userId: 7,
-      event: "facebook_login.page_selection_required",
-      metadata: { pageCount: 2 },
-    });
+    expect(mocks.createSessionToken).toHaveBeenCalledTimes(1);
   });
 
   it("does not rotate or replace an existing connected Page during login", async () => {
@@ -607,13 +536,8 @@ describe("OAuth callback security", () => {
       })
     );
     expect(mocks.getUserByOpenId).toHaveBeenCalledWith("open-id-1");
-    expect(mocks.getOrCreateUserWorkspace).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: 7,
-        openId: "open-id-1",
-        loginMethod: "facebook",
-      })
-    );
+    // A session, not a workspace: signing in provisions nothing.
+    expect(mocks.getOrCreateUserWorkspace).not.toHaveBeenCalled();
     expect(mocks.createSessionToken).toHaveBeenCalled();
   });
 
@@ -704,45 +628,6 @@ describe("OAuth callback security", () => {
 
     expect(response.status).toBe(302);
     expect(response.headers.location).toBe("/");
-  });
-
-  it("fails the callback before session creation when the workspace is not persisted", async () => {
-    mocks.exchangeCodeForToken.mockResolvedValue({
-      accessToken: "access-token",
-    });
-    mocks.getUserInfo.mockResolvedValue({
-      openId: "open-id-1",
-      name: "Test User",
-      email: "test@example.com",
-      loginMethod: "facebook",
-      platform: "facebook",
-    });
-    mocks.getUserByOpenId.mockResolvedValue({
-      id: 7,
-      openId: "open-id-1",
-      name: "Test User",
-      email: "test@example.com",
-      loginMethod: "facebook",
-      role: "user",
-      createdAt: new Date(0),
-      updatedAt: new Date(0),
-      lastSignedIn: new Date(0),
-    });
-    mocks.getOrCreateUserWorkspace.mockRejectedValue(
-      new Error("Database unavailable: workspace was not loaded")
-    );
-
-    const nonce = "nonce-1234567890abcdef";
-    const redirectUri = "https://leaderbot.example/api/oauth/callback";
-    const state = buildState(redirectUri, nonce);
-    const response = await sendCallbackRequest({
-      code: "code-workspace-fail",
-      state,
-      cookie: `${OAUTH_STATE_COOKIE_NAME}=${nonce}`,
-    });
-
-    expect(response.status).toBe(500);
-    expect(mocks.createSessionToken).not.toHaveBeenCalled();
   });
 
   it("fails the callback before session creation when the portal customer is not persisted", async () => {

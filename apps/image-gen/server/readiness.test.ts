@@ -8,6 +8,7 @@ import {
   type ReadinessCheck,
 } from "./_core/readiness";
 import * as billingReadiness from "./_core/billing/billingReadiness";
+import * as billingDrainLifecycle from "./_core/billing/billingDrainLifecycle";
 import * as creditCheckoutReadiness from "./_core/billing/creditCheckoutReadiness";
 import { deriveCreditCheckoutTestUserKeyHash } from "./_core/billing/creditCheckoutConfig";
 import { resetConversationIdentityConfigForTests } from "./_core/conversationIdentityConfig";
@@ -16,6 +17,7 @@ import { bindTestHttpServer } from "./testHttpServer";
 
 const READINESS_ENV_KEYS = [
   "NODE_ENV",
+  "JWT_SECRET",
   "MOLLIE_BILLING_ENABLED",
   "MOLLIE_BILLING_DRAIN_ENABLED",
   "MOLLIE_BILLING_PREFLIGHT_ENABLED",
@@ -113,6 +115,30 @@ describe("readiness", () => {
     expect(() => identityCheck?.check()).not.toThrow();
   });
 
+  it("fails production readiness before Page delivery when JWT_SECRET is missing", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    delete process.env.JWT_SECRET;
+    const pageCredentialCheck = buildRuntimeReadinessChecks().find(
+      check => check.name === "messenger_page_credential_config"
+    );
+
+    expect(pageCredentialCheck).toBeDefined();
+    expect(() => pageCredentialCheck?.check()).toThrow(
+      "JWT_SECRET must be set and at least 32 characters long"
+    );
+  });
+
+  it("accepts a production Page-token secret that can back stored credential envelopes", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("JWT_SECRET", "s".repeat(32));
+    const pageCredentialCheck = buildRuntimeReadinessChecks().find(
+      check => check.name === "messenger_page_credential_config"
+    );
+
+    expect(pageCredentialCheck).toBeDefined();
+    expect(() => pageCredentialCheck?.check()).not.toThrow();
+  });
+
   it("does not require Mollie configuration while billing is disabled", () => {
     delete process.env.MOLLIE_BILLING_ENABLED;
     const mollieCheck = buildRuntimeReadinessChecks().find(
@@ -121,6 +147,29 @@ describe("readiness", () => {
 
     expect(mollieCheck).toBeDefined();
     expect(() => mollieCheck?.check()).not.toThrow();
+  });
+
+  it("exposes unresolved retired billing work as a named readiness failure", async () => {
+    const runtimeGuard = vi
+      .spyOn(
+        billingDrainLifecycle,
+        "assertOwnerMessengerBillingRuntimeCompatible"
+      )
+      .mockRejectedValue(
+        new billingDrainLifecycle.OwnerMessengerLegacyBillingWorkError(
+          "activeSubscription"
+        )
+      );
+    const legacyCheck = buildRuntimeReadinessChecks().find(
+      check => check.name === "owner_messenger_billing_runtime"
+    );
+
+    expect(legacyCheck).toBeDefined();
+    await expect(legacyCheck?.check()).rejects.toMatchObject({
+      name: "OwnerMessengerLegacyBillingWorkError",
+      workKind: "activeSubscription",
+    });
+    expect(runtimeGuard).toHaveBeenCalledOnce();
   });
 
   it("fails the Mollie readiness check when billing is enabled but unconfigured", () => {
@@ -235,7 +284,7 @@ describe("readiness", () => {
     });
   });
 
-  it("runs drain-only readiness without requiring entitlement enforcement", async () => {
+  it("runs drain-only readiness without a portal delivery key or entitlement enforcement", async () => {
     for (const [name, value] of Object.entries({
       MOLLIE_BILLING_ENABLED: "false",
       MOLLIE_BILLING_DRAIN_ENABLED: "true",
@@ -257,6 +306,7 @@ describe("readiness", () => {
     })) {
       vi.stubEnv(name, value);
     }
+    vi.stubEnv("PORTAL_HANDOFF_TOKEN_SECRET", "");
     const databaseCheck = vi
       .spyOn(billingReadiness, "assertBillingDatabaseReadiness")
       .mockResolvedValue();
@@ -268,6 +318,12 @@ describe("readiness", () => {
     expect(databaseCheck).toHaveBeenCalledWith("test", {
       requireRuntimeHeartbeat: true,
     });
+    databaseCheck.mockClear();
+    vi.stubEnv("BILLING_PROFILE_EVIDENCE_HMAC_SECRET", "");
+    await expect(check?.check()).rejects.toThrow(
+      "BILLING_PROFILE_EVIDENCE_HMAC_SECRET is missing or too short"
+    );
+    expect(databaseCheck).not.toHaveBeenCalled();
   });
 
   it("checks the exact paid-credit schema and pilot boundary", async () => {

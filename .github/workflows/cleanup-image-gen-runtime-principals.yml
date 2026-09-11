@@ -295,7 +295,7 @@ jobs:
           for machine_id in "${machine_ids[@]}"; do
             output="$(timeout --signal=TERM 45s flyctl ssh console \
               --app leaderbot-fb-image-gen --machine "$machine_id" --quiet \
-              --command "EXPECTED_RUNTIME_PRINCIPAL_SHA256=$EXPECTED_RUNTIME_PRINCIPAL_SHA256 node /app/dist/billing-trigger-runtime-preflight.cjs")"
+              --command "env EXPECTED_RUNTIME_PRINCIPAL_SHA256=$EXPECTED_RUNTIME_PRINCIPAL_SHA256 node /app/dist/billing-trigger-runtime-preflight.cjs")"
             test "$output" = "Billing trigger runtime preflight passed."
           done
           health_body="$(mktemp)"
@@ -347,6 +347,13 @@ jobs:
             sleep 1
           done
           exit 1
+
+      - name: Reject unlock while reviewed or live Test exposure remains
+        if: inputs.operation == 'unlock'
+        timeout-minutes: 2
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_IMAGE_GEN_DEPLOY_TOKEN }}
+        run: node scripts/image-gen-credit-test-proof.mjs guard-unlock
 
       - name: Lock, unlock, or drop only the exact obsolete broad principal
         timeout-minutes: 5

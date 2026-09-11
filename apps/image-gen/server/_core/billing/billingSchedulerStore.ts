@@ -5,12 +5,17 @@ import {
   auditLog,
   billingExecutionControls,
   billingIntents,
+  billingNotificationReceiverOutbox,
   billingOutbox,
   billingProviderOperations,
   billingSchedulerProcessHeartbeats,
   billingSchedulerTenants,
   billingSubscriptions,
   billingWebhookRoutes,
+  paymentLedger,
+  users,
+  workspaceMembers,
+  workspaces,
 } from "../../../drizzle/schema";
 import { getDatabaseOrThrow } from "../../db";
 import type { MollieMode } from "./config";
@@ -44,6 +49,205 @@ export type BillingExecutionBoundary = Readonly<{
 type BillingTransaction = Parameters<
   Parameters<Awaited<ReturnType<typeof getDatabaseOrThrow>>["transaction"]>[0]
 >[0];
+
+export type BillingSchedulerOperatorAudit = Readonly<{
+  source: "protected_workflow";
+  githubActorId: string;
+  githubRunId: string;
+  githubRunAttempt: number;
+  sourceSha: string;
+  deploymentIdentity: string;
+  runtimePrincipalSha256: string;
+  operatorImage: string;
+  artifactSourceSha: string;
+  bundleSha256: string;
+  runtimeImage: string;
+}>;
+
+function validateOperatorAudit(value: BillingSchedulerOperatorAudit) {
+  const imagePattern =
+    /^registry\.fly\.io\/leaderbot-fb-image-gen@sha256:[a-f0-9]{64}$/;
+  if (
+    value.source !== "protected_workflow" ||
+    !/^[1-9][0-9]{0,19}$/.test(value.githubActorId) ||
+    !/^[1-9][0-9]{0,19}$/.test(value.githubRunId) ||
+    !Number.isSafeInteger(value.githubRunAttempt) ||
+    value.githubRunAttempt < 1 ||
+    !/^[a-f0-9]{40}$/.test(value.sourceSha) ||
+    !/^deploy-[1-9][0-9]{0,19}-[1-9][0-9]{0,9}$/.test(
+      value.deploymentIdentity
+    ) ||
+    !SHA256_PATTERN.test(value.runtimePrincipalSha256) ||
+    !imagePattern.test(value.operatorImage) ||
+    !/^[a-f0-9]{40}$/.test(value.artifactSourceSha) ||
+    !SHA256_PATTERN.test(value.bundleSha256) ||
+    !imagePattern.test(value.runtimeImage) ||
+    Object.keys(value).sort().join(",") !==
+      "artifactSourceSha,bundleSha256,deploymentIdentity,githubActorId,githubRunAttempt,githubRunId,operatorImage,runtimeImage,runtimePrincipalSha256,source,sourceSha"
+  )
+    throw new Error("invalid billing operator provenance");
+  return Object.freeze({
+    source: value.source,
+    githubActorId: value.githubActorId,
+    githubRunId: value.githubRunId,
+    githubRunAttempt: value.githubRunAttempt,
+    sourceSha: value.sourceSha,
+    deploymentIdentity: value.deploymentIdentity,
+    runtimePrincipalSha256: value.runtimePrincipalSha256,
+    operatorImage: value.operatorImage,
+    artifactSourceSha: value.artifactSourceSha,
+    bundleSha256: value.bundleSha256,
+    runtimeImage: value.runtimeImage,
+  });
+}
+
+async function readBillingOperatorOwner(
+  database: Pick<BillingTransaction, "select">,
+  workspaceId: number,
+  lock: boolean
+): Promise<number> {
+  const query = database
+    .select({ ownerUserId: workspaceMembers.userId, userRole: users.role })
+    .from(workspaces)
+    .innerJoin(
+      workspaceMembers,
+      eq(workspaceMembers.workspaceId, workspaces.id)
+    )
+    .leftJoin(users, eq(users.id, workspaceMembers.userId))
+    .where(
+      and(eq(workspaces.id, workspaceId), eq(workspaceMembers.role, "owner"))
+    )
+    .limit(2);
+  const rows = await (lock ? query.for("update") : query);
+  if (
+    rows.length !== 1 ||
+    rows[0]?.userRole !== "admin" ||
+    !Number.isSafeInteger(rows[0].ownerUserId) ||
+    rows[0].ownerUserId <= 0
+  ) {
+    throw new Error("billing operator owner unavailable");
+  }
+  return rows[0].ownerUserId;
+}
+
+export async function resolveBillingOperatorOwner(
+  workspaceId: number
+): Promise<number> {
+  if (!Number.isSafeInteger(workspaceId) || workspaceId <= 0) {
+    throw new Error("invalid billing operator workspace");
+  }
+  return readBillingOperatorOwner(
+    await getDatabaseOrThrow(),
+    workspaceId,
+    false
+  );
+}
+
+export async function assertBillingOperatorPrincipal(
+  database: Pick<BillingTransaction, "execute">,
+  expectedSha256: string
+): Promise<void> {
+  if (!SHA256_PATTERN.test(expectedSha256))
+    throw new Error("invalid billing operator principal");
+  const result = await database.execute(
+    sql`SELECT SHA2(SUBSTRING_INDEX(CURRENT_USER(),'@',1),256) AS principalSha256`
+  );
+  const rows = result[0] as unknown;
+  const row: unknown =
+    Array.isArray(rows) && rows.length === 1 ? rows[0] : undefined;
+  if (
+    !row ||
+    typeof row !== "object" ||
+    Array.isArray(row) ||
+    !("principalSha256" in row) ||
+    row.principalSha256 !== expectedSha256
+  ) {
+    throw new Error("billing operator principal mismatch");
+  }
+}
+
+async function assertNoInitialOperatorWork(
+  tx: BillingTransaction,
+  workspaceId: number
+) {
+  // This first activation must not release unrelated historical work. The
+  // execution-control lock is already held, as on all provider admission paths.
+  const result = await tx.execute(sql`SELECT (
+    EXISTS(SELECT 1 FROM ${billingProviderOperations} WHERE workspace_id=${workspaceId} AND mode='test') OR
+    EXISTS(SELECT 1 FROM ${billingSubscriptions} WHERE workspace_id=${workspaceId} AND mode='test') OR
+    EXISTS(SELECT 1 FROM ${billingWebhookRoutes} WHERE workspace_id=${workspaceId} AND mode='test') OR
+    EXISTS(SELECT 1 FROM ${paymentLedger} WHERE workspace_id=${workspaceId} AND mode='test') OR
+    EXISTS(SELECT 1 FROM ${billingIntents} WHERE workspace_id=${workspaceId} AND mode='test'
+      AND (mollie_payment_id IS NOT NULL OR status IN ('creating_payment','open','api_unknown'))) OR
+    EXISTS(SELECT 1 FROM ${billingOutbox} WHERE workspace_id=${workspaceId} AND mode='test'
+      AND status IN ('pending','processing','failed')) OR
+    EXISTS(SELECT 1 FROM ${billingNotificationReceiverOutbox} WHERE workspace_id=${workspaceId} AND mode='test'
+      AND status IN ('pending','processing','dead_letter'))
+  ) AS blocked`);
+  const rows = result[0] as unknown;
+  const row: unknown =
+    Array.isArray(rows) && rows.length === 1 ? rows[0] : undefined;
+  if (
+    !row ||
+    typeof row !== "object" ||
+    Array.isArray(row) ||
+    !("blocked" in row) ||
+    (row.blocked !== 0 && row.blocked !== "0")
+  ) {
+    throw new Error("billing operator initial work is not empty");
+  }
+}
+
+export async function assertTestPaymentOperatorReadback(input: {
+  workspaceId: number;
+  actorUserId: number;
+  requestId: string;
+  executionEpoch: number;
+}): Promise<void> {
+  const database = await getDatabaseOrThrow();
+  const rows = await database
+    .select({
+      commercialEnabled: billingExecutionControls.commercialEnabled,
+      authorizationEpoch: billingExecutionControls.authorizationEpoch,
+      kind: billingSchedulerTenants.kind,
+      enabled: billingSchedulerTenants.enabled,
+      executionEpoch: billingSchedulerTenants.executionEpoch,
+      actorUserId: billingSchedulerTenants.enabledByUserId,
+      requestId: billingSchedulerTenants.operatorRequestId,
+    })
+    .from(billingExecutionControls)
+    .innerJoin(
+      billingSchedulerTenants,
+      and(
+        eq(
+          billingSchedulerTenants.workspaceId,
+          billingExecutionControls.workspaceId
+        ),
+        eq(billingSchedulerTenants.mode, billingExecutionControls.mode)
+      )
+    )
+    .where(
+      and(
+        eq(billingExecutionControls.workspaceId, input.workspaceId),
+        eq(billingExecutionControls.mode, "test")
+      )
+    )
+    .limit(5);
+  if (
+    rows.length !== 4 ||
+    new Set(rows.map(row => row.kind)).size !== 4 ||
+    rows.some(
+      row =>
+        !row.commercialEnabled ||
+        row.authorizationEpoch !== input.executionEpoch ||
+        !row.enabled ||
+        row.executionEpoch !== input.executionEpoch ||
+        row.actorUserId !== input.actorUserId ||
+        row.requestId !== input.requestId
+    )
+  )
+    throw new Error("billing operator committed state readback mismatch");
+}
 
 export async function registerBillingSchedulerTenant(
   workspaceId: number,
@@ -96,6 +300,7 @@ export async function enableBillingSchedulerTenant(input: {
   requestId: string;
   expectedExecutionEpoch: number;
   reason: string;
+  operatorAudit?: BillingSchedulerOperatorAudit;
 }): Promise<{ executionEpoch: number }> {
   if (
     !Number.isSafeInteger(input.workspaceId) ||
@@ -109,6 +314,15 @@ export async function enableBillingSchedulerTenant(input: {
   ) {
     throw new Error("invalid billing scheduler enable request");
   }
+  const operatorAudit = input.operatorAudit
+    ? validateOperatorAudit(input.operatorAudit)
+    : undefined;
+  if (
+    operatorAudit &&
+    (input.mode !== "test" || input.expectedExecutionEpoch >= 2_147_483_647)
+  ) {
+    throw new Error("billing operator activation is test-only");
+  }
   const fingerprint = createHash("sha256")
     .update(
       JSON.stringify([
@@ -118,11 +332,25 @@ export async function enableBillingSchedulerTenant(input: {
         input.actorUserId,
         input.expectedExecutionEpoch,
         input.reason,
+        ...(operatorAudit ? [operatorAudit] : []),
       ])
     )
     .digest("hex");
   const database = await getDatabaseOrThrow();
   return database.transaction(async tx => {
+    if (operatorAudit) {
+      await assertBillingOperatorPrincipal(
+        tx,
+        operatorAudit.runtimePrincipalSha256
+      );
+      const ownerUserId = await readBillingOperatorOwner(
+        tx,
+        input.workspaceId,
+        true
+      );
+      if (ownerUserId !== input.actorUserId)
+        throw new Error("billing operator owner changed");
+    }
     const controls = await tx
       .select()
       .from(billingExecutionControls)
@@ -173,6 +401,16 @@ export async function enableBillingSchedulerTenant(input: {
       control.authorizationEpoch !== input.expectedExecutionEpoch
     ) {
       throw new Error("billing scheduler enable epoch mismatch");
+    }
+    if (operatorAudit) {
+      if (
+        rows.some(
+          row => row.pendingWorkCount !== 0 || row.deadLetterCount !== 0
+        )
+      ) {
+        throw new Error("billing operator initial work is not empty");
+      }
+      await assertNoInitialOperatorWork(tx, input.workspaceId);
     }
     const now = new Date();
     const resultingEpoch = input.expectedExecutionEpoch + 1;
@@ -226,6 +464,12 @@ export async function enableBillingSchedulerTenant(input: {
         previousExecutionEpoch: input.expectedExecutionEpoch,
         resultingExecutionEpoch: resultingEpoch,
         reason: input.reason,
+        ...(operatorAudit
+          ? {
+              operator: operatorAudit,
+              onBehalfOfOwnerUserId: input.actorUserId,
+            }
+          : {}),
       },
     });
     return { executionEpoch: resultingEpoch };

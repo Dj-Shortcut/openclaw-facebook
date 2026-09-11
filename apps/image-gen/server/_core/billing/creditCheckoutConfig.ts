@@ -147,15 +147,6 @@ function assertDedicatedCreditCheckoutShape(
       "MESSENGER_PAID_IMAGE_PROVIDER_MAX_COST_USD is required before paid credits"
     );
   }
-  if (
-    config.mode === "test" &&
-    (config.checkoutEnabled || config.paidCreditsEnabled) &&
-    config.testPilotScope === null
-  ) {
-    throw new CreditCheckoutConfigError(
-      "Test Mode paid credits require one exact Messenger tester scope"
-    );
-  }
   if (config.mode === "live" && config.testPilotScope !== null) {
     throw new CreditCheckoutConfigError(
       "Test Mode tester scope must be unset in live mode"
@@ -231,7 +222,7 @@ export function deriveCreditCheckoutTestUserKeyHash(userKey: string): string {
     .digest("hex");
 }
 
-/** Test Mode is one exact pseudonymous user on one immutable Page binding. */
+/** Test checkout needs no tester registration; every operation still binds its user. */
 export function isCreditCheckoutMessengerScopeAllowed(
   config: CreditCheckoutPilotConfig,
   scope: CreditCheckoutMessengerScopePinInput
@@ -241,8 +232,15 @@ export function isCreditCheckoutMessengerScopeAllowed(
   }
   if (config.mode === "live") return config.testPilotScope === null;
   const pilot = config.testPilotScope;
+  if (!pilot) {
+    return (
+      [scope.channelConnectionId, scope.bindingEpoch, scope.privacyEpoch].every(
+        value =>
+          Number.isSafeInteger(value) && value > 0 && value <= MAX_DATABASE_ID
+      ) && PRIVACY_USER_KEY_PATTERN.test(scope.userKey)
+    );
+  }
   if (
-    !pilot ||
     pilot.channelConnectionId !== scope.channelConnectionId ||
     pilot.bindingEpoch !== scope.bindingEpoch ||
     pilot.privacyEpoch !== scope.privacyEpoch

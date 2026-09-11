@@ -42,24 +42,6 @@ jobs:
           test "$status" = "200"
           grep -Fx "ok" "$body"
 
-      - name: Check OpenClaw gateway
-        run: |
-          set -euo pipefail
-          body="$(mktemp)"
-          status="$(
-            curl --ipv4 --silent --show-error --location \
-              --max-time 20 \
-              --retry 2 \
-              --retry-delay 5 \
-              --retry-all-errors \
-              --output "$body" \
-              --write-out "%{http_code}" \
-              https://leaderbot-openclaw-gateway.fly.dev/healthz
-          )"
-          cat "$body"
-          test "$status" = "200"
-          grep -F '"ok":true' "$body"
-
   readiness:
     name: Production dependencies
     runs-on: ubuntu-latest

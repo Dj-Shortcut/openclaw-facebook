@@ -923,7 +923,14 @@ export function createMessengerGenerationJobRunner(
         });
         if (!isMessengerGenerationQueueEnabled()) {
           await setFlowState(psid, "IDLE");
-          if (shouldPropagateInlineGenerationFailure()) throw error;
+          if (shouldPropagateInlineGenerationFailure()) {
+            // A notice that fails after the image was delivered must not reach
+            // the webhook top-level catch: its fallback would answer the
+            // delivered image with the generic failure text.
+            const delivery = await resolveGenerationDeliveryState(job);
+            if (!delivery.confirmed) throw error;
+            return rememberSendOutcome({ sent: true });
+          }
           return sendOutcome;
         }
         throw error;
@@ -948,6 +955,7 @@ export function createMessengerGenerationJobRunner(
         });
         throw error;
       }
+      const delivery = await resolveGenerationDeliveryState(job);
       await recoverUnexpectedGenerationError({
         deps,
         error,
@@ -957,7 +965,14 @@ export function createMessengerGenerationJobRunner(
         lang,
         resolvedGenerationKind,
         rememberSendOutcome,
+        delivery,
       });
+      if (delivery.confirmed) {
+        // Rethrowing here would reach the webhook top-level catch, which sends
+        // the generic fallback text whenever no response was marked as sent.
+        // The delivered image is that response, so report it and settle.
+        return rememberSendOutcome({ sent: true });
+      }
       if (shouldPropagateInlineGenerationFailure()) throw error;
       return sendOutcome;
     } finally {
@@ -1082,6 +1097,24 @@ export function createMessengerGenerationJobRunner(
             return MESSENGER_SEND_SKIPPED;
           }
           throw error;
+        }
+        const delivery = await resolveGenerationDeliveryState(input);
+        if (delivery.confirmed) {
+          // Retries were exhausted after this image already reached the user.
+          // Only post-delivery bookkeeping can still be pending, so settle the
+          // conversation instead of denying a picture the user already has.
+          logMessengerGenerationRecoveryEvent(
+            "messenger_generation_failure_notice_suppressed",
+            {
+              reqId: input.reqId,
+              user: toLogUser(input.userId),
+              generationKind: input.generationKind ?? null,
+              deliveryStatus: delivery.status,
+              stage: "dead_letter",
+            }
+          );
+          await setFlowState(input.psid, "IDLE");
+          return MESSENGER_SEND_SKIPPED;
         }
         await setFlowState(input.psid, "FAILURE");
         return await deps.sendLoggedText(
@@ -1215,6 +1248,59 @@ async function sendGenerationStartedAck(input: {
   }
 }
 
+type GenerationDeliveryState = {
+  /**
+   * True only for a durable `delivered` completion. `receipt_pending` records
+   * just that Meta accepted an outbound message ID, and a paid send is proven
+   * only once a delivery receipt upgrades that completion to `delivered`, so
+   * it must never silence a failure notice.
+   */
+  confirmed: boolean;
+  /** Metadata-only label for operational logs. */
+  status:
+    NonNullable<MessengerGenerationCompletion["deliveryStatus"]> | "unknown";
+};
+
+const UNKNOWN_GENERATION_DELIVERY: GenerationDeliveryState = Object.freeze({
+  confirmed: false,
+  status: "unknown",
+});
+
+/**
+ * Reports the durable delivery state of this exact request. Recovery uses it
+ * to keep a generation whose image Messenger already delivered from being
+ * reported as a generation failure. It only reads completion metadata: it
+ * never regenerates, delivers, or charges anything, and a missing, unreadable,
+ * or foreign record keeps the conservative failure path.
+ */
+async function resolveGenerationDeliveryState(
+  job: MessengerGenerationJob
+): Promise<GenerationDeliveryState> {
+  let completion: MessengerGenerationCompletion | null;
+  try {
+    completion = await Promise.resolve(
+      getMessengerGenerationCompletion(job.reqId, completionFenceForJob(job))
+    );
+  } catch (error) {
+    logMessengerGenerationRecoveryEvent(
+      "messenger_generation_delivery_state_unavailable",
+      {
+        level: "error",
+        reqId: job.reqId,
+        user: toLogUser(job.userId),
+        error,
+      }
+    );
+    return UNKNOWN_GENERATION_DELIVERY;
+  }
+  if (!completion) return UNKNOWN_GENERATION_DELIVERY;
+  if (completion.userKey && completion.userKey !== job.userId) {
+    return UNKNOWN_GENERATION_DELIVERY;
+  }
+  const status = completion.deliveryStatus ?? "unknown";
+  return { confirmed: status === "delivered", status };
+}
+
 async function recoverUnexpectedGenerationError(input: {
   deps: GenerationJobRunnerDeps;
   error: unknown;
@@ -1224,9 +1310,12 @@ async function recoverUnexpectedGenerationError(input: {
   lang: MessengerGenerationJob["lang"];
   resolvedGenerationKind: GenerationKind;
   rememberSendOutcome: (outcome: MessengerSendOutcome) => MessengerSendOutcome;
+  /** Durable delivery state of this request, when it could be read. */
+  delivery?: GenerationDeliveryState;
 }): Promise<void> {
+  const delivered = input.delivery?.confirmed === true;
   try {
-    await setFlowState(input.psid, "FAILURE");
+    await setFlowState(input.psid, delivered ? "IDLE" : "FAILURE");
   } catch (stateError) {
     logMessengerGenerationRecoveryEvent(
       "messenger_generation_recovery_state_failed",
@@ -1246,9 +1335,28 @@ async function recoverUnexpectedGenerationError(input: {
     reqId: input.reqId,
     user: toLogUser(input.userId),
     generationKind: input.resolvedGenerationKind,
+    deliveryStatus: input.delivery?.status ?? "unknown",
     error: input.error,
   });
   recordGenerationError();
+
+  if (delivered) {
+    // The image is already in the conversation, so the failing step can only
+    // be post-delivery bookkeeping. Sending the generic generation failure
+    // here would contradict a picture the user is looking at. Staying silent
+    // starts no second generation and consumes no additional credit.
+    logMessengerGenerationRecoveryEvent(
+      "messenger_generation_failure_notice_suppressed",
+      {
+        reqId: input.reqId,
+        user: toLogUser(input.userId),
+        generationKind: input.resolvedGenerationKind,
+        deliveryStatus: input.delivery?.status,
+        stage: "unexpected_error",
+      }
+    );
+    return;
+  }
 
   try {
     const failureResponse = buildGenerationFailureResponse(

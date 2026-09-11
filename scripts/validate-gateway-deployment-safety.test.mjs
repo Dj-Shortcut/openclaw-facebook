@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   validateFlyGatewayConfig,
@@ -48,6 +49,26 @@ function moveTomlAssignmentToOtherTable(text, setting) {
 }
 
 describe("gateway deployment safety validation", () => {
+  it("keeps retained recovery tests on the production CI path", () => {
+    const pkg = JSON.parse(
+      readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+    );
+    const workflow = readFileSync(
+      new URL("../.github/workflows/main.yml", import.meta.url),
+      "utf8",
+    );
+    expect(workflow).toContain("run: npm run test:retained-gateway");
+    const testPaths = pkg.scripts["test:retained-gateway"].split(/\s+/);
+    for (const testPath of [
+      "deploy/fly-gateway",
+      "scripts/gateway-state-rebaseline-workflow.test.mjs",
+      "scripts/select-fresh-fly-snapshot.test.mjs",
+      "scripts/validate-gateway-deployment-safety.test.mjs",
+      "scripts/verify-gateway-state-rebaseline.test.mjs",
+    ])
+      expect(testPaths).toContain(testPath);
+  });
+
   it("accepts the checked-in gateway config and update workflow", () => {
     expect(validateGatewayDeploymentSafety()).toEqual({
       agentModel: "openai/gpt-5.4-mini",
@@ -115,9 +136,7 @@ describe("gateway deployment safety validation", () => {
     "LEADERBOT_AI_ANSWER_ENFORCEMENT_ENABLED",
   ])("rejects customer-only setting %s on the personal gateway", (setting) => {
     expect(() =>
-      validateFlyGatewayConfig(
-        `${validFlyConfig}\n${setting} = "configured"`,
-      ),
+      validateFlyGatewayConfig(`${validFlyConfig}\n${setting} = "configured"`),
     ).toThrow(`must not configure customer setting ${setting}`);
   });
 

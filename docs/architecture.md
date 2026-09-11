@@ -186,17 +186,27 @@ Active or target public surfaces:
 - generated asset delivery through the reviewed storage boundary.
 
 The target product does not expose a customer workspace portal, OpenClaw
-gateway, pairing UI, admin content browser, or subscription management page.
+gateway, pairing UI, admin content browser, subscription management page, or
+any admin screen. Messenger is the customer interface, the owner handles
+payments and refunds in Mollie, and technical faults are read from redacted
+Fly logs.
+
+One internal operator login remains, and it is deliberately not advertised.
+Signing in through `/api/oauth/start` gives the configured owner account the
+admin role, which is the only safe way to reach the billing admin procedures
+that recover held credits. There is no dashboard behind it and no public route
+discloses it.
 
 ## Transitional architecture
 
-The repository still contains:
+For safe decommissioning, the repository still retains:
 
 - a root OpenClaw Facebook channel and personal gateway;
-- a multi-tenant portal and customer desktop app;
-- workspace subscription and Startpilot billing code;
-- recurring Mollie workers and subscription tables;
-- optional WhatsApp and video paths.
+- historical portal handoff and workspace billing records;
+- financial-only Mollie recovery for already-issued legacy payments, alongside
+  retained subscription and accounting tables; this drain never creates a
+  payment, renewal, entitlement, or customer message;
+- optional WhatsApp compatibility and the owner-operated video path.
 
 These are implementation facts, not target product commitments. The generic
 OpenClaw channel is intended to move to a standalone project, preserving the

@@ -110,6 +110,7 @@ export async function assertProductionMigrationRuntime(
       "expand",
       "credit-expand-pregrant",
       "credit-expand",
+      "credit-expand-postddl",
       "bootstrap",
       "credit-bootstrap",
     ]).has(privilegeProfile)
@@ -136,12 +137,14 @@ export async function assertProductionMigrationRuntime(
     await assertCheckConstraintsEnforced(connection);
   } else if (
     privilegeProfile === "credit-expand" ||
-    privilegeProfile === "credit-expand-pregrant"
+    privilegeProfile === "credit-expand-pregrant" ||
+    privilegeProfile === "credit-expand-postddl"
   ) {
     assertCreditWalletMigrationGrantScope(
       grants,
       runtime.databaseName,
-      Number(runtime.logBin) === 1 &&
+      privilegeProfile !== "credit-expand-postddl" &&
+        Number(runtime.logBin) === 1 &&
         Number(runtime.logBinTrustFunctionCreators) !== 1,
       privilegeProfile === "credit-expand-pregrant"
     );
@@ -630,7 +633,11 @@ export function assertCreditWalletMigrationGrantScope(
   }
 }
 
-export function assertCreditProvisionerGrantScope(grants, databaseName) {
+export function assertCreditProvisionerGrantScope(
+  grants,
+  databaseName,
+  { requireSessionInventory = false } = {}
+) {
   const expectedTablePrivileges = new Map(
     productionRuntimeWritableTableNames.map(tableName => [
       tableName,
@@ -648,6 +655,7 @@ export function assertCreditProvisionerGrantScope(grants, databaseName) {
   let hasCreateUser = false;
   let hasSchemaDelegation = false;
   let hasMysqlUserRead = false;
+  let hasSessionInventory = false;
   const unexpected = [];
 
   for (const rawGrant of grants) {
@@ -662,6 +670,39 @@ export function assertCreditProvisionerGrantScope(grants, databaseName) {
       parsed[1].split(",").map(value => value.trim().toUpperCase())
     );
     const scope = parseGrantScope(parsed[2]);
+    if (
+      scope?.kind === "object" &&
+      !scope.databaseWildcard &&
+      scope.databaseName === "performance_schema" &&
+      !scope.objectWildcard &&
+      scope.objectName === "threads"
+    ) {
+      const columnSelect = /^SELECT\s*\(([^()]*)\)$/i.exec(parsed[1]);
+      const columns = columnSelect?.[1].split(",").map(value => {
+        const identifier = decodeGrantIdentifier(value);
+        return identifier && !identifier.wildcard
+          ? identifier.value.toUpperCase()
+          : null;
+      });
+      const expectedColumns = new Set([
+        "NAME",
+        "TYPE",
+        "PROCESSLIST_ID",
+        "PROCESSLIST_USER",
+      ]);
+      if (
+        !hasSessionInventory &&
+        !hasGrantOption &&
+        columns?.length === expectedColumns.size &&
+        new Set(columns).size === expectedColumns.size &&
+        columns.every(column => expectedColumns.has(column))
+      ) {
+        hasSessionInventory = true;
+      } else {
+        unexpected.push(grant);
+      }
+      continue;
+    }
     if (
       scope?.kind === "object" &&
       scope.databaseWildcard &&
@@ -733,6 +774,7 @@ export function assertCreditProvisionerGrantScope(grants, databaseName) {
     !hasCreateUser ||
     !hasSchemaDelegation ||
     !hasMysqlUserRead ||
+    (requireSessionInventory && !hasSessionInventory) ||
     missingTables.length > 0 ||
     unexpected.length > 0
   ) {

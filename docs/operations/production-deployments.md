@@ -3,8 +3,20 @@
 Production has one owner: the reviewed Git repository through the manually
 dispatched `Deploy production` GitHub Actions workflow. `fly deploy` may replace
 or update Machines. Operators never use `fly machine run` as a deployment or
-migration shortcut. Only the protected schema workflow may create its one
-temporary, no-DNS Machine to prove that a fresh database snapshot restores.
+migration shortcut. Temporary Machines are permitted only in two protected
+workflows: the schema workflow's one no-DNS snapshot-restore Machine, and the
+bounded staged-hostname repair described below. Neither exception permits an
+ad-hoc application deployment or schema change.
+The schema workflow's fixed integrity check runs as its isolated Machine's entrypoint with
+networking disabled in MySQL and automatic restart disabled. The workflow reads
+structured exit evidence from the exact Machines API endpoint; a stopped
+Machine alone is not success. It retains the Machine until verification, then
+the existing unconditional cleanup removes the Machine and restored volume.
+This restore test uses no SSH or Machine-exec credential.
+The separate hostname-repair workflow may start one attested, sleep-only,
+auto-destroying Machine with no services or volumes and no DNS registration.
+Its bounded SSH probe and cleanup are restricted to the exact staged-hostname
+repair procedure; it must leave the running application baseline unchanged.
 
 ## Ownership model
 
@@ -23,6 +35,172 @@ config file, process groups, desired scale, Machine ownership rule, service
 check, reviewed rollback-image allowlist, and Meta callback expectations.
 `npm run production:validate` checks the repository contract in PR CI. The
 production workflow checks live drift before and after every deploy.
+The shared validation job installs the pinned pnpm toolchain once and uses the
+image-gen lockfile for the Actions dependency cache; the image-gen release
+step therefore reuses packages without changing the immutable artifact or
+production approval gates.
+
+### Credit readiness without the retired customer portal
+
+With legacy sales (`MOLLIE_BILLING_ENABLED`) disabled, credit startup and
+`/readyz` do not require a workspace buyer-profile attestation or the legacy
+`PORTAL_HANDOFF_TOKEN_SECRET`. Preserve the existing
+`BILLING_PROFILE_EVIDENCE_HMAC_SECRET`: despite its historical name, it also
+signs credit reservation recovery evidence and remains required.
+Credit checkout uses its dedicated signed capability; it never sends a user
+through a portal login. Legacy sales, if explicitly enabled on a retained
+compatibility deployment, still require their original profile and keys.
+
+The existing authenticated operator `billingAdmin.enableSchedulerTenant` action
+initializes missing, commercially disabled payment controls only when legacy
+sales are disabled, before applying
+its audited activation with the expected execution epoch. Do not create a fake
+consumer attestation to initialize credit processing. No customer login or new
+management UI is required; this retains the existing operator-only authority.
+
+The separately approved Test-only alternative is the manually dispatched
+`enable-image-gen-test-payments.yml` workflow on reviewed `main`, protected by
+the `production` environment and the same image-gen deployment concurrency
+lock. It is not a public endpoint and does not create an admin session or
+change Facebook permissions. The workflow accepts the reviewed operator image,
+its exact source commit, the manifest-pinned initial UUID request ID, and
+expected execution epoch 1 (resulting epoch 2). These inputs must match the
+reviewed immutable activation anchor before any SSH command.
+It resolves the owner workspace from the reviewed configuration; it never
+registers individual testers.
+
+The operator bundle `dist/enable-test-payments.cjs` must come from the trusted,
+attested runtime artifact whose digest and source are reviewed in the manifest.
+The workflow extracts and hashes that bundle, copies it to a run-scoped
+temporary path on the exact verified running app Machine, verifies its hash,
+and invokes it once using that Machine's existing restricted runtime database
+connection. This reuses the deployment probe's temporary-bundle pattern; it
+does not deploy the candidate application, copy database credentials to the
+runner, or use the migration provisioner. Persist the exact operator image,
+artifact source, extracted bundle hash and running image alongside the workflow
+source and deployment identity in the transactional audit and replay fingerprint;
+the short-lived GitHub evidence artifact is not the durable audit.
+
+Before the existing scheduler transaction can enable processing, the command
+requires Test Mode, the exact pinned owner workspace, prepared drain,
+notifications and reconciliation, and closed legacy sales, live billing,
+checkout and paid image use. It requires the persisted owner/admin and records
+explicit protected-workflow actor/run/source/deployment metadata in the audit;
+operator authority must not be represented as a fabricated browser login.
+Current ownership, existing control and four registered lanes, epoch and
+work-state checks must pass before mutation. Missing registration is rejected,
+not created by this action. Failed billing outbox items and notification dead
+letters both block initial activation.
+No provider request or credit grant is made by the command.
+
+Retain its metadata-only outcome and cleanup evidence. An SSH timeout, missing
+result, or cleanup failure after dispatch is not proof that the transaction
+rolled back. Never rerun the mutation with a changed request ID, workflow
+run/attempt/source or executable provenance, and never retry it automatically.
+Normally retain the successful operator receipt before dispatching deployment.
+If the response is lost, preserve the original request: the same protected
+deployment's read-only `prove`/`consume` steps can recover its committed audit
+and exact control/lane epochs before any Fly apply. This does not require an
+independent recovery command. An unsuccessful workflow conclusion alone does
+not invalidate a transaction that durably committed. Temporary bundle
+removal is always attempted and verified. A successful operator action is only
+processing activation: checkout/paid-use flags remain off, and the later
+protected exposure deploy must still perform its fresh same-run account,
+runtime, database, readiness and rollback checks before a user can test payment.
+
+The reviewed audit-preflight follow-up uses
+`inspectCommittedTestPaymentActivation` inside the existing
+`image-gen-credit-test-proof.mjs` `prove` and `consume` steps. Before deployment,
+both steps must read the original committed audit, require the enabled Test
+execution epoch and all four matching lanes, and verify the original request,
+fingerprint, owner and operator/executable provenance. This is read-only recovery
+of evidence, not another enable operation. Missing or inconsistent committed
+state blocks deployment before Fly apply. Protected execution of this follow-up remains pending;
+do not substitute a new request or treat its code review as production proof.
+
+The reviewed immutable `creditTestActivation.operator` anchor records
+`operatorImage`, `artifactSourceSha`, `runtimeImage`, `deploymentIdentity`,
+`requestId`, `previousEpoch: 1` and `epoch: 2`. Request
+`8a62f93d-e092-4dd8-82ca-9e77bdd89d54` committed the initial Test activation
+at epoch 2 in protected run
+[34581138362/2](https://github.com/Dj-Shortcut/openclaw-facebook/actions/runs/34581138362/attempts/2).
+The anchor was reviewed before this execution. Retain it unchanged across later
+frontend and runtime releases; changing the desired release must not require
+another enable action.
+The pinned request and initial epoch prevent a later disable/re-enable from
+being accepted as the original activation, even with the same executable and
+predecessor. Do not change the request or epochs to make that later state pass.
+The original audit is compared with this anchor, while current settled runtime,
+database principal, account/session and readiness checks remain fresh and
+separate for every deployment.
+
+That successful operator run used workflow source
+`108379291f6cb59b196f078621ca51f3addd3cde`, operator image
+`sha256:c54c1fd026e281ada8f88ecb1acc0a26d48e736b3874d3e7aeb70dc2c64efe5f`
+from artifact source `479e43d17aab852ea6b4bbfd6b03c4eac15eb797`, and bundle
+SHA-256 `4ff44ff41de899b0ebece69d9beccb943e6d60a482513863a481ca1210441208`.
+The unchanged running predecessor was
+`sha256:f2fa9d60e1fca02c09cb2764981a7134e908f2e33f127eb0e54e77030b4a7a4b`
+/ `deploy-34496956631-1`. The run's `test-payment-operator-evidence.json` has SHA-256
+`96e407ac273acfb3b387f63e98e28c2bf6a10838624057f2954eb4d360b2c3c4` and records
+`success=true`, `committed=true`, `stage=complete`, `outcome=committed`,
+`baselineUnchanged=true`, `remoteRemoved=true` and `containerRemoved=true`.
+Attempt 1 stopped at `stage=baseline`, `outcome=not_started`, before upload or
+activation dispatch; no cause is established by that redacted result.
+
+This proves only the operator's initial processing activation and cleanup.
+The separate deployment, its fresh protected `prove`/`consume` checks, public
+Test checkout exposure, and payment-to-credit-to-delivered-edit journey remain
+open. The existing Machines still have checkout and paid image use disabled;
+live and legacy billing remain off. Do not repeat the operator for the next
+frontend artifact; retain the original committed provenance above.
+
+This does not remove the audited payment execution controls, worker lanes and
+heartbeats, notification checks, credential generation identity, spend caps,
+or credit schema/privilege checks. Do not delete old handoff secrets or financial
+records until their retained work is drained or retired under its own runbook.
+Verify both startup and `/readyz` on the reviewed image; a code change alone is
+not proof of activation, credit delivery, or a successful payment test. Rollback
+must use the reviewed 0018 image/config and retain payment recovery workers.
+
+### Owner Page token rotation
+
+The reviewed image-gen runtime contains
+`dist/rotate-facebook-page-token.cjs` for one bounded owner operation after
+Meta rotates the token of the already connected Page. It is not a Page-connect
+flow and cannot create, reconnect, or switch a binding. Before running it, use
+approved metadata-only inspection to record the current workspace ID, owner
+member user ID, channel-connection ID, binding epoch, and Page ID. Verify in
+Meta that the replacement token belongs to that same Page and has the required
+Messenger permissions; the command deliberately makes no Graph request.
+
+Run the artifact only from the exact reviewed runtime in an approved operator
+shell that already has its normal `DATABASE_URL` and `JWT_SECRET`. Disable
+shell tracing, provide the replacement token without placing it in command
+arguments or shell history, and set these process-only inputs:
+
+- `FACEBOOK_PAGE_TOKEN_ROTATE_CONFIRM=rotate-exact-page-token`;
+- `FACEBOOK_PAGE_TOKEN_ROTATE_WORKSPACE_ID`;
+- `FACEBOOK_PAGE_TOKEN_ROTATE_ACTOR_USER_ID`;
+- `FACEBOOK_PAGE_TOKEN_ROTATE_CONNECTION_ID`;
+- `FACEBOOK_PAGE_TOKEN_ROTATE_BINDING_EPOCH`;
+- `FACEBOOK_PAGE_TOKEN_ROTATE_APPROVAL_REFERENCE`;
+- `FACEBOOK_PAGE_TOKEN_ROTATE_PAGE_ID`;
+- `FACEBOOK_PAGE_TOKEN_ROTATE_ACCESS_TOKEN`.
+
+Execute `node dist/rotate-facebook-page-token.cjs`, then unset every rotation
+input in that shell. Success is one JSON line with event
+`facebook_page_token_rotated` and only workspace/binding metadata. The raw
+token is sealed before storage, removed from the child-process environment,
+and excluded from output and the transactional audit record. Only an exact
+`owner` membership is accepted. A changed Page, connection ID, binding epoch,
+disconnected/missing binding, concurrent fence loss, or audit failure rolls
+back and fails closed. The operation preserves the connection ID, Page ID,
+binding epoch, display name, and recorded scopes; it only stores the new sealed
+token, restores the binding status to `connected`, and records the rotation
+time. If delivery verification fails, do not change the binding: repeat the
+same fenced operation with the retained previous token or another reviewed
+same-Page token.
 
 Every workflow job that can receive a Fly API token installs the same reviewed
 `flyctl` binary without a remote setup action or install script. Version
@@ -86,8 +264,16 @@ these environment secrets:
 - `FLY_IMAGE_GEN_DEPLOY_TOKEN`: limited to `leaderbot-fb-image-gen`;
 - `FLY_STORAGE_PROXY_DEPLOY_TOKEN`: limited to `leaderbot-storage-proxy`;
 - `FLY_DATABASE_MIGRATION_TOKEN`: limited to snapshot, temporary restore-volume,
-  restore-probe, and reviewer-approved orphan-cleanup operations for
-  `leaderbot-portal-mysql`;
+  restore-probe, reviewer-approved orphan cleanup, and the isolated database
+  tunnel for `leaderbot-portal-mysql`; it has no SSH or Machine-exec authority;
+- `FLY_DATABASE_REPAIR_EXEC_TOKEN`: a short-lived Machine-exec token limited to
+  `leaderbot-portal-mysql` and the two complete reviewed root-MySQL wrappers
+  for prepare and revoke-super. It exists only for the reviewed schema
+  transition and is revoked after the transition. SQL is one positional
+  argument, never shell source. The database URL is not passed to `flyctl`;
+- `FLY_DATABASE_CLEANUP_EXEC_TOKEN`: optional, separate four-hour exact-command
+  token for the protected pre-DDL failure-cleanup workflow below. Never replace
+  the failed run's repair secret with this credential;
 - `IMAGE_GEN_DATABASE_MIGRATION_URL`: `127.0.0.1:13306` URL for the dedicated
   expand principal;
 - `IMAGE_GEN_DATABASE_PROVISIONER_URL`: `127.0.0.1:13306` URL for the separate
@@ -95,6 +281,315 @@ these environment secrets:
   and drops reviewed MySQL principals;
 - `META_APP_ID` and `META_APP_SECRET`: used only to read and verify webhook
   subscriptions; values are never printed.
+
+### One-off repair-exec token installation and verified retirement
+
+Use a reviewed checkout and the operator's local `flyctl auth login` and
+`gh auth login` sessions, never workflow credentials. The retirement command
+requires Fly CLI `0.4.94`, the version used by the root-command helper. Pause
+other schema-transition dispatches and secret rotation for this operation;
+Fly token revocation and GitHub secret deletion have no shared atomic lock.
+Do not run these commands from Actions, shell tracing, or a recorded terminal.
+
+Dispatch `image-gen-schema-transition.yml` on protected `main`, but **do not
+approve its `production` job yet**. Record that exact run ID and attempt from
+GitHub. Environment secrets are resolved when the protected job starts, so
+install the token while the job waits for approval. Confirm that the named
+repair-exec secret is absent first; never overwrite a previous transition's
+unretired secret. A previous incomplete cleanup must be resolved before a new
+transition proceeds.
+
+```bash
+set -euo pipefail
+set +x
+unset FLY_API_TOKEN GH_TOKEN GITHUB_TOKEN
+run_id=REPLACE_WITH_EXACT_WAITING_RUN_ID
+run_attempt=1
+[[ "$run_id" =~ ^[1-9][0-9]*$ ]]
+[[ "$run_attempt" =~ ^[1-9][0-9]*$ ]]
+gh run view "$run_id" --repo Dj-Shortcut/openclaw-facebook \
+  --json databaseId,attempt,event,headBranch,status,workflowName,url
+test "$(gh secret list --repo Dj-Shortcut/openclaw-facebook --env production \
+  --json name --jq '[.[] | select(.name == "FLY_DATABASE_REPAIR_EXEC_TOKEN")] | length')" = 0
+prepare_command_csv="$(node --input-type=module -e \
+  'import {PREPARE_ROOT_EXEC_COMMAND_FLYCTL_CSV} from "./scripts/provision-image-gen-credit-provisioner-exec.mjs"; process.stdout.write(PREPARE_ROOT_EXEC_COMMAND_FLYCTL_CSV)')"
+cleanup_command_csv="$(node --input-type=module -e \
+  'import {SUPER_CLEANUP_EXEC_COMMAND_FLYCTL_CSV} from "./scripts/image-gen-super-cleanup-exec.mjs"; process.stdout.write(SUPER_CLEANUP_EXEC_COMMAND_FLYCTL_CSV)')"
+flyctl tokens list --app leaderbot-portal-mysql --scope app | \
+  REPAIR_RUN_ID="$run_id" node --input-type=module -e \
+  'import {parseFlyTokenInventory} from "./scripts/retire-image-gen-repair-exec-token.mjs"; let s=""; for await (const c of process.stdin) s+=c; if (parseFlyTokenInventory(s).some(t=>t.name===`leaderbot-pr486-repair-${process.env.REPAIR_RUN_ID}`)) process.exit(1)'
+repair_token_json="$(flyctl tokens create machine-exec \
+  --app leaderbot-portal-mysql --name "leaderbot-pr486-repair-$run_id" \
+  --expiry 4h --command-prefix "$prepare_command_csv" --command-prefix "$cleanup_command_csv" --json)"
+repair_token="$(printf '%s' "$repair_token_json" | node --input-type=module -e \
+  'try { let s=""; for await (const c of process.stdin) s+=c; const v=JSON.parse(s).token; if(typeof v!=="string" || !v.trim()) process.exit(1); process.stdout.write(v); } catch { process.exit(1); }')"
+unset repair_token_json prepare_command_csv cleanup_command_csv
+token_id="$(flyctl tokens list --app leaderbot-portal-mysql --scope app | \
+  REPAIR_RUN_ID="$run_id" node --input-type=module -e \
+  'import {parseFlyTokenInventory} from "./scripts/retire-image-gen-repair-exec-token.mjs"; let s=""; for await (const c of process.stdin) s+=c; const t=parseFlyTokenInventory(s).filter(t=>t.name===`leaderbot-pr486-repair-${process.env.REPAIR_RUN_ID}`); if(t.length!==1 || t[0].revokedAt!==null) process.exit(1); process.stdout.write(t[0].id)')"
+test -n "$token_id"
+printf '%s' "$repair_token" | gh secret set FLY_DATABASE_REPAIR_EXEC_TOKEN \
+  --repo Dj-Shortcut/openclaw-facebook --env production
+unset repair_token
+secret_updated_at="$(gh secret list --repo Dj-Shortcut/openclaw-facebook \
+  --env production --json name,updatedAt \
+  --jq '.[] | select(.name == "FLY_DATABASE_REPAIR_EXEC_TOKEN") | .updatedAt')"
+test -n "$token_id"
+test -n "$secret_updated_at"
+```
+
+Record only `run_id`, `run_attempt`, `token_id`, and `secret_updated_at` in the
+operator evidence. Never record the token value. Fly CLI `0.4.94` parses
+`--command-prefix` as RFC 4180 CSV fields. Both imported encodings decode to
+complete reviewed wrappers, including their full shell source and fixed `$0`.
+Both wrappers enforce exactly one SQL argument. The isolated MySQL 8.4.11 proof
+accepted both prefixes with one short-lived token, rejected changed shell
+source and missing/extra arguments, and exercised actual grants, replay and
+verification-triggered rollback. Do not shorten either prefix, omit either
+wrapper, use a deploy/migration token, or extend the four-hour expiry.
+The two-prefix token uses the existing secret and retirement path; no additional
+production secret is introduced. Fly's token inventory exposes
+ID/name/expiry/revocation metadata, not command caveats; the exact creation
+command above establishes the command restriction.
+Only after successful installation and metadata capture may the operator
+approve the protected job. If installation fails or the token expires, do not
+approve the job or treat expiry as proof that temporary MySQL grants vanished.
+
+After the exact run attempt is terminal and its **Revoke temporary migration
+SUPER privilege** step succeeded, run:
+
+```bash
+node scripts/retire-image-gen-repair-exec-token.mjs \
+  --run-id "$run_id" --run-attempt "$run_attempt" --token-id "$token_id" \
+  --secret-updated-at "$secret_updated_at"
+```
+
+Success is only `repair_exec_token_retired` (exit zero). The command verifies
+the exact latest main/dispatch attempt, current protected environment, executed
+workflow matching this reviewed checkout, and the cleanup step's fixed-output
+success gate. It resolves the one-off token by both exact ID and exact name,
+revokes only that token, and requires an authoritative nonempty `Revoked At`
+readback before deleting only `production/FLY_DATABASE_REPAIR_EXEC_TOKEN`.
+It then verifies the secret is absent. It never reads the secret value or adds
+revocation authority to workflow credentials.
+
+#### Cleanup after a failed pre-DDL repair
+
+Do not rerun a transition whose repair and SUPER cleanup both failed. The
+separate `cleanup-image-gen-migration-super.yml` workflow accepts only the
+latest exact failed transition attempt whose snapshot/tunnel setup succeeded
+and whose DDL steps were all skipped. It uses the same protected `production`
+environment and deployment concurrency, verifies the exact database Machine
+and encrypted volume, invokes only `revoke-super`, and records the unchanged
+`0016_expand` history. It never grants migration rights or applies DDL.
+
+Preserve the original repair metadata, even if the token expired. Run these
+cleanup-specific blocks from the reviewed, green `main` checkout with installed
+verification dependencies, authenticated GitHub CLI, and pinned Fly CLI
+`0.4.94`. Replace the six placeholders with the failed run's recorded metadata;
+do not copy the normal repair-token creation block above. The existing repair
+secret must remain present with its original timestamp.
+
+```bash
+set -euo pipefail
+set +x
+unset FLY_API_TOKEN GH_TOKEN GITHUB_TOKEN
+failed_run_id=REPLACE_WITH_FAILED_RUN_ID
+failed_run_attempt=REPLACE_WITH_FAILED_RUN_ATTEMPT
+failed_head_sha=REPLACE_WITH_FAILED_SOURCE_SHA
+database_machine_id=REPLACE_WITH_RECORDED_DATABASE_MACHINE_ID
+repair_token_id=REPLACE_WITH_RECORDED_REPAIR_TOKEN_ID
+repair_secret_updated_at=REPLACE_WITH_RECORDED_REPAIR_SECRET_UPDATED_AT
+[[ "$failed_run_id" =~ ^[1-9][0-9]*$ ]]
+[[ "$failed_run_attempt" =~ ^[1-9][0-9]*$ ]]
+[[ "$failed_head_sha" =~ ^[a-f0-9]{40}$ ]]
+[[ "$database_machine_id" =~ ^[a-f0-9]{14}$ ]]
+test -n "$repair_token_id"
+test -n "$repair_secret_updated_at"
+cleanup_head_sha="$(gh api repos/Dj-Shortcut/openclaw-facebook/commits/main --jq .sha)"
+test "$(git rev-parse HEAD)" = "$cleanup_head_sha"
+test -z "$(git status --porcelain)"
+GITHUB_REPOSITORY=Dj-Shortcut/openclaw-facebook \
+GITHUB_API_URL=https://api.github.com \
+GITHUB_TOKEN="$(gh auth token)" node scripts/validate-production-deployment.mjs \
+  --verify-source-ci "$cleanup_head_sha"
+test "$(gh api "repos/Dj-Shortcut/openclaw-facebook/actions/runs/$failed_run_id/attempts/$failed_run_attempt" \
+  --jq '[.head_sha,.status,.conclusion,.event,.head_branch] | join(" ")')" = \
+  "$failed_head_sha completed failure workflow_dispatch main"
+test "$(gh secret list --repo Dj-Shortcut/openclaw-facebook --env production \
+  --json name,updatedAt --jq '.[] | select(.name == "FLY_DATABASE_REPAIR_EXEC_TOKEN") | .updatedAt')" = \
+  "$repair_secret_updated_at"
+test "$(gh secret list --repo Dj-Shortcut/openclaw-facebook --env production \
+  --json name --jq '[.[] | select(.name == "FLY_DATABASE_CLEANUP_EXEC_TOKEN")] | length')" = 0
+fly_version="$(flyctl version)"
+[[ "$fly_version" =~ ^flyctl\ v0\.4\.94([[:space:]]|$) ]]
+flyctl tokens list --app leaderbot-portal-mysql --scope app | \
+  CLEANUP_FAILED_RUN_ID="$failed_run_id" node --input-type=module -e \
+  'import {parseFlyTokenInventory} from "./scripts/retire-image-gen-repair-exec-token.mjs"; let s=""; for await (const c of process.stdin) s+=c; if (parseFlyTokenInventory(s).some(t=>t.name===`leaderbot-pr486-cleanup-${process.env.CLEANUP_FAILED_RUN_ID}` && t.revokedAt===null)) process.exit(1)'
+root_mysql_command_csv="$(node --input-type=module -e \
+  'import {SUPER_CLEANUP_EXEC_COMMAND_FLYCTL_CSV} from "./scripts/image-gen-super-cleanup-exec.mjs"; process.stdout.write(SUPER_CLEANUP_EXEC_COMMAND_FLYCTL_CSV)')"
+cleanup_token_json="$(flyctl tokens create machine-exec \
+  --app leaderbot-portal-mysql --name "leaderbot-pr486-cleanup-$failed_run_id" \
+  --expiry 4h --command-prefix "$root_mysql_command_csv" --json)"
+cleanup_token="$(printf '%s' "$cleanup_token_json" | node --input-type=module -e \
+  'try { let s=""; for await (const c of process.stdin) s+=c; const v=JSON.parse(s).token; if(typeof v!=="string" || !v.trim()) process.exit(1); process.stdout.write(v); } catch { process.exit(1); }')"
+unset cleanup_token_json root_mysql_command_csv
+cleanup_token_id="$(flyctl tokens list --app leaderbot-portal-mysql --scope app | \
+  CLEANUP_FAILED_RUN_ID="$failed_run_id" node --input-type=module -e \
+  'import {parseFlyTokenInventory} from "./scripts/retire-image-gen-repair-exec-token.mjs"; let s=""; for await (const c of process.stdin) s+=c; const t=parseFlyTokenInventory(s).filter(t=>t.name===`leaderbot-pr486-cleanup-${process.env.CLEANUP_FAILED_RUN_ID}` && t.revokedAt===null); if(t.length!==1 || t[0].revokedAt!==null) process.exit(1); process.stdout.write(t[0].id)')"
+test -n "$cleanup_token_id"
+test "$cleanup_token_id" != "$repair_token_id"
+test "$(gh secret list --repo Dj-Shortcut/openclaw-facebook --env production \
+  --json name --jq '[.[] | select(.name == "FLY_DATABASE_CLEANUP_EXEC_TOKEN")] | length')" = 0
+printf '%s' "$cleanup_token" | gh secret set FLY_DATABASE_CLEANUP_EXEC_TOKEN \
+  --repo Dj-Shortcut/openclaw-facebook --env production
+unset cleanup_token
+cleanup_secret_updated_at="$(gh secret list --repo Dj-Shortcut/openclaw-facebook \
+  --env production --json name,updatedAt \
+  --jq '.[] | select(.name == "FLY_DATABASE_CLEANUP_EXEC_TOKEN") | .updatedAt')"
+test -n "$cleanup_token_id"
+test -n "$cleanup_secret_updated_at"
+test "$cleanup_token_id" != "$repair_token_id"
+```
+
+Record only the eight metadata values, never either credential. If creation,
+installation, or metadata capture is uncertain, stop and inspect that exact
+cleanup identity; do not rerun token creation or replace the repair secret.
+For an explicitly authorized replacement after a terminal failed cleanup, use
+the retirement CLI with `--failed-cleanup-credential-only` followed by its
+existing nine metadata argument pairs. This mode requires the latest cleanup
+run to have failed and preserves the original repair secret unchanged. Before
+any mutation it fetches the exact attempt job log from GitHub and compares all
+eight runner-rendered request metadata fields in the successful source-check
+step with the requested identities. Missing, masked, ambiguous, or mismatched
+metadata fails closed; a later replacement cannot borrow the older failed run.
+Raw logs and credential identifiers must not be copied into repository evidence.
+It
+retires only the recorded cleanup token and secret, and never supplies database
+cleanup evidence. Successful database cleanup is still required by the normal
+retirement path. Retired same-name historical tokens may remain visible; active
+same-name collisions still block replacement, and identity is always bound to
+the recorded token ID and secret timestamp rather than its name alone.
+The cleanup also refuses to report success if any non-system MySQL account
+still has `SUPER`, including a former migration account after credential
+rotation. It does not revoke privileges from other accounts automatically.
+
+The revoke-only runner sends one bounded Machines Exec API request to the
+exact verified database Machine. It uses `SUPER_CLEANUP_EXEC_COMMAND` and passes
+the bounded SQL batch as one positional argument to `mysql --execute`, using
+the API's `command` array rather than its shell-parsed `cmd` string. The token's
+CSV encoding is only for the Fly CLI credential-creation flag, not the API body.
+The fixed shell source never evaluates SQL as shell code and rejects additional
+arguments. Both repair operations use `--command-prefix` for their complete fixed wrappers:
+Fly compares parsed argument lists, including the complete `-lc` script and
+its fixed `$0`. The sole trailing argument is the SQL batch. An exact
+`--command` for the wrapper would reject every batch; a shorter prefix (such
+as `/bin/sh`) would allow arbitrary shell source and is forbidden. The prepare
+credential above carries exactly the two reviewed wrappers; this is not a
+blanket permission to broaden other credentials. The cleanup token still permits root SQL, just
+as the former stdin transport did, so keep its four-hour expiry, protected-job
+approval, exact app binding, and verified retirement. Before using this revised
+credential on production, prove on an isolated target that the intended command
+succeeds while changed shell source and extra arguments fail. An operator-token
+probe alone does not satisfy this requirement.
+Read-only production probes returned empty stdout for both API stdin
+forms, while the explicit SQL argument returned its expected marker. Do not
+reuse a token restricted to the former stdin command: preserve its metadata and
+revoke it with verified readback before installing the separately recorded
+replacement cleanup credential. Keep the original repair secret unchanged.
+There is no SSH fallback, redirect, or automatic request
+retry. One root session holds the existing repair lock while the separate
+migration connection verifies the exact account, grants, and schema history
+before and after the revoke. Each approval must belong to that live verifier
+connection; disconnecting or releasing a wait lock is not approval. Success
+requires both local verifications, the request-specific output marker, a remote
+zero exit code, and empty stderr. The Exec/verification protocol has a 45-second
+local deadline and a 40-second remote execution bound; that deadline does not
+include the runner's preceding database connection and initial inspection.
+
+A timeout or lost response after approval can still mean that `SUPER` was
+revoked. It never means rollback or successful cleanup: preserve the exact
+credential metadata and investigate before another protected attempt. Local
+MySQL tests do not prove that Fly accepts the command-scoped token; only the
+protected run and its artifact establish production completion. This transport
+applies to `revoke-super` and the migration-principal `prepare` command.
+Prepare uses one root batch and a separate live controller: the root holds the
+repair lock, the controller approves only missing rights, and failed
+verification compensates only that batch's delta. The root batch never retries
+or reconnects. A transport/SQL failure with an uncertain result is explicitly
+cleanup-incomplete, never success or proof of rollback. Bootstrap of a new
+definer-provisioner account remains a separate operator-only SSH path; it is
+not used by this schema-transition repair.
+
+Prepare's shared time budgets allow three eight-second controller waits and
+four five-second SQL lock waits, plus at least ten seconds for execution and
+response: the remote request is bounded to 55 seconds and the local protocol
+to 65 seconds. A server crash or SQL error after a GRANT can nevertheless leave
+rights applied before compensation runs. On cleanup-incomplete, retain the
+exact operation/credential metadata, inspect the effective rights, and use the
+reviewed recovery path; never retry a grant blindly or infer rollback from an
+absent response. The protected transition's unconditional SUPER-cleanup step
+still runs on failures.
+
+Dispatch once using GitHub CLI `2.95.0` or a version that returns the created
+run URL. Capture that exact URL, not the most recent run in a list. If dispatch
+returns no unambiguous URL, inspect Actions without dispatching again. Keep the
+same shell metadata for the retirement command below.
+
+```bash
+cleanup_dispatch_output="$(gh workflow run cleanup-image-gen-migration-super.yml \
+  --repo Dj-Shortcut/openclaw-facebook --ref main \
+  -f failed_run_id="$failed_run_id" -f failed_run_attempt="$failed_run_attempt" \
+  -f failed_head_sha="$failed_head_sha" -f database_machine_id="$database_machine_id" \
+  -f repair_token_id="$repair_token_id" -f repair_secret_updated_at="$repair_secret_updated_at" \
+  -f cleanup_token_id="$cleanup_token_id" -f cleanup_secret_updated_at="$cleanup_secret_updated_at")"
+cleanup_run_id="$(printf '%s' "$cleanup_dispatch_output" | node --input-type=module -e \
+  'let s=""; for await (const c of process.stdin) s+=c; const ids=[...new Set([...s.matchAll(/https:\/\/github\.com\/Dj-Shortcut\/openclaw-facebook\/actions\/runs\/([1-9][0-9]*)(?![0-9])/g)].map(m=>m[1]))]; if(ids.length!==1) process.exit(1); process.stdout.write(ids[0]);')"
+unset cleanup_dispatch_output
+cleanup_run_attempt="$(gh api "repos/Dj-Shortcut/openclaw-facebook/actions/runs/$cleanup_run_id" --jq .run_attempt)"
+test "$cleanup_run_attempt" = 1
+test "$(gh api "repos/Dj-Shortcut/openclaw-facebook/actions/runs/$cleanup_run_id" \
+  --jq '[.head_sha,.event,.head_branch,.path] | join(" ")')" = \
+  "$cleanup_head_sha workflow_dispatch main .github/workflows/cleanup-image-gen-migration-super.yml"
+gh run view "$cleanup_run_id" --repo Dj-Shortcut/openclaw-facebook \
+  --json databaseId,attempt,headSha,status,workflowName,url
+```
+
+Approve only this recorded run's protected production job after checking the
+eight inputs. The workflow independently verifies the full predecessor chain
+before database access. Record `cleanup_run_id` and `cleanup_run_attempt` too.
+
+After the cleanup workflow succeeds, retire both credentials:
+
+```bash
+node scripts/retire-image-gen-repair-exec-token.mjs \
+  --run-id "$failed_run_id" --run-attempt "$failed_run_attempt" --token-id "$repair_token_id" \
+  --secret-updated-at "$repair_secret_updated_at" \
+  --cleanup-run-id "$cleanup_run_id" --cleanup-run-attempt "$cleanup_run_attempt" \
+  --cleanup-token-id "$cleanup_token_id" \
+  --cleanup-secret-updated-at "$cleanup_secret_updated_at" \
+  --database-machine-id "$database_machine_id"
+```
+
+Only `repair_and_cleanup_exec_tokens_retired` means completion. This path
+revalidates both runs, reviewed workflow bytes, the immutable cleanup artifact,
+and both unchanged secret timestamps before mutation. It reads every page of
+Fly's app-scoped metadata inventory without requesting token values. An active
+token still requires explicit revoked-at readback. Only after the recorded
+four-hour maximum window may a token absent from that complete inventory be
+treated as already absent; that is not claimed as an explicit revocation or as
+proof of database cleanup. The separate successful protected cleanup proof is
+always required. Original normal-transition retirement behavior is unchanged.
+
+On `repair_exec_token_retirement_failed` (exit one), retain these same four
+metadata values and retry only after the evidence or external operation is
+resolved. Repeating the command handles an already revoked token, an already
+absent secret, and uncertain mutation responses. A replacement secret's changed
+`updatedAt` is rejected even on a later retry. Failed/skipped/missing SUPER
+cleanup, a newer run/attempt, missing inventory, or unknown grant state blocks
+retirement; there is no `--no-grant` bypass. Preserve cleanup access and obtain
+a fresh reviewed SUPER-revocation proof before retiring credentials in those
+cases. Do not infer database cleanup from token expiry or cancellation alone.
 
 Create a second environment named `production-inspection`, limited to protected
 `main`, with no reviewer or wait timer and with administrator bypass disabled.
@@ -218,9 +713,46 @@ must name the authenticated migration account from `CURRENT_USER()` as its
 definer and retain an exact procedure-level creator `EXECUTE` grant before the
 transition may resume. Schema-level `ALTER ROUTINE` remains part of the exact
 migration-principal contract; MySQL need not duplicate it per procedure.
-The protected workflow first performs a non-mutating migration-principal and
-schema-phase inspection, then creates, restores, validates, and durably uploads
-the exact pre-credit recovery evidence. This pregrant inspection accepts an
+Before that first inspection, the protected transition creates a fresh
+encrypted volume snapshot and uploads its metadata before any repair. This is
+a recovery reference, not restore proof; the later independently restored and
+verified snapshot remains the DDL rollback gate. It then runs the fixed-output
+migration-role repair. That repair accepts only an otherwise exact migration
+role missing a subset of `CREATE`, `TRIGGER`, `CREATE ROUTINE`, and `ALTER
+ROUTINE`, plus conditional global `SUPER` only when the inspected binary-log
+settings require it. It uses the root credential only inside the exact reviewed
+database Machine, never exports the credential or account identity, grants the
+schema subset first, and grants `SUPER` last. It immediately runs the strict
+`credit-expand` inspection. A failed verification re-reads the effective grants
+even when transport failed after MySQL may have committed, reconnects under a
+fresh repair lock when the root transport was lost, revokes `SUPER` before any
+schema rights proven to have been added by that attempt, and verifies the
+rollback; an incomplete rollback stops with a distinct fixed marker. The
+mutation decision is made only after the repair lock is held. An
+already-correct role is a no-op. A resumed exact 0017 or 0018 history must
+already have every required schema, table, and routine privilege. It may add
+only conditional `SUPER` for the immutable bridge inspection; it never repairs
+missing schema privileges after DDL. Before taking the usable 0016 recovery
+snapshot, the workflow revokes temporary `SUPER` and verifies its absence.
+Only after restoring that snapshot, uploading its evidence, and rechecking the
+settled bridge may it prepare the conditional privilege again for DDL. The
+recovery artifact records `snapshot.temporarySuperAbsent: true`; old artifacts
+without that evidence cannot be used for resume or promoted from the untested
+pre-repair reference. After either a successful or failed DDL attempt, an `always` cleanup
+reopens only the same reviewed root command, revokes `SUPER`, and verifies that
+it is absent before success evidence is recorded or the isolated tunnel is
+stopped. Cleanup failure is terminal and preserves the fixed stdout
+cleanup-incomplete marker. The repair helper additionally emits the metadata-only
+stderr event `credit_migration_principal_operation_failed` with an allowlisted
+operation and last-entered stage. This is a diagnostic location, not proof of
+the root cause, absence of mutation, or successful rollback. Error details,
+identifiers, grants, and credentials are never included. The normal
+schema transition remains reviewer-gated and no credit DDL runs before this
+repair and inspection succeed.
+
+The protected workflow then performs the non-mutating migration-principal and
+schema-phase inspection, creates, restores, validates, and durably uploads the
+exact pre-credit recovery evidence. This pregrant inspection accepts an
 absent or incomplete subset of only the two reviewed definer table grants so a
 connection loss between their two statements remains resumable; it rejects any
 revoke or unreviewed privilege. Only after the recovery evidence exists does it
@@ -341,6 +873,13 @@ mutation and gateway quota enforcement stays off.
    reviewed manifest only after the rollback image is proven compatible with
    that phase. These artifacts contain no tenant content or secrets. A live Fly
    config is evidence only and is never trusted as rollback input.
+   Image-gen captures the deployment identity from strict settled-live
+   Machine/release evidence, then selects the exact identity/image-bound
+   checked-in restore config. A second settled-live check must return the same
+   tuple, including the release watermark, after the config is copied. The
+   app-level `fly config show` identity may describe a failed later release or
+   be absent; it must not select the rollback file. Post-rollback verification
+   remains strict and is not replaced by this pre-deployment capture rule.
 7. Complete the relevant live Messenger smoke test. For image generation, check
    both prompt-first generation and a source-photo edit while confirming quota
    enforcement remains active.
@@ -533,11 +1072,93 @@ either failure marker.
 
 ### Image-gen database migration gate
 
-Production currently runs `0016_expand`. The only reviewed successor is the
-ordered credit transition through `0017_credit_wallet_expand` to the exact
-`0018_credit_checkout_reservation` runtime. The protected schema workflow may
-apply those two checked-in migrations only; no application deploy, shell
-command, or ad-hoc Machine may change the production schema.
+The production database is verified at `0018_credit_checkout_reservation` by
+protected run [34339825855/1](https://github.com/Dj-Shortcut/openclaw-facebook/actions/runs/34339825855)
+on source `ea680af1061901436fdae4e59397365ce6949f36`, completed
+`2026-09-09T10:41:12Z`. The pre-credit snapshot was restore-tested and temporary
+SUPER was revoked. The bound repair token and GitHub secret were retired with
+`repair_exec_token_retired`. The final runtime was built and attested by
+[34342883040/2](https://github.com/Dj-Shortcut/openclaw-facebook/actions/runs/34342883040)
+from `80703910131e227d1d683b1f5b6287c8bff241de`, with digest
+`sha256:1d80d6bce5fdbd7486f31d6223ca87ac7a50d075661ec48ae0f3d536eb8e5b36`.
+It rejects pre-credit schemas and accepts the exact 0018 contract. Restricted
+principal staging [34345293602/2](https://github.com/Dj-Shortcut/openclaw-facebook/actions/runs/34345293602)
+on manifest source `c784e496cf8e629b87dd8b31c28bfbbe989a70b6` passed the exact
+candidate privilege and trigger checks, then staged `DATABASE_URL` at
+`2026-09-09T11:53:32Z`. Its metadata artifact digest is
+`sha256:d3f807a17cc0e5d051e2d5aa476d600bbdf8395dc338c745073995f5930403e8`.
+Attempt 1 had stopped before staging because three unchanged legacy billing
+triggers named a runtime definer without `TRIGGER`. The separately reviewed
+DBA repair above completed at `2026-09-09T11:47:26Z`: exact canonical bodies,
+a separate locked definer, only the two prescribed table-grant sets, and all
+other 0018 triggers unchanged. Fresh encrypted snapshot
+`vs_zGGOJgmJAKGKfqMJklNp6` has digest
+`0e17cf05d01b0639756fc438d285735130edb03dd2d99b1df12562af1398c1b0`;
+this extra pre-repair snapshot was created, not independently restore-tested.
+Runtime grants and commercial flags were unchanged. Staging success does not
+prove the deployed frontend, credit grant, or a completed payment.
+The manifest now binds the staged principal to `runtime_reviewed`, with the
+bridge retained as the only rollback. The owner explicitly approved this rollout
+on 2026-09-09; it still requires normal PR review and exact-source CI before
+deployment, and does not enable checkout or live payments. Application Machines
+still run the bridge; resume at step 10, not by repeating the
+completed schema expansion or runtime build. The protected schema workflow
+remains the only permitted path for the reviewed 0017/0018 migrations; no
+application deploy, shell command, or ad-hoc Machine may change the production
+schema.
+
+### Repair a staged runtime database hostname
+
+Run `34353109061/1` (2026-09-09) failed before replacing any app/worker
+Machine. The attested runtime's mysql2 URL parser retained square brackets
+around the private IPv6 hostname, producing `getaddrinfo ENOTFOUND`. The earlier
+staging probe used the loopback tunnel instead of that production URL. Both
+the candidate and bridge release-command checks rejected the staged URL; all
+four original Machines retained the healthy bridge, and exact restored-config
+verification plus `/healthz` and `/readyz` passed.
+
+For this exact `runtime_reviewed` condition, use only the protected manual
+`repair-image-gen-runtime-database-host.yml` workflow from green reviewed main.
+Before dispatch, the responsible operator must reserve an exclusive secret-change
+window through cleanup: no direct Fly CLI/API/dashboard credential changes or
+external rotation jobs may run against this app. The required
+`exclusive_secret_window=true` input records that operational confirmation;
+the protected production approval must verify it. Repository mutation workflows
+already share the same concurrency group. Fly's secret update API has no
+compare-and-set field, so this is an operator coordination requirement, not an
+atomic vault lock. Do not dispatch when other writers cannot be excluded.
+It does not create or rotate a database principal, widen privileges, change
+schema, deploy the app, or enable payments. It starts one auto-destroying,
+ten-minute isolated Machine on the attested runtime with a sleep-only entrypoint,
+no services and no volumes. A bounded SSH command validates the staged account
+fingerprint, exact database Machine/private IP and database name, substitutes
+the exact `<machine-id>.vm.<database-app>.internal` hostname, and requires that
+DNS resolve to the same private IP. Both the exact artifact schema verifier
+and the synthetic, rolled-back billing-trigger probe must pass through that
+hostname. The resulting credential travels only in process memory from SSH
+stdout to `flyctl secrets import --stage` stdin, never in arguments, files,
+application logs or artifacts. A changed vault digest or deployment status
+observed immediately before staging aborts; that check alone cannot prevent a
+write racing the import. Cleanup polls for delayed probe creation for up to two
+minutes, removes only its exact random marker, and requires two separated absent
+observations. Unknown creation/cleanup remains a failed run, with the ten-minute
+auto-destroy as a backstop, not successful cleanup evidence. The unchanged
+production baseline is reproved only after confirmed cleanup. Only metadata is
+retained. An interrupted/ambiguous stage requires
+inspection, not an automatic replay or a new credential.
+
+Probe creation submits the attested image digest unchanged to the fixed Fly
+Machines API using the existing image-gen app-scoped deploy token. A read-only
+`--build-only` reproduction on pinned flyctl 0.4.85 showed its image resolver
+appending a second `@sha256:` suffix to this digest reference. The helper avoids
+that resolver only for creation; all inventory, verification, staging and cleanup
+guards remain. Creation has a sixty-second timeout, rejects redirects, never
+automatically retries, and discards response bodies. No broader token, database
+privilege or mutable image tag is required by this correction.
+
+Future principal staging uses the same machine-specific internal hostname.
+This is an address-format correction, not completion of the runtime rollout
+or permission to expose a checkout. Resume step 10 after successful repair.
 
 Use this exact sequence:
 
@@ -572,14 +1193,18 @@ trusted production artifact` with `image-gen-bridge`. The workflow proves
    `Apply reviewed image-gen credit schema`. The protected workflow first
    proves every Machine is the attested
    bridge and the live database is the exact 0016 base. It creates a fresh
-   encrypted snapshot, restores it into an isolated encrypted volume, runs
-   MySQL integrity checks, uploads metadata-only recovery evidence, and removes
-   the temporary restore Machine and volume.
+   encrypted snapshot only after verified temporary-SUPER revocation, restores
+   it into an isolated encrypted volume, runs MySQL integrity checks, uploads
+   metadata-only recovery evidence, and removes the temporary restore Machine
+   and volume. The success check binds the actual Machine image digest and
+   shell command to the reviewed image and the runner's exact probe hash;
+   an unrelated command returning zero is not restore proof.
 7. **Apply only 0017 then 0018.** The same protected workflow applies only the
    reviewed credit migrations and verifies the exact final 0018 contract from
    the bridge. A resume must name the exact earlier recovery run and attempt;
    the snapshot, database, migration manifest, schema contract, bridge digest,
-   and bridge source must all still match. Unknown or partial shapes fail
+   and bridge source must all still match, including verified absence of
+   temporary `SUPER` in the recovery snapshot. Unknown or partial shapes fail
    closed.
 8. **Build the final runtime.** In a reviewed manifest PR, record the successful
    schema phase and state `runtime_build_pending`, leaving deploys frozen on the
@@ -605,6 +1230,16 @@ trusted production artifact` with `image-gen-bridge`. The workflow proves
     through the staged principal on every desired app and worker Machine before
     `/healthz` and `/readyz` may complete the rollout. A failed rollout restores
     the bridge and its captured configuration; the 0018 schema remains in place.
+    Fly SSH executes the command directly, not through a shell: pass the
+    principal fingerprint using `env EXPECTED_RUNTIME_PRINCIPAL_SHA256=... node ...`,
+    never a bare leading assignment. Run `34459197149/1` reached all four
+    runtime Machines but that malformed probe command triggered a verified
+    bridge restore before principal/readiness evidence could be completed.
+    The corrected rollout `34461561679/1` passed on all four Machines under
+    `deploy-34461561679-1`. Its final `image-gen-release-34461561679-1` artifact
+    (not the earlier rollback artifact) contains the completed
+    `runtime-principal-cutover.json` with health/readiness no longer pending.
+    This proves runtime cutover, not checkout activation or a Mollie payment.
 11. **Settle the final runtime before principal cleanup.** Record a healthy
     final-schema runtime predecessor and move to `complete` only in a later reviewed
     manifest PR that removes the bridge from the rollback allowlist and retains
@@ -612,6 +1247,18 @@ trusted production artifact` with `image-gen-bridge`. The workflow proves
     while the only rollback is the migration bridge. This settled manifest is a
     prerequisite for the protected obsolete-principal cleanup workflow; moving
     to `complete` does not itself enable paid credits or checkout.
+    The owner approved this exact rollback-plan change on 2026-09-10, which
+    first replaced the migration bridge with runtime `1d80d6bce5fd...`, built
+    from `80703910131e227d1d683b1f5b6287c8bff241de`, under settled identity
+    `deploy-34461561679-1`. A later owner-approved settlement replaced that
+    entry, so the current rollback point is runtime `f2fa9d60e1fc...`, built
+    from `b9caea7951b44d1f97bbd1bc742c25aca68264e9`, with settled identity
+    `deploy-34496956631-1` and config SHA-256
+    `05ffded5fb93abca68e275fe174f20db55f9e0dd1a679cd94c6378fc10053380`.
+    Read the exact current values from `deploy/production/apps.json`.
+    This approval does not authorize the account-retirement operations below.
+    Their per-Machine probes must also use `env` before the principal assignment;
+    both manual cleanup workflows and their exact-command checks enforce this.
 12. **Retire the obsolete broad runtime principal.** Only after every desired
     Machine reproves the restricted principal under the settled deployment
     identity, run the protected cleanup workflow to lock the exact obsolete
@@ -634,11 +1281,122 @@ trusted production artifact` with `image-gen-bridge`. The workflow proves
     across the stabilization window. The retirement workflow never deletes a
     GitHub secret itself and is not part of the bootstrap helper. Do not replace
     this sequence with manual SQL or an unreviewed secret-field edit.
-14. **Keep Test Mode exposure separate.** Until both cleanup paths have
-    metadata-only success evidence, the commercial cutover is incomplete and
-    no Mollie Test Mode checkout may be exposed. Continue only through the
-    separately reviewed Test Mode activation gates; schema state `complete` is
-    not payment-readiness evidence.
+14. **Review bounded Test Mode exposure separately.** Irreversible credential
+    retirement remains incomplete until both cleanup paths have metadata-only
+    success evidence. Eligible Messenger users may exercise the existing Test offer
+    before those drops only through the explicit activation contract below.
+    The two 24-hour recovery windows before deletion remain unchanged. Schema
+    state `complete`, a successful historical lock, and this sequencing
+    exception are not payment-readiness evidence. Live billing remains off.
+
+The optional image-gen manifest object `creditTestActivation` records
+`state: "bounded_test"`, `obsoletePrincipalSha256` (the SHA-256 of the exact
+old runtime account name), and the immutable original operator anchor described
+above. It is a reviewed request, not execution evidence.
+Reviewers must match that hash to the actual
+old runtime/cutover and protected cleanup evidence; never choose an arbitrary
+or newly generated hash. An activation PR must retain the exact
+healthy 0018 runtime predecessor, runtime-only rollback entries, and a proven
+rollback configuration with both checkout and paid admission off, and drain,
+notifications and reconciliation on. After any provider transport, a drain-off rollback is unsafe
+and fails the runtime's durable-activity guard.
+
+The reviewed operator artifact reference and desired Test exposure flags may
+share one configuration PR while the actual Fly Machines remain on the exact
+checkout-off predecessor. Merge does not deploy either workflow. First run the
+protected Test processing operator on that unchanged predecessor. Normally
+confirm its successful receipt before dispatching `Deploy production` for the
+desired image/configuration. If the response is lost, that same protected
+deployment's read-only proof path must recover the exact original committed
+audit or stop before Fly apply; never dispatch another enable mutation to
+resolve the ambiguity. The shared deployment lock prevents overlap; it
+does not replace this ordering. The deployment proof must independently verify
+the original committed activation audit and enabled epoch as well as fresh
+account/session and runtime-principal proof. Keep live billing and the manual tester restrictions
+off throughout this Test Mode transition.
+
+The following inspection was merged in PR #517 after disposable MySQL validation
+passed on PR run `34485670813` and main run `34486831012`. The owner separately
+authorized the exact inspection grant; application and effective-grant readback
+succeeded on 2026-09-10 at `15:44:48Z` for the existing managed provisioner.
+No credentials, customer data or application runtime rights changed. This
+one-off access preparation is not activation evidence: the protected job must
+still prove its actual credential consumer and fresh account/session state.
+It uses the existing
+protected provisioner over one pinned connection through the exact selected
+Machine's Fly tunnel; the migration token supplies metadata/tunnel access, not
+database SSH. In addition to its unchanged base profile, the inspection requires
+exact column-level `SELECT (NAME, TYPE, PROCESSLIST_ID, PROCESSLIST_USER)` on
+`performance_schema.threads`, without grant option. This grants no SQL-text,
+client-host or customer-content inspection and no extra bot privileges. Ordinary
+maintenance accepts the original profile or that exact extension; bootstrap
+still creates only the original profile. Never substitute `PROCESS`, table-wide
+`SELECT`, another token or an unverified partial census.
+
+The collector brackets its session inventory with connection counters and checks
+the account's locked/absent state before and after. It rejects unstable,
+incomplete, unsupported or unavailable observations. Transient connection IDs
+and total session counts are internal checks, not durable activation identities.
+The provisioner credential is present only in the two conditional proof steps
+and is removed from all Fly/runtime-probe subprocess environments. The inspection
+does not grant its own access or authorize applying that grant in production.
+
+Only this explicit request would run the additional privileged inspection in
+`Deploy production`; ordinary dark deployments do not receive those additional
+credentials or perform those checks. `image-gen-credit-test-proof.mjs` must
+use only explicitly authorized access, never grant or create
+access, and never change accounts or read customer rows. The database
+account/session checks are read-only. The app-side check reuses the existing
+reviewed billing-trigger probe: it performs synthetic metadata INSERT/UPDATE
+operations and rolls them back. It is not a wholly read-only SQL probe, and
+its success requires no persistent user or financial changes. The protected job
+binds the exact GitHub source/run/attempt, settled predecessor and release
+watermark, every app/worker's restricted-principal probe, and the reviewed
+database Machine/volume. It separately checks the obsolete account is locked
+or positively absent after its approved drop, and its surviving session count
+is zero. The evidence distinguishes `locked` from `absent`. Session inspection
+reads only `NAME`, `TYPE`, `PROCESSLIST_ID` and `PROCESSLIST_USER` from
+`performance_schema.threads`; it neither requires `PROCESS` nor reads query
+text. It requires Performance Schema and one-thread-per-connection handling,
+checks its own pinned session, and matches distinct client sessions against
+stable `Connections` and `Threads_connected` counters. Only the two explicitly
+recognized internal daemon identities are excluded from the client count.
+Missing instrumentation, unknown session types, unstable counters or unavailable
+metadata fail closed rather than proving zero obsolete sessions. The same protected run
+then repeats current checks and consumes its own evidence, rejecting evidence
+older than 15 minutes, another run/source, a changed identity or topology,
+an unlocked account, or surviving sessions. Both steps execute under the
+existing shared deployment lock. This avoids treating an older lock artifact
+as proof after a later unlock or release. No account is killed or dropped by
+this inspection. Failure leaves exposure unchanged and requires investigation.
+This proves closure of the specified obsolete runtime account only. Audited
+provisioner accounts remain administrative recovery access used exclusively
+inside the existing protected operator workflows until their later retirement;
+the application must never receive their credentials. It is not proof that
+all administrative database access has been removed.
+The detailed proof is runner-local and is consumed within that same protected
+run; it is not uploaded or retained after the runner finishes. Workflow logs
+contain only fixed proof markers. A successful proof is not payment or image
+delivery evidence.
+
+The activation contract requires `MOLLIE_MODE=test`, legacy and live billing
+off, drain/notification/reconciliation on, no manual tester restriction, and
+the existing offer and cost caps. Enable paid admission before checkout.
+For this bounded initial activation, use the approved Test-only protected
+operator workflow above with the manifest-pinned request and epoch 1 to enable
+the DB control and lanes at epoch 2. A separate admin enable or a later
+disable/re-enable is not this original protected activation proof. Do not
+fabricate profile attestations or replace this with ad-hoc SQL. Verify existing control/lane inventory and
+notification/reconciliation readiness before exposure. Missing registration
+requires a separate scoped operational change.
+
+After the test, close checkout and paid admission through a reviewed config
+deployment while retaining the wallet and financial safety drain. Remove the
+reviewed Test request only after that shutdown is proven. The obsolete-account
+cleanup workflow rejects `unlock` if the manifest still has the request or any
+Machine, including a stopped Machine, still has a paid/checkout exposure flag.
+Resume irreversible retirement with its existing exact identity/evidence and
+24-hour rules; never rewrite old evidence to fit a later deployment identity.
 
 Before paid-credit exposure, set the non-secret
 `CREDIT_CHECKOUT_HMAC_ACTIVE_KEY_ID=k1` beside the dedicated Fly secret. A later
@@ -651,18 +1409,18 @@ key. Never remove a predecessor until no non-erased wallet or
 provider-resolution proof uses it; removal is a fail-closed incident, not a
 wallet migration.
 
-Test Mode exposure is additionally limited to one approved pseudonymous
-Messenger subject on one exact Page binding. In the reviewed activation change,
-set `MOLLIE_CREDIT_TEST_CHANNEL_CONNECTION_ID`,
-`MOLLIE_CREDIT_TEST_BINDING_EPOCH` and `MOLLIE_CREDIT_TEST_PRIVACY_EPOCH` to the
-current non-secret database boundary. Compute
-`MOLLIE_CREDIT_TEST_USER_KEY_HASH` only in the protected operator environment as
-SHA-256 over the UTF-8 domain `leaderbot.credit-checkout-test-user.v1\0`
-followed by the canonical pseudonymous user key. Retain only the hash; never
-place the source user key or PSID in config, documentation, evidence, chat or
-logs. `/readyz` must fail before database access when any part is absent or
-stale. A different user in the same owner workspace remains on the ordinary
-free-quota response and cannot create a wallet, intent or provider operation.
+The owner-directed Test Mode journey requires no tester registration. In the
+reviewed activation change, leave `MOLLIE_CREDIT_TEST_CHANNEL_CONNECTION_ID`,
+`MOLLIE_CREDIT_TEST_BINDING_EPOCH`, `MOLLIE_CREDIT_TEST_PRIVACY_EPOCH` and
+`MOLLIE_CREDIT_TEST_USER_KEY_HASH` all empty. Eligible Messenger users on the
+owner Page may then use the same checkout path. Each intent, capability,
+payment and wallet still binds the actual user, channel connection, Page
+binding and privacy epoch automatically; this is not an anonymous shared
+wallet or an unbound payment URL. Consent, the messaging window, quota and
+budget admission remain mandatory. For compatibility an existing complete
+four-field tester restriction is honored; partial or malformed restrictions
+fail closed. The source change alone does not activate checkout: the protected
+activation, payment workers and production evidence gates above remain open.
 
 Set the non-secret `MESSENGER_PAID_IMAGE_PROVIDER_MAX_COST_USD=1.00` in the same
 reviewed Test Mode activation. This is a conservative reservation against the
@@ -791,6 +1549,28 @@ converge, destroy, or replace detached gateway Machines until the volume state
 has been backed up, migration has been rehearsed on a copy, and the canonical
 Machine-volume attachment is explicitly approved. The pre-deploy drift gate is
 intentionally fail-closed while this remains unresolved.
+
+### Gateway quiescence observation
+
+The canonical owner Page callback now points directly to `apps/image-gen`, but
+that callback proof alone does not authorize stopping the legacy gateway. The
+scheduled production uptime workflow must not probe the gateway during the
+zero-traffic observation window; it continues to monitor image-gen and the
+storage proxy.
+
+The observation duration is fixed in advance at exactly 168 continuous hours,
+or seven 24-hour periods. The clock starts only when this duration contract is
+merged to `main`, not at the earlier probe-removal merge. Record that contract's
+exact merge SHA and UTC timestamp in `docs/operations/todo.md`; PR creation time
+and gateway logs collected before that point do not count. Collect metadata-only
+ingress evidence without calling the public gateway endpoint. Keep overlapping
+captures if the provider exposes only a bounded log window, and never record
+message content or user identifiers. Any evidence gap, gateway probe, gateway
+Machine mutation, or drift away from the canonical direct Page callback resets
+the full 168-hour clock. The quiescence changes do not stop, scale, redeploy,
+delete, or otherwise mutate any gateway Machine, secret, or volume. Those
+actions remain separate, reviewed retirement steps with their own rollback and
+retention evidence.
 
 The manifest contract has four stages:
 

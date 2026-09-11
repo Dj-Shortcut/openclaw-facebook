@@ -56,14 +56,14 @@
     "clean": "node -e \"fs.rmSync('dist', { recursive: true, force: true })\"",
     "build": "npm run clean && tsc -p tsconfig.json",
     "test": "node ./scripts/run-vitest.mjs",
-    "test:plugin": "node ./scripts/run-vitest.mjs configured-state.test.ts manifest.test.ts src scripts/openclaw-login-command.test.mjs scripts/update-openclaw.test.mjs",
-    "test:production-contracts": "node ./scripts/run-vitest.mjs scripts/check-package-manager-contract.test.mjs scripts/classify-ci-changes.test.mjs scripts/image-gen-credit-provisioner-bootstrap-contract.test.mjs scripts/image-gen-migration-smoke-workflow.test.mjs scripts/messenger-smoke-checklist.test.mjs scripts/provision-image-gen-credit-provisioner.test.mjs scripts/retire-image-gen-credit-provisioners.test.mjs scripts/validate-production-deployment.test.mjs",
+    "test:plugin": "node ./scripts/run-vitest.mjs configured-state.test.ts manifest.test.ts src scripts/update-openclaw.test.mjs",
+    "test:retained-gateway": "node ./scripts/run-vitest.mjs deploy/fly-gateway scripts/gateway-state-rebaseline-workflow.test.mjs scripts/select-fresh-fly-snapshot.test.mjs scripts/validate-gateway-deployment-safety.test.mjs scripts/verify-gateway-state-rebaseline.test.mjs",
     "test:legacy-gateway": "node ./scripts/run-vitest.mjs deploy/fly-gateway scripts/gateway-state-rebaseline-workflow.test.mjs scripts/select-fresh-fly-snapshot.test.mjs scripts/validate-gateway-deployment-safety.test.mjs scripts/verify-gateway-state-rebaseline.test.mjs",
+    "test:production-contracts": "node ./scripts/run-vitest.mjs scripts/check-package-manager-contract.test.mjs scripts/classify-ci-changes.test.mjs scripts/image-gen-credit-migration-principal-repair-contract.test.mjs scripts/image-gen-super-cleanup-exec.test.mjs scripts/image-gen-credit-provisioner-bootstrap-contract.test.mjs scripts/image-gen-migration-smoke-workflow.test.mjs scripts/image-gen-migration-super-cleanup-evidence.test.mjs scripts/fly-restore-probe-status.test.mjs scripts/messenger-smoke-checklist.test.mjs scripts/provision-image-gen-credit-provisioner.test.mjs scripts/provision-image-gen-credit-provisioner-exec.test.mjs scripts/image-gen-principal-prepare-exec.test.mjs scripts/retire-image-gen-credit-provisioners.test.mjs scripts/retire-image-gen-repair-exec-token.test.mjs scripts/repair-image-gen-runtime-database-host.test.mjs scripts/image-gen-credit-test-proof.test.mjs scripts/image-gen-payment-processing-prepared.test.mjs scripts/image-gen-test-payment-operator.test.mjs scripts/image-gen-test-payment-activation-audit.test.mjs scripts/validate-production-deployment.test.mjs",
     "prepare": "npm run build",
     "pack:dry": "npm pack --dry-run",
     "check": "npm run build && npm test && npm run pack:dry",
     "openclaw:update": "node scripts/update-openclaw.mjs",
-    "openclaw:login": "node scripts/openclaw-login.mjs",
     "openclaw:validate": "node scripts/validate-openclaw-runtime.mjs",
     "release:validate-versions": "node scripts/validate-release-versions.mjs",
     "openclaw:release-check": "npm run openclaw:validate && npm run release:validate-versions && npm run check",
@@ -98,14 +98,19 @@
     "openclaw": ">=2026.6.11 || 2026.7.2-beta.7"
   },
   "devDependencies": {
-    "@types/node": "^26.2.0",
+    "@types/node": "^26.5.0",
     "openclaw": "2026.7.2-beta.7",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.11"
+    "vitest": "^5.0.0"
   },
   "overrides": {
-    "hono": "4.12.34",
+    "hono": "4.13.5",
     "nanoid@3": "3.3.18"
+  },
+  "pnpm": {
+    "overrides": {
+      "hono": "4.13.5"
+    }
   },
   "openclaw": {
     "compat": {

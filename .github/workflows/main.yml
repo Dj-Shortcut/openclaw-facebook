@@ -39,3 +39,6 @@ jobs:
 
       - name: Test production contracts
         run: npm run test:production-contracts
+
+      - name: Test retained gateway recovery without starting a gateway
+        run: npm run test:retained-gateway

@@ -117,10 +117,7 @@ export async function createTrackedEventContext(
     ? localeLang
     : storedSenderLanguage || ctx.defaultLang;
   const classification = classifyInboundEvent(event);
-  await recordInboundUserActivity(psid, event, classification, {
-    entryId,
-    allowPaidRecovery: false,
-  });
+  await recordInboundUserActivity(psid, event, classification);
   const sendFallbackIfNeeded = () =>
     sendFallbackTextIfNeeded({
       isInboundUserEvent: classification.isInboundUserEvent,

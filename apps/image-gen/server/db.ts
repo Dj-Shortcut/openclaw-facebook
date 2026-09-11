@@ -2268,7 +2268,9 @@ export async function upsertChannelConnection(
       allowedRoles: readonly WorkspaceMember["role"][];
     }>;
     updatePolicy?:
-      "preserve_exact_whatsapp_binding" | "preserve_exact_facebook_binding";
+      | "preserve_exact_whatsapp_binding"
+      | "preserve_exact_facebook_binding"
+      | "rotate_exact_facebook_page_token";
   }> = {}
 ) {
   const { externalId, providerAccountExternalId } =
@@ -2281,8 +2283,13 @@ export async function upsertChannelConnection(
       : null;
   const preservesExactFacebookBinding =
     options.updatePolicy === "preserve_exact_facebook_binding";
+  const rotatesExactFacebookPageToken =
+    options.updatePolicy === "rotate_exact_facebook_page_token";
   const exactFacebookPageId =
-    preservesExactFacebookBinding && externalId ? externalId : null;
+    (preservesExactFacebookBinding || rotatesExactFacebookPageToken) &&
+    externalId
+      ? externalId
+      : null;
   if (
     preservesExactWhatsAppBinding &&
     (values.channel !== "whatsapp" ||
@@ -2298,6 +2305,29 @@ export async function upsertChannelConnection(
       !exactFacebookPageId)
   ) {
     throw new FacebookChannelConnectionMigrationRequiredError();
+  }
+  if (
+    rotatesExactFacebookPageToken &&
+    (values.channel !== "facebook_messenger" ||
+      values.status !== "connected" ||
+      !exactFacebookPageId ||
+      !Number.isSafeInteger(values.id) ||
+      Number(values.id) <= 0 ||
+      !Number.isSafeInteger(values.bindingEpoch) ||
+      Number(values.bindingEpoch) <= 0 ||
+      !values.encryptedAccessToken?.trim())
+  ) {
+    throw new FacebookChannelConnectionMigrationRequiredError();
+  }
+  if (
+    rotatesExactFacebookPageToken &&
+    (!options.authorization ||
+      options.authorization.allowedRoles.length !== 1 ||
+      options.authorization.allowedRoles[0] !== "owner" ||
+      !options.auditLog ||
+      options.auditLog.event !== "facebook_page_token.rotated")
+  ) {
+    throw new ChannelConnectionAuthorizationError();
   }
   if (options.auditLog && options.auditLog.workspaceId !== values.workspaceId) {
     throw new Error("Channel connection audit workspace does not match");
@@ -2451,6 +2481,44 @@ export async function upsertChannelConnection(
                 )
               )
             );
+        } else if (rotatesExactFacebookPageToken) {
+          if (
+            !exactFacebookPageId ||
+            existing[0].id !== values.id ||
+            existing[0].bindingEpoch !== values.bindingEpoch ||
+            !["connected", "missing_permissions", "token_expired"].includes(
+              existing[0].status
+            ) ||
+            existing[0].externalId !== exactFacebookPageId ||
+            existing[0].providerAccountExternalId !== null
+          ) {
+            throw new FacebookChannelConnectionMigrationRequiredError();
+          }
+          const result = await tx
+            .update(channelConnections)
+            .set({
+              status: "connected",
+              encryptedAccessToken: values.encryptedAccessToken,
+              lastCheckedAt,
+            })
+            .where(
+              and(
+                eq(channelConnections.id, existing[0].id),
+                eq(channelConnections.workspaceId, values.workspaceId),
+                eq(channelConnections.channel, "facebook_messenger"),
+                inArray(channelConnections.status, [
+                  "connected",
+                  "missing_permissions",
+                  "token_expired",
+                ]),
+                eq(channelConnections.externalId, exactFacebookPageId),
+                isNull(channelConnections.providerAccountExternalId),
+                eq(channelConnections.bindingEpoch, existing[0].bindingEpoch)
+              )
+            );
+          if (getAffectedRows(result) !== 1) {
+            throw new FacebookChannelConnectionMigrationRequiredError();
+          }
         } else if (preservesExactFacebookBinding) {
           if (!exactFacebookPageId) {
             throw new FacebookChannelConnectionMigrationRequiredError();
@@ -2639,6 +2707,9 @@ export async function upsertChannelConnection(
             );
         }
       } else {
+        if (rotatesExactFacebookPageToken) {
+          throw new FacebookChannelConnectionMigrationRequiredError();
+        }
         await tx.insert(channelConnections).values({
           ...values,
           externalId,

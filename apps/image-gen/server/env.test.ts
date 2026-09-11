@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { assertPortalDatabaseConfig } from "./_core/env";
+import { assertDatabaseConfig } from "./_core/env";
 
 const originalNodeEnv = process.env.NODE_ENV;
 const originalDatabaseUrl = process.env.DATABASE_URL;
@@ -18,20 +18,20 @@ afterEach(() => {
   }
 });
 
-describe("portal database config", () => {
+describe("database config", () => {
   it("does not require DATABASE_URL outside production", () => {
     process.env.NODE_ENV = "test";
     delete process.env.DATABASE_URL;
 
-    expect(() => assertPortalDatabaseConfig()).not.toThrow();
+    expect(() => assertDatabaseConfig()).not.toThrow();
   });
 
   it("requires DATABASE_URL in production", () => {
     process.env.NODE_ENV = "production";
     delete process.env.DATABASE_URL;
 
-    expect(() => assertPortalDatabaseConfig()).toThrow(
-      "DATABASE_URL is required for the production customer portal"
+    expect(() => assertDatabaseConfig()).toThrow(
+      "DATABASE_URL is required for the production Messenger runtime"
     );
   });
 
@@ -39,7 +39,7 @@ describe("portal database config", () => {
     process.env.NODE_ENV = "production";
     process.env.DATABASE_URL = "postgres://example.invalid/leaderbot";
 
-    expect(() => assertPortalDatabaseConfig()).toThrow(
+    expect(() => assertDatabaseConfig()).toThrow(
       "DATABASE_URL must use a MySQL-compatible URL"
     );
   });
@@ -48,6 +48,6 @@ describe("portal database config", () => {
     process.env.NODE_ENV = "production";
     process.env.DATABASE_URL = "mysql://user:pass@example.invalid:3306/leaderbot";
 
-    expect(() => assertPortalDatabaseConfig()).not.toThrow();
+    expect(() => assertDatabaseConfig()).not.toThrow();
   });
 });

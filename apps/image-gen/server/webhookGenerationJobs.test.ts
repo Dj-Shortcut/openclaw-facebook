@@ -43,6 +43,7 @@ const {
   faultInjection: {
     quotaMarkerError: null as Error | null,
     setLastGeneratedError: null as Error | null,
+    successNoticeMarkerError: null as Error | null,
   },
 }));
 
@@ -117,6 +118,18 @@ vi.mock("./_core/messengerGenerationCompletion", async importOriginal => {
         throw error;
       }
       return await actual.markMessengerGenerationQuotaCommitted(...args);
+    },
+    markMessengerGenerationSuccessNoticeSent: async (
+      ...args: Parameters<
+        typeof actual.markMessengerGenerationSuccessNoticeSent
+      >
+    ) => {
+      const error = faultInjection.successNoticeMarkerError;
+      if (error) {
+        faultInjection.successNoticeMarkerError = null;
+        throw error;
+      }
+      return await actual.markMessengerGenerationSuccessNoticeSent(...args);
     },
   };
 });
@@ -290,6 +303,7 @@ beforeEach(() => {
   sendTextMock.mockResolvedValue({ sent: true });
   faultInjection.quotaMarkerError = null;
   faultInjection.setLastGeneratedError = null;
+  faultInjection.successNoticeMarkerError = null;
   resetStateStore();
   resetRuntimeStatsForTests();
   process.env.MESSENGER_IMAGE_QUOTA_TIME_ZONE = "Europe/Brussels";
@@ -3279,9 +3293,9 @@ describe("messenger generation job safety", () => {
 
   it("uses the out-of-free-credits translation when quota is exhausted", async () => {
     const originalLimit = process.env.MESSENGER_FREE_DAILY_LIMIT;
-    const originalPortalBaseUrl = process.env.PORTAL_BASE_URL;
+    const originalAppBaseUrl = process.env.APP_BASE_URL;
     process.env.MESSENGER_FREE_DAILY_LIMIT = "0";
-    process.env.PORTAL_BASE_URL = "https://leaderbot.live";
+    process.env.APP_BASE_URL = "https://app.leaderbot.live";
     const { runner } = createContextBackedRunner();
 
     try {
@@ -3297,10 +3311,10 @@ describe("messenger generation job safety", () => {
       } else {
         process.env.MESSENGER_FREE_DAILY_LIMIT = originalLimit;
       }
-      if (originalPortalBaseUrl === undefined) {
-        delete process.env.PORTAL_BASE_URL;
+      if (originalAppBaseUrl === undefined) {
+        delete process.env.APP_BASE_URL;
       } else {
-        process.env.PORTAL_BASE_URL = originalPortalBaseUrl;
+        process.env.APP_BASE_URL = originalAppBaseUrl;
       }
     }
 
@@ -3407,6 +3421,330 @@ describe("messenger generation job safety", () => {
       "recoverable-user",
       "https://img.example/recovered.png"
     );
+  });
+
+  it("stays silent about generation when bookkeeping fails after delivery", async () => {
+    const psid = "delivered-then-marker-fault-user";
+    const userId = "delivered-then-marker-fault-user-key";
+    const reqId = "req-delivered-then-marker-fault";
+    const runner = createTestRunner();
+    executeGenerationFlowMock.mockResolvedValueOnce(successGenerationResult());
+    faultInjection.successNoticeMarkerError = new Error(
+      "success notice marker unavailable"
+    );
+
+    await runner.processMessengerGenerationJob({
+      psid,
+      userId,
+      reqId,
+      lang: "nl",
+    });
+
+    expect(sendImageMock).toHaveBeenCalledTimes(1);
+    expect(executeGenerationFlowMock).toHaveBeenCalledTimes(1);
+    expect(sendQuickRepliesMock).not.toHaveBeenCalledWith(
+      psid,
+      t("nl", "generationGenericFailure"),
+      expect.anything()
+    );
+    expect(getState(psid)?.stage).toBe("IDLE");
+    await expect(
+      getMessengerGenerationCompletion(reqId)
+    ).resolves.toMatchObject({ deliveryStatus: "delivered" });
+    await expect(
+      getMessengerImageQuotaStatus(quotaIdentityForUser(userId))
+    ).resolves.toEqual({
+      daily: { used: 1, limit: 5, remaining: 4 },
+      monthly: { used: 1, limit: 20, remaining: 19 },
+    });
+    expect(safeLogMock).toHaveBeenCalledWith(
+      "messenger_generation_failure_notice_suppressed",
+      expect.objectContaining({ reqId, deliveryStatus: "delivered" })
+    );
+  });
+
+  it("dead-letters a delivered generation without a generation failure message", async () => {
+    const psid = "delivered-dead-letter-user";
+    const userId = "delivered-dead-letter-user-key";
+    const pageId = "delivered-dead-letter-page";
+    const reqId = "req-delivered-dead-letter";
+    const sendLoggedText = vi.fn(
+      async (_psid: string, _text: string, _reqId: string) =>
+        ({ sent: true }) satisfies MessengerSendOutcome
+    );
+    const runner = createTestRunner({ sendLoggedText });
+    await seedLegacyCompletion({
+      reqId,
+      userId,
+      imageUrl: "https://img.example/dead-letter-delivered.png",
+      deliveryStatus: "delivered",
+    });
+
+    await runner.processMessengerGenerationJobDeadLetter({
+      psid,
+      userId,
+      pageId,
+      reqId,
+      lang: "nl",
+    });
+
+    const state = await runWithMessengerRequestContext(
+      pageId,
+      async () => await Promise.resolve(getState(psid))
+    );
+    expect(sendLoggedText).not.toHaveBeenCalled();
+    expect(executeGenerationFlowMock).not.toHaveBeenCalled();
+    expect(state?.stage).toBe("IDLE");
+  });
+
+  it("keeps the failure notice when only a pending receipt was recorded", async () => {
+    process.env.MESSENGER_FREE_DAILY_LIMIT = "0";
+    const job = paidCreditGenerationJob("paid-receipt-pending-failure");
+    const commitDeliveredOutput = vi.fn(async () => undefined);
+    reservePaidCreditGenerationMock.mockResolvedValueOnce({
+      available: true,
+      reservation: paidCreditReservationFixture({ commitDeliveredOutput }),
+    });
+    executeGenerationFlowMock.mockImplementationOnce(async input => {
+      await (await input.onProviderAttempt())?.markTransportStarted();
+      await input.onProviderSuccess?.();
+      return successGenerationResult();
+    });
+    sendImageMock.mockResolvedValueOnce({
+      sent: true,
+      messageId: "mid-paid-receipt-pending-failure",
+    });
+    faultInjection.successNoticeMarkerError = new Error(
+      "success notice marker unavailable"
+    );
+
+    await createTestRunner().processMessengerGenerationJob(job);
+
+    // Meta accepted a message ID, but no delivery receipt confirmed it, so the
+    // send is not proven and the user must still hear that it failed.
+    await expect(
+      getMessengerGenerationCompletion(
+        job.reqId,
+        paidCreditCompletionFence(job)
+      )
+    ).resolves.toMatchObject({ deliveryStatus: "receipt_pending" });
+    expect(sendQuickRepliesMock).toHaveBeenCalledWith(
+      job.psid,
+      t("nl", "generationGenericFailure"),
+      expect.anything()
+    );
+    expect(commitDeliveredOutput).not.toHaveBeenCalled();
+    expect(commitDeliveredPaidCreditGenerationMock).not.toHaveBeenCalled();
+    expect(executeGenerationFlowMock).toHaveBeenCalledTimes(1);
+    expect(sendImageMock).toHaveBeenCalledTimes(1);
+    await expect(readScopedFlowStage(job)).resolves.toBe("FAILURE");
+  });
+
+  it("settles inline production instead of escaping to the webhook fallback", async () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = "production";
+    // The free quota store is Redis-only in production; this scenario is about
+    // outer error handling, so keep the quota path out of it.
+    process.env.MESSENGER_QUOTA_BYPASS_IDS = "inline-production-delivered-psid";
+    const job = {
+      psid: "inline-production-delivered-psid",
+      userId: "b".repeat(64),
+      pageId: "inline-production-page",
+      workspaceId: 42,
+      channelConnectionId: 8,
+      bindingEpoch: 3,
+      privacyEpoch: 5,
+      reqId: "req-inline-production-delivered",
+      lang: "nl" as const,
+    };
+    const runner = createTestRunner();
+    executeGenerationFlowMock.mockResolvedValueOnce(successGenerationResult());
+    faultInjection.successNoticeMarkerError = new Error(
+      "success notice marker unavailable"
+    );
+
+    try {
+      // Inline production rethrows generation failures so the webhook fallback
+      // can answer. A delivered image is already that answer, so the runner
+      // must report it as sent instead of propagating.
+      await expect(runner.processMessengerGenerationJob(job)).resolves.toEqual({
+        sent: true,
+      });
+
+      expect(sendImageMock).toHaveBeenCalledTimes(1);
+      expect(executeGenerationFlowMock).toHaveBeenCalledTimes(1);
+      expect(sendQuickRepliesMock).not.toHaveBeenCalledWith(
+        job.psid,
+        t("nl", "generationGenericFailure"),
+        expect.anything()
+      );
+      await expect(readScopedFlowStage(job)).resolves.toBe("IDLE");
+    } finally {
+      process.env.NODE_ENV = originalNodeEnv;
+    }
+  });
+
+  it("settles inline production when the success notice fails after delivery", async () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = "production";
+    process.env.MESSENGER_QUOTA_BYPASS_IDS = "inline-production-notice-psid";
+    const job = {
+      psid: "inline-production-notice-psid",
+      userId: "d".repeat(64),
+      pageId: "inline-production-notice-page",
+      workspaceId: 42,
+      channelConnectionId: 8,
+      bindingEpoch: 3,
+      privacyEpoch: 5,
+      reqId: "req-inline-production-notice",
+      lang: "nl" as const,
+    };
+    const sendLoggedActions = vi.fn(async () => {
+      throw new Error("success notice send failed");
+    });
+    const runner = createTestRunner({ sendLoggedActions });
+    executeGenerationFlowMock.mockResolvedValueOnce(successGenerationResult());
+
+    try {
+      // The success notice failed, but the image itself was delivered, so the
+      // runner must not propagate into the webhook fallback.
+      await expect(runner.processMessengerGenerationJob(job)).resolves.toEqual({
+        sent: true,
+      });
+
+      expect(sendImageMock).toHaveBeenCalledTimes(1);
+      expect(executeGenerationFlowMock).toHaveBeenCalledTimes(1);
+      await expect(readScopedFlowStage(job)).resolves.toBe("IDLE");
+    } finally {
+      process.env.NODE_ENV = originalNodeEnv;
+    }
+  });
+
+  it("still escalates an inline production notice failure without delivery", async () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = "production";
+    process.env.MESSENGER_QUOTA_BYPASS_IDS =
+      "inline-production-quota-notice-psid";
+    const job = {
+      psid: "inline-production-quota-notice-psid",
+      userId: "e".repeat(64),
+      pageId: "inline-production-quota-notice-page",
+      workspaceId: 42,
+      channelConnectionId: 8,
+      bindingEpoch: 3,
+      privacyEpoch: 5,
+      reqId: "req-inline-production-quota-notice",
+      lang: "nl" as const,
+    };
+    const sendLoggedActions = vi.fn(async () => {
+      throw new Error("startpilot quota notice send failed");
+    });
+    const runner = createTestRunner({ sendLoggedActions });
+    resolveWorkspaceRuntimePolicyMock.mockResolvedValue({
+      kind: "startpilot",
+      workspaceId: 42,
+      entitlementId: 7,
+      mode: "test",
+      imageModel: "gpt-image-1",
+      imageQuality: "medium",
+    });
+    admitStartpilotImageProviderAttemptMock.mockResolvedValueOnce({
+      allowed: false,
+      reason: "daily_exhausted",
+    });
+    executeGenerationFlowMock.mockImplementationOnce(async input => {
+      const admission = await input.onProviderAttempt();
+      try {
+        await admission?.markTransportStarted();
+      } catch (error) {
+        return failureGenerationResult(error);
+      }
+      return successGenerationResult();
+    });
+
+    try {
+      await expect(runner.processMessengerGenerationJob(job)).rejects.toThrow();
+
+      // Nothing was delivered, so the error must still reach the webhook.
+      expect(sendImageMock).not.toHaveBeenCalled();
+    } finally {
+      process.env.NODE_ENV = originalNodeEnv;
+    }
+  });
+
+  it("still escalates an inline production failure that never delivered", async () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = "production";
+    process.env.MESSENGER_QUOTA_BYPASS_IDS =
+      "inline-production-undelivered-psid";
+    const job = {
+      psid: "inline-production-undelivered-psid",
+      userId: "c".repeat(64),
+      pageId: "inline-production-undelivered-page",
+      workspaceId: 42,
+      channelConnectionId: 8,
+      bindingEpoch: 3,
+      privacyEpoch: 5,
+      reqId: "req-inline-production-undelivered",
+      lang: "nl" as const,
+    };
+    const runner = createTestRunner();
+    executeGenerationFlowMock.mockRejectedValueOnce(
+      new Error("provider blew up before delivery")
+    );
+
+    try {
+      await expect(runner.processMessengerGenerationJob(job)).rejects.toThrow(
+        "provider blew up before delivery"
+      );
+
+      expect(sendImageMock).not.toHaveBeenCalled();
+      expect(sendQuickRepliesMock).toHaveBeenCalledWith(
+        job.psid,
+        t("nl", "generationGenericFailure"),
+        expect.anything()
+      );
+      await expect(readScopedFlowStage(job)).resolves.toBe("FAILURE");
+    } finally {
+      process.env.NODE_ENV = originalNodeEnv;
+    }
+  });
+
+  it("dead-letters an undelivered generation with the localized failure", async () => {
+    const psid = "undelivered-dead-letter-user";
+    const userId = "undelivered-dead-letter-user-key";
+    const pageId = "undelivered-dead-letter-page";
+    const reqId = "req-undelivered-dead-letter";
+    const sendLoggedText = vi.fn(
+      async (_psid: string, _text: string, _reqId: string) =>
+        ({ sent: true }) satisfies MessengerSendOutcome
+    );
+    const runner = createTestRunner({ sendLoggedText });
+    await seedLegacyCompletion({
+      reqId,
+      userId,
+      imageUrl: "https://img.example/dead-letter-pending.png",
+      deliveryStatus: "pending",
+    });
+
+    await runner.processMessengerGenerationJobDeadLetter({
+      psid,
+      userId,
+      pageId,
+      reqId,
+      lang: "nl",
+    });
+
+    const state = await runWithMessengerRequestContext(
+      pageId,
+      async () => await Promise.resolve(getState(psid))
+    );
+    expect(sendLoggedText).toHaveBeenCalledWith(
+      psid,
+      t("nl", "generationGenericFailure"),
+      reqId
+    );
+    expect(state?.stage).toBe("FAILURE");
   });
 });
 
@@ -3549,6 +3887,29 @@ function paidCreditGenerationJob(suffix: string) {
     reqId: `req-${suffix}`,
     lang: "nl" as const,
   };
+}
+
+async function readScopedFlowStage(job: {
+  psid: string;
+  userId: string;
+  pageId: string;
+  workspaceId: number;
+  channelConnectionId: number;
+  bindingEpoch: number;
+  privacyEpoch: number;
+}): Promise<string | undefined> {
+  return await runWithMessengerRequestContext(
+    job.pageId,
+    async () => await Promise.resolve(getState(job.psid)?.stage),
+    {
+      channel: "facebook_messenger",
+      workspaceId: job.workspaceId,
+      channelConnectionId: job.channelConnectionId,
+      bindingEpoch: job.bindingEpoch,
+      privacyEpoch: job.privacyEpoch,
+      userKey: job.userId,
+    }
+  );
 }
 
 function paidCreditCompletionFence(

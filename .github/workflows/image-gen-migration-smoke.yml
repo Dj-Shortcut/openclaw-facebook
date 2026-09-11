@@ -144,6 +144,15 @@ jobs:
           RUN_MYSQL_INTEGRATION: "1"
         run: pnpm exec vitest run server/creditProvisionerRetirement.mysql.test.ts
 
+      - name: Verify narrow session inspection on disposable MySQL
+        env:
+          CREDIT_SESSION_INVENTORY_DESTRUCTIVE_TEST: credit-session-inventory-disposable-mysql-v1
+          DATABASE_URL: mysql://root:root@127.0.0.1:3306/test_image_gen
+          RUN_MYSQL_INTEGRATION: "1"
+        run: |
+          npm ci
+          node scripts/run-vitest.mjs scripts/credit-test-session-inventory.mysql.test.mjs
+
       - name: Apply and verify from the exact production container
         working-directory: apps/image-gen
         run: |
