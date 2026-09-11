@@ -189,7 +189,10 @@ function conversationBeatClass(beat: ConversationBeat, at: number): string {
 /** Reports whether a section is on screen, so the pinned mobile call to action
  * can step aside once the closing one is visible. Without an observer the bar
  * simply stays put, which is the safe direction. */
-function useSectionInView(ref: React.RefObject<HTMLElement | null>): boolean {
+function useSectionInView(
+  ref: React.RefObject<HTMLElement | null>,
+  rootMargin = "0px"
+): boolean {
   const [inView, setInView] = useState(false);
 
   useEffect(() => {
@@ -198,11 +201,11 @@ function useSectionInView(ref: React.RefObject<HTMLElement | null>): boolean {
 
     const observer = new IntersectionObserver(
       entries => setInView(entries.some(entry => entry.isIntersecting)),
-      { rootMargin: "-25% 0px -10% 0px" }
+      { rootMargin }
     );
     observer.observe(el);
     return () => observer.disconnect();
-  }, [ref]);
+  }, [ref, rootMargin]);
 
   return inView;
 }
@@ -276,8 +279,14 @@ export default function LandingPage() {
   const copy = landingCopies[locale];
   const unavailable = unavailablePremiumCopies[locale];
   const { beat, typing } = useConversationPlayback();
+  const heroCtaRef = useRef<HTMLDivElement>(null);
+  const heroCtaInView = useSectionInView(heroCtaRef);
   const closingRef = useRef<HTMLDivElement>(null);
-  const closingInView = useSectionInView(closingRef);
+  const closingInView = useSectionInView(closingRef, "-25% 0px -10% 0px");
+  // The pinned bar is a safety net for the scroll, not a third button on the
+  // first screen: it waits until the hero call to action is gone and steps
+  // aside again at the closing one.
+  const pinnedCtaHidden = heroCtaInView || closingInView;
   const microLine = commercialBillingAvailable
     ? copy.microLine
     : unavailable.microLine;
@@ -369,11 +378,9 @@ export default function LandingPage() {
           </nav>
           <div className="flex items-center gap-2 sm:gap-4">
             <LanguagePicker copy={copy} locale={locale} onChange={setLocale} />
-            <MessengerCta
-              label={copy.headerCta}
-              variant="solid"
-              className="hidden sm:inline-flex"
-            />
+            <span className="hidden sm:inline-flex">
+              <MessengerCta label={copy.headerCta} variant="solid" />
+            </span>
           </div>
         </div>
       </header>
@@ -394,7 +401,10 @@ export default function LandingPage() {
             <p className="mt-6 max-w-2xl text-lg leading-8 text-[#14203D]/75">
               {copy.subtitle}
             </p>
-            <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
+            <div
+              className="mt-8 flex flex-col gap-3 sm:flex-row sm:flex-wrap"
+              ref={heroCtaRef}
+            >
               <MessengerCta
                 label={copy.heroPrimaryCta}
                 variant="solid"
@@ -867,9 +877,9 @@ export default function LandingPage() {
       </section>
 
       <div
-        aria-hidden={closingInView}
+        aria-hidden={pinnedCtaHidden}
         className={`fixed inset-x-0 bottom-0 z-40 border-t border-[#14203D]/10 bg-[#f6f2ea]/95 px-4 pt-3 backdrop-blur transition-opacity duration-200 sm:hidden ${
-          closingInView ? "pointer-events-none opacity-0" : "opacity-100"
+          pinnedCtaHidden ? "pointer-events-none opacity-0" : "opacity-100"
         }`}
         style={{ paddingBottom: "calc(0.75rem + env(safe-area-inset-bottom))" }}
       >
