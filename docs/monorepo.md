@@ -51,7 +51,10 @@ Machines, volume, secrets, and Meta callback safely.
 
 ## Package managers
 
-- `apps/image-gen` and storage proxy use their checked-in pnpm lockfiles.
+- `apps/image-gen` and `apps/image-gen/storage-proxy` are the two isolated
+  applications with their own checked-in pnpm lockfiles.
+- `apps/customer-app` holds no application code or lockfile (only a leftover
+  `src-tauri/.gitignore`) and is not a pnpm application boundary.
 - The root npm package and compatibility lockfiles remain until plugin
   extraction is complete.
 - Do not regenerate a lockfile owned by another package boundary casually.

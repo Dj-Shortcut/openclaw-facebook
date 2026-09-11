@@ -250,13 +250,17 @@ Changes here require targeted tests and explicit failure-path verification.
 
 ## Documentation rules
 
-- `README.md` explains the product and repository.
-- `docs/architecture.md` defines current and target boundaries.
-- `docs/operations/todo.md` is the only active backlog.
+- `README.md` explains the product, repository, and documentation status boundaries.
+- `docs/architecture.md` defines current, target, and transitional boundaries.
+- `docs/operations/todo.md` is the only active backlog and must contain current
+  gates, evidence links, and next actions rather than a historical incident log.
 - Runbooks describe executable operations, not product aspirations.
-- Delete stale plans instead of labeling them historical.
+- Move completed incident detail to Git history or a dedicated archive; do not
+  leave stale plans or historical deployment transcripts in the active backlog.
 - A document that describes removed behavior must be removed in the same change,
   unless it is a temporary decommission runbook with an explicit removal gate.
+- Transitional documents must be labeled clearly so they cannot be mistaken for
+  the active Leaderbot production path.
 - Never claim a target feature is live before its code and production evidence
   exist.
 

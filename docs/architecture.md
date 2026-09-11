@@ -177,19 +177,19 @@ is unavailable.
 
 ## HTTP surfaces
 
-Active or target public surfaces:
+The following status labels distinguish deployed behavior from target design:
 
-- `/facebook/webhook` as the canonical direct Messenger callback;
-- `/healthz`, `/readyz`, version, and metrics endpoints;
-- legal and data-deletion pages;
-- a minimal checkout, return, and receipt surface;
-- generated asset delivery through the reviewed storage boundary.
+| Status | Surface | Meaning |
+| --- | --- | --- |
+| Active or migration-gated | `/facebook/webhook`, `/healthz`, `/readyz`, version, metrics, legal and data-deletion pages | Direct `apps/image-gen` runtime surfaces whose production evidence is tracked in `operations/todo.md`. |
+| Implemented, exposure-gated | Signed credit checkout page and `/credits/checkout/return` | One-time checkout path in `apps/image-gen`. Mollie Test Mode exposure still awaits its protected deployment, live payment remains disabled until the launch gates close, and the browser return never grants credits. |
+| Target | Customer payment receipt | No separate receipt route or page exists; receipt proof remains open P4 work in `operations/todo.md`. |
+| Active boundary | Generated asset delivery through the reviewed storage boundary | Storage and retention controls apply regardless of payment state. |
+| Retirement-only | OpenClaw gateway, historical portal handoff, and recurring billing surfaces | Retained only for controlled migration or data-drain work; not part of the Leaderbot customer path. |
+| Not exposed | Customer workspace portal, pairing UI, admin content browser, subscription management page, and public admin screens | The target product does not expose these surfaces. |
 
-The target product does not expose a customer workspace portal, OpenClaw
-gateway, pairing UI, admin content browser, subscription management page, or
-any admin screen. Messenger is the customer interface, the owner handles
-payments and refunds in Mollie, and technical faults are read from redacted
-Fly logs.
+Messenger is the customer interface. The owner handles payments and refunds in
+Mollie, and technical faults are read from redacted Fly logs.
 
 One internal operator login remains, and it is deliberately not advertised.
 Signing in through `/api/oauth/start` gives the configured owner account the
@@ -220,9 +220,11 @@ video path is an owner-operated, feature-flagged photo-to-video beta with its
 own per-user attempt quota, global attempt cap, priced spend admission, scoped
 pilot allowlist, storage, deletion, and delivery fences. Provider job references
 remain in the exact user/privacy cleanup inventory until provider deletion is
-confirmed, bounded by a 31-day retention window aligned to the provider's
-[documented 30-day video data window](https://platform.openai.com/docs/models/default-usage-policies-by-endpoint);
-the provider copy is removed before Messenger delivery. It does not read
+confirmed, bounded by a 31-day internal retention window. The extra day is an
+intentional cleanup buffer after the provider's documented 30-day video data
+window, not a claim that provider data is retained for 31 days (see the
+provider's [documented video data window](https://platform.openai.com/docs/models/default-usage-policies-by-endpoint)).
+The provider copy is removed before Messenger delivery. It does not read
 subscription state or consume purchased image credits.
 
 ## Failure model

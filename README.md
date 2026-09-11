@@ -124,19 +124,19 @@ recovery run in Production contract CI without starting or deploying a gateway.
 
 ## Documentation
 
-- [Architecture](docs/architecture.md)
-- [Active production outcomes](docs/operations/todo.md)
-- [Transitional OpenClaw channel setup](docs/setup.md)
-- [Meta App Review](docs/operations/meta-app-review.md)
-- [Production deployment and rollback](docs/operations/production-deployments.md)
-- [Production readiness](docs/production-readiness.md)
-- [Billing operations](docs/BILLING_RUNBOOK.md)
-- [Cancellation and refund policy](docs/CANCELLATION_REFUND_POLICY.md)
-- [Security](docs/security/SECURITY.md)
-- [Storage and retention](docs/storage-proxy-r2.md)
+The documentation uses explicit status boundaries. Read the active operational
+state first; transitional and target documents must not be treated as evidence
+that a feature is live.
+
+| Status | Documents | Meaning |
+| --- | --- | --- |
+| Active state | [Operations backlog](docs/operations/todo.md), [production readiness](docs/production-readiness.md), [deployment and rollback](docs/operations/production-deployments.md) | Current gates, evidence, and executable operational procedures. |
+| Current architecture and policy | [Architecture](docs/architecture.md), [Meta App Review](docs/operations/meta-app-review.md), [security](docs/security/SECURITY.md), [billing operations](docs/BILLING_RUNBOOK.md), [cancellation and refund policy](docs/CANCELLATION_REFUND_POLICY.md), [storage and retention](docs/storage-proxy-r2.md) | Current boundaries and policies; implementation or production status is stated explicitly in each document. Meta App Review covers the public `apps/image-gen` Messenger surface and must change with visible Messenger behavior or permissions. |
+| Transitional or release-specific | [OpenClaw setup](docs/setup.md), [ClawHub listing](docs/clawhub-listing.md), [ClawHub release preparation](docs/clawhub.md) | Retained for the legacy plugin and its extraction/release path, not the active Leaderbot runtime path. |
 
 Documentation is current-state only. Git history is the archive for removed
-product plans.
+product plans and completed incident detail. Do not copy historical run notes
+into active procedures.
 
 ## Production changes
 

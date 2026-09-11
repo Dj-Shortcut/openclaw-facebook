@@ -15,8 +15,8 @@ The repository supports one OpenClaw runtime contract:
 
 | Requirement | Contract |
 | --- | --- |
-| Node.js | `>=24.15.0` |
-| Package manager | npm `>=11.12.1` is authoritative for the root plugin; pnpm `10.28.1` is pinned for the three isolated subapps. The root `pnpm-lock.yaml` remains a compatibility mirror. |
+| Node.js | `>=24.15.0` for the root plugin and ClawHub release path; isolated applications must also satisfy their own package `engines` declarations. |
+| Package manager | npm `>=11.12.1` is authoritative for the root plugin; pnpm `10.28.1` is pinned for the two isolated applications, `apps/image-gen` and `apps/image-gen/storage-proxy`. The root `pnpm-lock.yaml` remains a compatibility mirror. |
 | OpenClaw package | `openclaw` version recorded in `package.json` at `openclaw.build.openclawVersion` |
 | Plugin SDK version | same version as `openclaw.build.openclawVersion` |
 | Fly gateway OpenClaw version | same version in `deploy/fly-gateway/Dockerfile` `ARG OPENCLAW_VERSION` |
