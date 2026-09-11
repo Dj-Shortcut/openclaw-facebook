@@ -14,6 +14,7 @@ import {
 } from "./image-gen-credit-provisioner-bootstrap-contract.mjs";
 import { assertCreditProvisionerGrantScope } from "../apps/image-gen/scripts/production-schema-contract.mjs";
 import { collectCreditTestSessionInventory } from "./credit-test-session-inventory.mjs";
+import { inspectCommittedTestPaymentActivation } from "./image-gen-test-payment-activation-audit.mjs";
 import { readCreditTestActivation } from "./validate-production-deployment.mjs";
 
 const REPOSITORY = "Dj-Shortcut/openclaw-facebook";
@@ -461,6 +462,7 @@ export async function collectCreditTestProof({
   const timeout = setTimeout(() => controller.abort(), 90_000);
   let session;
   let state;
+  let activation;
   try {
     session = await sessionFactory({
       recovery,
@@ -475,6 +477,14 @@ export async function collectCreditTestProof({
       app.creditTestActivation.obsoletePrincipalSha256,
       controller.signal,
     );
+    activation = await inspectCommittedTestPaymentActivation(session, {
+      workspaceId: 1,
+      app,
+      baseline,
+      signal: controller.signal,
+      githubToken: env.GITHUB_TOKEN,
+      fetchImpl,
+    });
     await session.initialize(controller.signal);
   } finally {
     clearTimeout(timeout);
@@ -515,6 +525,7 @@ export async function collectCreditTestProof({
     ),
     configSha256: digest(fs.readFileSync(path.join(rootDir, app.config))),
     ...state,
+    activation,
     checkedAt: new Date(now()).toISOString(),
   };
 }

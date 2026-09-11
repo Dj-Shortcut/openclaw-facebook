@@ -19,7 +19,7 @@ import {
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import {
   landingCopies,
-  unavailablePremiumCopies,
+  messengerPremiumCopies,
   type LandingCopy,
 } from "./landingCopy";
 import { SUPPORTED_LOCALES, type AppLocale } from "./appLocales";
@@ -185,10 +185,8 @@ function SectionEyebrow({ children }: { children: string }) {
 
 export default function LandingPage() {
   const [locale, setLocale] = useState<AppLocale>("nl-BE");
-  // The purchase option is offered inside Messenger, not from this page, and
-  // the router that used to report a catalogue here is retired. Saying "no
-  // purchase option is shown" is the only thing this page can prove.
-  const commercialBillingAvailable = false;
+  // This page describes the Messenger purchase path, not its live availability.
+  // The user-bound checkout owns the actual offer and Test/live mode display.
   // The fixed mobile call to action sits above the shared footer, so the page
   // itself has to reserve that strip. A body class keeps the reservation in
   // sync with this page only; other routes have no fixed bar.
@@ -198,23 +196,16 @@ export default function LandingPage() {
   }, []);
 
   const copy = landingCopies[locale];
-  const unavailable = unavailablePremiumCopies[locale];
-  const microLine = commercialBillingAvailable
-    ? copy.microLine
-    : unavailable.microLine;
-  const premiumNote = commercialBillingAvailable
-    ? copy.credits.note
-    : unavailable.note;
+  const premiumGuidance = messengerPremiumCopies[locale];
+  const microLine = premiumGuidance.microLine;
+  const premiumNote = premiumGuidance.note;
   const trustCards = copy.trustCards.map((card, index) => {
-    if (commercialBillingAvailable) return card;
-    if (index === 0) return { ...card, body: unavailable.mollieCardBody };
-    if (index === 2) return { ...card, body: unavailable.creditsCardBody };
+    if (index === 0) return { ...card, body: premiumGuidance.mollieCardBody };
+    if (index === 2) return { ...card, body: premiumGuidance.creditsCardBody };
     return card;
   });
   const questions = copy.questions.map((question, index) =>
-    index === 2 && !commercialBillingAvailable
-      ? { ...question, answer: unavailable.faqAnswer }
-      : question
+    index === 2 ? { ...question, answer: premiumGuidance.faqAnswer } : question
   );
 
   const faqSchema = {
@@ -597,12 +588,10 @@ export default function LandingPage() {
                 className="absolute -right-16 -top-16 h-48 w-48 rounded-full bg-gradient-to-br from-violet-500/40 to-blue-400/30 blur-3xl"
                 aria-hidden="true"
               />
-              {!commercialBillingAvailable ? (
-                <span className="relative inline-flex items-center gap-1.5 rounded-full bg-white/15 px-3 py-1 text-xs font-bold uppercase tracking-wide text-white">
-                  <CreditCard className="h-3.5 w-3.5" aria-hidden="true" />
-                  {unavailable.badge}
-                </span>
-              ) : null}
+              <span className="relative inline-flex items-center gap-1.5 rounded-full bg-white/15 px-3 py-1 text-xs font-bold uppercase tracking-wide text-white">
+                <CreditCard className="h-3.5 w-3.5" aria-hidden="true" />
+                {premiumGuidance.badge}
+              </span>
               <h3 className="relative mt-5 text-xl font-semibold">
                 {copy.credits.name}
               </h3>

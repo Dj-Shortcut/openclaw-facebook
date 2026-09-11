@@ -2322,6 +2322,23 @@ export function resolveImmutableReleaseImage(
 }
 
 export function validateProductionWorkflow(rootDir = process.cwd()) {
+  const proofSource = fs.readFileSync(
+    path.join(rootDir, "scripts/image-gen-credit-test-proof.mjs"),
+    "utf8",
+  );
+  if (
+    !proofSource.includes(
+      'import { inspectCommittedTestPaymentActivation } from "./image-gen-test-payment-activation-audit.mjs";',
+    ) ||
+    !/activation = await inspectCommittedTestPaymentActivation\(session, \{\s*workspaceId: 1,/.test(
+      proofSource,
+    ) ||
+    !/\n\s+activation,\s+checkedAt:/.test(proofSource)
+  ) {
+    fail(
+      "image-gen must collect the original committed Test activation audit for workspace 1 before deployment",
+    );
+  }
   const creditWorkflow = fs.readFileSync(
     path.join(rootDir, PRODUCTION_WORKFLOW_PATH),
     "utf8",
@@ -3926,6 +3943,10 @@ export function validateTestPaymentOperatorWorkflow(rootDir = process.cwd()) {
     /await verifyOperatorRun\(env, fetchImpl\)/g,
     /await sourceCi\(input\.workflowSourceSha, verify\)/,
     /await artifactCi\("image-gen", input\.image, verify\)/,
+    /activation\.requestId !== input\.requestId/,
+    /activation\.previousEpoch !== 1/,
+    /activation\.epoch !== 2/,
+    /input\.expectedEpoch !== activation\.previousEpoch/,
     /run\.head_sha !== input\.workflowSourceSha/,
     /run\.actor\?\.id/,
     /run\.triggering_actor\?\.id/,
@@ -8503,7 +8524,8 @@ export function validateCreditTestActivation(app, env, rootDir) {
     !request ||
     typeof request !== "object" ||
     Array.isArray(request) ||
-    Object.keys(request).sort().join(",") !== "obsoletePrincipalSha256,state" ||
+    Object.keys(request).sort().join(",") !==
+      "obsoletePrincipalSha256,operator,state" ||
     request.state !== "bounded_test" ||
     !/^[a-f0-9]{64}$/.test(request.obsoletePrincipalSha256 ?? "") ||
     request.obsoletePrincipalSha256 ===
@@ -8513,6 +8535,33 @@ export function validateCreditTestActivation(app, env, rootDir) {
   ) {
     fail(
       "image-gen bounded Test activation must bind the completed restricted runtime and a distinct obsolete principal",
+    );
+  }
+  // Retain the originally reviewed activation executable and predecessor even
+  // when a later frontend/runtime release advances the desired image/baseline.
+  // This request is not evidence: the deploy still verifies the original audit.
+  const operator = request.operator;
+  if (
+    !operator ||
+    typeof operator !== "object" ||
+    Array.isArray(operator) ||
+    Object.keys(operator).sort().join(",") !==
+      "artifactSourceSha,deploymentIdentity,epoch,operatorImage,previousEpoch,requestId,runtimeImage" ||
+    typeof operator.requestId !== "string" ||
+    !/^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(
+      operator.requestId,
+    ) ||
+    operator.previousEpoch !== 1 ||
+    operator.epoch !== 2 ||
+    !isImmutableAppImage(app, operator.operatorImage) ||
+    typeof operator.artifactSourceSha !== "string" ||
+    !/^[a-f0-9]{40}$/.test(operator.artifactSourceSha) ||
+    !isImmutableAppImage(app, operator.runtimeImage) ||
+    typeof operator.deploymentIdentity !== "string" ||
+    !/^deploy-[1-9][0-9]*-[1-9][0-9]*$/.test(operator.deploymentIdentity)
+  ) {
+    fail(
+      "image-gen bounded Test activation must retain exact original operator and predecessor identities",
     );
   }
   validateImageGenSchemaTransition(app);
