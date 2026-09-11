@@ -615,7 +615,8 @@ export const landingCopies: Record<AppLocale, LandingCopy> = {
   },
 };
 
-export const unavailablePremiumCopies: Record<
+/** Mode-neutral guidance: only the user-bound checkout knows availability. */
+export const messengerPremiumCopies: Record<
   AppLocale,
   {
     badge: string;
@@ -627,39 +628,39 @@ export const unavailablePremiumCopies: Record<
   }
 > = {
   "nl-BE": {
-    badge: "Nu geen aankoopoptie",
-    note: "Deze pagina toont op dit moment geen aankoopoptie. Zodra ze er is, verschijnt ze in Messenger.",
+    badge: "Alleen bij een aanbod",
+    note: "Zie je geen betaalknop in Messenger? Dan is kopen op dat moment niet beschikbaar. Toont de bot wel een aanbod, controleer dan de prijs in de beveiligde checkout voordat je bevestigt.",
     faqAnswer:
-      "Er is hier op dit moment geen aankoopoptie te zien. Zodra ze beschikbaar is, stuurt Leaderbot je in Messenger een persoonlijke, beveiligde betaallink.",
+      "Wanneer Messenger je een aankoop aanbiedt, open je daar de beveiligde link voor de eenmalige bundel van €4,99 voor 8 premiumcredits. Controleer de exacte prijs in de checkout voordat je bevestigt. Een Test-checkout is duidelijk gemarkeerd en brengt geen echt bedrag in rekening.",
     microLine:
-      "Elke dag gratis beeldtegoed • Geen abonnement • Nu geen nieuwe aankoop mogelijk",
+      "Elke dag gratis beeldtegoed • Geen abonnement • Een aankoop kan alleen als de bot een betaalknop toont",
     mollieCardBody:
-      "Je kan hier op dit moment geen nieuwe aankoop starten. Een aankoop die wel doorgaat, verloopt altijd via de beveiligde betaalpagina van Mollie.",
+      "Bevestig een aangeboden aankoop pas nadat je de prijs op de beveiligde checkout van Mollie hebt gecontroleerd. Een Test-checkout is duidelijk gemarkeerd en brengt geen echt bedrag in rekening.",
     creditsCardBody:
-      "Premiumcredits worden alleen toegevoegd nadat Mollie de betaling bevestigt. Zolang je hier geen aankoopoptie ziet, kan je geen nieuwe bundel starten.",
+      "Premiumcredits worden alleen toegevoegd nadat Mollie de betaling bevestigt, niet doordat je terugkeert naar deze website.",
   },
   "fr-BE": {
-    badge: "Pas d'option d'achat",
-    note: "Cette page n'affiche pas d'option d'achat pour l'instant. Dès qu'elle existe, elle apparaît dans Messenger.",
+    badge: "Uniquement sur proposition",
+    note: "Aucun bouton de paiement dans Messenger ? L'achat n'est alors pas disponible. Si le bot propose une offre, vérifiez le prix sur la page de paiement sécurisée avant de confirmer.",
     faqAnswer:
-      "Aucune option d'achat n'est visible ici pour l'instant. Dès qu'elle sera disponible, Leaderbot vous enverra dans Messenger un lien de paiement personnel et sécurisé.",
+      "Lorsque Messenger vous propose un achat, ouvrez son lien sécurisé pour le pack unique de 4,99 € pour 8 crédits premium. Vérifiez le prix exact sur la page de paiement avant de confirmer. Un paiement en mode Test est clairement indiqué et ne débite aucun montant réel.",
     microLine:
-      "Crédit d'images gratuit chaque jour • Sans abonnement • Pas de nouvel achat pour l'instant",
+      "Crédit d'images gratuit chaque jour • Sans abonnement • Achat uniquement si le bot affiche un bouton de paiement",
     mollieCardBody:
-      "Vous ne pouvez pas lancer de nouvel achat ici pour l'instant. Un achat qui aboutit passe toujours par la page de paiement sécurisée de Mollie.",
+      "Confirmez un achat proposé uniquement après avoir vérifié le prix sur la page sécurisée de Mollie. Un paiement en mode Test est clairement indiqué et ne débite aucun montant réel.",
     creditsCardBody:
-      "Les crédits premium ne sont ajoutés qu'après confirmation du paiement par Mollie. Tant qu'aucune option d'achat n'apparaît ici, vous ne pouvez pas lancer de nouveau pack.",
+      "Les crédits premium ne sont ajoutés qu'après confirmation du paiement par Mollie, pas simplement lors du retour sur ce site.",
   },
   en: {
-    badge: "No purchase option",
-    note: "This page is not showing a purchase option right now. Once there is one, it appears in Messenger.",
+    badge: "Only when offered",
+    note: "No payment button in Messenger? Buying is not available at that time. If the bot does show an offer, check the price at secure checkout before confirming.",
     faqAnswer:
-      "There is no purchase option visible here right now. Once it is available, Leaderbot sends you a personal, secure payment link in Messenger.",
+      "When Messenger offers you a purchase, open its secure link for the one-time €4.99 pack of 8 premium credits. Check the exact price at checkout before confirming. A Test checkout is clearly marked and makes no real charge.",
     microLine:
-      "Free image credits every day • No subscription • No new purchase right now",
+      "Free image credits every day • No subscription • Purchase only when the bot shows a payment button",
     mollieCardBody:
-      "You cannot start a new purchase here right now. A purchase that does go ahead always runs through Mollie's secure payment page.",
+      "Only confirm an offered purchase after checking the price on Mollie's secure checkout. A Test checkout is clearly marked and makes no real charge.",
     creditsCardBody:
-      "Premium credits are only added after Mollie confirms the payment. While no purchase option appears here, you cannot start a new pack.",
+      "Premium credits are only added after Mollie confirms the payment, not simply when you return to this website.",
   },
 };

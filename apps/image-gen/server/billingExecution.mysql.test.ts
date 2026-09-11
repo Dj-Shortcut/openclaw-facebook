@@ -10,6 +10,10 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { assertBillingTriggerRuntimePreflight } from "../scripts/billing-trigger-runtime-preflight.mjs";
 import {
+  buildTestPaymentActivationAuditQuery,
+  validateCommittedTestPaymentActivation,
+} from "../../../scripts/image-gen-test-payment-activation-audit.mjs";
+import {
   creditWalletRoutineNames,
   productionRuntimeWritableTableNames,
 } from "../scripts/production-schema-contract.mjs";
@@ -21,6 +25,7 @@ import {
   readTestPaymentOperatorEnv,
 } from "./_core/billing/testPaymentOperator";
 import {
+  disableBillingSchedulerTenant,
   enableBillingSchedulerTenant,
   registerBillingSchedulerTenant,
 } from "./_core/billing/billingSchedulerStore";
@@ -172,20 +177,59 @@ suite("billing trigger MySQL runtime boundary", () => {
         LEADERBOT_TEST_PAYMENT_OPERATOR_BUNDLE_SHA256: "d".repeat(64),
         LEADERBOT_TEST_PAYMENT_OPERATOR_RUNTIME_IMAGE: `registry.fly.io/leaderbot-fb-image-gen@sha256:${"e".repeat(64)}`,
       };
-      const snapshot = async () => {
-        const [controls] = await connection.query<RowDataPacket[]>(
+      const snapshot = async (reader: Connection = connection) => {
+        const [controls] = await reader.query<RowDataPacket[]>(
           "SELECT commercial_enabled,authorization_epoch FROM billing_execution_controls WHERE workspace_id=? AND mode='test'",
           [workspaceId]
         );
-        const [lanes] = await connection.query<RowDataPacket[]>(
+        const [lanes] = await reader.query<RowDataPacket[]>(
           "SELECT kind,enabled,execution_epoch,pending_work_count,dead_letter_count,operator_request_id,operator_request_fingerprint,enabled_by_user_id FROM billing_scheduler_tenants WHERE workspace_id=? AND mode='test' ORDER BY kind",
           [workspaceId]
         );
-        const [audits] = await connection.query<RowDataPacket[]>(
+        const [audits] = await reader.query<RowDataPacket[]>(
           "SELECT userId,metadata FROM auditLog WHERE workspaceId=? AND event='billing_scheduler_enabled'",
           [workspaceId]
         );
         return { controls, lanes, audits };
+      };
+      const operatorAudit = readTestPaymentOperatorEnv(env).operatorAudit;
+      const auditOptions = {
+        workspaceId,
+        app: {
+          reviewedImage: operatorAudit.operatorImage,
+          reviewedSourceCommit: operatorAudit.artifactSourceSha,
+          databaseSchemaTransition: { runtimePrincipalSha256: principalSha256 },
+          creditTestActivation: {
+            operator: {
+              requestId,
+              previousEpoch: 1,
+              epoch: 2,
+              operatorImage: operatorAudit.operatorImage,
+              artifactSourceSha: operatorAudit.artifactSourceSha,
+              runtimeImage: operatorAudit.runtimeImage,
+              deploymentIdentity: operatorAudit.deploymentIdentity,
+            },
+          },
+        },
+        baseline: {
+          identity: operatorAudit.deploymentIdentity,
+          expectedImage: operatorAudit.runtimeImage,
+        },
+      };
+      const readCommittedAudit = async (options = auditOptions) => {
+        // Execute the actual bounded production SELECT with this disposable
+        // workspace and restricted principal; preserve MySQL JSON scalar types.
+        const [rows] = await runtimeConnection!.query<RowDataPacket[]>(
+          buildTestPaymentActivationAuditQuery(workspaceId)
+        );
+        expect(rows).toHaveLength(1);
+        const values = Object.values(rows[0]);
+        expect(values).toHaveLength(1);
+        // The provisioner transport stringifies row values. The SQL must
+        // produce JSON text, never an object coerced to "[object Object]".
+        expect(typeof values[0]).toBe("string");
+        const result = JSON.parse(String(values[0]));
+        return validateCommittedTestPaymentActivation(result, options);
       };
       // Neither a non-admin owner nor missing registration may create controls.
       await connection.query("UPDATE users SET role='user' WHERE id=?", [
@@ -207,6 +251,11 @@ suite("billing trigger MySQL runtime boundary", () => {
       // Provision only this disposable fixture explicitly; the operator does
       // not create or reset scheduler state as a side effect of an enable.
       await registerBillingSchedulerTenant(workspaceId, "test");
+      const registered = await snapshot();
+      await expect(readCommittedAudit()).rejects.toThrow(
+        "credit_test_activation_audit_rejected"
+      );
+      expect(await snapshot()).toEqual(registered);
       const failedDeliveryId = randomUUID();
       const [failedOutbox] = await connection.query<ResultSetHeader>(
         "INSERT INTO billing_outbox (delivery_id,workspace_id,mode,event_type,deduplication_key,payload,status,attempt_count,max_attempts,last_error_code) VALUES (?,?,'test','manual_review',?,JSON_OBJECT('reason','synthetic_operator_failed_outbox'),'failed',1,1,'synthetic_operator_failure')",
@@ -274,6 +323,57 @@ suite("billing trigger MySQL runtime boundary", () => {
       expect(metadata.operator).toEqual(
         readTestPaymentOperatorEnv(env).operatorAudit
       );
+      await expect(readCommittedAudit()).resolves.toMatchObject({
+        verified: true,
+        committed: true,
+        readOnly: true,
+        workspaceId,
+        mode: "test",
+        previousExecutionEpoch: 1,
+        executionEpoch: 2,
+        requestId,
+        ownerUserId: userIds[0],
+        operator: operatorAudit,
+      });
+      const originalProof = await readCommittedAudit();
+      await expect(
+        readCommittedAudit({
+          ...auditOptions,
+          app: {
+            ...auditOptions.app,
+            reviewedImage: `registry.fly.io/leaderbot-fb-image-gen@sha256:${"f".repeat(64)}`,
+            reviewedSourceCommit: "9".repeat(40),
+          },
+          baseline: {
+            identity: "deploy-789-2",
+            expectedImage: `registry.fly.io/leaderbot-fb-image-gen@sha256:${"8".repeat(64)}`,
+          },
+        })
+      ).resolves.toEqual(originalProof);
+      expect(await snapshot()).toEqual(committed);
+      // Corrupt only our synthetic lane in a rolled-back transaction. The
+      // inspection sees the same connection snapshot and must never repair it.
+      for (const mutation of [
+        "UPDATE billing_scheduler_tenants SET operator_request_fingerprint=REPEAT('f',64) WHERE workspace_id=? AND mode='test' AND kind='profile_expiry'",
+        "DELETE FROM billing_scheduler_tenants WHERE workspace_id=? AND mode='test' AND kind='profile_expiry'",
+      ]) {
+        await runtimeConnection.beginTransaction();
+        try {
+          const [changed] = await runtimeConnection.query<ResultSetHeader>(
+            mutation,
+            [workspaceId]
+          );
+          expect(changed.affectedRows).toBe(1);
+          const inconsistent = await snapshot(runtimeConnection);
+          await expect(readCommittedAudit()).rejects.toThrow(
+            "credit_test_activation_audit_rejected"
+          );
+          expect(await snapshot(runtimeConnection)).toEqual(inconsistent);
+        } finally {
+          await runtimeConnection.rollback();
+        }
+        expect(await snapshot()).toEqual(committed);
+      }
       const input = {
         ...readTestPaymentOperatorEnv(env),
         actorUserId: userIds[0]!,
@@ -293,6 +393,36 @@ suite("billing trigger MySQL runtime boundary", () => {
         })
       ).rejects.toThrow("request conflicts");
       expect(await snapshot()).toEqual(committed);
+      // A legitimate disable/re-enable overwrites current lane provenance.
+      // Even a fully consistent new protected audit on the same artifacts
+      // must not be mistaken for this manifest's original 1 -> 2 activation.
+      await expect(
+        disableBillingSchedulerTenant({
+          workspaceId,
+          mode: "test",
+          actorUserId: userIds[0]!,
+          requestId: randomUUID(),
+          expectedExecutionEpoch: 2,
+          reason: "synthetic operator disable check",
+        })
+      ).resolves.toEqual({ executionEpoch: 3 });
+      await expect(
+        enableBillingSchedulerTenant({
+          ...input,
+          requestId: randomUUID(),
+          expectedExecutionEpoch: 3,
+          operatorAudit: { ...input.operatorAudit, githubRunId: "457" },
+        })
+      ).resolves.toEqual({ executionEpoch: 4 });
+      const reenabled = await snapshot();
+      expect(reenabled.controls).toMatchObject([
+        { commercial_enabled: 1, authorization_epoch: 4 },
+      ]);
+      expect(reenabled.audits).toHaveLength(2);
+      await expect(readCommittedAudit()).rejects.toThrow(
+        "credit_test_activation_audit_rejected"
+      );
+      expect(await snapshot()).toEqual(reenabled);
     } finally {
       databaseMock.mockReset();
       await runtimeConnection?.end();

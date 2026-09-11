@@ -111,6 +111,9 @@ function createRepositoryFixture({ boundedTest = false } = {}) {
     "scripts/retire-image-gen-credit-provisioners.mjs",
     "scripts/retire-image-gen-credit-provisioners.test.mjs",
     "scripts/image-gen-test-payment-operator.mjs",
+    "scripts/image-gen-credit-test-proof.mjs",
+    "scripts/image-gen-test-payment-activation-audit.mjs",
+    "scripts/image-gen-test-payment-activation-audit.test.mjs",
     "scripts/verify-gateway-state-rebaseline.mjs",
     "scripts/validate-production-deployment.mjs",
   ]) {
@@ -6428,6 +6431,72 @@ describe("production deployment contract", () => {
   it("accepts the reviewed bounded Test desired configuration with its prepared rollback", () => {
     const root = createRepositoryFixture({ boundedTest: true });
     expect(() => validateProductionRepository(root)).not.toThrow();
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(root, "deploy/production/apps.json"), "utf8"),
+    );
+    expect(
+      manifest.apps["image-gen"].creditTestActivation.operator,
+    ).toMatchObject({
+      requestId: "8a62f93d-e092-4dd8-82ca-9e77bdd89d54",
+      previousEpoch: 1,
+      epoch: 2,
+    });
+  });
+
+  it.each([
+    undefined,
+    null,
+    [],
+    { operatorImage: "latest" },
+    { operatorImage: "registry.fly.io/another-app@sha256:" + "a".repeat(64) },
+    { artifactSourceSha: ["a".repeat(40)] },
+    { runtimeImage: "registry.fly.io/leaderbot-fb-image-gen:latest" },
+    { deploymentIdentity: "unverified" },
+    { requestId: "not-a-uuid" },
+    { requestId: undefined },
+    { previousEpoch: undefined },
+    { previousEpoch: "1" },
+    { previousEpoch: 3 },
+    { epoch: undefined },
+    { epoch: "2" },
+    { epoch: 4 },
+    { verified: true },
+  ])(
+    "rejects missing or malformed original operator identity: %j",
+    (mutation) => {
+      const root = createRepositoryFixture({ boundedTest: true });
+      const file = path.join(root, "deploy/production/apps.json");
+      const manifest = JSON.parse(fs.readFileSync(file, "utf8"));
+      const request = manifest.apps["image-gen"].creditTestActivation;
+      request.operator =
+        mutation && !Array.isArray(mutation)
+          ? { ...request.operator, ...mutation }
+          : mutation;
+      fs.writeFileSync(file, JSON.stringify(manifest));
+      expect(() => validateProductionRepository(root)).toThrow(
+        mutation === undefined
+          ? "image-gen bounded Test activation must bind the completed restricted runtime and a distinct obsolete principal"
+          : "image-gen bounded Test activation must retain exact original operator and predecessor identities",
+      );
+    },
+  );
+
+  it.each([
+    "activation.requestId !== input.requestId",
+    "activation.previousEpoch !== 1",
+    "activation.epoch !== 2",
+    "input.expectedEpoch !== activation.previousEpoch",
+  ])("requires the initial operator request fence: %s", (guard) => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      "scripts/image-gen-test-payment-operator.mjs",
+      guard,
+      "false",
+    );
+    expect(() => validateProductionRepository(root)).toThrow(
+      "Test payment operator controller must retain run, artifact, exact target, result and cleanup verification",
+    );
   });
 
   it("does not silently broaden a partial older tester restriction", () => {
@@ -6461,6 +6530,29 @@ describe("production deployment contract", () => {
       "must require protected proof only for the explicit bounded Test request",
     );
   });
+
+  it.each([
+    [
+      "activation = await inspectCommittedTestPaymentActivation(session, {",
+      "activation = await inspectAnotherState(session, {",
+    ],
+    ["workspaceId: 1,", "workspaceId: 2,"],
+    ["    activation,\n    checkedAt:", "    checkedAt:"],
+  ])(
+    "requires the committed Test operator audit in the collected proof: %s",
+    (before, after) => {
+      const root = createRepositoryFixture();
+      replaceFixtureText(
+        root,
+        "scripts/image-gen-credit-test-proof.mjs",
+        before,
+        after,
+      );
+      expect(() => validateProductionRepository(root)).toThrow(
+        "image-gen must collect the original committed Test activation audit for workspace 1 before deployment",
+      );
+    },
+  );
 
   it("rejects privileged Test proof on ordinary dark deployments", () => {
     const root = createRepositoryFixture();

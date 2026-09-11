@@ -25,6 +25,8 @@ const IMAGE_GEN_CREDIT_DATABASE_CONTROL_PATHS = new Set([
   "scripts/validate-production-deployment.test.mjs",
   "scripts/image-gen-credit-test-proof.mjs",
   "scripts/image-gen-credit-test-proof.test.mjs",
+  "scripts/image-gen-test-payment-activation-audit.mjs",
+  "scripts/image-gen-test-payment-activation-audit.test.mjs",
   "scripts/credit-test-session-inventory.mjs",
   "scripts/credit-test-session-inventory.test.mjs",
   "scripts/credit-test-session-inventory.mysql.test.mjs",

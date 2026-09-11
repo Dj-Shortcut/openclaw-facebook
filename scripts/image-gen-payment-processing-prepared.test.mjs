@@ -127,6 +127,17 @@ it("binds the Test request and retains the exact prepared f2fa predecessor", () 
     state: "bounded_test",
     obsoletePrincipalSha256:
       "db3013fb364b7486dabd6520c68beb4a7f5df05530ce90febb30049418a509b5",
+    operator: {
+      requestId: "8a62f93d-e092-4dd8-82ca-9e77bdd89d54",
+      previousEpoch: 1,
+      epoch: 2,
+      operatorImage:
+        "registry.fly.io/leaderbot-fb-image-gen@sha256:70c608aa90473aa9da6fe671a486d757e3041328ba61f9d4ba564b3548a6c4ad",
+      artifactSourceSha: "3f0b7d01b0daef28f6f9abf8d514a128d68eeb62",
+      runtimeImage:
+        "registry.fly.io/leaderbot-fb-image-gen@sha256:f2fa9d60e1fca02c09cb2764981a7134e908f2e33f127eb0e54e77030b4a7a4b",
+      deploymentIdentity: "deploy-34496956631-1",
+    },
   });
   expect(predecessor.image).toBe(
     "registry.fly.io/leaderbot-fb-image-gen@sha256:f2fa9d60e1fca02c09cb2764981a7134e908f2e33f127eb0e54e77030b4a7a4b",
