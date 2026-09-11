@@ -132,8 +132,8 @@ it("binds the Test request and retains the exact prepared f2fa predecessor", () 
       previousEpoch: 1,
       epoch: 2,
       operatorImage:
-        "registry.fly.io/leaderbot-fb-image-gen@sha256:70c608aa90473aa9da6fe671a486d757e3041328ba61f9d4ba564b3548a6c4ad",
-      artifactSourceSha: "3f0b7d01b0daef28f6f9abf8d514a128d68eeb62",
+        "registry.fly.io/leaderbot-fb-image-gen@sha256:c54c1fd026e281ada8f88ecb1acc0a26d48e736b3874d3e7aeb70dc2c64efe5f",
+      artifactSourceSha: "479e43d17aab852ea6b4bbfd6b03c4eac15eb797",
       runtimeImage:
         "registry.fly.io/leaderbot-fb-image-gen@sha256:f2fa9d60e1fca02c09cb2764981a7134e908f2e33f127eb0e54e77030b4a7a4b",
       deploymentIdentity: "deploy-34496956631-1",
