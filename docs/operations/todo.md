@@ -376,11 +376,9 @@ release`, before any deployment or restart. The app-level Fly config
       epoch 1 and all lane pending/dead counters were zero. The exact Test
       workspace had zero provider operations, subscriptions, payment routes,
       ledger rows, exposed intents, pending/dead outbox work and notifications.
-      This is not execution evidence for the new command. Build the merged
-      command as an attested runtime artifact, review its immutable reference
-      together with the desired Test exposure configuration, run the protected
-      command on the unchanged checkout-off predecessor, and normally retain
-      its successful receipt before dispatching the exposure deployment.
+      This precheck alone was not operator execution evidence. The subsequent
+      protected operator success is recorded below; retain its receipt before
+      dispatching the separate exposure deployment.
       These manual workflows do not deploy automatically when a PR is merged.
       If the operator response is ambiguous, never rerun the mutation with a
       changed request, run/attempt/source or executable provenance. The reviewed
@@ -390,11 +388,12 @@ release`, before any deployment or restart. The app-level Fly config
       apply. If the response is lost, this same protected deployment proof can
       recover the original committed audit; no independent recovery command or
       new enable mutation is required. A lost response is not proof of rollback;
-      inconsistent or missing committed state blocks before Fly apply. Review
-      the immutable operator artifact/predecessor anchor and allocated initial
+      inconsistent or missing committed state blocks before Fly apply. Retain
+      the immutable operator artifact/predecessor anchor and initial
       request `8a62f93d-e092-4dd8-82ca-9e77bdd89d54`, fixed to epoch 1→2, before
-      the first execution. This UUID is allocated, not executed. Retain the
-      whole anchor unchanged after commit across later frontend releases.
+      the exposure deployment. This request committed at epoch 2 in run
+      `34581138362/2`; keep the whole anchor unchanged across later frontend
+      releases.
       Current runtime and payment safety checks remain fresh
       on every deployment; a later disable/re-enable cannot replace the original
       activation, even with the same artifacts. This proof's protected execution
@@ -409,21 +408,56 @@ release`, before any deployment or restart. The app-level Fly config
       migration smoke `34570157395` also passed. A fresh metadata-only
       production inspection at `2026-09-11T06:37:54Z` confirmed the same
       disabled epoch, existing owner/admin and zero pending/dead or financial
-      work, without changing data. Operator execution, checkout exposure and
-      the payment-to-credit-to-delivered-edit proof remain open.
+      work, without changing data. That precheck is distinct from the actual
+      operator success below. Checkout exposure and the
+      payment-to-credit-to-delivered-edit proof remain open.
+    - Protected operator run
+      [34581138362/2](https://github.com/Dj-Shortcut/openclaw-facebook/actions/runs/34581138362/attempts/2)
+      successfully committed the original request at epoch 2 for workspace 1,
+      Test Mode, from workflow source
+      `108379291f6cb59b196f078621ca51f3addd3cde`. It used operator image
+      `c54c1fd0...` / artifact source `479e43d17aab852ea6b4bbfd6b03c4eac15eb797`
+      on the unchanged `f2fa9d60...` / `deploy-34496956631-1` predecessor.
+      The metadata receipt records success, committed outcome, unchanged
+      baseline and verified remote/container cleanup; its SHA-256 is
+      `96e407ac273acfb3b387f63e98e28c2bf6a10838624057f2954eb4d360b2c3c4`.
+      Exact image and bundle provenance is recorded in the production runbook.
+      Attempt 1 stopped at baseline with `not_started`, before upload or
+      activation dispatch; the redacted evidence establishes no failure cause.
+      No new operator action is needed for a later frontend artifact. This
+      success does not deploy that artifact, expose checkout, make a payment,
+      grant credits or deliver an image. Fresh deployment `prove`/`consume`,
+      the exposure rollout and the actual Test payment/edit journey remain open;
+      all running purchase entry points and live/legacy billing stay closed.
     - Protected artifact build
-      [34571665119/1](https://github.com/Dj-Shortcut/openclaw-facebook/actions/runs/34571665119)
+      [34578480504/1](https://github.com/Dj-Shortcut/openclaw-facebook/actions/runs/34578480504)
       passed from exact merged source
-      `3f0b7d01b0daef28f6f9abf8d514a128d68eeb62`, producing runtime
-      `sha256:70c608aa90473aa9da6fe671a486d757e3041328ba61f9d4ba564b3548a6c4ad`
-      with attestation `46783444`. Its exact-container checks reject pre-credit
-      schemas and accept 0018. The desired Test activation pins this artifact
-      while retaining `f2fa9d60...` / `deploy-34496956631-1` as the unchanged
+      `479e43d17aab852ea6b4bbfd6b03c4eac15eb797`, producing runtime
+      `sha256:c54c1fd026e281ada8f88ecb1acc0a26d48e736b3874d3e7aeb70dc2c64efe5f`
+      with attestation `46800613`. Its exact-container checks reject pre-credit
+      schemas and accept 0018. This supersedes the unexecuted `70c608aa...`
+      candidate and includes the reviewed conditional purchase copy and original
+      activation-audit checks. The original committed operator anchor retains
+      this artifact, with `f2fa9d60...` / `deploy-34496956631-1` as the unchanged
       checkout-off, processing-on predecessor and rollback. The offer remains
       EUR 4.99 for eight medium credits; all manual tester pins remain empty,
       and live/legacy billing stay disabled. No operator execution, public
       checkout or payment-to-credit-to-delivery evidence is claimed by this
       build or configuration change.
+    - Frontend PR #527 merged as
+      `cff9e09733d4ba89869634b87de5c569334f86d8` after green review and CI.
+      Protected build
+      [34582281913/2](https://github.com/Dj-Shortcut/openclaw-facebook/actions/runs/34582281913/attempts/2)
+      passed from that exact source, producing runtime
+      `sha256:7c95cf09581afd53a4909fee039ecdbcc9a7b7f8e7c4989389b548a5705cbcda`
+      with attestation `46810628` and exact 0018 container checks. This is the
+      desired frontend-and-Test-checkout release. Only the desired artifact
+      and source pins change; the original committed `c54c1fd0...` operator
+      anchor, `f2fa9d60...` rollback, offer, budgets and flags remain unchanged.
+      Build attempt 1 stopped before construction because the exact-source
+      migration CI was still running; attempt 2 began only after it passed.
+      The exposure deployment and payment-to-credit-to-delivered-edit evidence
+      remain pending. No additional processing-enable action is required.
     - The completed payment-processing preparation changed only notification, drain and
       reconciliation flags to true; checkout, paid image use, legacy sales and
       live billing remain false. It reuses the reviewed `f2fa9d60...` runtime,

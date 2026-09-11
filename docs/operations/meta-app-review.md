@@ -29,7 +29,7 @@ mix it into the owner-bot review or subscription behavior.
 
 ## Current Messenger capabilities
 
-### Bounded Test exposure — reviewed configuration, execution pending
+### Bounded Test exposure — processing active, deployment pending
 
 The desired configuration enables the existing one-time credit flow in Mollie
 Test Mode for every eligible Messenger user, without a tester registry, personal
@@ -38,8 +38,11 @@ medium-quality image credits. Consent, the user-initiated response window,
 free-quota exhaustion, exact user/Page/privacy scope and provider budgets still
 apply; no new Meta permission or customer portal is introduced.
 
-Actual Fly Machines remain on the checkout-off, processing-on predecessor until
-the protected operator action and separate protected deployment are completed.
+Protected operator run
+[34581138362/2](https://github.com/Dj-Shortcut/openclaw-facebook/actions/runs/34581138362/attempts/2)
+committed the initial Test processing activation at epoch 2 and verified cleanup.
+Actual Fly Machines still remain on the checkout-off predecessor until the
+separate protected deployment completes. The operator made no payment or grant.
 A merged configuration is not exposure or delivery evidence. The signed
 `app.leaderbot.live` browser handoff, explicit confirmation, trusted Test payment,
 exactly-once grant and delivered paid edit still require the demo evidence below.
