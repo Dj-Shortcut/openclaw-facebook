@@ -214,3 +214,61 @@ html {
     padding-bottom: calc(5rem + env(safe-area-inset-bottom));
   }
 }
+
+/**
+ * Pictogram motion.
+ *
+ * Deliberately cheap. Nothing animates at rest, there is no JavaScript in the
+ * frame loop, and only `transform` and `opacity` change — both of which the
+ * compositor handles without layout or paint. Hovering a card nudges the one
+ * part of the drawing that carries its meaning; the reduced-motion block above
+ * switches every bit of it off.
+ */
+.pictogram [data-picto] {
+  transform-box: fill-box;
+  transform-origin: center;
+  transition: transform 420ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+.group:hover .pictogram [data-picto="shift"] {
+  transform: translateX(3px);
+}
+
+.group:hover .pictogram [data-picto="lift"] {
+  transform: translateY(-3px);
+}
+
+.group:hover .pictogram [data-picto="pop"] {
+  transform: scale(1.1);
+}
+
+.group:hover .pictogram [data-picto="spin"] {
+  transform: rotate(22deg);
+}
+
+.group:hover .pictogram [data-picto="twinkle"] {
+  transform: scale(1.12) rotate(-6deg);
+}
+
+/**
+ * A one-shot settle the first time the row scrolls into view: the drawing
+ * arrives once and then never animates again. The class is additive, so with
+ * no observer — or no JavaScript at all — the pictogram is simply already
+ * there rather than stuck invisible.
+ */
+@keyframes picto-settle {
+  from {
+    opacity: 0.001;
+    transform: translateY(7px) scale(0.97);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.pictogram--settle > svg {
+  animation: picto-settle 520ms cubic-bezier(0.22, 0.61, 0.36, 1) both;
+  animation-delay: var(--picto-delay, 0ms);
+}

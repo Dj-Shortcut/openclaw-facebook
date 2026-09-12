@@ -33,6 +33,17 @@ describe("landing purchase guidance wiring", () => {
     expect(source).toContain("questions.map");
   });
 
+  it("draws pictograms where the example and result tiles used to sit", () => {
+    // The picture-like gradient tiles are gone on purpose: a flat drawing of
+    // the edit cannot be mistaken for something Leaderbot generated.
+    expect(source).not.toMatch(/exampleTileGradients|linear-gradient\(140deg/);
+    expect(source).toMatch(
+      /const Pictogram =\s*examplePictograms\[index\] \?\? examplePictograms\[0\]/
+    );
+    expect(source).toContain('<Pictogram className="h-24 w-auto" />');
+    expect(source).toContain("<ChatResultPictogram");
+  });
+
   it("keeps the existing offer and Messenger CTA destination without a public checkout API", () => {
     expect(source).toContain("{copy.credits.price}");
     expect(source).toContain("copy.credits.features.map");

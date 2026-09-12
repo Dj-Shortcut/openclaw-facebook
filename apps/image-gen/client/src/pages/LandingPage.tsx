@@ -3,17 +3,12 @@ import {
   ArrowRight,
   Check,
   CheckCircle2,
-  Combine,
   CreditCard,
-  Layers,
   Lock,
   MessageCircle,
-  Package,
   Send,
   ShieldCheck,
   Sparkles,
-  SunMedium,
-  Type,
   Image as ImageIcon,
   Trash2,
 } from "lucide-react";
@@ -24,22 +19,12 @@ import {
   type LandingCopy,
 } from "./landingCopy";
 import { SUPPORTED_LOCALES, type AppLocale } from "./appLocales";
+import {
+  ChatResultPictogram,
+  examplePictograms,
+} from "@/components/ExamplePictograms";
 
 const HeroOrbCanvas = lazy(() => import("@/components/HeroOrbCanvas"));
-
-const exampleIcons = [Layers, Sparkles, Package, Type, SunMedium, Combine];
-
-/** One abstract gradient per example card. These are decorative illustrations
- * on purpose: the landing page never shows a real generated result, so no
- * visitor can mistake the artwork for proof of what the bot produced. */
-const exampleTileGradients = [
-  "bg-[linear-gradient(140deg,#2541C9,#4F46E5_55%,#8B2FE0)]",
-  "bg-[linear-gradient(140deg,#6D28D9,#8B2FE0_55%,#C026D3)]",
-  "bg-[linear-gradient(140deg,#0F766E,#2541C9_60%,#4F46E5)]",
-  "bg-[linear-gradient(140deg,#8B2FE0,#DB2777_60%,#F97316)]",
-  "bg-[linear-gradient(140deg,#B45309,#DB2777_55%,#8B2FE0)]",
-  "bg-[linear-gradient(140deg,#4F46E5,#2541C9_55%,#0F766E)]",
-];
 
 const trustCardIcons = [Lock, ShieldCheck, CheckCircle2, Trash2];
 
@@ -224,6 +209,34 @@ function useSectionInView(ref: React.RefObject<HTMLElement | null>): boolean {
   return inView;
 }
 
+/** Latches once the row is about to scroll into view, so the pictograms can
+ * play their one-shot settle and nothing observes the page afterwards. The
+ * drawings are visible without it: the class it gates only adds the animation,
+ * so no observer — or no JavaScript — simply means no motion. */
+function useSettledOnce(ref: React.RefObject<HTMLElement | null>): boolean {
+  const [settled, setSettled] = useState(false);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || typeof IntersectionObserver === "undefined") return;
+
+    const observer = new IntersectionObserver(
+      entries => {
+        if (!entries.some(entry => entry.isIntersecting)) return;
+        setSettled(true);
+        observer.disconnect();
+      },
+      // Fire just before the row is on screen, so a card is never seen still
+      // and then suddenly animating.
+      { rootMargin: "120px" }
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [ref]);
+
+  return settled;
+}
+
 /** Subtle cursor-following spotlight over the hero mockup card — a plain
  * CSS/pointer-events micro-interaction layered on top of the WebGL orb. It is
  * skipped entirely when the visitor asked for reduced motion. */
@@ -295,6 +308,8 @@ export default function LandingPage() {
   const heroCtaInView = useSectionInView(heroCtaRef);
   const closingRef = useRef<HTMLDivElement>(null);
   const closingInView = useSectionInView(closingRef);
+  const examplesRef = useRef<HTMLDivElement>(null);
+  const examplesSettled = useSettledOnce(examplesRef);
   // The pinned bar is a safety net for the scroll, not a third button on the
   // first screen: it waits until the hero call to action is gone and steps
   // aside again at the closing one.
@@ -505,19 +520,16 @@ export default function LandingPage() {
                     <div
                       className={`overflow-hidden rounded-2xl border border-[#14203D]/10 bg-white p-4 shadow-sm transition duration-300 ease-out ${conversationBeatClass(beat, 3)}`}
                     >
-                      <div className="flex min-h-32 items-end justify-between rounded-xl bg-[radial-gradient(circle_at_25%_20%,rgba(255,255,255,0.35),transparent_45%),linear-gradient(135deg,#2541C9,#6D28D9_60%,#8B2FE0)] p-4 text-white">
-                        <div>
-                          <div className="text-xs font-semibold uppercase tracking-[0.16em] text-white/85">
+                      <div className="flex min-h-32 flex-wrap items-center justify-between gap-4 rounded-xl border border-[#14203D]/10 bg-[#f1ece1] p-4">
+                        <div className="min-w-0">
+                          <div className="text-xs font-semibold uppercase tracking-[0.16em] text-[#2541C9]">
                             {copy.chat.resultTag}
                           </div>
-                          <div className="mt-1 text-xl font-semibold">
+                          <div className="mt-1 text-xl font-semibold text-[#14203D]">
                             {copy.chat.resultCaption}
                           </div>
                         </div>
-                        <Sparkles
-                          className="h-7 w-7 text-white"
-                          aria-hidden="true"
-                        />
+                        <ChatResultPictogram className="h-16 w-auto shrink-0" />
                       </div>
                       <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
                         <span className="flex items-center gap-2 text-xs text-[#14203D]/75">
@@ -612,25 +624,35 @@ export default function LandingPage() {
               {copy.examplesBody}
             </p>
           </div>
-          <div className="mt-12 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+          <div
+            className="mt-12 grid gap-6 sm:grid-cols-2 lg:grid-cols-3"
+            ref={examplesRef}
+          >
             {copy.examples.map((example, index) => {
-              const Icon = exampleIcons[index] ?? Sparkles;
-              const gradient =
-                exampleTileGradients[index] ?? exampleTileGradients[0];
+              const Pictogram =
+                examplePictograms[index] ?? examplePictograms[0];
               return (
                 <article
-                  className="flex flex-col overflow-hidden rounded-3xl border border-[#14203D]/10 bg-white shadow-sm transition hover:shadow-md motion-safe:hover:-translate-y-1"
+                  className="group flex flex-col overflow-hidden rounded-3xl border border-[#14203D]/10 bg-white shadow-sm transition hover:shadow-md motion-safe:hover:-translate-y-1"
                   key={example.title}
                 >
                   <div
                     aria-hidden="true"
-                    className={`relative flex h-32 items-end justify-between p-5 ${gradient}`}
+                    className="relative flex h-32 items-center justify-center border-b border-[#14203D]/10 bg-[#f1ece1] px-5"
                   >
-                    <span className="absolute inset-0 bg-[radial-gradient(circle_at_20%_15%,rgba(255,255,255,0.45),transparent_55%)]" />
-                    <span className="relative text-[11px] font-semibold uppercase tracking-[0.16em] text-white/90">
+                    <span className="absolute left-5 top-5 text-[11px] font-semibold uppercase tracking-[0.16em] text-[#14203D]/45">
                       {String(index + 1).padStart(2, "0")}
                     </span>
-                    <Icon className="relative h-8 w-8 text-white" />
+                    <span
+                      className={`pictogram ${examplesSettled ? "pictogram--settle" : ""}`}
+                      style={
+                        {
+                          "--picto-delay": `${index * 70}ms`,
+                        } as React.CSSProperties
+                      }
+                    >
+                      <Pictogram className="h-24 w-auto" />
+                    </span>
                   </div>
                   <div className="flex grow flex-col p-6">
                     <h3 className="text-base font-semibold text-[#14203D]">
