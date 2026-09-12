@@ -85,6 +85,19 @@ describe("pictogram motion", () => {
     );
   });
 
+  it("keeps the staggered settle out of a reduced-motion visitor's way", () => {
+    // The global reduced-motion reset shortens durations but not delays, so a
+    // delayed animation with a `both` fill would hold its hidden opening frame
+    // and then snap in. The whole settle is opt-in instead.
+    const guard = motion.indexOf(
+      "@media (prefers-reduced-motion: no-preference)"
+    );
+    expect(guard).toBeGreaterThan(-1);
+    expect(motion.indexOf("@keyframes picto-settle")).toBeGreaterThan(guard);
+    expect(motion.indexOf("animation-delay")).toBeGreaterThan(guard);
+    expect(motion.indexOf(".pictogram--settle > svg")).toBeGreaterThan(guard);
+  });
+
   it("never loops at rest", () => {
     expect(motion).not.toContain("infinite");
     // Every hover rule is gated behind a pointer over the card.
