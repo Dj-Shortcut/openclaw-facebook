@@ -100,7 +100,7 @@ export const landingCopies: Record<AppLocale, LandingCopy> = {
       resultCaption: "Zo komt je beeld terug in het gesprek",
       quotaCaption: "1 gratis beeld van vandaag gebruikt",
       disclaimer:
-        "Nagebouwd gesprek ter illustratie. De tegels hierboven zijn geen echte resultaten.",
+        "Nagebouwd gesprek ter illustratie. Het pictogram hierboven is geen echt resultaat.",
     },
     howEyebrow: "In drie stappen",
     howTitle: "Van berichtje naar beeld",
@@ -125,7 +125,7 @@ export const landingCopies: Record<AppLocale, LandingCopy> = {
     examplesBody:
       "Dit zijn voorbeelden van vragen die je letterlijk in Messenger kan typen. Sommige werken op een foto die je meestuurt, andere maken een volledig nieuw beeld.",
     examplesDisclaimer:
-      "De gekleurde tegels zijn abstracte illustraties, geen beelden die Leaderbot heeft gemaakt.",
+      "De pictogrammen tonen wat elke opdracht doet. Het zijn tekeningen, geen beelden die Leaderbot heeft gemaakt.",
     examples: [
       {
         title: "Achtergrond vervangen",
@@ -294,7 +294,7 @@ export const landingCopies: Record<AppLocale, LandingCopy> = {
       resultCaption: "Votre image revient dans la conversation",
       quotaCaption: "1 image gratuite utilisée aujourd'hui",
       disclaimer:
-        "Conversation reconstituée à titre d'illustration. Les tuiles ci-dessus ne sont pas de vrais résultats.",
+        "Conversation reconstituée à titre d'illustration. Le pictogramme ci-dessus n'est pas un vrai résultat.",
     },
     howEyebrow: "En trois étapes",
     howTitle: "Du message à l'image",
@@ -319,7 +319,7 @@ export const landingCopies: Record<AppLocale, LandingCopy> = {
     examplesBody:
       "Voici des exemples que vous pouvez taper littéralement dans Messenger. Certains s'appliquent à une photo que vous envoyez, d'autres créent une image entièrement nouvelle.",
     examplesDisclaimer:
-      "Les tuiles colorées sont des illustrations abstraites, pas des images créées par Leaderbot.",
+      "Les pictogrammes montrent ce que fait chaque demande. Ce sont des dessins, pas des images créées par Leaderbot.",
     examples: [
       {
         title: "Remplacer l'arrière-plan",
@@ -488,7 +488,7 @@ export const landingCopies: Record<AppLocale, LandingCopy> = {
       resultCaption: "Your image comes back in the chat",
       quotaCaption: "1 free image used today",
       disclaimer:
-        "Mocked-up conversation for illustration. The tiles above are not real results.",
+        "Mocked-up conversation for illustration. The pictogram above is not a real result.",
     },
     howEyebrow: "In three steps",
     howTitle: "From message to image",
@@ -513,7 +513,7 @@ export const landingCopies: Record<AppLocale, LandingCopy> = {
     examplesBody:
       "These are examples you can type straight into Messenger. Some work on a photo you attach, others create a brand-new image.",
     examplesDisclaimer:
-      "The coloured tiles are abstract illustrations, not images made by Leaderbot.",
+      "The pictograms show what each request does. They are drawings, not images made by Leaderbot.",
     examples: [
       {
         title: "Replace the background",
